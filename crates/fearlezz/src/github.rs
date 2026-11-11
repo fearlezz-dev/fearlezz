@@ -184,7 +184,7 @@ pub(crate) fn section(text: &mut String, waits: &[Waits], shown: &Shown<'_>) -> 
                         text,
                         "| **{}** {}<br>{} | {} | {} |",
                         cell(&item.name),
-                        item.change.label(),
+                        label(item),
                         cell(&item.summary),
                         media(&item.before, &item.kind, url),
                         media(&item.after, &item.kind, url)
@@ -197,7 +197,7 @@ pub(crate) fn section(text: &mut String, waits: &[Waits], shown: &Shown<'_>) -> 
                         text,
                         "- **{}** {}: {}",
                         cell(&item.name),
-                        item.change.label(),
+                        label(item),
                         cell(&item.summary)
                     )?;
                 }
@@ -220,6 +220,15 @@ pub(crate) fn section(text: &mut String, waits: &[Waits], shown: &Shown<'_>) -> 
         "To approve them, a person with write access comments `/fearlezz approve <what they \
          think of them>`. A new push needs a new approval.\n"
     )
+}
+
+/// An item's change, and that it never blocks when the check calls it flaky.
+fn label(item: &crate::look::Item) -> String {
+    if item.flaky {
+        format!("{} (flaky, never blocks)", item.change.label())
+    } else {
+        item.change.label().to_string()
+    }
 }
 
 /// The approvals CI recorded on the pull request of the branch checked out in `root`, oldest
