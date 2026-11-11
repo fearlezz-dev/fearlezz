@@ -442,65 +442,6 @@ fn only_a_final_run_of_the_whole_work_answers_for_it() {
     assert!(named.ok, "{}", named.stdout);
 }
 
-// Proving a commit for CI
-
-const CI_NEXT: &str =
-    "next: this proved the commit, not the work; fearlezz shows where the work stands";
-
-#[test]
-fn ci_runs_what_the_change_needs_fresh_and_writes_no_journal() {
-    let repo = committed_change();
-    for round in 1..=2 {
-        let out = repo.fz_env(&["run", "--ci"], &[("FEARLEZZ_JOURNAL", "ci/1")]);
-        assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-        assert_eq!(out.last_line(), CI_NEXT);
-        assert!(!out.stdout.contains("ready to merge"), "{}", out.stdout);
-        for check in ["tests", "screens", "e2e"] {
-            assert_eq!(
-                runs(&repo.path(&format!(".runs/{check}"))),
-                round,
-                "{check}"
-            );
-        }
-    }
-    assert!(!repo.path(".git/fearlezz/journals").exists());
-}
-
-#[test]
-fn ci_fails_when_a_check_fails() {
-    let repo = committed_change();
-    repo.write("src/broken", "x\n");
-    repo.commit("break");
-    let out = repo.fz(&["run", "--ci"]);
-    assert!(!out.ok, "{}", out.stdout);
-    assert_eq!(out.last_line(), CI_NEXT);
-}
-
-#[test]
-fn ci_leaves_the_journal_of_the_branch_alone() {
-    let repo = committed_change();
-    start(&repo);
-    assert!(repo.fz(&["run", "--ci"]).ok);
-    let status = repo.fz(&[]);
-    assert!(
-        status.stdout.contains("stage exploring"),
-        "{}",
-        status.stdout
-    );
-    assert!(
-        status.stdout.contains("tests never run"),
-        "{}",
-        status.stdout
-    );
-}
-
-#[test]
-fn ci_does_not_combine_with_a_stage_or_named_checks() {
-    let repo = committed_change();
-    assert!(!repo.fz(&["run", "--ci", "--stage", "merge"]).ok);
-    assert!(!repo.fz(&["run", "--ci", "tests"]).ok);
-}
-
 // Stages and claims
 
 #[test]

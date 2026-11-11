@@ -158,7 +158,8 @@ fn fz_in(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     cmd.args(args)
         .current_dir(dir)
         .env_remove("CI")
-        .env_remove("FEARLEZZ_JOURNAL");
+        .env_remove("FEARLEZZ_JOURNAL")
+        .env_remove("GITHUB_STEP_SUMMARY");
     for (k, v) in env {
         cmd.env(k, v);
     }

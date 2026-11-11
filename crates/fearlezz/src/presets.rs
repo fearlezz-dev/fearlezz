@@ -659,6 +659,22 @@ impl Source {
 
 /// Merges `from` into `into`: tables merge key by key, anything else replaces. Pieces merge
 /// this way, and so does each tool's settings over its lint tables.
+/// The pieces `fearlezz.toml` in `root` names by a path in the repository, as repository paths.
+pub(crate) fn local_pieces(root: &Path) -> Result<Vec<String>> {
+    let Ok(text) = std::fs::read_to_string(root.join(FILE)) else {
+        return Ok(Vec::new());
+    };
+    let table: Table = toml::from_str(&text).with_context(|| format!("reading {FILE}"))?;
+    let named = table.get("use").and_then(Value::as_array);
+    Ok(named
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(|spec| spec.strip_prefix("./"))
+        .map(String::from)
+        .collect())
+}
+
 pub(crate) fn merge(into: &mut Table, from: Table) {
     for (key, value) in from {
         match (into.get_mut(&key), value) {

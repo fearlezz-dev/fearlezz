@@ -53,18 +53,19 @@ decided:
     what: "Hooks are firm at the door: push needs a goal and a claim, a non-draft pull request needs ready, end of turn blocks once."
   - id: weakening-red-admin-bypass
     what: "A change that weakens its own proof is red and names the weakening; a person with admin rights merges past it after reading."
+  - id: protect-main
+    what: "main requires the proof check, set only by GitHub Actions; admins can bypass. Ruleset 27014534."
 
 open:
-  - id: protect-main
-    ask: May main get a ruleset requiring the proof check? Asked at the CI slice.
 
 slices:
   - id: honest-ready
     tests: [crates/fearlezz/tests/core.rs ready_*, ci_*]
     status: done
   - id: ci-mode
-    tests: []
-    status: todo
+    tests: [crates/fearlezz/tests/ci.rs]
+    status: done
+    left: test counts and zero tests red; lint levels, rules and env in the floor
   - id: claims-reach-ci
     tests: []
     status: todo
@@ -72,4 +73,4 @@ slices:
     tests: []
     status: todo
 
-next: Show slice 1 for review, then ask about protecting main before the CI slice.
+next: Show the CI slice for review, then build claims reaching CI.

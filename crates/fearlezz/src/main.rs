@@ -3,6 +3,7 @@
 mod config;
 mod env;
 mod findings;
+mod floor;
 mod git;
 mod journal;
 mod lints;
@@ -18,6 +19,7 @@ mod state;
 mod store;
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{Context as _, Result, bail};
@@ -652,46 +654,162 @@ fn plan(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+/// The checks a run takes on: the named ones, every check when proving a commit on the base
+/// branch itself, and otherwise those the change needs in the current stage.
+fn targets<'a>(
+    ctx: &'a Ctx,
+    before: &View,
+    wt: &Worktree,
+    ids: &[String],
+    in_memory: bool,
+) -> Result<Vec<&'a config::Check>> {
+    if !ids.is_empty() {
+        return ids.iter().map(|id| ctx.config.check(id)).collect();
+    }
+    if in_memory && wt.changed.is_empty() {
+        return Ok(ctx.config.checks.iter().collect());
+    }
+    let due: Vec<&str> = before
+        .checks
+        .iter()
+        .filter(|c| c.needed && c.stage <= before.stage)
+        .map(|c| c.id.as_str())
+        .collect();
+    Ok(ctx
+        .config
+        .checks
+        .iter()
+        .filter(|c| due.contains(&c.id.as_str()))
+        .collect())
+}
+
+fn print_failure(f: &store::RunResult) {
+    let code = f
+        .exit_code
+        .map_or_else(|| "signal".to_string(), |c| c.to_string());
+    if f.findings.iter().any(|x| x.level == findings::Level::Gate) {
+        println!("fail {}: blocking findings", f.check);
+    } else {
+        println!("fail {} (exit {code})", f.check);
+        for line in run::tail(&f.log, 12) {
+            println!("  {line}");
+        }
+        println!("  log: {}", f.log.display());
+    }
+    print_findings(f);
+}
+
+/// What proving a commit shows besides the usual lines, so a reader can tell the checks ran:
+/// the commit, each check with its command and time, and the GitHub job summary.
+struct CommitReport {
+    commit: String,
+    rows: Vec<(String, &'static str, f64, String)>,
+}
+
+impl CommitReport {
+    fn start(ctx: &Ctx, wt: &Worktree, to_run: usize) -> Result<CommitReport> {
+        let commit = ctx.git.head_short()?;
+        println!(
+            "commit {commit}: {} changed files, {to_run} of {} checks to run",
+            wt.changed.len(),
+            ctx.config.checks.len()
+        );
+        Ok(CommitReport {
+            commit,
+            rows: Vec::new(),
+        })
+    }
+
+    fn ran(&mut self, check: &config::Check, result: &store::RunResult) {
+        let word = match result.outcome {
+            Outcome::Passed => "passed",
+            Outcome::Failed => "failed",
+        };
+        #[expect(clippy::cast_precision_loss, reason = "a duration shown in seconds")]
+        let secs = result.duration_ms as f64 / 1000.0;
+        println!("{word} {}  {secs:.1} s  {}", check.id, check.run);
+        self.rows
+            .push((check.id.clone(), word, secs, check.run.clone()));
+    }
+
+    /// Appends the job summary to the file GitHub Actions names, when it names one.
+    fn finish(self, floor: &floor::Floor) -> Result<()> {
+        use std::fmt::Write as _;
+        use std::io::Write as _;
+        let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") else {
+            return Ok(());
+        };
+        let mut text = format!(
+            "### Fearlezz: commit {}\n\n| check | result | time | command |\n| --- | --- | --- \
+             | --- |\n",
+            self.commit
+        );
+        for (id, outcome, secs, run) in &self.rows {
+            let run = run.replace('|', "\\|");
+            writeln!(text, "| {id} | {outcome} | {secs:.1} s | `{run}` |")?;
+        }
+        if self.rows.is_empty() {
+            text.push_str("\nNo check reads what this commit changed.\n");
+        }
+        let lines = floor.lines();
+        if !lines.is_empty() {
+            text.push('\n');
+            for line in lines {
+                writeln!(text, "- {}", line.trim())?;
+            }
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(Path::new(&path))?
+            .write_all(text.as_bytes())?;
+        Ok(())
+    }
+}
+
+/// The next line of a final run whose change fails the floor of the base branch.
+const FLOOR_NEXT: &str = "the change takes away proof the base branch requires (above): restore \
+                          it, or ask the developer whether to merge past CI: fearlezz say ask \
+                          \"<question>\"";
+
 fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<bool> {
     let mut wt = ctx.worktree()?;
     let before = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
     let stages = &ctx.config.stages;
     let stage = stages.name(before.stage).to_string();
     let final_stage = stages.name(stages.last()).to_string();
-    let targets: Vec<&config::Check> = if ids.is_empty() {
-        let due: Vec<&str> = before
-            .checks
-            .iter()
-            .filter(|c| c.needed && c.stage <= before.stage)
-            .map(|c| c.id.as_str())
-            .collect();
-        ctx.config
-            .checks
-            .iter()
-            .filter(|c| due.contains(&c.id.as_str()))
-            .collect()
-    } else {
-        ids.iter()
-            .map(|id| ctx.config.check(id))
-            .collect::<Result<_>>()?
-    };
-    // A full run at the final stage answers for the whole work, not only for its checks.
     let in_memory = j.is_in_memory();
+    let targets = targets(ctx, &before, &wt, ids, in_memory)?;
+    // A full run at the final stage answers for the whole work, and for what the base
+    // branch requires, not only for its checks.
+    let floor = if ids.is_empty() && stage == final_stage {
+        floor::Floor::read(&ctx.git, &ctx.config, &wt)?
+    } else {
+        floor::Floor::default()
+    };
     let answers_for_work = !in_memory && ids.is_empty() && stage == final_stage;
     let settled = |view: &View| {
-        !answers_for_work
-            || view.next == state::READY
-            || (view.checks.is_empty() && view.claims.is_empty())
+        floor.holds()
+            && (!answers_for_work
+                || view.next == state::READY
+                || (view.checks.is_empty() && view.claims.is_empty()))
     };
     let next_line = |view: &View| {
         if in_memory {
             state::COMMIT_PROVEN.to_string()
+        } else if !floor.holds() {
+            FLOOR_NEXT.to_string()
         } else {
             view.next.clone()
         }
     };
+    let mut report = in_memory
+        .then(|| CommitReport::start(ctx, &wt, targets.len()))
+        .transpose()?;
     if targets.is_empty() {
         println!("nothing to run in {stage}");
+        floor.lines().iter().for_each(|l| println!("{l}"));
+        report.map_or(Ok(()), |r| r.finish(&floor))?;
         println!("next: {}", next_line(&before));
         return Ok(settled(&before));
     }
@@ -769,6 +887,9 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
             },
         )?;
         reused += usize::from(was_reused);
+        if let Some(r) = report.as_mut() {
+            r.ran(check, &result);
+        }
         match result.outcome {
             Outcome::Passed => {
                 passed += 1;
@@ -786,21 +907,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
              it stays unstable until its inputs change"
         );
     }
-    for f in &failures {
-        let code = f
-            .exit_code
-            .map_or_else(|| "signal".to_string(), |c| c.to_string());
-        if f.findings.iter().any(|x| x.level == findings::Level::Gate) {
-            println!("fail {}: blocking findings", f.check);
-        } else {
-            println!("fail {} (exit {code})", f.check);
-            for line in run::tail(&f.log, 12) {
-                println!("  {line}");
-            }
-            println!("  log: {}", f.log.display());
-        }
-        print_findings(f);
-    }
+    failures.iter().for_each(print_failure);
     for (_, r) in &green {
         print_findings(r);
     }
@@ -812,6 +919,8 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
         failures.len(),
         clock.elapsed().as_secs_f64()
     );
+    floor.lines().iter().for_each(|l| println!("{l}"));
+    report.map_or(Ok(()), |r| r.finish(&floor))?;
     let after = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
     if stage == final_stage
         && (after.next == state::READY || in_memory)
