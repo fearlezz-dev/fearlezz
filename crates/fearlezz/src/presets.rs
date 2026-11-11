@@ -737,6 +737,20 @@ fn git(dir: Option<&Path>, args: &[&str]) -> Result<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn every_language_piece_runs_and_counts_its_tests() {
+        for name in ["python", "kotlin", "typescript", "go", "flutter", "rust"] {
+            let text = BUILTIN.iter().find(|(n, _)| *n == name).unwrap().1;
+            let piece = table(text);
+            let check = piece.get("check").and_then(|c| c.get("tests"));
+            assert!(check.is_some(), "the {name} piece runs no tests");
+            assert!(
+                check.and_then(|c| c.get("tests")).is_some(),
+                "the {name} piece's tests check counts nothing"
+            );
+        }
+    }
+
     fn table(text: &str) -> Table {
         toml::from_str(text).unwrap()
     }

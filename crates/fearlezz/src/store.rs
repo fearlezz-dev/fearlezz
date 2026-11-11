@@ -109,8 +109,8 @@ impl Hasher {
             let levels = spec.levels.fingerprint(&spec.tools);
             parts.insert("(lints)".into(), sha256(levels.as_bytes()));
         }
-        if let Some(reader) = check.tests {
-            parts.insert("(tests)".into(), sha256(reader.name().as_bytes()));
+        if let Some(reader) = &check.tests {
+            parts.insert("(tests)".into(), sha256(reader.fingerprint().as_bytes()));
         }
         if let Some(shell) = &check.shell {
             parts.insert("(shell)".into(), sha256(shell.as_bytes()));

@@ -16,7 +16,8 @@ inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "clippy.toml", "rust-toolcha
 [check.tests]
 run = "cargo test --quiet"
 stage = "working"
-tests = "cargo"
+# Each test binary prints "test result: ok. N passed; M failed; ...".
+tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }
 inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
 
 # Production code never unwraps or panics; tests may.

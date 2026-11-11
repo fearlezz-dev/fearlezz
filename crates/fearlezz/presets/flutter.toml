@@ -13,9 +13,11 @@ stage = "working"
 inputs = ["**/*.dart", "analysis_options.yaml", "pubspec.yaml", "pubspec.lock"]
 findings = { read = "dart", lints = ["dart"] }
 
+# The last line says "+12: All tests passed!" or "+10 -2: Some tests failed.".
 [check.tests]
 run = "flutter test"
 stage = "working"
+tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
 inputs = ["**/*.dart", "pubspec.yaml", "pubspec.lock"]
 
 [settings.dart-analysis.analyzer]

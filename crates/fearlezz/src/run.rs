@@ -42,6 +42,8 @@ pub(crate) fn execute(
     let out = File::create(&log)?;
 
     let started_at = Timestamp::now();
+    // Reports from before this moment are another run's, never proof of this one.
+    let started = SystemTime::now();
     let clock = Instant::now();
     let (exit_ok, exit_code) = if let Some(builtin) = &check.builtin {
         run_builtin(builtin, at, &dir, out)?;
@@ -65,9 +67,9 @@ pub(crate) fn execute(
         findings = verdict.counted;
         findings_elsewhere = verdict.elsewhere;
     }
-    let tests = check.tests.map(|reader| {
+    let tests = check.tests.as_ref().map(|reader| {
         reader
-            .count(&[&log, &stdout_path], &dir)
+            .count(&[&log, &stdout_path], &dir, at.root, started)
             .unwrap_or_else(|why| {
                 proof_errors.push(why);
                 0

@@ -200,7 +200,7 @@ struct RawCheck {
     #[serde(default)]
     needs: Vec<Need>,
     findings: Option<RawFindings>,
-    tests: Option<crate::counts::Reader>,
+    tests: Option<toml::Value>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
     #[expect(
@@ -316,7 +316,12 @@ impl Config {
                 .with_context(|| format!("check {id}: inputs"))?,
                 shell: env.shell.clone(),
                 builtin: None,
-                tests: c.tests,
+                tests: c
+                    .tests
+                    .as_ref()
+                    .map(crate::counts::Reader::parse)
+                    .transpose()
+                    .with_context(|| format!("check {id}"))?,
                 id: id.clone(),
                 run: c.run,
                 stage,

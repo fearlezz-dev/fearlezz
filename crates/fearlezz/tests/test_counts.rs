@@ -1,5 +1,6 @@
-//! Test counts: a check with a `tests` reader says how many tests it ran, and a run of zero
-//! tests fails, so a test command that proves nothing cannot pass.
+//! Test counts: a check with a `tests` reader says how many tests it ran, from JUnit reports or
+//! a pattern in its output, and a run of zero tests fails, so a test command that proves nothing
+//! cannot pass.
 
 // Clippy applies its test allowances (unwrap, expect, panic) only to cfg(test) code.
 #![cfg(test)]
@@ -20,7 +21,7 @@ done
 '''
 stage = "working"
 inputs = ["src/**"]
-tests = "cargo"
+tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }
 "#;
 
 /// A test runner that writes a JUnit report: one test case per line of `src/a.txt`, skipped
@@ -112,7 +113,7 @@ fn output_without_a_test_result_fails_the_check() {
     let out = repo.fz(&["run", "tests"]);
     assert!(!out.ok, "{}", out.stdout);
     assert!(
-        out.stdout.contains("no test result line in its output"),
+        out.stdout.contains("no line of its output matches"),
         "{}",
         out.stdout
     );
@@ -132,7 +133,8 @@ fn junit_without_a_report_fails_and_says_where_it_looked() {
     let out = repo.fz(&["run", "tests"]);
     assert!(!out.ok, "{}", out.stdout);
     assert!(
-        out.stdout.contains("no $FEARLEZZ_OUT/junit.xml"),
+        out.stdout
+            .contains("no JUnit report matching $FEARLEZZ_OUT/junit.xml written by this run"),
         "{}",
         out.stdout
     );
@@ -141,7 +143,7 @@ fn junit_without_a_report_fails_and_says_where_it_looked() {
 #[test]
 fn an_unknown_reader_is_an_error() {
     let repo = Repo::new(
-        &CARGO.replace("\"cargo\"", "\"mocha\""),
+        &CARGO.replace("tests = { count", "tests = { mocha"),
         &[("src/a.txt", "1\n")],
     );
     let out = repo.fz(&["run", "tests"]);
@@ -154,7 +156,8 @@ fn dropping_the_reader_weakens_the_floor() {
     let repo = Repo::new(CARGO, &[("src/a.txt", "1\n")]);
     repo.branch("feat/x");
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
-    repo.write("fearlezz.toml", &config.replace("tests = \"cargo\"\n", ""));
+    let reader = config.lines().find(|l| l.starts_with("tests = ")).unwrap();
+    repo.write("fearlezz.toml", &config.replace(&format!("{reader}\n"), ""));
     repo.commit("drop the reader");
     let out = repo.fz(&["run", "--ci"]);
     assert!(!out.ok, "{}", out.stdout);
@@ -164,4 +167,62 @@ fn dropping_the_reader_weakens_the_floor() {
         "{}",
         out.stdout
     );
+}
+
+/// A JUnit report with `n` test cases.
+fn report(n: usize) -> String {
+    let cases = "<testcase name=\"t\"/>".repeat(n);
+    format!("<testsuites><testsuite name=\"all\">{cases}</testsuite></testsuites>\n")
+}
+
+#[test]
+fn junit_reports_anywhere_count_when_this_run_wrote_them() {
+    let config = r#"
+[check.tests]
+run = "mkdir -p mod/build/results && cp src/report.xml mod/build/results/a.xml"
+stage = "working"
+inputs = ["src/**"]
+tests = { junit = "**/build/results/*.xml" }
+"#;
+    let repo = repo(config, &[("src/report.xml", &report(3))]);
+    let (ok, line, out) = ci_line(&repo);
+    assert!(ok, "{out}");
+    assert!(line.contains("  3 tests  "), "{line}");
+}
+
+#[test]
+fn an_old_junit_report_is_not_proof() {
+    let config = r#"
+[check.tests]
+run = "true"
+stage = "working"
+inputs = ["src/**"]
+tests = { junit = "build/*.xml" }
+"#;
+    let repo = repo(
+        config,
+        &[("src/a.txt", "1\n"), ("build/old.xml", &report(5))],
+    );
+    let out = repo.fz(&["run", "tests"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("no JUnit report matching build/*.xml written by this run"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_pattern_without_numbers_counts_its_matches() {
+    let config = r#"
+[check.tests]
+run = "printf -- '--- PASS: TestA\n    --- PASS: TestA/sub\n--- FAIL: TestB\nok pkg\n'"
+stage = "working"
+inputs = ["src/**"]
+tests = { count = '--- (?:PASS|FAIL):' }
+"#;
+    let repo = repo(config, &[("src/a.txt", "1\n")]);
+    let (_, line, out) = ci_line(&repo);
+    assert!(line.contains("  3 tests  "), "{out}");
 }
