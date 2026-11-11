@@ -748,12 +748,12 @@ mod tests {
         for name in ["python", "kotlin", "typescript", "go", "flutter", "rust"] {
             let text = BUILTIN.iter().find(|(n, _)| *n == name).unwrap().1;
             let piece = table(text);
-            let check = piece.get("check").and_then(|c| c.get("tests"));
-            assert!(check.is_some(), "the {name} piece runs no tests");
-            assert!(
-                check.and_then(|c| c.get("tests")).is_some(),
-                "the {name} piece's tests check counts nothing"
-            );
+            // Checks are named for their tools; the one that runs tests counts them.
+            let counted = piece
+                .get("check")
+                .and_then(Value::as_table)
+                .is_some_and(|checks| checks.values().any(|c| c.get("tests").is_some()));
+            assert!(counted, "the {name} piece runs no counted tests");
         }
     }
 
