@@ -550,7 +550,12 @@ fn the_flutter_piece_excludes_the_folders_flutter_adds_to_the_analyzer() {
     assert!(out.ok, "{}", out.stderr);
     let options = std::fs::read_to_string(repo.path("analysis_options.yaml")).unwrap();
     // `flutter test` appends whichever of these a missing platform folder asks for.
-    for folder in ["build", "android", "ios", "web", "windows", "macos", "linux"] {
-        assert!(options.contains(&format!("    - \"{folder}/**\"\n")), "{options}");
+    for folder in [
+        "build", "android", "ios", "web", "windows", "macos", "linux",
+    ] {
+        assert!(
+            options.contains(&format!("    - \"{folder}/**\"\n")),
+            "{options}"
+        );
     }
 }
