@@ -25,5 +25,49 @@
     ],
     "ask": ["Bash(git push:*)", "Bash(curl:*)"],
     "deny": ["Bash(rm:*)"]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "fearlezz setup hook claude after-shell || true",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "fearlezz setup hook claude before-shell || true",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "fearlezz setup hook claude session-start || true",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "fearlezz setup hook claude stop || true",
+            "type": "command"
+          }
+        ]
+      }
+    ]
   }
 }

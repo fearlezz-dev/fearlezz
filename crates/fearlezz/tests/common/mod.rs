@@ -36,7 +36,10 @@ impl Repo {
     /// A repository on `main` with one commit holding `fearlezz.toml` and `files`. It opts out
     /// of the agent skill, which is the subject of `with_skill` alone.
     pub(crate) fn new(config: &str, files: &[(&str, &str)]) -> Repo {
-        Repo::with_skill(&format!("{config}\n[settings.skill]\nagents = []\n"), files)
+        Repo::with_skill(
+            &format!("{config}\n[settings.skill]\nagents = []\n\n[settings.hooks]\nagents = []\n"),
+            files,
+        )
     }
 
     /// A repository as a real project has it: `fearlezz.toml` exactly as given.
@@ -107,6 +110,24 @@ impl Repo {
 
     pub(crate) fn fz_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         fz_in(&self.root, args, env)
+    }
+
+    /// Runs `fearlezz` with `input` on stdin, as an agent runs a hook.
+    pub(crate) fn fz_input(&self, args: &[&str], input: &str) -> Output {
+        let out = Command::cargo_bin("fearlezz")
+            .unwrap()
+            .args(args)
+            .current_dir(&self.root)
+            .env_remove("CI")
+            .env_remove("FEARLEZZ_JOURNAL")
+            .write_stdin(input)
+            .output()
+            .unwrap();
+        Output {
+            ok: out.status.success(),
+            stdout: String::from_utf8(out.stdout).unwrap(),
+            stderr: String::from_utf8(out.stderr).unwrap(),
+        }
     }
 }
 

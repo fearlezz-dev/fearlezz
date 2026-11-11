@@ -502,23 +502,31 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool) -> String {
             l.check
         );
     }
+    // Work moves on only once it says what it is and what it must prove.
+    if let Some(line) = missing_declaration(v) {
+        return line;
+    }
     match stages.after(v.stage) {
         Some(s) => format!("when ready: fearlezz run --stage {}", stages.name(s)),
         None => missing_for_ready(v).unwrap_or_else(|| READY.into()),
     }
 }
 
-/// What the work still lacks, beyond its checks, to be called ready: proof needs a goal and
-/// something to prove, and it counts only for what is committed.
-fn missing_for_ready(v: &View) -> Option<String> {
+/// The goal or claims the work has not declared yet.
+fn missing_declaration(v: &View) -> Option<String> {
     if v.goal.is_none() {
         return Some(SAY_START.into());
     }
-    if v.claims.is_empty() {
-        return Some(
-            "say what this work must prove: fearlezz say claim \"<behavior>\" --check <check>"
-                .into(),
-        );
+    v.claims.is_empty().then(|| {
+        "say what this work must prove: fearlezz say claim \"<behavior>\" --check <check>".into()
+    })
+}
+
+/// What the work still lacks, beyond its checks, to be called ready: proof needs a goal and
+/// something to prove, and it counts only for what is committed.
+fn missing_for_ready(v: &View) -> Option<String> {
+    if let Some(line) = missing_declaration(v) {
+        return Some(line);
     }
     if !v.work_file_current {
         return Some(format!(

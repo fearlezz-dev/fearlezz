@@ -44,7 +44,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Capability | Missing |
 | --- | --- |
 | Overview of the work | A static page and `fearlezz --all` exist; nothing live for runs of hours or days |
-| Local and CI together | "Ready to merge" and the final exit code are honest. `fearlezz run --ci` proves a commit with no journal, runs every check on the base branch, and holds a change to the base branch's config as its floor; `main` requires the check. The goal and claims are committed in a work file per change, and CI proves each claim again. The rest of the proof gate is under Next |
+| Local and CI together | "Ready to merge" and the final exit code are honest. `fearlezz run --ci` proves a commit with no journal, runs every check on the base branch, and holds a change to the base branch's config as its floor; `main` requires the check. The goal and claims are committed in a work file per change, and CI proves each claim again. Agent hooks (Claude Code, Codex, Cursor) refuse a push without claims and a pull request before ready, block stopping once, and say a check's command run by hand is not proof. The rest of the proof gate is under Next |
 | Tests are real | Red then green only; no mutation or coverage proof |
 | Extension layers | Pieces work; a new kind of proof and a library layer do not exist yet |
 
@@ -70,7 +70,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 1. Finish the proof gate, so unproven work cannot look proven (design: `docs/drive/ci-proof-loop/record.yaml`):
    - What CI shows: every check's test count, and zero tests is red. The floor does not yet compare `[lints]` levels, `[rule]` tables or check `env`, so lowering a lint or a rule is not caught.
    - Claims in CI cannot show red before green for a bug, or that a check really tests its claim; both stay the agent's word until "tests are real". Work files stay in the repository after merging.
-   - Agent hooks, written by `fearlezz setup sync`: push needs a goal and a claim, a non draft pull request needs ready, the end of a turn blocks once.
+   - The Codex and Cursor hooks follow their docs but have not run in those agents yet. Hooks replace a project's own hooks for the same events in those files.
 2. Adopt Fearlezz in a first real project outside this repository, which then tests the gate for real.
 3. Pick up the list above one piece at a time, each in its own thread.
 

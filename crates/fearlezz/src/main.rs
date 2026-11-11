@@ -5,6 +5,7 @@ mod env;
 mod findings;
 mod floor;
 mod git;
+mod hooks;
 mod journal;
 mod lints;
 mod look;
@@ -143,6 +144,15 @@ enum Setup {
     /// those whose spec contains PIECE), accept tags that moved, and list every setting that
     /// changes.
     Update { piece: Option<String> },
+    /// Answer an agent's hook, reading its JSON on stdin. Written into each agent's settings
+    /// by `fearlezz setup sync`.
+    #[command(hide = true)]
+    Hook {
+        #[arg(value_enum)]
+        agent: hooks::Agent,
+        #[arg(value_enum)]
+        event: hooks::Event,
+    },
     /// Stop the services this checkout runs, or with --all every checkout's.
     Down {
         #[arg(long)]
@@ -319,6 +329,31 @@ fn move_stage(ctx: &Ctx, name: String, reason: Option<String>) -> Result<()> {
     j.append(ctx.now, Event::Stage { to: name, reason })?;
     println!("stage {} -> {}", stages.name(from), stages.name(to));
     Ok(())
+}
+
+/// What Fearlezz tells an agent at `event`, from the repository the hook input names.
+fn hook_answer(event: hooks::Event, input: &hooks::Input) -> Result<hooks::Answer> {
+    if let Some(dir) = &input.dir {
+        std::env::set_current_dir(dir)?;
+    }
+    let ctx = ctx()?;
+    let journal = ctx.journal()?;
+    let wt = ctx.worktree()?;
+    let view = ctx.view(&journal)?;
+    let work = hooks::Work {
+        name: journal.name.clone(),
+        declared: match (view.goal.is_some(), view.claims.is_empty()) {
+            (false, _) => hooks::Declared::Nothing,
+            (true, true) => hooks::Declared::Goal,
+            (true, false) => hooks::Declared::GoalAndClaims,
+        },
+        ready: view.next == state::READY,
+        waiting: view.waiting.is_some(),
+        needs_proof: wt.changed.iter().any(|p| ctx.config.needs_proof(p)),
+        now: view.now.clone(),
+        next: view.next.clone(),
+    };
+    Ok(hooks::judge(&ctx.config, &work, event, input))
 }
 
 /// Writes the work file after the journal declared something, and says so.
@@ -524,6 +559,19 @@ fn setup(what: Setup) -> Result<bool> {
                 }
             }
         }
+        Setup::Hook { agent, event } => {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+            let input = hooks::Input::parse(agent, &text);
+            // A hook that cannot judge says nothing: it is a guardrail, and CI is the boundary.
+            let answer = hook_answer(event, &input).unwrap_or_else(|e| {
+                eprintln!("fearlezz hook: {e:#}");
+                hooks::Answer::Nothing
+            });
+            if let Some(out) = hooks::render(agent, event, answer) {
+                println!("{out}");
+            }
+        }
         Setup::Down { all } => {
             let ctx = prepared()?;
             {
@@ -703,11 +751,7 @@ fn declared<'a>(
     wt: &Worktree,
     targets: &mut Vec<&'a config::Check>,
 ) -> Result<work::Declared> {
-    let needs_claims = wt
-        .changed
-        .iter()
-        .filter(|p| !ctx.config.needs_no_proof(p))
-        .any(|p| ctx.config.checks.iter().any(|c| c.reads(p)));
+    let needs_claims = wt.changed.iter().any(|p| ctx.config.needs_proof(p));
     let declared = work::Declared::in_change(&wt.git.root, &wt.changed, needs_claims)?;
     for id in declared.checks() {
         if let Ok(c) = ctx.config.check(&id)
