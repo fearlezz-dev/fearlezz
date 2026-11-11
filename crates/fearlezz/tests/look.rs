@@ -269,3 +269,97 @@ fn a_base_another_command_uses_is_not_removed() {
         "a base nobody holds stays after three newer ones"
     );
 }
+
+/// Stands in for Playwright: `toHaveScreenshot` writes each still under the snapshot path the
+/// project's config points into `$FEARLEZZ_OUT`, and the JUnit reporter counts the tests.
+const FAKE_PLAYWRIGHT: &str = r#"#!/bin/sh
+set -e
+echo "$*" >> "$FEARLEZZ_OUT/args"
+mkdir -p "$FEARLEZZ_OUT/stills/desktop"
+ffmpeg -v error -nostdin -f lavfi -i "color=c=$(cat src/color.css):s=64x48" -frames:v 1 "$FEARLEZZ_OUT/stills/desktop/home.png"
+echo '<testsuites><testsuite tests="1"><testcase name="home"/></testsuite></testsuites>' > "$PLAYWRIGHT_JUNIT_OUTPUT_FILE"
+"#;
+
+#[test]
+fn the_playwright_piece_compares_the_stills_playwright_writes() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let repo = Repo::new(
+        "use = [\"playwright\"]\n",
+        &[
+            (".gitignore", "node_modules/\n"),
+            ("src/color.css", "red"),
+            ("package-lock.json", "{}"),
+        ],
+    );
+    // Installed in the main checkout only, as npm does; the piece clones it into the base.
+    repo.write("node_modules/.bin/playwright", FAKE_PLAYWRIGHT);
+    std::fs::set_permissions(
+        repo.path("node_modules/.bin/playwright"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    repo.branch("feat/blue");
+    repo.write("src/color.css", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("look playwright: 1 changed"),
+        "{}",
+        out.stdout
+    );
+    let status = repo.fz(&["--check", "playwright"]);
+    assert!(status.stdout.contains("\"tests\": 1"), "{}", status.stdout);
+    assert!(
+        status.stdout.contains("\"id\": \"desktop/home\""),
+        "{}",
+        status.stdout
+    );
+}
+
+/// A tool that writes its pictures into a folder (Playwright's `toHaveScreenshot` with its
+/// snapshot path in `$FEARLEZZ_OUT`) needs no `proof.jsonl`: `stills` names them by glob.
+const WRITE_FILES: &str = r#"set -e
+still() {
+  mkdir -p "$(dirname "$FEARLEZZ_OUT/stills/$1")"
+  ffmpeg -v error -nostdin -f lavfi -i "color=c=$2:s=64x48" -frames:v 1 "$FEARLEZZ_OUT/stills/$1.png"
+}
+still desktop/home "$(cat src/color.txt)"
+still mobile/home white
+if [ -e src/extra ]; then still desktop/extra green; fi
+"#;
+
+#[test]
+fn stills_can_be_named_by_a_glob_in_the_proof_folder() {
+    let repo = Repo::new(
+        r#"
+[check.screens]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+stills = "stills/**/*.png"
+"#,
+        &[("record.sh", WRITE_FILES), ("src/color.txt", "red")],
+    );
+    repo.branch("feat/blue");
+    repo.write("src/color.txt", "blue");
+    repo.write("src/extra", "");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("look screens: 1 changed, 1 new, 1 same"),
+        "{}",
+        out.stdout
+    );
+    let status = repo.fz(&["--check", "screens"]);
+    // Named by the path below the glob's fixed part, without the extension.
+    for id in ["desktop/home", "mobile/home", "desktop/extra"] {
+        assert!(
+            status.stdout.contains(&format!("\"id\": \"{id}\"")),
+            "{id}: {}",
+            status.stdout
+        );
+    }
+}

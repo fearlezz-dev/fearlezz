@@ -43,6 +43,8 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 ## Stills and films
 
 - A check that records the UI lists each picture in `proof.jsonl` with `"kind": "still"` or `"kind": "film"` (any format ffmpeg reads; animated WebP, GIF, PNG, MP4). An optional `"id"` names it; otherwise the file name does.
+- A tool that writes its pictures into a folder needs no `proof.jsonl`: `stills = "stills/**/*.png"` on the check makes every matching file in `$FEARLEZZ_OUT` a still, named by its path below the fixed folders without the extension (`stills/mobile/home.png` is `mobile/home`).
+- For a web app, `use = ["playwright"]`: each `toHaveScreenshot` call is a still. Its piece shows the two lines `playwright.config` needs. Hide what changes on its own (clocks, random values) with `data-volatile` and a `stylePath`, or freeze it with `page.clock`; set `timezoneId` and `locale`. Add the still harness on the base branch first, so the base run takes the same pictures.
 - After such a check passes, `fearlezz run` runs the same check on the base commit (where the branch left the base branch) in a hidden worktree, once per base, and compares every picture: same, timing, changed, new, gone. It prints `look <check>: ...` and a report path.
 - Changed pictures are not failures. Read the report, and when the change is not the intended one, fix it.
 - Merge waits until the developer approves changed pictures. Show them the report. Only after they agree, run `fearlezz say approve <check> --said "<their words, quoted>"`. Never approve on your own judgment. The approval holds while the check's inputs stay the same; any further change needs a new one.
@@ -84,7 +86,7 @@ In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter:
 
 ```toml
 use = [
-  "rust",                                  # built in: fmt, clippy, tests (also: flutter, typescript, eslint, python, kotlin, go, devenv, agents)
+  "rust",                                  # built in: fmt, clippy, tests (also: flutter, typescript, eslint, playwright, python, kotlin, go, devenv, agents)
   "./proof/screens.toml",                  # a file in this repo
   "github:acme/presets//web.toml@v1.2",    # someone's repo, pinned to a tag or commit
 ]

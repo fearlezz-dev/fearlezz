@@ -66,7 +66,10 @@ pub(crate) fn execute(
     let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
     let stdout_path = dir.join("stdout.txt");
 
-    let (proofs, mut proof_errors) = read_proofs(&dir.join("proof.jsonl"));
+    let (mut proofs, mut proof_errors) = read_proofs(&dir.join("proof.jsonl"));
+    if let Some(stills) = &check.stills {
+        proofs.extend(stills.proofs(&dir));
+    }
     let mut passed = exit_ok;
     let (mut findings, mut findings_elsewhere) = (Vec::new(), 0);
     if let Some(spec) = &check.findings {

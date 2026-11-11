@@ -27,6 +27,7 @@ pub(crate) const BUILTIN: &[(&str, &str)] = &[
     ("flutter", include_str!("../presets/flutter.toml")),
     ("go", include_str!("../presets/go.toml")),
     ("kotlin", include_str!("../presets/kotlin.toml")),
+    ("playwright", include_str!("../presets/playwright.toml")),
     ("python", include_str!("../presets/python.toml")),
     ("rust", include_str!("../presets/rust.toml")),
     ("typescript", include_str!("../presets/typescript.toml")),

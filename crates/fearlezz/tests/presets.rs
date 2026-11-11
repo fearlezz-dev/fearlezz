@@ -86,7 +86,7 @@ fn an_unknown_piece_says_what_exists() {
     assert!(!out.ok);
     assert!(
         out.stderr.contains(
-            "built in are agents, devenv, eslint, flutter, go, kotlin, python, rust, typescript"
+            "built in are agents, devenv, eslint, flutter, go, kotlin, playwright, python, rust, typescript"
         ),
         "{}",
         out.stderr

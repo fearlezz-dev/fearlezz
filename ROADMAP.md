@@ -35,8 +35,8 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Rules | Paths, naming, companion files, ast-grep code rules |
 | Settings | One source written into each tool's own file, drift is a finding |
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
-| Pieces | Rust, TypeScript, ESLint, Python, Go, Kotlin, Flutter, devenv, agents; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
-| Stills and films | Compared with the same check run on the base commit, with a report page |
+| Pieces | Rust, TypeScript, ESLint, Playwright, Python, Go, Kotlin, Flutter, devenv, agents; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
+| Stills and films | Compared with the same check run on the base commit, with a report page. Listed in `proof.jsonl` or found by a `stills` glob; the `playwright` piece takes them from `toHaveScreenshot` (spike, `spike/look-web`) |
 | Approvals | A visual change waits for the developer's words |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
 | Distribution | GitHub Releases for Linux and macOS through release-please (merging its pull request tags and builds), `install.sh`, Homebrew tap, Nix flake and devenv input, `cargo install --git`. The tap follows new releases once its workflow (tap pull request 1) is merged |
@@ -78,6 +78,8 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 ## Known problems
 
+- **The comparison is blind to color.** Pictures are compared in gray, so a blue accent turned green (or red turned green) is called same, and the report outlines only noise. Repro: the ignored test `a_change_of_color_alone_is_a_change`.
+- **The base checkout lives under `.git`.** Tools that refuse or skip `.git` paths break there: the Vite dev server answers 403 to every file (its `server.fs.deny` has `**/.git/**`), so a look against a dev server has no before.
 - **Sync never removes a rule a piece dropped.** Biome's `linter.rules` keeps stale keys and the `settings` check calls it in sync.
 - **Monorepos.** `setup init` and the language pieces look only at the repository root.
 - **macOS is not covered by CI.** It is only proven on the developer's machine.

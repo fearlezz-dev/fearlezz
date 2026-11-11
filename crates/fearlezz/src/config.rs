@@ -104,6 +104,8 @@ pub(crate) struct Check {
     pub findings: Option<FindingsSpec>,
     /// For a check that runs tests: where it says how many ran. Zero tests fails it.
     pub tests: Option<crate::counts::Reader>,
+    /// For a check that writes pictures into a folder: which files in it are stills.
+    pub stills: Option<crate::look::StillGlob>,
     /// The environment's shell it runs inside, part of its inputs.
     pub shell: Option<String>,
     /// Work Fearlezz does itself instead of running a command.
@@ -201,6 +203,7 @@ struct RawCheck {
     needs: Vec<Need>,
     findings: Option<RawFindings>,
     tests: Option<toml::Value>,
+    stills: Option<String>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
     #[expect(
@@ -322,6 +325,12 @@ impl Config {
                     .map(crate::counts::Reader::parse)
                     .transpose()
                     .with_context(|| format!("check {id}"))?,
+                stills: c
+                    .stills
+                    .as_deref()
+                    .map(crate::look::StillGlob::parse)
+                    .transpose()
+                    .with_context(|| format!("check {id}"))?,
                 id: id.clone(),
                 run: c.run,
                 stage,
@@ -434,6 +443,7 @@ fn builtin_check(id: &str, stages: &Stages, inputs: GlobSet, on: Scope, builtin:
         shell: None,
         builtin: Some(builtin),
         tests: None,
+        stills: None,
     }
 }
 

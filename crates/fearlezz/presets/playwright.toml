@@ -1,0 +1,27 @@
+# Playwright end to end tests whose `toHaveScreenshot` calls are the stills of the look.
+#
+# Fearlezz compares each still with the same test run on the base commit, so there are no
+# golden files: Playwright only writes the pictures. Two lines in playwright.config point
+# them into the proof folder and keep what changes on its own out of them:
+#
+#   ...(process.env.FEARLEZZ_OUT && {
+#     snapshotPathTemplate: `${process.env.FEARLEZZ_OUT}/stills/{projectName}/{arg}{ext}`,
+#   }),
+#   expect: { toHaveScreenshot: { stylePath: "e2e/stills.css" } },   // [data-volatile] { visibility: hidden }
+#
+# A still is then named `<project>/<name>`, such as `mobile/home` for
+# `await expect(page).toHaveScreenshot("home.png")` in the mobile project. toHaveScreenshot
+# already stops animations, hides the caret and waits until two captures match.
+
+[check.playwright]
+run = "PLAYWRIGHT_JUNIT_OUTPUT_FILE=\"$FEARLEZZ_OUT/junit.xml\" playwright test --update-snapshots=all --reporter=line,junit"
+stage = "look"
+tests = "junit"
+stills = "stills/**/*.png"
+inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.html", "**/*.css", "**/*.svg", "public/**", "package.json", "package-lock.json", "bun.lock", "pnpm-lock.yaml", "yarn.lock"]
+
+# The base commit's checkout needs the installed packages and browsers too; Playwright keeps
+# its browsers in a cache outside the repository, so only node_modules is cloned.
+[env]
+clone = ["node_modules"]
+clone_when = ["package-lock.json", "bun.lock", "pnpm-lock.yaml", "yarn.lock"]

@@ -138,6 +138,70 @@ impl Base {
     }
 }
 
+/// `stills = "<glob>"`: every file the check wrote under `$FEARLEZZ_OUT` matching the glob is
+/// a still, for tools that write pictures into a folder and no `proof.jsonl`. Each is named by
+/// its path below the glob's fixed folders, without the extension: `stills/desktop/home.png`
+/// matched by `stills/**/*.png` is `desktop/home`.
+pub(crate) struct StillGlob {
+    matcher: globset::GlobMatcher,
+    /// The folders before the first segment with a wildcard, with a trailing slash.
+    fixed: String,
+}
+
+impl StillGlob {
+    pub(crate) fn parse(glob: &str) -> Result<StillGlob> {
+        let glob = glob.strip_prefix("$FEARLEZZ_OUT/").unwrap_or(glob);
+        let matcher = globset::GlobBuilder::new(glob)
+            .literal_separator(true)
+            .build()
+            .map_err(|e| anyhow::anyhow!("stills \"{glob}\": {e}"))?
+            .compile_matcher();
+        // The file name segment is never a folder, so only the ones before it count.
+        let folders = glob.rsplit_once('/').map_or("", |(dirs, _)| dirs);
+        let mut fixed = String::new();
+        for segment in folders
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .take_while(|s| !s.contains(['*', '?', '[', '{']))
+        {
+            fixed.push_str(segment);
+            fixed.push('/');
+        }
+        Ok(StillGlob { matcher, fixed })
+    }
+
+    /// The still proofs for the files under `out` this glob matches, sorted by path.
+    pub(crate) fn proofs(&self, out: &Path) -> Vec<serde_json::Value> {
+        let mut files = Vec::new();
+        walk(out, out, &mut files);
+        files.sort();
+        files
+            .into_iter()
+            .filter(|rel| self.matcher.is_match(rel))
+            .map(|rel| {
+                let below = rel.strip_prefix(&self.fixed).unwrap_or(&rel);
+                let id = below.rsplit_once('.').map_or(below, |(stem, _)| stem);
+                serde_json::json!({ "kind": "still", "file": rel, "id": id })
+            })
+            .collect()
+    }
+}
+
+/// Every file below `dir`, as a path relative to `base` with forward slashes.
+fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk(base, &path, out);
+        } else if let Ok(rel) = path.strip_prefix(base) {
+            out.push(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+}
+
 struct MediaProof {
     name: String,
     kind: String,
