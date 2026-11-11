@@ -41,6 +41,15 @@ impl Level {
     pub(crate) fn is_on(self) -> bool {
         self != Level::Off
     }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Level::Off => "off",
+            Level::Hint => "hint",
+            Level::Flag => "flag",
+            Level::Gate => "gate",
+        }
+    }
 }
 
 /// A linter whose rules Fearlezz knows how to name.
@@ -163,6 +172,27 @@ impl Lints {
     /// The rules of one tool, by name.
     pub(crate) fn of(&self, tool: Tool) -> Option<&BTreeMap<String, Level>> {
         self.0.get(&tool)
+    }
+
+    /// How `head` judges the rules of `tool` more mildly than these tables: a rule at a lower
+    /// level, or no longer set. Each as `lints.<tool>.<rule>` and how it weakened.
+    pub(crate) fn weakenings(&self, head: &Lints, tool: Tool) -> Vec<(String, String)> {
+        let Some(base) = self.of(tool) else {
+            return Vec::new();
+        };
+        let head = head.of(tool);
+        base.iter()
+            .filter_map(|(rule, &was)| {
+                let how = match head.and_then(|h| h.get(rule)) {
+                    None => "it is no longer set".to_string(),
+                    Some(&now) if now < was => {
+                        format!("it goes from {} to {}", was.name(), now.name())
+                    }
+                    Some(_) => return None,
+                };
+                Some((format!("lints.{}.{rule}", tool.name()), how))
+            })
+            .collect()
     }
 
     /// A stable text of the tables, part of the inputs of checks that read them.

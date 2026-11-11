@@ -15,6 +15,10 @@ check = "tests"
 text = "a check with a tests reader shows how many tests ran, and a run of zero tests fails it"
 check = "tests"
 
+[claim.c12]
+text = "a change that lowers a lint or rule, drops a lints table, narrows findings or a rule's files, changes what a rule checks, or changes a check's env is red, naming it"
+check = "tests"
+
 [claim.c2]
 text = "fearlezz run --ci proves the commit without writing a journal and never says ready to merge"
 check = "tests"
