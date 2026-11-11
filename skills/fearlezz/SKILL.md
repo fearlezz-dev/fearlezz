@@ -118,6 +118,8 @@ Pieces carry tool settings (lint levels, analyzer rules, agent permissions) unde
 unwrap_used = "warn"       # tools: cargo-lints, dart-analysis, claude
 ```
 
+`fearlezz setup sync` also writes this skill, from the Fearlezz binary, into `.claude/skills/fearlezz/` and `.agents/skills/fearlezz/`, so it always matches the installed version. Commit both. `[settings.skill]` narrows it: `agents = ["claude"]` writes one copy, `agents = []` none.
+
 ## Lint levels
 
 Pieces decide every lint rule once under `[lints.<tool>]` (tools: clippy, rustc, dart, biome, eslint, ruff, ktlint, detekt, golangci) as `gate`, `flag`, `hint` or `off`; the project overrides any rule. A check names the tables its findings use, and each finding gets its rule's level; an off rule is never reported. `fearlezz setup sync` turns the rules on or off in the tool's own file: Cargo.toml, analysis_options.yaml, biome.json, eslint.fearlezz.mjs (spread it into eslint.config.* after the plugin configs), ruff.toml, a marked block in .editorconfig (ktlint), config/detekt/detekt.yml, .golangci.yml. When the project already keeps a tool's config in another file that tool reads first (biome.jsonc, .ruff.toml, pyproject.toml with `[tool.ruff]`, .golangci.yaml), sync writes into that file instead of adding one that shadows it.

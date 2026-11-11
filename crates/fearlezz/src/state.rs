@@ -188,7 +188,9 @@ pub(crate) fn view(
 
     let mut checks = Vec::new();
     let mut tree = None;
+    let mut skill_out_of_date = false;
     if let Some(wt) = worktree {
+        skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
         tree = Some(wt.tree.clone());
         for check in &config.checks {
             let needed = wt.changed.iter().any(|p| check.reads(p));
@@ -301,7 +303,7 @@ pub(crate) fn view(
     } else {
         Group::Idle
     };
-    view.next = next(config, &view);
+    view.next = next(config, &view, skill_out_of_date);
     view.now = now_line(config, &view);
     Ok(view)
 }
@@ -388,12 +390,17 @@ fn claim_state(
     ClaimState::Proven
 }
 
-/// What the agent should do next, as one line. Order: the developer, failures, needed runs,
-/// claims, moving on.
-fn next(config: &Config, v: &View) -> String {
+/// What the agent should do next, as one line. Order: the developer, the agent skill, failures,
+/// needed runs, claims, moving on.
+fn next(config: &Config, v: &View, skill_out_of_date: bool) -> String {
     let stages = &config.stages;
     if let Some(q) = &v.waiting {
         return format!("waiting for the developer: {q}");
+    }
+    if skill_out_of_date {
+        return "write the agent skill for this Fearlezz version: fearlezz setup sync, then \
+                commit it"
+            .into();
     }
     let due: Vec<&CheckView> = v
         .checks

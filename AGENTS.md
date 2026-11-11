@@ -18,7 +18,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `state.rs`: everything shown, derived from journal, store and worktree. Nothing derived is stored.
 - `presets.rs`: `use`, pulling pieces of config in by name, path or pinned repository and merging them; built in pieces live in `crates/fearlezz/presets/`.
 - `run.rs`: running one check in a clean env, or a built in check in process.
-- `settings.rs`: shared tool settings from pieces, written into each tool's own file; drift is a finding of the built in `settings` check.
+- `settings.rs`: shared tool settings from pieces, written into each tool's own file, and the agent skill every project gets; drift is a finding of the built in `settings` check. The skill's source is `skills/fearlezz/SKILL.md`, embedded in the binary; after changing it run `fearlezz setup sync`.
 - `lints.rs`: `[lints.<tool>]` tables, the level (gate, flag, hint, off) a finding of each rule gets, by rule name.
 - `rules.rs`: `[rule.<name>]` conventions (paths, naming, companion files, ast-grep code rules) that form the built in `rules` check.
 - `findings.rs`: findings a check reports at file and line (cargo JSON, SARIF, jsonl), the lines a change touched, and the verdict.

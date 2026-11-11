@@ -33,8 +33,14 @@ impl Output {
 }
 
 impl Repo {
-    /// A repository on `main` with one commit holding `fearlezz.toml` and `files`.
+    /// A repository on `main` with one commit holding `fearlezz.toml` and `files`. It opts out
+    /// of the agent skill, which is the subject of `with_skill` alone.
     pub(crate) fn new(config: &str, files: &[(&str, &str)]) -> Repo {
+        Repo::with_skill(&format!("{config}\n[settings.skill]\nagents = []\n"), files)
+    }
+
+    /// A repository as a real project has it: `fearlezz.toml` exactly as given.
+    pub(crate) fn with_skill(config: &str, files: &[(&str, &str)]) -> Repo {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let repo = Repo { _dir: dir, root };

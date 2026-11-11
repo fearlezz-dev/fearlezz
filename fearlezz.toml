@@ -3,3 +3,7 @@
 # `devenv shell`: only the base variables and the ones listed under `env` reach it.
 
 use = ["devenv", "rust", "agents"]
+
+# The binary embeds the agent skill, so the tests read it too.
+[check.tests]
+inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md"]
