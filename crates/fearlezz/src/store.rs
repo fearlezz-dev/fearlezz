@@ -49,6 +49,9 @@ pub(crate) struct RunResult {
     /// Findings outside the scope (on lines this change did not touch).
     #[serde(default)]
     pub findings_elsewhere: usize,
+    /// For a check with a tests reader: how many tests ran; zero when there is no count.
+    #[serde(default)]
+    pub tests: Option<u64>,
     pub dir: PathBuf,
     pub log: PathBuf,
 }
@@ -105,6 +108,9 @@ impl Hasher {
         if let Some(spec) = check.findings.as_ref().filter(|s| !s.tools.is_empty()) {
             let levels = spec.levels.fingerprint(&spec.tools);
             parts.insert("(lints)".into(), sha256(levels.as_bytes()));
+        }
+        if let Some(reader) = check.tests {
+            parts.insert("(tests)".into(), sha256(reader.name().as_bytes()));
         }
         if let Some(shell) = &check.shell {
             parts.insert("(shell)".into(), sha256(shell.as_bytes()));

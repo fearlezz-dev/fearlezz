@@ -102,6 +102,8 @@ pub(crate) struct Check {
     pub services: Option<String>,
     /// For a check that reports findings: where they come from and which count.
     pub findings: Option<FindingsSpec>,
+    /// For a check that runs tests: where it says how many ran. Zero tests fails it.
+    pub tests: Option<crate::counts::Reader>,
     /// The environment's shell it runs inside, part of its inputs.
     pub shell: Option<String>,
     /// Work Fearlezz does itself instead of running a command.
@@ -198,6 +200,7 @@ struct RawCheck {
     #[serde(default)]
     needs: Vec<Need>,
     findings: Option<RawFindings>,
+    tests: Option<crate::counts::Reader>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
     #[expect(
@@ -313,6 +316,7 @@ impl Config {
                 .with_context(|| format!("check {id}: inputs"))?,
                 shell: env.shell.clone(),
                 builtin: None,
+                tests: c.tests,
                 id: id.clone(),
                 run: c.run,
                 stage,
@@ -424,6 +428,7 @@ fn builtin_check(id: &str, stages: &Stages, inputs: GlobSet, on: Scope, builtin:
         }),
         shell: None,
         builtin: Some(builtin),
+        tests: None,
     }
 }
 

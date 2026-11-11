@@ -67,7 +67,7 @@ slices:
   - id: ci-mode
     tests: [crates/fearlezz/tests/ci.rs]
     status: done
-    left: test counts and zero tests red; lint levels, rules and env in the floor
+    left: lint levels, rules and env in the floor
   - id: claims-reach-ci
     tests: [crates/fearlezz/tests/ci.rs work file tests, crates/fearlezz/tests/core.rs say_writes_*, ready_needs_the_work_file_*]
     status: done
@@ -76,5 +76,9 @@ slices:
     tests: [crates/fearlezz/tests/hooks.rs]
     status: done
     note: Claude Code, Codex and Cursor; Codex and Cursor untested in the agents themselves
+  - id: test-counts
+    tests: [crates/fearlezz/tests/test_counts.rs]
+    status: done
+    note: a tests reader per check (cargo, junit), chosen over guessing from the command; zero tests or no count is red
 
-next: Show the hooks slice for review; the proof gate design is built.
+next: Show the test counts slice for review; the proof gate design is built.

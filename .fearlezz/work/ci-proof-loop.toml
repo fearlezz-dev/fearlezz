@@ -11,6 +11,10 @@ check = "tests"
 text = "the hooks refuse a push without a goal and claim and a non draft pull request before ready, block stopping once, show the state at session start, and say a check's command run by hand is not proof"
 check = "tests"
 
+[claim.c11]
+text = "a check with a tests reader shows how many tests ran, and a run of zero tests fails it"
+check = "tests"
+
 [claim.c2]
 text = "fearlezz run --ci proves the commit without writing a journal and never says ready to merge"
 check = "tests"
