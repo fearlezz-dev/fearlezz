@@ -35,7 +35,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Stills and films | Compared with the same check run on the base commit, with a report page |
 | Approvals | A visual change waits for the developer's words |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
-| Distribution | GitHub Releases, `install.sh`, Nix flake and devenv input, `cargo install --git` |
+| Distribution | `v0.1.0` on GitHub Releases for Linux and macOS, `install.sh`, Homebrew tap, Nix flake and devenv input, `cargo install --git`. A new release does not update the tap by itself yet |
 
 ## Partly built
 
@@ -60,13 +60,12 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 ## Wishes
 
 - **Releases as a layer.** Help with product releases, so publishing to many places at once is easy: GitHub, Homebrew, Nix, package registries and release notes. It should fit the existing system as layers, with pieces per destination and proof that each place really got the release.
-- **Ship the agent skill with the CLI.** `skills/fearlezz/SKILL.md` lives in this repository only, so a new project does not get it.
 - **Name the failing test.** A failed test check shows its last lines; naming the failures directly would be better.
 - **Faster film comparison.** A 94 second 1080p film takes about 236 seconds.
 
 ## Next
 
-1. Finish the first release: `v0.1.0`, the Homebrew tap, and install it on the developer's machine.
+1. Ship the agent skill with the CLI, since a new project needs it.
 2. Adopt Fearlezz in a first real project outside this repository.
 3. Decide what a run on `main` should prove (see below).
 4. Pick up the list above one piece at a time, each in its own thread.
