@@ -31,6 +31,11 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `hooks.rs`: agent hooks (Claude Code, Codex, Cursor): what `setup sync` writes into each agent's settings, and the answers of `fearlezz setup hook` that hold an agent to the proof while it works.
 - `main.rs`: the CLI; `overview.rs`: the overview page.
 
+## Releases
+
+- release-please opens the release PR from commits on `main`; merging it tags `vX.Y.Z` and builds the binaries (`.github/workflows/release.yml`).
+- Only conventional commits count: a change that should release starts with `fix:` or `feat:` (`feat!:` for a breaking one). Plain sentence commits are fine but cause no release; `main` takes squash merges, so the pull request title is the commit.
+
 ## Free and paid
 
 - Everything that runs locally (CLI, checks, journals, diffs, reports) belongs to the open core in `crates/`. Hosted, paid parts go under `ee/`. Keep the core free of any dependency on `ee/`.

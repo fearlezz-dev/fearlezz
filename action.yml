@@ -1,0 +1,69 @@
+name: Fearlezz proof
+description: Prove a change with the checks in fearlezz.toml and show the status on the pull request.
+
+inputs:
+  version:
+    description: Release tag of Fearlezz to install (for example v0.2.0). The default is the latest release.
+    default: latest
+  devenv:
+    description: Install Nix and devenv first, for projects whose checks run in a devenv shell.
+    default: "false"
+  comment:
+    description: Post or replace one status comment on the pull request.
+    default: "true"
+  token:
+    description: Token that writes the pull request comment.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - if: inputs.devenv == 'true'
+      uses: cachix/install-nix-action@v31
+    - if: inputs.devenv == 'true'
+      uses: cachix/cachix-action@v16
+      with:
+        name: devenv
+    - if: inputs.devenv == 'true'
+      shell: bash
+      run: nix profile install nixpkgs#devenv
+    - name: Install Fearlezz
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        FEARLEZZ_INSTALL_DIR: ${{ runner.temp }}/fearlezz-bin
+      run: |
+        if [ "$VERSION" != latest ]; then export FEARLEZZ_VERSION="$VERSION"; fi
+        sh "$GITHUB_ACTION_PATH/install.sh"
+        echo "$FEARLEZZ_INSTALL_DIR" >> "$GITHUB_PATH"
+    - name: Prove this commit with Fearlezz
+      shell: bash
+      run: fearlezz run --ci --comment "$RUNNER_TEMP/fearlezz.md"
+    # One comment per pull request, replaced on every run. A fork's token may not comment;
+    # the check stays.
+    - name: Show the status on the pull request
+      if: always() && inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        file="$RUNNER_TEMP/fearlezz.md"
+        [ -s "$file" ] || exit 0
+        comments="repos/$GITHUB_REPOSITORY/issues/$PR/comments"
+        {
+          id=$(gh api "$comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- fearlezz -->"))) | .id' | head -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$file" > /dev/null
+          else
+            gh api "$comments" -F body=@"$file" > /dev/null
+          fi
+        } || echo "could not write the pull request comment"
+    - name: Keep the output of every check
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: proof-logs
+        path: .git/fearlezz/results/**/output.log
+        include-hidden-files: true
+        if-no-files-found: ignore
