@@ -528,3 +528,17 @@ fn json_arrays_wrap_where_the_projects_formatter_wraps_them() {
         "{written}"
     );
 }
+
+#[test]
+fn the_typescript_piece_keeps_biome_off_the_files_fearlezz_writes() {
+    let repo = Repo::new("use = [\"typescript\"]\n", &[]);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    let biome = std::fs::read_to_string(repo.path("biome.json")).unwrap();
+    for skipped in ["!.claude", "!.agents", "!.codex", "!.cursor"] {
+        assert!(biome.contains(&format!("\"{skipped}\"")), "{biome}");
+    }
+    // Biome rejects the whole file over one rule it does not know; these started in nursery
+    // and are not in Biome 2.6.6.
+    assert!(!biome.contains("noComponentHookFactories"), "{biome}");
+}
