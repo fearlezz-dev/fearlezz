@@ -104,6 +104,10 @@ pub(crate) struct Check {
     pub findings: Option<FindingsSpec>,
     /// For a check that runs tests: where it says how many ran. Zero tests fails it.
     pub tests: Option<crate::counts::Reader>,
+    /// Which of its inputs are tests, as written: CI runs the change's test files on the base
+    /// commit to show they fail there (red before green).
+    pub test_files: Vec<String>,
+    test_globs: GlobSet,
     /// The environment's shell it runs inside, part of its inputs.
     pub shell: Option<String>,
     /// Work Fearlezz does itself instead of running a command.
@@ -201,6 +205,8 @@ struct RawCheck {
     needs: Vec<Need>,
     findings: Option<RawFindings>,
     tests: Option<toml::Value>,
+    #[serde(default)]
+    test_files: Vec<String>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
     #[expect(
@@ -322,6 +328,9 @@ impl Config {
                     .map(crate::counts::Reader::parse)
                     .transpose()
                     .with_context(|| format!("check {id}"))?,
+                test_globs: globs(&c.test_files)
+                    .with_context(|| format!("check {id}: test_files"))?,
+                test_files: c.test_files,
                 id: id.clone(),
                 run: c.run,
                 stage,
@@ -434,6 +443,8 @@ fn builtin_check(id: &str, stages: &Stages, inputs: GlobSet, on: Scope, builtin:
         shell: None,
         builtin: Some(builtin),
         tests: None,
+        test_files: Vec::new(),
+        test_globs: GlobSet::empty(),
     }
 }
 
@@ -449,6 +460,11 @@ fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<GlobSet> 
 impl Check {
     pub(crate) fn reads(&self, path: &str) -> bool {
         self.inputs.is_match(path)
+    }
+
+    /// Whether `path` is one of its tests, by `test_files`.
+    pub(crate) fn is_test(&self, path: &str) -> bool {
+        self.test_globs.is_match(path)
     }
 
     pub(crate) fn needs_services(&self) -> bool {

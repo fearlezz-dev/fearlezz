@@ -120,6 +120,11 @@ impl Git {
         self.short("HEAD")
     }
 
+    /// The first line of the message of the commit checked out.
+    pub(crate) fn subject(&self) -> Result<String> {
+        Ok(self.git(&["log", "-1", "--format=%s"])?.trim().to_string())
+    }
+
     /// The short name of a commit.
     pub(crate) fn short(&self, rev: &str) -> Result<String> {
         Ok(self.git(&["rev-parse", "--short", rev])?.trim().to_string())
@@ -189,15 +194,16 @@ impl Git {
 
     /// A hidden worktree with `commit` checked out, shared by every journal, and a hold on it:
     /// while the returned file lives, no other command removes it. Keeps the three most
-    /// recently used and removes older ones nobody holds.
-    pub(crate) fn base_worktree(&self, commit: &str) -> Result<(Git, std::fs::File)> {
+    /// recently used and removes older ones nobody holds. `name` tells apart worktrees of one
+    /// commit, such as one with a change's test files laid over it.
+    pub(crate) fn base_worktree(&self, commit: &str, name: &str) -> Result<(Git, std::fs::File)> {
         let dir = self.common.join("fearlezz").join("base");
         std::fs::create_dir_all(&dir)?;
         // One command at a time adds or prunes bases, so two never add the same one and none
         // prunes a base another just took.
         let lock = std::fs::File::create(self.common.join("fearlezz").join("base.lock"))?;
         lock.lock()?;
-        let id = &commit[..commit.len().min(12)];
+        let id = &format!("{}{name}", commit.get(..12).unwrap_or(commit));
         let holds = self.common.join("fearlezz").join("base-holds");
         std::fs::create_dir_all(&holds)?;
         let hold_file = |id: &std::ffi::OsStr| {
