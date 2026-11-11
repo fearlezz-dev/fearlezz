@@ -166,14 +166,15 @@ findings = "cargo"     # or "dart" (dart analyze --format=machine), "eslint" (es
 
 ## Test counts
 
-A check that runs tests says where its runner reports how many ran, with `tests`. A run of zero tests fails the check, as does a run with no count, so a filter that matches nothing or a runner that found no tests cannot pass. CI shows each count. The rust piece sets `tests = "cargo"`.
+A check that runs tests says where its runner reports how many ran, with `tests`. A run of zero tests fails the check, as does a run with no count, so a filter that matches nothing or a runner that found no tests cannot pass. CI shows each count. Every language piece sets it, so a project only writes `tests` when it changes its test runner.
 
 ```toml
-[check.tests]
-run = "cargo test --quiet"
-stage = "working"
-tests = "cargo"       # the "test result" lines in the output; or "junit" ($FEARLEZZ_OUT/junit.xml, skipped cases left out)
+tests = "junit"                                   # the JUnit report in $FEARLEZZ_OUT/junit.xml
+tests = { junit = "**/build/test-results/*.xml" } # JUnit reports anywhere this run wrote them
+tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }  # numbers a pattern captures in the output, or one per match
 ```
+
+Only reports written by the run count, so an old report never passes for a new run.
 
 ## Environments
 

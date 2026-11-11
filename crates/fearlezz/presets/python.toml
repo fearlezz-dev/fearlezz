@@ -1,4 +1,4 @@
-# Python with Ruff: lint and formatting.
+# Python with Ruff (lint and formatting) and pytest.
 
 # Findings get the level [lints.ruff] gives them. Only lines the change touched count.
 [check.lint]
@@ -11,6 +11,12 @@ findings = { read = "sarif", lints = ["ruff"] }
 run = "ruff format --check ."
 stage = "working"
 inputs = ["**/*.py", "**/*.pyi", ".ruff.toml", "ruff.toml", "pyproject.toml"]
+
+[check.tests]
+run = "pytest -q --junitxml=\"$FEARLEZZ_OUT/junit.xml\""
+stage = "working"
+tests = "junit"
+inputs = ["**/*.py", "pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py", "uv.lock", "poetry.lock", "requirements*.txt"]
 
 # Every rule, decided once on the maintainer's Lint Desk: gate means it must never happen, flag
 # means there is little or no reason for it, hint means there can be a reason so an agent looks
