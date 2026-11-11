@@ -1172,10 +1172,9 @@ fn run_checks(
         print_findings(r);
     }
     look_at_media(ctx, &green, &stage);
-    let red_blocks = match report.as_mut() {
-        Some(r) => red_before_green(ctx, &wt, &green, &stage, r),
-        None => false,
-    };
+    // In CI, and at the final stage of a journal so the agent learns it before CI.
+    let red_blocks = (in_memory || stage == final_stage)
+        && red_before_green(ctx, &wt, &green, &stage, report.as_mut());
     prune_store(ctx);
     println!(
         "{} checks: {passed} passed, {} failed, {reused} reused, {:.1} s",
@@ -1195,30 +1194,56 @@ fn run_checks(
         env.state.stop(env.cfg, &wt.git.root)?;
         println!("services stopped: all proof is in");
     }
-    println!("next: {}", next_line(&after));
+    if red_blocks && !in_memory && failures.is_empty() {
+        println!("next: {RED_NEXT}, then fearlezz run");
+    } else {
+        println!("next: {}", next_line(&after));
+    }
     Ok(failures.is_empty() && !red_blocks && settled(&after))
 }
 
+/// What a fix whose tests pass on the base commit does next.
+const RED_NEXT: &str = "change a test so it fails without the fix; when the change fixes no \
+                        bug, its title does not start with fix:";
+
+/// At most this many test names on one line; the rest are counted.
+const NAMES_SHOWN: usize = 5;
+
+/// `a, b, c and 3 more`, each name wrapped in `quote`.
+fn test_names(names: &[String], quote: &str) -> String {
+    let shown: Vec<String> = names
+        .iter()
+        .take(NAMES_SHOWN)
+        .map(|n| format!("{quote}{n}{quote}"))
+        .collect();
+    let mut text = shown.join(", ");
+    if names.len() > NAMES_SHOWN {
+        write!(text, " and {} more", names.len() - NAMES_SHOWN).ok();
+    }
+    text
+}
+
 /// Runs each green check that reads changed test files on the base commit with those files,
-/// one line per check. True when the change is a fix and its tests do not fail there.
+/// one line per check, noted in the commit report when there is one. True when the change is
+/// a fix and its tests do not fail there.
 fn red_before_green(
     ctx: &Ctx,
     wt: &Worktree,
     green: &[(&config::Check, store::RunResult)],
     stage: &str,
-    report: &mut CommitReport,
+    mut report: Option<&mut CommitReport>,
 ) -> bool {
     let subject = pull_request("title")
         .or_else(|| ctx.git.subject().ok())
         .unwrap_or_default();
     let fix = red::is_fix(&subject);
     let mut blocks = false;
-    for (check, _) in green {
+    for (check, head) in green {
         let ran = red::run(
             &ctx.git,
             &ctx.config,
             &ctx.store,
-            check,
+            (check, head),
             wt,
             stage,
             &ctx.env(),
@@ -1231,45 +1256,92 @@ fn red_before_green(
                 continue;
             }
         };
+        let id = &check.id;
         let (what, fails, passes) = red.subject();
-        let it = if red.files.len() == 1 {
-            "it does"
-        } else {
-            "they do"
+        let one = red.files.len() == 1;
+        let mut note = |text: String| {
+            if let Some(r) = report.as_mut() {
+                r.notes.push(text);
+            }
         };
-        if red.is_red() {
-            println!(
-                "red before green {}: {what} {fails} on the base commit and {passes} here",
-                check.id
-            );
-            println!("  log on the base: {}", red.base.log.display());
-            report.notes.push(format!(
-                "Red before green: `{}` fails on the base commit with the change's test files \
-                 ({what}) and passes on this one.",
-                check.id
-            ));
-            continue;
-        }
-        println!(
-            "not red before green {}: {what} {passes} on the base commit too, so {it} not show \
-             the fix",
-            check.id
-        );
-        report.notes.push(format!(
-            "Not red before green: `{}` passes on the base commit with the change's test files \
-             ({what}).",
-            check.id
-        ));
-        if fix {
-            println!("  fix: change a test so it fails without the fix");
-            report.red_items.push(floor::Item {
-                what: format!("the tests of `{}` do not show the fix", check.id),
-                why: format!("{what} {passes} on the base commit too"),
-                fix: "change a test so it fails without the fix; when the change fixes no bug, \
-                      its title does not start with fix:"
-                    .into(),
-            });
-            blocks = true;
+        match &red.verdict {
+            red::Verdict::Red { tests } => {
+                println!(
+                    "red before green {id}: {what} {fails} on the base commit and {passes} here"
+                );
+                let mut text = format!(
+                    "Red before green: `{id}` fails on the base commit with the change's test \
+                     files ({what}) and passes on this one."
+                );
+                if !tests.is_empty() {
+                    println!(
+                        "  failed on the base, passed here: {}",
+                        test_names(tests, "")
+                    );
+                    write!(
+                        text,
+                        " Failed on the base, passed here: {}.",
+                        test_names(tests, "`")
+                    )
+                    .ok();
+                }
+                println!("  log on the base: {}", red.base.log.display());
+                note(text);
+            }
+            red::Verdict::Unbuilt => {
+                let build = if one {
+                    "does not build"
+                } else {
+                    "do not build"
+                };
+                println!(
+                    "red before green {id}: {what} {build} on the base commit, which counts as \
+                     failing, and {passes} here"
+                );
+                println!("  log on the base: {}", red.base.log.display());
+                note(format!(
+                    "Red before green: the change's test files of `{id}` ({what}) {build} on \
+                     the base commit, which counts as failing, and {passes} on this one."
+                ));
+            }
+            red::Verdict::BaseFails { log } => {
+                println!(
+                    "red before green {id}: the base already fails without the change's test \
+                     files, so failing there shows nothing"
+                );
+                println!("  log on the base: {}", log.display());
+                note(format!(
+                    "Red before green shows nothing for `{id}`: it already fails on the base \
+                     commit without the change's test files."
+                ));
+            }
+            red::Verdict::NotRed { tests } => {
+                let it = if one { "it does" } else { "they do" };
+                println!(
+                    "not red before green {id}: {what} {passes} on the base commit too, so {it} \
+                     not show the fix"
+                );
+                let mut text = format!(
+                    "Not red before green: `{id}` passes on the base commit with the change's \
+                     test files ({what})."
+                );
+                if !tests.is_empty() {
+                    println!("  passed on both: {}", test_names(tests, ""));
+                    write!(text, " Passed on both: {}.", test_names(tests, "`")).ok();
+                }
+                note(text);
+                if fix {
+                    println!("  fix: {RED_NEXT}");
+                    if let Some(r) = report.as_mut() {
+                        r.red_items.push(floor::Item {
+                            what: format!("the tests of `{id}` do not show the fix"),
+                            why: format!("{what} {passes} on the base commit too"),
+                            fix: RED_NEXT.into(),
+                        });
+                    }
+                    blocks = true;
+                }
+            }
         }
     }
     blocks

@@ -17,6 +17,7 @@ run = "pytest -q --junitxml=\"$FEARLEZZ_OUT/junit.xml\""
 stage = "working"
 tests = "junit"
 inputs = ["**/*.py", "pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py", "uv.lock", "poetry.lock", "requirements*.txt"]
+test_files = ["tests/**", "**/test_*.py", "**/*_test.py", "**/conftest.py"]
 
 # Every rule, decided once on the maintainer's Lint Desk: gate means it must never happen, flag
 # means there is little or no reason for it, hint means there can be a reason so an agent looks

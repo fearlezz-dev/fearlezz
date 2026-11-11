@@ -52,6 +52,9 @@ pub(crate) struct RunResult {
     /// For a check with a tests reader: how many tests ran; zero when there is no count.
     #[serde(default)]
     pub tests: Option<u64>,
+    /// For a check with a JUnit reader: each test case that ran, and whether it failed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cases: Vec<crate::counts::Case>,
     pub dir: PathBuf,
     pub log: PathBuf,
 }

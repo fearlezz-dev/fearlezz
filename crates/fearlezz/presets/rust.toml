@@ -19,6 +19,9 @@ stage = "working"
 # Each test binary prints "test result: ok. N passed; M failed; ...".
 tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }
 inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
+# Integration tests live in tests folders; unit tests inside src cannot be told apart
+# from the code, so only the former show red before green.
+test_files = ["**/tests/**"]
 
 # Production code never unwraps or panics; tests may.
 [settings.clippy]
