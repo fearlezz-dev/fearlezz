@@ -3,7 +3,10 @@ description: Prove a change with the checks in fearlezz.toml and show the status
 
 inputs:
   version:
-    description: Release tag of Fearlezz to install (for example v0.2.0). The default is the latest release.
+    description: >-
+      Release tag of Fearlezz to install (for example v0.2.0). The default is the latest release.
+      `source` builds the Fearlezz this action was taken from, for trying a branch; `installed`
+      uses the one already on PATH.
     default: latest
   devenv:
     description: Install Nix and devenv first, for projects whose checks run in a devenv shell.
@@ -11,34 +14,183 @@ inputs:
   comment:
     description: Post or replace one status comment on the pull request.
     default: "true"
+  pictures:
+    description: >-
+      Where changed pictures are shown on the pull request. `branch` pushes them to the
+      `fearlezz-pictures` branch of this repository and shows them in the comment (needs
+      `contents: write`; only people who can read the repository see them). `artifact` keeps
+      them only in the `fearlezz-looks` artifact. `off` keeps neither.
+    default: branch
   token:
-    description: Token that writes the pull request comment.
+    description: Token that writes the pull request comment, the pictures and the status.
     default: ${{ github.token }}
 
 runs:
   using: composite
   steps:
-    - if: inputs.devenv == 'true'
+    # A developer approves changed pictures with a `/fearlezz approve` comment. Spike, throwaway.
+    - name: Approve changed pictures
+      if: github.event_name == 'issue_comment'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR: ${{ github.event.issue.number }}
+        IS_PR: ${{ github.event.issue.pull_request != null }}
+        BODY: ${{ github.event.comment.body }}
+        WHO: ${{ github.event.comment.user.login }}
+        WHO_TYPE: ${{ github.event.comment.user.type }}
+        COMMENT_URL: ${{ github.event.comment.html_url }}
+      run: |
+        case "$BODY" in "/fearlezz approve"*) ;; *) exit 0 ;; esac
+        [ "$IS_PR" = true ] || exit 0
+        repo="repos/$GITHUB_REPOSITORY"
+        reply() { gh api "$repo/issues/$PR/comments" -f body="$1" > /dev/null; }
+        if [ "$WHO_TYPE" != User ]; then reply "Only a person can approve pictures, not @$WHO."; exit 0; fi
+        perm=$(gh api "$repo/collaborators/$WHO/permission" --jq .permission)
+        case "$perm" in admin|maintain|write) ;; *) reply "@$WHO cannot approve: approving needs write access."; exit 0 ;; esac
+        head=$(gh api "$repo/pulls/$PR" --jq .head.sha)
+        # The proof comment names what an approval covers for the head it proved.
+        status=$(gh api "$repo/issues/$PR/comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- fearlezz -->"))) | .body' | head -c 100000)
+        line=$(printf '%s\n' "$status" | sed -n 's/^<!-- fearlezz-pictures \([0-9a-f]*\) \([0-9a-f]*\) \(.*\) -->$/\1 \2 \3/p' | head -n 1)
+        set -- $line
+        if [ "${1:-}" != "$head" ]; then reply "Nothing to approve for ${head:0:7} yet: wait for its proof."; exit 0; fi
+        fingerprint="$2"; shift 2
+        said=$(printf '%s' "$BODY" | sed '1s#^/fearlezz approve##' | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+        gh api "$repo/statuses/$head" -f state=success -f context=fearlezz/pictures \
+          -f description="approved by $WHO" -f target_url="$COMMENT_URL" > /dev/null
+        reply "Approved the pictures of $* at ${head:0:7} for @$WHO${said:+: \"$said\"}. Fingerprint \`${fingerprint:0:12}\`; a new push needs a new approval."
+    - if: github.event_name != 'issue_comment' && inputs.devenv == 'true'
       uses: cachix/install-nix-action@v31
-    - if: inputs.devenv == 'true'
+    - if: github.event_name != 'issue_comment' && inputs.devenv == 'true'
       uses: cachix/cachix-action@v16
       with:
         name: devenv
-    - if: inputs.devenv == 'true'
+    - if: github.event_name != 'issue_comment' && inputs.devenv == 'true'
       shell: bash
       run: nix profile install nixpkgs#devenv
     - name: Install Fearlezz
+      if: github.event_name != 'issue_comment'
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
         FEARLEZZ_INSTALL_DIR: ${{ runner.temp }}/fearlezz-bin
       run: |
-        if [ "$VERSION" != latest ]; then export FEARLEZZ_VERSION="$VERSION"; fi
-        sh "$GITHUB_ACTION_PATH/install.sh"
+        if [ "$VERSION" = installed ]; then
+          fearlezz --version
+          exit 0
+        fi
+        if [ "$VERSION" = source ]; then
+          cargo build --release --locked --manifest-path "$GITHUB_ACTION_PATH/Cargo.toml" --target-dir "$RUNNER_TEMP/fearlezz-target"
+          mkdir -p "$FEARLEZZ_INSTALL_DIR"
+          cp "$RUNNER_TEMP/fearlezz-target/release/fearlezz" "$FEARLEZZ_INSTALL_DIR/"
+        else
+          if [ "$VERSION" != latest ]; then export FEARLEZZ_VERSION="$VERSION"; fi
+          sh "$GITHUB_ACTION_PATH/install.sh"
+        fi
         echo "$FEARLEZZ_INSTALL_DIR" >> "$GITHUB_PATH"
-    - name: Prove this commit with Fearlezz
+    # Comparing stills and films needs ffmpeg, which GitHub's Ubuntu runners lack.
+    - name: Install ffmpeg
+      if: github.event_name != 'issue_comment'
       shell: bash
-      run: fearlezz run --ci --comment "$RUNNER_TEMP/fearlezz.md"
+      run: |
+        command -v ffmpeg > /dev/null && exit 0
+        if command -v apt-get > /dev/null; then
+          sudo apt-get update -q > /dev/null && sudo apt-get install -qy --no-install-recommends ffmpeg > /dev/null
+        else
+          echo "ffmpeg is missing; install it before this action to compare pictures"
+        fi
+    # Results of earlier runs on the same base, so the look reuses the base commit's pictures
+    # instead of running the check there again.
+    - name: Restore results of the base commit
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@v4
+      with:
+        path: .git/fearlezz/results
+        key: fearlezz-base-${{ github.event.pull_request.base.sha }}
+        restore-keys: fearlezz-base-${{ github.event.pull_request.base.sha }}-
+    - name: Prove this commit with Fearlezz
+      id: prove
+      if: github.event_name != 'issue_comment'
+      shell: bash
+      env:
+        PICTURES: ${{ inputs.pictures }}
+        SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        # A fork's token cannot push the pictures, so they stay in the artifact.
+        if [ "$PICTURES" = branch ] && [ "$SAME_REPO" = true ] && [ -n "$PR" ]; then
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/raw/fearlezz-pictures/pr-$PR/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          export FEARLEZZ_PICTURES_URL="$url"
+        fi
+        fearlezz run --ci --comment "$RUNNER_TEMP/fearlezz.md"
+    - name: Keep results of the base commit
+      if: always() && github.event_name == 'pull_request'
+      uses: actions/cache/save@v4
+      with:
+        path: .git/fearlezz/results
+        key: fearlezz-base-${{ github.event.pull_request.base.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+    - name: Put the pictures on the pictures branch
+      if: always() && steps.prove.outputs.url != '' && steps.prove.outputs.pictures != '0' && steps.prove.outputs.pictures != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR: ${{ github.event.pull_request.number }}
+        URL: ${{ steps.prove.outputs.url }}
+      run: |
+        dir="$RUNNER_TEMP/fearlezz-pictures"
+        run="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+        git init -q "$dir"
+        cd "$dir"
+        git config user.name github-actions[bot]
+        git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+        git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+        # gh hands git the token, so it never lands in a URL or a file.
+        git config credential.helper '!gh auth git-credential'
+        for attempt in 1 2 3; do
+          if git fetch -q --depth 1 origin fearlezz-pictures 2> /dev/null; then
+            git checkout -q -B fearlezz-pictures FETCH_HEAD
+          else
+            git checkout -q --orphan fearlezz-pictures
+          fi
+          # Only this run's pictures of this pull request stay.
+          git rm -rqf --ignore-unmatch "pr-$PR" > /dev/null
+          mkdir -p "pr-$PR/$run"
+          for look in "$GITHUB_WORKSPACE"/.git/fearlezz/looks/*/; do
+            name=$(basename "$look")
+            mkdir -p "pr-$PR/$run/$name"
+            cp -R "$look/media" "pr-$PR/$run/$name/"
+          done
+          git add -A
+          git commit -qm "Pictures of pull request $PR, run $run"
+          if git push -q origin HEAD:fearlezz-pictures 2> /dev/null; then
+            echo "pictures at $URL"
+            exit 0
+          fi
+          git reset -q --hard
+        done
+        echo "could not push the pictures"
+    - name: Mark what an approval covers
+      if: always() && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        HEAD: ${{ github.event.pull_request.head.sha }}
+        COUNT: ${{ steps.prove.outputs.pictures }}
+        CHECKS: ${{ steps.prove.outputs.picture-checks }}
+        FINGERPRINT: ${{ steps.prove.outputs.fingerprint }}
+      run: |
+        file="$RUNNER_TEMP/fearlezz.md"
+        repo="repos/$GITHUB_REPOSITORY"
+        if [ -n "$COUNT" ] && [ "$COUNT" != 0 ]; then
+          [ -s "$file" ] && echo "<!-- fearlezz-pictures $HEAD $FINGERPRINT $CHECKS -->" >> "$file"
+          gh api "$repo/statuses/$HEAD" -f state=pending -f context=fearlezz/pictures \
+            -f description="changed pictures of $CHECKS wait for /fearlezz approve" > /dev/null \
+            || echo "could not set the pictures status"
+        else
+          gh api "$repo/statuses/$HEAD" -f state=success -f context=fearlezz/pictures \
+            -f description="no changed pictures" > /dev/null || echo "could not set the pictures status"
+        fi
     # One comment per pull request, replaced on every run. A fork's token may not comment;
     # the check stays.
     - name: Show the status on the pull request
@@ -59,8 +211,16 @@ runs:
             gh api "$comments" -F body=@"$file" > /dev/null
           fi
         } || echo "could not write the pull request comment"
+    - name: Keep the pictures
+      if: always() && github.event_name != 'issue_comment' && inputs.pictures != 'off'
+      uses: actions/upload-artifact@v4
+      with:
+        name: fearlezz-looks
+        path: .git/fearlezz/looks
+        include-hidden-files: true
+        if-no-files-found: ignore
     - name: Keep the output of every check
-      if: always()
+      if: always() && github.event_name != 'issue_comment'
       uses: actions/upload-artifact@v4
       with:
         name: proof-logs

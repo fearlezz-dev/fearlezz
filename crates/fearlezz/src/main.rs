@@ -713,6 +713,8 @@ struct CommitReport {
     rows: Vec<Row>,
     /// Where the short status for the pull request goes, when asked.
     comment: Option<PathBuf>,
+    /// Checks whose changed pictures wait for the developer.
+    waiting: usize,
 }
 
 /// One check in the report.
@@ -771,6 +773,7 @@ impl CommitReport {
             base: ctx.config.base.clone(),
             rows: Vec::new(),
             comment,
+            waiting: 0,
         })
     }
 
@@ -803,10 +806,11 @@ impl CommitReport {
     /// Writes the check page into the job summary GitHub Actions names, when it names one,
     /// and the status for the pull request, when asked.
     fn finish(
-        self,
+        mut self,
         floor: &floor::Floor,
         failures: &[store::RunResult],
         unstable: &[String],
+        looks: &[(look::Look, String)],
     ) -> Result<()> {
         use std::io::Write as _;
         let mut items: Vec<floor::Item> = failures.iter().map(failure_item).collect();
@@ -816,8 +820,17 @@ impl CommitReport {
             fix: "make it give one answer: a flaky test, or an input it does not declare".into(),
         }));
         items.extend(floor.items(&self.base));
+        self.waiting = looks.len();
+        if let Some(path) = std::env::var_os("GITHUB_OUTPUT") {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(Path::new(&path))?
+                .write_all(picture_outputs(looks).as_bytes())?;
+        }
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-            let page = self.page(&items, failures)?;
+            let mut page = self.page(&items, failures)?;
+            pictures(&mut page, looks)?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -825,8 +838,9 @@ impl CommitReport {
                 .write_all(page.as_bytes())?;
         }
         if let Some(path) = &self.comment {
-            std::fs::write(path, self.status(&items)?)
-                .with_context(|| format!("writing {}", path.display()))?;
+            let mut status = self.status(&items)?;
+            pictures(&mut status, looks)?;
+            std::fs::write(path, status).with_context(|| format!("writing {}", path.display()))?;
         }
         Ok(())
     }
@@ -839,8 +853,13 @@ impl CommitReport {
         } else {
             "Not proven"
         };
+        let waiting = match self.waiting {
+            0 => String::new(),
+            1 => "; the pictures of 1 check wait for the developer".into(),
+            n => format!("; the pictures of {n} checks wait for the developer"),
+        };
         format!(
-            "**{word}**: commit {}, {passed} of {} checks passed",
+            "**{word}**: commit {}, {passed} of {} checks passed{waiting}",
             self.commit,
             self.rows.len()
         )
@@ -920,6 +939,102 @@ impl CommitReport {
         }
         Ok(())
     }
+}
+
+/// For the CI scripts around the run: how many checks have pictures to approve, and a
+/// fingerprint of what an approval would cover (each check, its inputs and the base), so an
+/// approval given for other pictures never counts. Spike, throwaway.
+fn picture_outputs(looks: &[(look::Look, String)]) -> String {
+    use sha2::Digest as _;
+    let mut hash = sha2::Sha256::new();
+    for (l, key) in looks {
+        hash.update(format!("{}\0{key}\0{}\n", l.check, l.base_commit));
+    }
+    let checks: Vec<&str> = looks.iter().map(|(l, _)| l.check.as_str()).collect();
+    format!(
+        "pictures={}\npicture-checks={}\nfingerprint={}\n",
+        looks.len(),
+        checks.join(" "),
+        hex::encode(hash.finalize())
+    )
+}
+
+/// The pictures a person should look at, before and after side by side when CI publishes
+/// them (`FEARLEZZ_PICTURES_URL` names where each look folder is served). Spike, throwaway.
+fn pictures(text: &mut String, looks: &[(look::Look, String)]) -> std::fmt::Result {
+    if looks.is_empty() {
+        return Ok(());
+    }
+    let url = std::env::var("FEARLEZZ_PICTURES_URL")
+        .ok()
+        .filter(|u| !u.is_empty());
+    let cell = |s: &str| s.replace('|', "\\|").replace('\n', " ");
+    writeln!(text, "#### Pictures to look at\n")?;
+    for (l, _) in looks {
+        let dir = l
+            .report
+            .parent()
+            .and_then(Path::file_name)
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let why = l
+            .no_before
+            .as_ref()
+            .map(|w| format!(" (no before: {})", cell(w)))
+            .unwrap_or_default();
+        writeln!(text, "**`{}`**: {}{why}\n", l.check, l.counts())?;
+        let shown = l.items.iter().filter(|i| i.change != look::Change::Same);
+        match &url {
+            Some(url) => {
+                let media = |rel: &Option<String>, kind: &str| match rel {
+                    None => String::new(),
+                    Some(rel) => {
+                        let src = format!("{url}/{dir}/{rel}");
+                        let playable = kind == "still"
+                            || [".gif", ".webp", ".png", ".apng"]
+                                .iter()
+                                .any(|e| rel.ends_with(e));
+                        if playable {
+                            format!("<a href=\"{src}\"><img src=\"{src}\" width=\"320\"></a>")
+                        } else {
+                            format!("[film]({src})")
+                        }
+                    }
+                };
+                writeln!(text, "| picture | before | after |\n| --- | --- | --- |")?;
+                for item in shown {
+                    writeln!(
+                        text,
+                        "| **{}** {}<br>{} | {} | {} |",
+                        cell(&item.name),
+                        item.change.label(),
+                        cell(&item.summary),
+                        media(&item.before, &item.kind),
+                        media(&item.after, &item.kind)
+                    )?;
+                }
+                writeln!(text)?;
+            }
+            None => {
+                for item in shown {
+                    writeln!(
+                        text,
+                        "- **{}** {}: {}",
+                        cell(&item.name),
+                        item.change.label(),
+                        cell(&item.summary)
+                    )?;
+                }
+                writeln!(text)?;
+            }
+        }
+    }
+    writeln!(
+        text,
+        "The full report with marked changes is the `fearlezz-looks` artifact of the run. \
+         Changed pictures wait for the developer: comment `/fearlezz approve` to approve these \
+         pictures; a new push needs a new approval.\n"
+    )
 }
 
 /// The table of what keeps the commit from being proven, if anything does.
@@ -1036,7 +1151,7 @@ fn run_checks(
         for line in &lines {
             println!("{line}");
         }
-        report.map_or(Ok(()), |r| r.finish(&floor, &[], &[]))?;
+        report.map_or(Ok(()), |r| r.finish(&floor, &[], &[], &[]))?;
         println!("next: {}", next_line(&before));
         return Ok(settled(&before));
     }
@@ -1138,7 +1253,7 @@ fn run_checks(
     for (_, r) in &green {
         print_findings(r);
     }
-    look_at_media(ctx, &green, &stage);
+    let looks = look_at_media(ctx, &green, &stage);
     prune_store(ctx);
     println!(
         "{} checks: {passed} passed, {} failed, {reused} reused, {:.1} s",
@@ -1149,7 +1264,7 @@ fn run_checks(
     for line in &lines {
         println!("{line}");
     }
-    report.map_or(Ok(()), |r| r.finish(&floor, &failures, &unstable))?;
+    report.map_or(Ok(()), |r| r.finish(&floor, &failures, &unstable, &looks))?;
     let after = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
     if stage == final_stage
         && (after.next == state::READY || in_memory)
@@ -1163,7 +1278,13 @@ fn run_checks(
 }
 
 /// Compares the stills and films of green checks with the base commit, one line per check.
-fn look_at_media(ctx: &Ctx, green: &[(&config::Check, store::RunResult)], stage: &str) {
+/// Returns each look with pictures to look at, with the inputs key of the run it judged.
+fn look_at_media(
+    ctx: &Ctx,
+    green: &[(&config::Check, store::RunResult)],
+    stage: &str,
+) -> Vec<(look::Look, String)> {
+    let mut looks = Vec::new();
     // Opened once, on the first check with pictures.
     let mut base: Option<Result<Option<look::Base>>> = None;
     for (check, result) in green {
@@ -1196,10 +1317,14 @@ fn look_at_media(ctx: &Ctx, green: &[(&config::Check, store::RunResult)], stage:
                     None => println!("look {}: {}", check.id, l.counts()),
                 }
                 println!("  report: {}", l.report.display());
+                if l.to_look_at() > 0 {
+                    looks.push((l, result.key.clone()));
+                }
             }
             Err(e) => println!("look {} failed: {e:#}", check.id),
         }
     }
+    looks
 }
 
 fn print_status(ctx: &Ctx, v: &View) {
