@@ -28,7 +28,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Checks, stages | A check counts only for the inputs it ran on; the final stage runs everything fresh |
 | Results by input hash | Shared across worktrees, pruned after 30 days |
 | Journals | One per piece of work, append only |
-| Command line | See, run, say, setup |
+| Command line | See, run, say, setup. A tool a check cannot find is named with how to install it; tools in `node_modules/.bin` and `.venv/bin` are found |
 | Starting out | Without `fearlezz.toml`, every command leads to `fearlezz setup init`, which writes a starter from the languages at the root and `no_proof` for prose |
 | Findings | Only lines the change touched can block |
 | Test counts | A check's `tests` reader (JUnit reports, or a pattern in the output) counts what ran; zero tests fails it. Every language piece runs and counts its tests |
@@ -39,7 +39,8 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Stills and films | Compared with the same check run on the base commit, with a report page |
 | Approvals | A visual change waits for the developer's words |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
-| Distribution | `v0.1.0` on GitHub Releases for Linux and macOS, `install.sh`, Homebrew tap, Nix flake and devenv input, `cargo install --git`. A new release does not update the tap by itself yet |
+| Distribution | GitHub Releases for Linux and macOS through release-please (merging its pull request tags and builds), `install.sh`, Homebrew tap, Nix flake and devenv input, `cargo install --git`. The tap follows new releases once its workflow (tap pull request 1) is merged |
+| CI for other projects | `fearlezz-dev/fearlezz@v0`, a composite action: installs a release, proves the commit, posts the status comment, keeps the logs. Not yet run in another project |
 
 ## Partly built
 
@@ -77,6 +78,8 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 ## Known problems
 
+- **Sync never removes a rule a piece dropped.** Biome's `linter.rules` keeps stale keys and the `settings` check calls it in sync.
+- **Monorepos.** `setup init` and the language pieces look only at the repository root.
 - **macOS is not covered by CI.** It is only proven on the developer's machine.
 - **A flaky test.** One test in `core` has failed twice on CI and not locally; its name is still unknown. Failed checks now show 12 lines, so the next failure should name it.
 - **60 lint flags** in existing code, mostly possible panics from indexing. They do not block.
