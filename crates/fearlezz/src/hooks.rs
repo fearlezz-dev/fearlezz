@@ -143,6 +143,14 @@ pub(crate) fn judge(config: &Config, work: &Work, event: Event, input: &Input) -
              why they fail. Ask the developer: fearlezz say ask \"<question>\""
                 .into(),
         ),
+        // CI takes `/fearlezz approve` from anyone with write access, which may be the account
+        // the agent works with.
+        Event::BeforeShell if posts_approval(command) => Answer::Deny(
+            "Fearlezz: approving changed pictures is for a person, in their own words. Show the \
+             developer the pictures and ask them to comment /fearlezz approve on the pull \
+             request themselves."
+                .into(),
+        ),
         Event::BeforeShell if work.needs_proof && opens_pull_request(command) && !work.ready => {
             Answer::Deny(format!(
                 "Fearlezz: a pull request that is not a draft needs the work ready to merge. Open \
@@ -231,6 +239,14 @@ fn merges_past_checks(line: &str) -> bool {
         ["gh", "pr", "merge", rest @ ..] => rest.contains(&"--admin"),
         _ => false,
     })
+}
+
+/// A line that sends `/fearlezz approve` somewhere with a tool that can post a comment.
+fn posts_approval(line: &str) -> bool {
+    line.contains("/fearlezz approve")
+        && commands(line)
+            .iter()
+            .any(|w| matches!(w.first(), Some(&("gh" | "curl" | "wget" | "hub" | "http"))))
 }
 
 /// `gh pr create` without `--draft`, or `gh pr ready` without `--undo`.

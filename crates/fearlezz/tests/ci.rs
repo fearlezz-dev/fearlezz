@@ -792,3 +792,200 @@ fn the_status_comment_names_the_pull_requests_head_not_the_merge_commit() {
         "{text}"
     );
 }
+
+// Changed pictures on the pull request
+
+/// Records two stills, `home` in the color `src/color.txt` names and `about` in white.
+const RECORD: &str = r#"set -e
+still() {
+  ffmpeg -v error -nostdin -f lavfi -i "color=c=$2:s=64x48" -frames:v 1 "$FEARLEZZ_OUT/$1.png"
+  echo "{\"kind\":\"still\",\"file\":\"$1.png\"}" >> "$FEARLEZZ_OUT/proof.jsonl"
+}
+still home "$(cat src/color.txt)"
+still about white
+"#;
+
+const SCREENS: &str = r#"
+[check.screens]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+"#;
+
+/// A branch whose `home` still turns from red to `color`.
+fn screens_branch(color: &str) -> Repo {
+    let repo = screens_main();
+    repo.write("src/color.txt", color);
+    repo.commit("color");
+    repo
+}
+
+/// The stills on `main`, and a branch `feat/look` off it with nothing changed yet.
+fn screens_main() -> Repo {
+    let repo = Repo::new(
+        SCREENS,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", RECORD),
+            ("src/color.txt", "red"),
+            ("src/other.txt", "a"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/look");
+    repo
+}
+
+const PICTURES_URL: &str = "https://github.com/owner/repo/raw/fearlezz-pictures/pr-7/42-1";
+
+/// `fearlezz run --ci` as the action runs it: the comment, the pictures folder and its URL, and
+/// the step outputs.
+fn ci_with_pictures(repo: &Repo, url: Option<&str>) -> (common::Output, String, String) {
+    let comment = repo.path(".runs/comment.md");
+    let dir = repo.path(".runs/pictures");
+    let outputs = repo.path(".runs/outputs");
+    drop(std::fs::remove_file(&outputs));
+    let mut args = vec![
+        "run",
+        "--ci",
+        "--comment",
+        comment.to_str().unwrap(),
+        "--pictures",
+        dir.to_str().unwrap(),
+    ];
+    if let Some(url) = url {
+        args.extend(["--pictures-url", url]);
+    }
+    let mut env = GITHUB.to_vec();
+    env.push(("GITHUB_OUTPUT", outputs.to_str().unwrap()));
+    let out = repo.fz_env(&args, &env);
+    let text = std::fs::read_to_string(&comment)
+        .unwrap_or_else(|_| panic!("{}\n{}", out.stdout, out.stderr));
+    let outputs = std::fs::read_to_string(&outputs).unwrap_or_default();
+    (out, text, outputs)
+}
+
+/// The JSON in the hidden line an approval checks.
+fn waiting(text: &str) -> serde_json::Value {
+    let line = text
+        .lines()
+        .find_map(|l| l.strip_prefix("<!-- fearlezz-pictures "))
+        .unwrap_or_else(|| panic!("no hidden line in {text}"));
+    serde_json::from_str(line.strip_suffix(" -->").unwrap()).unwrap()
+}
+
+#[test]
+fn changed_pictures_wait_for_a_person_without_failing_the_proof() {
+    let repo = screens_branch("blue");
+    let (out, text, outputs) = ci_with_pictures(&repo, Some(PICTURES_URL));
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(text.contains("**Pictures wait**"), "{text}");
+    let shown: Vec<&str> = text.lines().filter(|l| !l.starts_with("<!--")).collect();
+    assert!(!shown.iter().any(|l| l.contains("Proven")), "{text}");
+    assert!(text.contains("`/fearlezz approve "), "{text}");
+    assert!(outputs.contains("pictures=screens\n"), "{outputs}");
+    let head = repo.git(&["rev-parse", "HEAD"]);
+    let w = waiting(&text);
+    assert_eq!(w["head"], head.trim(), "{text}");
+    assert_eq!(w["checks"], serde_json::json!(["screens"]), "{text}");
+    assert!(
+        w["approved"].as_str().unwrap().starts_with("**Proven**"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_comment_shows_before_and_after_from_the_pictures_folder() {
+    let repo = screens_branch("blue");
+    let (out, text, _) = ci_with_pictures(&repo, Some(PICTURES_URL));
+    assert!(out.ok, "{}", out.stdout);
+    let sources: Vec<&str> = text
+        .split("src=\"")
+        .skip(1)
+        .map(|s| s.split('"').next().unwrap())
+        .collect();
+    assert_eq!(sources.len(), 2, "before and after of home only: {text}");
+    for src in sources {
+        let rel = src
+            .strip_prefix(&format!("{PICTURES_URL}/"))
+            .unwrap_or_else(|| panic!("{src}"));
+        assert!(
+            repo.path(".runs/pictures").join(rel).is_file(),
+            "{rel} is not in the pictures folder"
+        );
+    }
+    assert!(text.contains("**home.png** changed"), "{text}");
+    assert!(
+        !text.contains("**about.png**"),
+        "same pictures are not shown: {text}"
+    );
+}
+
+#[test]
+fn without_a_pictures_url_the_comment_names_the_artifact() {
+    let repo = screens_branch("blue");
+    let (out, text, _) = ci_with_pictures(&repo, None);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(!text.contains("<img"), "{text}");
+    assert!(text.contains("**home.png** changed"), "{text}");
+    assert!(text.contains("`fearlezz-pictures` artifact"), "{text}");
+}
+
+#[test]
+fn the_fingerprint_follows_the_inputs_of_the_pictures() {
+    let repo = screens_branch("blue");
+    let fingerprint = |repo: &Repo| {
+        let (out, text, _) = ci_with_pictures(repo, None);
+        assert!(text.contains("fearlezz-pictures"), "{}", out.stdout);
+        waiting(&text)["fingerprint"].clone()
+    };
+    let first = fingerprint(&repo);
+    let again = fingerprint(&repo);
+    assert_eq!(first, again);
+    // Gray is far from blue; green would look the same as red to the comparison.
+    repo.write("src/color.txt", "gray");
+    repo.commit("gray");
+    let other = fingerprint(&repo);
+    assert_ne!(first, other);
+}
+
+#[test]
+fn pictures_that_stay_the_same_leave_the_commit_proven() {
+    let repo = screens_main();
+    repo.write("src/other.txt", "b");
+    repo.commit("other");
+    let (out, text, outputs) = ci_with_pictures(&repo, Some(PICTURES_URL));
+    assert!(out.ok, "{}", out.stdout);
+    assert!(text.contains("**Proven**"), "{text}");
+    assert!(!text.contains("fearlezz-pictures"), "{text}");
+    assert!(outputs.contains("pictures=\n"), "{outputs}");
+}
+
+#[test]
+fn a_failing_check_stays_not_proven_with_pictures_waiting() {
+    let repo = screens_branch("blue");
+    repo.write(
+        "fearlezz.toml",
+        &full(&format!(
+            "{SCREENS}\n[check.unit]\nrun = \"false\"\nstage = \"working\"\ninputs = [\"src/**\"]\n"
+        )),
+    );
+    repo.commit("unit");
+    let (out, text, _) = ci_with_pictures(&repo, None);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(text.contains("**Not proven**"), "{text}");
+    assert!(!text.contains("**Proven**:"), "{text}");
+    assert!(text.contains("**home.png** changed"), "{text}");
+}
+
+#[test]
+fn the_tools_fearlezz_needs_name_ffmpeg_only_for_pictures() {
+    let repo = screens_branch("blue");
+    let out = repo.fz(&["setup", "needs"]);
+    assert!(out.ok, "{}", out.stderr);
+    assert_eq!(out.stdout, "ffmpeg\n");
+    let plain = branch_with_change();
+    let out = plain.fz(&["setup", "needs"]);
+    assert!(out.ok, "{}", out.stderr);
+    assert_eq!(out.stdout, "");
+}

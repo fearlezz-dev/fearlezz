@@ -69,10 +69,29 @@ pub(crate) struct CheckView {
     pub state: CheckState,
     /// How its stills and films compare with the base, for a passing run.
     pub look: Option<crate::look::Look>,
-    /// What the developer said when approving its pictures as they are now.
-    pub approved: Option<String>,
+    /// The approval of its pictures as they are now.
+    pub approved: Option<Approved>,
     /// The findings in scope of its latest run on these inputs.
     pub findings: Vec<crate::findings::Finding>,
+}
+
+/// An approval of a check's changed pictures.
+#[derive(Clone, Debug)]
+pub(crate) struct Approved {
+    /// The developer's words.
+    pub said: String,
+    /// Who approved on the pull request, as CI checked; none when the agent reported it.
+    pub by: Option<String>,
+}
+
+impl Approved {
+    /// For example `approved on GitHub by @lead ("ship it")`.
+    pub(crate) fn label(&self) -> String {
+        match &self.by {
+            Some(by) => format!("approved on GitHub by @{by} (\"{}\")", self.said),
+            None => format!("approved (\"{}\")", self.said),
+        }
+    }
 }
 
 impl CheckView {
@@ -145,7 +164,7 @@ pub(crate) fn view(
     let mut went_back = None;
     let mut waiting = None;
     let mut last_note = None;
-    let mut approvals: std::collections::BTreeMap<String, (String, String)> =
+    let mut approvals: std::collections::BTreeMap<String, (String, Approved)> =
         std::collections::BTreeMap::default();
     for entry in &journal.entries {
         match &entry.event {
@@ -157,8 +176,26 @@ pub(crate) fn view(
                 waiting = None;
             }
             Event::Ran { .. } => waiting = None,
-            Event::Approve { check, key, said } => {
-                approvals.insert(check.clone(), (key.clone(), said.clone()));
+            Event::Approve {
+                check,
+                key,
+                said,
+                by,
+                ..
+            } => {
+                let approved = Approved {
+                    said: said.clone(),
+                    by: by.clone(),
+                };
+                // The agent's report of what the developer said never replaces an approval
+                // a person gave on the pull request for the same inputs.
+                let weaker = by.is_none()
+                    && approvals
+                        .get(check)
+                        .is_some_and(|(k, a)| k == key && a.by.is_some());
+                if !weaker {
+                    approvals.insert(check.clone(), (key.clone(), approved));
+                }
                 waiting = None;
             }
             Event::Wait { question } => waiting = Some(question.clone()),
@@ -223,7 +260,7 @@ pub(crate) fn view(
             let approved = approvals
                 .get(&check.id)
                 .filter(|(key, _)| *key == inputs.key)
-                .map(|(_, said)| said.clone());
+                .map(|(_, approved)| approved.clone());
             checks.push(CheckView {
                 id: check.id.clone(),
                 stage: check.stage,
@@ -388,11 +425,12 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool, floor_fails: bool) -
         .and_then(|c| c.look.as_ref())
     {
         return format!(
-            "look at {} ({}): {}; when the developer agrees: fearlezz say approve {} --said \"<their words>\"",
+            "look at {0} ({1}): {2}; when the developer agrees: fearlezz say approve {0} --said \
+             \"<their words>\", or once they approved on the pull request: fearlezz say approve \
+             {0} --github",
             l.check,
             l.counts(),
             l.report.display(),
-            l.check
         );
     }
     match stages.after(v.stage) {

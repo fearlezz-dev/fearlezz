@@ -116,6 +116,10 @@ impl Git {
     }
 
     /// The short id of the commit checked out.
+    pub(crate) fn head(&self) -> Result<String> {
+        Ok(self.git(&["rev-parse", "HEAD"])?.trim().to_string())
+    }
+
     pub(crate) fn head_short(&self) -> Result<String> {
         self.short("HEAD")
     }

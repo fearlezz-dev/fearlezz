@@ -2,7 +2,7 @@
 
 What Fearlezz is for, where it stands and where it is going. Read this first when picking up the work, and update it in the same change that moves something.
 
-Last updated: 2026-11-11.
+Last updated: 2026-11-12.
 
 ## Purpose
 
@@ -37,10 +37,10 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
 | Pieces | Rust, TypeScript, ESLint, Playwright, Python, Go, Kotlin, Flutter, devenv, agents, safety; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
 | Stills and films | Compared with the same check run on the base commit, with a report page. Listed in `proof.jsonl` or found by a `stills` glob; the `playwright` piece takes them from `toHaveScreenshot` (spike, `spike/look-web`) |
-| Approvals | A visual change waits for the developer's words |
+| Approvals | A visual change waits for the developer's words. On a pull request a person with write access approves with `/fearlezz approve <words>`, which turns the `fearlezz/pictures` status green; `fearlezz say approve <check> --github` reads it into the journal, as the person's approval rather than the agent's report |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
 | Distribution | GitHub Releases for Linux and macOS through release-please (merging its pull request tags and builds), `install.sh`, Homebrew tap, Nix flake and devenv input, `cargo install --git`. The tap follows new releases once its workflow (tap pull request 1) is merged |
-| CI for other projects | `fearlezz-dev/fearlezz@v0`, a composite action: installs a release, proves the commit, posts the status comment, keeps the logs. Not yet run in another project |
+| CI for other projects | `fearlezz-dev/fearlezz@v0`, a composite action: installs the release of its tag (and refuses one too old), a pinned static ffmpeg when checks record pictures, proves the commit, posts the status comment with changed pictures before and after (from the `fearlezz-pictures` branch, or an artifact for forks), sets the `fearlezz/pictures` status, keeps the logs; a second workflow answers approvals and cleans and squashes the pictures branch. Run under act with the real GitHub API of a private repository, not yet on GitHub's runners or in another project |
 
 ## Partly built
 
@@ -73,8 +73,9 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 1. Finish the proof gate, so unproven work cannot look proven (design: `docs/drive/ci-proof-loop/record.yaml`):
    - Red before green: settle the spike on `spike/red-before-green` (its draft pull request lists the open decisions), then set `test_files` in the language pieces.
    - The Codex and Cursor hooks follow their docs but have not run in those agents yet. Hooks replace a project's own hooks for the same events in those files.
-2. Adopt Fearlezz in a first real project outside this repository, which then tests the gate for real.
-3. Pick up the list above one piece at a time, each in its own thread.
+2. Cut a release: the action refuses v0.1.0, which lacks `run --ci --pictures-url`, and `fearlezz-dev/fearlezz@v0` exists only once the release workflow moves the `v0` tag.
+3. Adopt Fearlezz in a first real project outside this repository, which then tests the gate and the pictures workflow on GitHub's runners for real.
+4. Pick up the list above one piece at a time, each in its own thread.
 
 ## Known problems
 

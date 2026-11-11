@@ -180,7 +180,9 @@ fn fz_in(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         .current_dir(dir)
         .env_remove("CI")
         .env_remove("FEARLEZZ_JOURNAL")
-        .env_remove("GITHUB_STEP_SUMMARY");
+        .env_remove("GITHUB_STEP_SUMMARY")
+        .env_remove("GITHUB_OUTPUT")
+        .env_remove("GITHUB_EVENT_PATH");
     for (k, v) in env {
         cmd.env(k, v);
     }

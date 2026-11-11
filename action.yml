@@ -1,9 +1,16 @@
 name: Fearlezz proof
-description: Prove a change with the checks in fearlezz.toml and show the status on the pull request.
+description: Prove a change with the checks in fearlezz.toml, and show the status and changed pictures on the pull request.
 
+# One action for every event of the workflows in the README: a pull request or push is proven;
+# a `/fearlezz approve` comment approves changed pictures; a closed pull request and a schedule
+# clean up the pictures branch. The steps themselves are in action.sh.
 inputs:
   version:
-    description: Release tag of Fearlezz to install (for example v0.2.0). The default is the latest release.
+    description: >-
+      Fearlezz to install: a release tag (for example v0.2.0), `latest` (the release of the
+      action's own tag when it is taken at one, otherwise the newest), `source` (build the
+      Fearlezz the action was taken from, for trying a branch), or `installed` (the one already
+      on PATH).
     default: latest
   devenv:
     description: Install Nix and devenv first, for projects whose checks run in a devenv shell.
@@ -11,59 +18,115 @@ inputs:
   comment:
     description: Post or replace one status comment on the pull request.
     default: "true"
+  ffmpeg:
+    description: >-
+      Install a pinned static ffmpeg for comparing stills and films: `auto` when a check records
+      pictures (a `stills` glob, or a check in the `look` stage) and ffmpeg is missing, `true`,
+      or `false`.
+    default: auto
   token:
-    description: Token that writes the pull request comment.
+    description: Token that writes the comment, the pictures status and the pictures branch.
     default: ${{ github.token }}
 
 runs:
   using: composite
   steps:
-    - if: inputs.devenv == 'true'
+    - id: task
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/action.sh" task
+
+    # Prove the commit.
+    - if: steps.task.outputs.task == 'prove' && inputs.devenv == 'true'
       uses: cachix/install-nix-action@v31
-    - if: inputs.devenv == 'true'
+    - if: steps.task.outputs.task == 'prove' && inputs.devenv == 'true'
       uses: cachix/cachix-action@v16
       with:
         name: devenv
-    - if: inputs.devenv == 'true'
+    - if: steps.task.outputs.task == 'prove' && inputs.devenv == 'true'
       shell: bash
       run: nix profile install nixpkgs#devenv
     - name: Install Fearlezz
+      if: steps.task.outputs.task == 'prove'
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
         FEARLEZZ_INSTALL_DIR: ${{ runner.temp }}/fearlezz-bin
-      run: |
-        if [ "$VERSION" != latest ]; then export FEARLEZZ_VERSION="$VERSION"; fi
-        sh "$GITHUB_ACTION_PATH/install.sh"
-        echo "$FEARLEZZ_INSTALL_DIR" >> "$GITHUB_PATH"
-    - name: Prove this commit with Fearlezz
+      run: bash "$GITHUB_ACTION_PATH/action.sh" install
+    # GitHub's Ubuntu runners have no ffmpeg, and installing it with apt takes minutes.
+    - id: ffmpeg
+      if: steps.task.outputs.task == 'prove'
       shell: bash
-      run: fearlezz run --ci --comment "$RUNNER_TEMP/fearlezz.md"
-    # One comment per pull request, replaced on every run. A fork's token may not comment;
-    # the check stays.
-    - name: Show the status on the pull request
-      if: always() && inputs.comment == 'true' && github.event_name == 'pull_request'
+      env:
+        FFMPEG: ${{ inputs.ffmpeg }}
+      run: bash "$GITHUB_ACTION_PATH/action.sh" needs-ffmpeg
+    - if: steps.ffmpeg.outputs.need == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/fearlezz-ffmpeg/b6.1.1
+        key: fearlezz-ffmpeg-b6.1.1-${{ runner.os }}-${{ runner.arch }}
+    - name: Install ffmpeg
+      if: steps.ffmpeg.outputs.need == 'true'
+      shell: bash
+      env:
+        FFMPEG_DIR: ${{ runner.tool_cache }}/fearlezz-ffmpeg/b6.1.1
+      run: bash "$GITHUB_ACTION_PATH/action.sh" ffmpeg
+    - name: Prove this commit with Fearlezz
+      id: prove
+      if: steps.task.outputs.task == 'prove'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/action.sh" prove
+    - name: Put the changed pictures on the pictures branch
+      id: publish
+      if: always() && steps.prove.outputs.url != '' && steps.prove.outputs.pictures != ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
-        PR: ${{ github.event.pull_request.number }}
-      run: |
-        file="$RUNNER_TEMP/fearlezz.md"
-        [ -s "$file" ] || exit 0
-        comments="repos/$GITHUB_REPOSITORY/issues/$PR/comments"
-        {
-          id=$(gh api "$comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- fearlezz -->"))) | .id' | head -n 1)
-          if [ -n "$id" ]; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$file" > /dev/null
-          else
-            gh api "$comments" -F body=@"$file" > /dev/null
-          fi
-        } || echo "could not write the pull request comment"
+      run: bash "$GITHUB_ACTION_PATH/action.sh" publish
+    # One comment per pull request, replaced on every run. A fork's token may not comment;
+    # the check stays.
+    - name: Show the status on the pull request
+      id: comment
+      if: always() && steps.prove.outcome != 'skipped' && inputs.comment == 'true' && github.event_name == 'pull_request'
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PICTURES: ${{ steps.prove.outputs.pictures }}
+        URL: ${{ steps.prove.outputs.url }}
+        PUSHED: ${{ steps.publish.outputs.pushed }}
+      run: bash "$GITHUB_ACTION_PATH/action.sh" comment
+    # Pending while changed pictures wait for a person, so approving them reruns no check.
+    - name: Set the pictures status
+      if: always() && steps.prove.outcome != 'skipped' && github.event_name == 'pull_request'
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PICTURES: ${{ steps.prove.outputs.pictures }}
+        COMMENT_URL: ${{ steps.comment.outputs.url }}
+      run: bash "$GITHUB_ACTION_PATH/action.sh" status
+    - name: Keep the changed pictures
+      if: always() && steps.prove.outputs.pictures != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: fearlezz-pictures
+        path: ${{ runner.temp }}/fearlezz-pictures
+        if-no-files-found: ignore
     - name: Keep the output of every check
-      if: always()
+      if: always() && steps.prove.outcome != 'skipped'
       uses: actions/upload-artifact@v4
       with:
         name: proof-logs
         path: .git/fearlezz/results/**/output.log
         include-hidden-files: true
         if-no-files-found: ignore
+
+    # Approve changed pictures, or clean up the pictures branch.
+    - name: Answer /fearlezz approve, or clean up the pictures
+      if: contains(fromJSON('["approve", "clean", "squash"]'), steps.task.outputs.task)
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TASK: ${{ steps.task.outputs.task }}
+      run: bash "$GITHUB_ACTION_PATH/action.sh" "$TASK"
