@@ -20,6 +20,13 @@ pub(crate) struct Floor {
     pub unproven: Vec<String>,
 }
 
+/// One thing that keeps a commit from being proven: what, why, and what to do about it.
+pub(crate) struct Item {
+    pub what: String,
+    pub why: String,
+    pub fix: String,
+}
+
 impl Floor {
     /// Compares the change's config with the base branch's. Without a base branch, or with
     /// no config on it, there is no floor and the change's own `no_proof` counts.
@@ -58,6 +65,31 @@ impl Floor {
 
     pub(crate) fn holds(&self) -> bool {
         self.weakened.is_empty() && self.unproven.is_empty()
+    }
+
+    /// What fails the floor, one item each, for a reader who sees nothing else.
+    pub(crate) fn items(&self, base: &str) -> Vec<Item> {
+        let weakened = self.weakened.iter().map(|(what, how)| Item {
+            what: if what.contains('.') || what == "no_proof" {
+                format!("`{what}` is weaker")
+            } else {
+                format!("check `{what}` is weaker")
+            },
+            why: how.clone(),
+            fix: format!(
+                "keep the proof {base} requires; when it must change, a person with admin rights \
+                 merges past CI after reading this"
+            ),
+        });
+        let unproven = self.unproven.iter().map(|path| Item {
+            what: format!("`{path}` has no proof"),
+            why: format!("no check reads it and {base} does not declare it in no_proof"),
+            fix: format!(
+                "add it to a check's inputs, or declare it in no_proof in {} on {base} first",
+                config::FILE
+            ),
+        });
+        weakened.chain(unproven).collect()
     }
 
     /// The lines that say what fails the floor and how to get past it.

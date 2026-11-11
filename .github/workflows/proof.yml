@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   proof:
     runs-on: ubuntu-latest
@@ -21,7 +25,25 @@ jobs:
           name: devenv
       - run: nix profile install nixpkgs#devenv
       - name: Prove this commit with Fearlezz
-        run: devenv shell -- check
+        run: devenv shell -- check --comment "$RUNNER_TEMP/fearlezz.md"
+      # One comment per pull request, replaced on every run. Only CI writes it, so the agent
+      # whose work it judges cannot change it. A fork's token may not comment; the check stays.
+      - name: Show the status on the pull request
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          file="$RUNNER_TEMP/fearlezz.md"
+          [ -s "$file" ] || exit 0
+          comments="repos/$GITHUB_REPOSITORY/issues/$PR/comments"
+          id=$(gh api "$comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- fearlezz -->"))) | .id' | head -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$file" > /dev/null
+          else
+            gh api "$comments" -F body=@"$file" > /dev/null
+          fi
       - name: Keep the output of every check
         if: always()
         uses: actions/upload-artifact@v4
