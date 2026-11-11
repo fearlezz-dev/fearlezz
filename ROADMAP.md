@@ -18,6 +18,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 - **Proof comes from three sources:** what the edits touch, the kind of change, and the claims. The agent may only add to it.
 - **All proof groups matter:** honest, does what was asked, did not break anything, tests are real, built well, safe. Not every project needs all of them.
 - **Local first.** Journals and results live on the developer's machine. The final stage proves everything fresh once.
+- **CI trusts only what it saw.** Local proof is the agent's word, so it never counts as proof in CI. CI proves the commit itself, and "ready to merge" is never said about work that has not been proven.
 - **Free and paid.** Everything local is the open core in `crates/`. Hosted, paid parts go under `ee/`.
 
 ## Built
@@ -43,7 +44,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Capability | Missing |
 | --- | --- |
 | Overview of the work | A static page and `fearlezz --all` exist; nothing live for runs of hours or days |
-| Local and CI together | CI runs Fearlezz; there is no waiting pull request check that gates merging on local proof |
+| Local and CI together | "Ready to merge" and the final exit code are honest, and `fearlezz run --ci` proves a commit with no journal; the rest of the proof gate is under Next |
 | Tests are real | Red then green only; no mutation or coverage proof |
 | Extension layers | Pieces work; a new kind of proof and a library layer do not exist yet |
 
@@ -66,8 +67,11 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 ## Next
 
-1. Adopt Fearlezz in a first real project outside this repository.
-2. Decide what a run on `main` should prove (see below).
+1. Finish the proof gate, so unproven work cannot look proven (design: `docs/drive/ci-proof-loop/record.yaml`):
+   - CI mode: the base branch's config is the floor, so a change that weakens its own proof is red and names it, and only an admin merges past it. A run on `main` runs every check. A changed file that no check reads and that is not declared as needing no proof is red. The log shows every check's command, time and test count, and zero tests is red. `main` requires the check.
+   - Claims reach CI: the goal and claims are a small committed file per change, written by `fearlezz say`, and CI proves each claim again.
+   - Agent hooks, written by `fearlezz setup sync`: push needs a goal and a claim, a non draft pull request needs ready, the end of a turn blocks once.
+2. Adopt Fearlezz in a first real project outside this repository, which then tests the gate for real.
 3. Pick up the list above one piece at a time, each in its own thread.
 
 ## Known problems

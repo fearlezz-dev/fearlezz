@@ -19,6 +19,7 @@ pub(crate) struct Worktree {
     pub lines: crate::findings::Changed,
     pub files: Vec<String>,
     pub tree: String,
+    pub committed: bool,
     pub hasher: Hasher,
 }
 
@@ -29,6 +30,7 @@ impl Worktree {
             lines: git.changed_lines(&config.base)?,
             files: git.files()?,
             tree: git.tree()?,
+            committed: git.committed()?,
             git,
             hasher: Hasher::default(),
         })
@@ -106,7 +108,10 @@ pub(crate) enum Group {
 pub(crate) struct View {
     pub name: String,
     pub kind: Option<Kind>,
+    pub goal: Option<String>,
     pub stage: Stage,
+    /// False when something in the worktree is not committed; true when it is unknown.
+    pub committed: bool,
     /// Why the work last went back a stage.
     pub went_back: Option<String>,
     pub checks: Vec<CheckView>,
@@ -137,6 +142,13 @@ const ACTIVE_SECONDS: i64 = 30 * 60;
 /// The next line once all proof is in at the final stage.
 pub(crate) const READY: &str = "all proof is in: ready to merge";
 
+/// The next line after proving a commit, where no work is being judged.
+pub(crate) const COMMIT_PROVEN: &str =
+    "this proved the commit, not the work; fearlezz shows where the work stands";
+
+const SAY_START: &str = "say what this work is: fearlezz say start --kind \
+                         bug|feature|refactor|other --goal \"<the goal in the developer's words>\"";
+
 pub(crate) fn view(
     config: &Config,
     store: &Store,
@@ -146,6 +158,7 @@ pub(crate) fn view(
 ) -> Result<View> {
     let stages = &config.stages;
     let mut kind = None;
+    let mut goal = None;
     let mut stage = stages.first();
     let mut went_back = None;
     let mut waiting = None;
@@ -155,7 +168,10 @@ pub(crate) fn view(
         std::collections::BTreeMap::default();
     for entry in &journal.entries {
         match &entry.event {
-            Event::Started { kind: k, .. } => kind = Some(*k),
+            Event::Started { kind: k, goal: g } => {
+                kind = Some(*k);
+                goal.clone_from(g);
+            }
             Event::Claim { id, text, check } => {
                 claims.push((id.clone(), text.clone(), check.clone()));
                 waiting = None;
@@ -189,7 +205,9 @@ pub(crate) fn view(
     let mut checks = Vec::new();
     let mut tree = None;
     let mut skill_out_of_date = false;
+    let mut committed = true;
     if let Some(wt) = worktree {
+        committed = wt.committed;
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
         tree = Some(wt.tree.clone());
         for check in &config.checks {
@@ -277,7 +295,9 @@ pub(crate) fn view(
     let mut view = View {
         name: journal.name.clone(),
         kind,
+        goal,
         stage,
+        committed,
         went_back,
         checks,
         claims,
@@ -434,7 +454,7 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool) -> String {
             todo.join(", ")
         );
     }
-    if v.stage > stages.first() {
+    if v.stage > stages.first() || stages.after(v.stage).is_none() {
         for c in &v.claims {
             match c.state {
                 ClaimState::NoProof => {
@@ -459,9 +479,7 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool) -> String {
     }
     if v.checks.is_empty() {
         return if v.kind.is_none() {
-            "say what this work is: fearlezz say start --kind bug|feature|refactor|other --goal \
-             \"<the goal in the developer's words>\""
-                .into()
+            SAY_START.into()
         } else {
             "make a change; fearlezz --plan shows the proof it will need".into()
         };
@@ -481,8 +499,23 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool) -> String {
     }
     match stages.after(v.stage) {
         Some(s) => format!("when ready: fearlezz run --stage {}", stages.name(s)),
-        None => READY.into(),
+        None => missing_for_ready(v).unwrap_or_else(|| READY.into()),
     }
+}
+
+/// What the work still lacks, beyond its checks, to be called ready: proof needs a goal and
+/// something to prove, and it counts only for what is committed.
+fn missing_for_ready(v: &View) -> Option<String> {
+    if v.goal.is_none() {
+        return Some(SAY_START.into());
+    }
+    if v.claims.is_empty() {
+        return Some(
+            "say what this work must prove: fearlezz say claim \"<behavior>\" --check <check>"
+                .into(),
+        );
+    }
+    (!v.committed).then(|| "commit the work: ready means everything is committed".into())
 }
 
 fn now_line(config: &Config, v: &View) -> String {

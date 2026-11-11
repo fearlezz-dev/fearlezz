@@ -72,7 +72,8 @@ pub(crate) enum Event {
 
 pub(crate) struct Journal {
     pub name: String,
-    file: PathBuf,
+    /// Where events are appended; `None` keeps them in memory only.
+    file: Option<PathBuf>,
     pub entries: Vec<Entry>,
 }
 
@@ -117,9 +118,23 @@ impl Journal {
         }
         Ok(Journal {
             name: name.to_string(),
-            file,
+            file: Some(file),
             entries,
         })
+    }
+
+    /// A journal that lives only as long as this command: for proving a commit, which says
+    /// nothing about any piece of work.
+    pub(crate) fn in_memory(name: &str) -> Journal {
+        Journal {
+            name: name.to_string(),
+            file: None,
+            entries: Vec::new(),
+        }
+    }
+
+    pub(crate) fn is_in_memory(&self) -> bool {
+        self.file.is_none()
     }
 
     pub(crate) fn all(common: &Path) -> Result<Vec<Journal>> {
@@ -138,17 +153,19 @@ impl Journal {
     }
 
     pub(crate) fn append(&mut self, at: Timestamp, event: Event) -> Result<()> {
-        if let Some(dir) = self.file.parent() {
-            fs::create_dir_all(dir)?;
-        }
         let entry = Entry { at, event };
-        let mut line = serde_json::to_string(&entry)?;
-        line.push('\n');
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.file)?
-            .write_all(line.as_bytes())?;
+        if let Some(file) = &self.file {
+            if let Some(dir) = file.parent() {
+                fs::create_dir_all(dir)?;
+            }
+            let mut line = serde_json::to_string(&entry)?;
+            line.push('\n');
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file)?
+                .write_all(line.as_bytes())?;
+        }
         self.entries.push(entry);
         Ok(())
     }

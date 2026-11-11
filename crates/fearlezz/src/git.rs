@@ -115,6 +115,11 @@ impl Git {
         })
     }
 
+    /// Whether every file in the worktree is committed; new files count, ignored ones do not.
+    pub(crate) fn committed(&self) -> Result<bool> {
+        Ok(self.git(&["status", "--porcelain"])?.trim().is_empty())
+    }
+
     /// The id of the tree the worktree holds right now, uncommitted and new files included.
     /// Proof is named by this, not by the last commit.
     pub(crate) fn tree(&self) -> Result<String> {
