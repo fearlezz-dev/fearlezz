@@ -559,3 +559,39 @@ fn the_flutter_piece_excludes_the_folders_flutter_adds_to_the_analyzer() {
         );
     }
 }
+
+#[test]
+fn the_flutter_look_piece_writes_its_test_helpers_and_catches_their_drift() {
+    let repo = Repo::new("use = [\"flutter-look\"]\n", &[]);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    for file in [
+        "look_test/fearlezz_look.dart",
+        "look_test/flutter_test_config.dart",
+    ] {
+        assert!(
+            out.stdout.contains(&format!("wrote {file}")),
+            "{}",
+            out.stdout
+        );
+    }
+    let helper = std::fs::read_to_string(repo.path("look_test/fearlezz_look.dart")).unwrap();
+    assert!(
+        helper.starts_with("// Written by fearlezz setup sync"),
+        "{helper}"
+    );
+    assert!(helper.contains("Future<void> still(WidgetTester tester, String id)"));
+    repo.commit("synced");
+    repo.branch("feat/x");
+    repo.write("look_test/fearlezz_look.dart", "// mine now\n");
+    let out = repo.fz(&["run", "settings"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains(
+            "gate look_test/fearlezz_look.dart:1  settings  differs from the settings in \
+             fearlezz.toml"
+        ),
+        "{}",
+        out.stdout
+    );
+}

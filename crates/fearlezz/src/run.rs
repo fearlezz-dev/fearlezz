@@ -60,8 +60,7 @@ pub(crate) fn execute(
         run_builtin(builtin, at, &dir, out)?;
         (true, Some(0))
     } else {
-        let status = spawn(check, &dir, out, at)?;
-        (status.success(), status.code())
+        spawn(check, &dir, out, at)?
     };
     let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
     let stdout_path = dir.join("stdout.txt");
@@ -126,8 +125,9 @@ pub(crate) fn execute(
     Ok(result)
 }
 
-/// Runs the check's command in a clean env, inside the environment's shell if any.
-fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<std::process::ExitStatus> {
+/// Runs the check's command in a clean env, inside the environment's shell if any, recording
+/// its app's window when it has `record`. Returns whether it passed and its exit code.
+fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, Option<i32>)> {
     // A tool that prints findings on stdout keeps them apart from its log.
     let stdout_path = dir.join("stdout.txt");
     let stdout = match &check.findings {
@@ -146,7 +146,7 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<std::pr
         .env_clear()
         .stdin(Stdio::null())
         .stdout(stdout)
-        .stderr(out);
+        .stderr(out.try_clone()?);
     for name in BASE_ENV
         .iter()
         .copied()
@@ -166,8 +166,43 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<std::pr
         .env("FEARLEZZ_CHECK", &check.id)
         .env("FEARLEZZ_STAGE", at.stage);
 
-    cmd.status()
-        .with_context(|| format!("starting check {}", check.id))
+    let Some(record) = &check.record else {
+        let status = cmd
+            .status()
+            .with_context(|| format!("starting check {}", check.id))?;
+        return Ok((status.success(), status.code()));
+    };
+    // Its own process group, so stopping it after `seconds` stops the app it started too.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut log = out;
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("starting check {}", check.id))?;
+    // A recorder that panics must still stop the app the command started.
+    let recorded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::record::during(&mut child, record, dir, &mut log)
+    }))
+    .unwrap_or_else(|panic| {
+        Err(anyhow::anyhow!(
+            "the recorder failed: {}",
+            crate::panic_text(&*panic)
+        ))
+    });
+    let recorded = match recorded {
+        Ok(r) => r,
+        Err(e) => {
+            use std::io::Write as _;
+            writeln!(log, "record: {e:#}")?;
+            crate::record::stop(&mut child)?;
+            return Ok((false, None));
+        }
+    };
+    Ok(match recorded.status {
+        // Stopped by Fearlezz after `seconds`: the app ran until then, which is the point.
+        None => (recorded.recorded, None),
+        Some(status) => (status.success() && recorded.recorded, status.code()),
+    })
 }
 
 /// A port nothing listens on right now, for a server the check starts itself (such as

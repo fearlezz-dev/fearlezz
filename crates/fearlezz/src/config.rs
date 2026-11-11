@@ -116,6 +116,8 @@ pub(crate) struct Check {
     /// wait for approval.
     pub flaky: Vec<String>,
     flaky_globs: GlobSet,
+    /// For a check that records an app's window while its command runs.
+    pub record: Option<crate::record::Spec>,
     /// The environment's shell it runs inside, part of its inputs.
     pub shell: Option<String>,
     /// Work Fearlezz does itself instead of running a command.
@@ -248,6 +250,7 @@ struct RawCheck {
     films: Option<String>,
     #[serde(default)]
     flaky: Vec<String>,
+    record: Option<toml::Value>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
     #[expect(
@@ -386,6 +389,11 @@ impl Config {
                     .with_context(|| format!("check {id}"))?,
                 flaky_globs: globs(&c.flaky).with_context(|| format!("check {id}: flaky"))?,
                 flaky: c.flaky,
+                record: c
+                    .record
+                    .map(crate::record::Spec::parse)
+                    .transpose()
+                    .with_context(|| format!("check {id}"))?,
                 id: id.clone(),
                 run: c.run,
                 stage,
@@ -516,6 +524,7 @@ fn builtin_check(id: &str, stages: &Stages, inputs: GlobSet, on: Scope, builtin:
         films: None,
         flaky: Vec::new(),
         flaky_globs: GlobSet::empty(),
+        record: None,
     }
 }
 

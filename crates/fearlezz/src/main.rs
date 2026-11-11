@@ -15,6 +15,7 @@ mod media;
 mod overview;
 mod page;
 mod presets;
+mod record;
 mod red;
 mod report;
 mod rules;
@@ -75,6 +76,10 @@ struct See {
     /// Write the overview page of every journal.
     #[arg(long)]
     page: bool,
+    /// A still of a running app's window, to look at while working (macOS): a pid, bundle
+    /// id, app name or part of the window title. Prints the PNG's path.
+    #[arg(long, value_name = "WINDOW")]
+    still: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -181,7 +186,10 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let done = match cli.command {
         Some(cmd) => dispatch(cmd),
-        None => see(&cli.see),
+        None => match &cli.see.still {
+            Some(window) => still(window),
+            None => see(&cli.see),
+        },
     };
     match done {
         Ok(true) => ExitCode::SUCCESS,
@@ -527,6 +535,29 @@ fn setup(what: Setup) -> Result<bool> {
             }
         }
     }
+    Ok(true)
+}
+
+/// `fearlezz --still`: a still of a running app's window, kept with this repository's
+/// Fearlezz files (outside the worktree, so it is never a change), or in the temp folder.
+fn still(window: &str) -> Result<bool> {
+    let dir = match Git::discover(&std::env::current_dir()?) {
+        Ok(git) => git.common.join("fearlezz").join("stills"),
+        Err(_) => std::env::temp_dir().join("fearlezz-stills"),
+    };
+    let s = record::still_of(window, &dir, 0.0)?;
+    println!(
+        "still {}x{} of {} in {:.2} s: {}",
+        s.size.0,
+        s.size.1,
+        s.window.describe(),
+        s.took.as_secs_f64(),
+        s.path.display()
+    );
+    println!(
+        "next: look at the PNG and judge the UI; for proof, a check records it with a record \
+         table and fearlezz run compares it with the base"
+    );
     Ok(true)
 }
 
@@ -1087,6 +1118,7 @@ fn run_checks(
     let env = ctx.env();
     let mut prepared = false;
     let mut held = None;
+    let (mut not_run, mut cannot_record) = (0, 0);
     for check in &targets {
         let inputs = wt.inputs(check)?;
         // Reuse only a pass, never across an unstable key, and at the final stage only a run
@@ -1099,6 +1131,28 @@ fn run_checks(
                     && (stage != final_stage || r.made_at_final(&j.name, &final_stage))
             })
         };
+        // A check that records a window runs only where something can record. CI does not
+        // need it (looks of app windows are proven on a developer's machine); locally it
+        // fails with the one time fix. Neither is stored, so it is not called unstable once
+        // recording works.
+        if reuse.is_none() && check.record.is_some() {
+            if let Some(u) = record::unavailable() {
+                if let Some(r) = report.as_mut() {
+                    println!("not run {}: {}", check.id, u.why);
+                    r.notes.push(format!(
+                        "Not run: `{}` records an app's window, and {}. It is proven on a \
+                         developer's machine.",
+                        check.id, u.why
+                    ));
+                    not_run += 1;
+                } else {
+                    println!("fail {}: {}", check.id, u.why);
+                    println!("  fix: {}", u.fix);
+                    cannot_record += 1;
+                }
+                continue;
+            }
+        }
         let (result, was_reused) = if let Some(r) = reuse {
             (r, true)
         } else {
@@ -1181,10 +1235,15 @@ fn run_checks(
     let red_blocks = (in_memory || stage == final_stage)
         && red_before_green(ctx, &wt, &green, &stage, report.as_mut());
     prune_store(ctx);
+    let not_run_text = if not_run > 0 {
+        format!(", {not_run} not run")
+    } else {
+        String::new()
+    };
     println!(
-        "{} checks: {passed} passed, {} failed, {reused} reused, {:.1} s",
+        "{} checks: {passed} passed, {} failed, {reused} reused{not_run_text}, {:.1} s",
         targets.len(),
-        failures.len(),
+        failures.len() + cannot_record,
         clock.elapsed().as_secs_f64()
     );
     for line in &lines {
@@ -1199,12 +1258,14 @@ fn run_checks(
         env.state.stop(env.cfg, &wt.git.root)?;
         println!("services stopped: all proof is in");
     }
-    if red_blocks && !in_memory && failures.is_empty() {
+    if cannot_record > 0 {
+        println!("next: give the recorder its permission (fix: above), then fearlezz run");
+    } else if red_blocks && !in_memory && failures.is_empty() {
         println!("next: {RED_NEXT}, then fearlezz run");
     } else {
         println!("next: {}", next_line(&after));
     }
-    Ok(failures.is_empty() && !red_blocks && settled(&after))
+    Ok(failures.is_empty() && cannot_record == 0 && !red_blocks && settled(&after))
 }
 
 /// What a fix whose tests pass on the base commit does next.

@@ -127,6 +127,9 @@ impl Hasher {
         if let Some(reader) = &check.tests {
             parts.insert("(tests)".into(), sha256(reader.fingerprint().as_bytes()));
         }
+        if let Some(record) = &check.record {
+            parts.insert("(record)".into(), sha256(record.fingerprint().as_bytes()));
+        }
         if let Some(shell) = &check.shell {
             parts.insert("(shell)".into(), sha256(shell.as_bytes()));
         }

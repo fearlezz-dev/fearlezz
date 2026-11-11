@@ -48,6 +48,25 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 - Changed pictures are not failures. Read the report, and when the change is not the intended one, fix it.
 - Merge waits until the developer approves changed pictures. Show them the report: they mark each picture and copy either the approve command in their own words or feedback for you. Only after they agree, run `fearlezz say approve <check> --said "<their words, quoted>"`. Never approve on your own judgment. The approval holds while the check's inputs stay the same; any further change needs a new one.
 - `fearlezz setup compare BEFORE AFTER` compares any two stills or films directly, for quick tries while exploring.
+- While building a UI, look at it often: `fearlezz --still <window>` (macOS) takes a still of a running app's window, named by pid, bundle id, app name or part of its title, and prints the PNG's path. Read the picture and critique it. It is for you, not proof.
+- For a Flutter app, `use = ["flutter-look"]`: widget tests in `look_test/` call `still(tester, "home")` on a widget wrapped in `lookable(...)` (helpers written by `fearlezz setup sync`), headless and fast; `flutter-film` films the macOS app while `integration_test/` drives it, at the final stage.
+
+## Recording an app's window
+
+A check with `record` films or stills the window of the app its command starts (macOS, with Screen Recording for the app that started the agent), so a check needs no script around a recorder:
+
+```toml
+[check.app-look]
+run = "swift run LookDemo"        # or xcodebuild test, flutter test integration_test -d macos
+stage = "look"
+inputs = ["Sources/**", "Package.swift"]
+record = { still = "home", film = "home", seconds = 3 }
+# window = "com.example.app"     the app when the command does not start it itself (open, launchd)
+# crop_top = 28                  leave out the title bar (off by default; some apps have none)
+# display = "virtual"            experimental: keep the window on a virtual display (needs Accessibility)
+```
+
+The still is taken once the window is up; the film runs until the command ends, or for `seconds`, after which Fearlezz stops the command and the check counts as passed. Where nothing can record, the check does not run: locally it fails with the one time fix; in CI it is listed as not run and does not block, since looks of app windows are proven on a developer's machine.
 
 ## Seeing the work
 
@@ -85,7 +104,7 @@ In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter:
 
 ```toml
 use = [
-  "rust",                                  # built in: fmt, clippy, tests (also: flutter, typescript, eslint, playwright, python, kotlin, go, devenv, agents, actions: zizmor over GitHub workflows, safety: secret scanning with gitleaks where a leaked key on a changed line is a gate, trufflehog and betterleaks as other secret scanners, osv-scanner: vulnerable dependencies as flags)
+  "rust",                                  # built in: fmt, clippy, tests (also: flutter, flutter-look, typescript, eslint, playwright, python, kotlin, go, devenv, agents, actions: zizmor over GitHub workflows, safety: secret scanning with gitleaks where a leaked key on a changed line is a gate, trufflehog and betterleaks as other secret scanners, osv-scanner: vulnerable dependencies as flags)
   "./proof/screens.toml",                  # a file in this repo
   "github:acme/presets//web.toml@v1.2",    # someone's repo, pinned to a tag or commit
 ]
