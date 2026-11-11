@@ -596,8 +596,7 @@ fn setup(what: Setup) -> Result<bool> {
                     || c.films.is_some()
                     || c.record.is_some()
                     || stages.name(c.stage) == "look"
-            })
-            {
+            }) {
                 println!("ffmpeg");
             }
         }
