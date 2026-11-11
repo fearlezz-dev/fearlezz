@@ -55,7 +55,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 | Capability | State |
 | --- | --- |
-| Recording apps on macOS | Spike proved a covered window can be recorded with ScreenCaptureKit; no recorder yet |
+| Recording apps on macOS | A spike recorder (`tools/macos-recorder`) takes a still or film of one window, covered or offscreen, in about a second plus the film length. It needs Screen Recording for the app that started the agent, and hosted CI runners cannot be granted it. Flutter stills need no recorder: widget tests render them headlessly (`docs/spikes/look-native`). No built in piece yet |
 | Showcase | Stitch proofs into polished README films and release notes; prototyped once |
 | Safety proof | The `safety` piece scans for secrets (gitleaks, gate on changed lines). No dependency, workflow or code scanning yet |
 | Hosted parts and proof links | `ee/` is empty; links may be hidden or need sign in |
