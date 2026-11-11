@@ -363,3 +363,110 @@ stills = "stills/**/*.png"
         );
     }
 }
+
+/// The report page a run printed.
+fn report_of(out: &common::Output) -> String {
+    let path = out
+        .lines()
+        .iter()
+        .find_map(|l| l.trim().strip_prefix("report: "))
+        .map(std::path::PathBuf::from)
+        .expect("a report line");
+    std::fs::read_to_string(path).unwrap()
+}
+
+#[test]
+fn the_report_is_one_page_to_review_and_approve_from() {
+    let (repo, counter) = repo();
+    let html = report_of(&ran(&repo, &counter, &["run"]));
+    // Counts that filter, one per kind of change there is.
+    for kind in ["changed", "new", "same"] {
+        assert!(
+            html.contains(&format!("data-filter=\"{kind}\"")),
+            "{kind}: {html}"
+        );
+    }
+    assert!(html.contains("data-name=\"home.png\" data-change=\"changed\""));
+    // Ways to compare a before with its after.
+    for mode in ["side", "slider", "onion", "diff", "blink"] {
+        assert!(html.contains(&format!("data-mode=\"{mode}\"")), "{mode}");
+    }
+    // A decision per picture, and approval built from the developer's words.
+    for word in ["Looks right", "Not right", "Flaky"] {
+        assert!(html.contains(word), "{word}");
+    }
+    assert!(html.contains("fearlezz say approve screens --said"));
+}
+
+#[test]
+fn the_report_needs_nothing_from_the_network_and_keeps_to_the_house_style() {
+    let (repo, counter) = repo();
+    let html = report_of(&ran(&repo, &counter, &["run"]));
+    assert!(!html.contains("http://") && !html.contains("https://"));
+    assert!(html.contains("prefers-reduced-motion"));
+    assert!(html.contains("prefers-color-scheme: dark"));
+    // Borders go all the way round or not at all.
+    for side in ["border-left", "border-right", "border-top", "border-bottom"] {
+        assert!(!html.contains(side), "{side}");
+    }
+}
+
+#[test]
+fn the_report_groups_by_the_parts_of_a_picture_name() {
+    let repo = Repo::new(
+        r#"
+[check.screens]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+stills = "stills/**/*.png"
+"#,
+        &[("record.sh", WRITE_FILES), ("src/color.txt", "red")],
+    );
+    repo.branch("feat/blue");
+    repo.write("src/color.txt", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let html = report_of(&repo.fz(&["run"]));
+    assert!(html.contains("data-group=\"viewport\""), "{html}");
+    assert!(html.contains("data-viewport=\"desktop\""), "{html}");
+    assert!(html.contains("data-viewport=\"mobile\""), "{html}");
+}
+
+/// A film of a box that appears after a second, at a place the source names.
+const RECORD_FILM: &str = r#"set -e
+ffmpeg -v error -nostdin -f lavfi -i "color=c=white:s=160x120:r=10:d=2" \
+  -vf "drawbox=x=$(cat src/x.txt):y=30:w=50:h=40:color=blue:t=fill:enable='gte(t,1)'" \
+  -pix_fmt yuv420p "$FEARLEZZ_OUT/flow.mp4"
+echo '{"kind":"film","file":"flow.mp4"}' >> "$FEARLEZZ_OUT/proof.jsonl"
+"#;
+
+#[test]
+fn a_changed_film_plays_both_sides_on_one_clock_with_lanes_of_where_they_differ() {
+    let repo = Repo::new(
+        r#"
+[check.flow]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+"#,
+        &[("record.sh", RECORD_FILM), ("src/x.txt", "20")],
+    );
+    repo.branch("feat/move");
+    repo.write("src/x.txt", "90");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(
+        out.stdout.contains("look flow: 1 changed"),
+        "{}",
+        out.stdout
+    );
+    let html = report_of(&out);
+    assert!(html.contains("class=\"film\""), "{html}");
+    assert_eq!(html.matches("<video").count(), 2, "{html}");
+    assert!(html.contains("class=\"lane before\""), "{html}");
+    assert!(
+        html.contains("class=\"diff\""),
+        "a differing stretch: {html}"
+    );
+    assert!(html.contains("data-seek="), "a jump to the change: {html}");
+}

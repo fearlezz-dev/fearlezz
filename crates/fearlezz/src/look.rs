@@ -56,6 +56,9 @@ pub(crate) struct Item {
     pub before: Option<String>,
     pub after: Option<String>,
     pub comparison: Option<Comparison>,
+    /// Marked flaky in the check's config: still shown, but nobody needs to look at it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flaky: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -394,6 +397,7 @@ fn build(
             before: None,
             after: None,
             comparison: None,
+            flaky: false,
         };
         let copies = (
             b.map(|(run, b)| copy("before", run, b)).transpose(),
@@ -430,6 +434,7 @@ fn build(
                 before: copied.and_then(Result::ok),
                 after: None,
                 comparison: None,
+                flaky: false,
             },
             None,
         ));

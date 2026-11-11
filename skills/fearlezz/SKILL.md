@@ -45,7 +45,7 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 - For a web app, `use = ["playwright"]`: each `toHaveScreenshot` call is a still. Its piece shows the two lines `playwright.config` needs. Hide what changes on its own (clocks, random values) with `data-volatile` and a `stylePath`, or freeze it with `page.clock`; set `timezoneId` and `locale`. Add the still harness on the base branch first, so the base run takes the same pictures.
 - After such a check passes, `fearlezz run` runs the same check on the base commit (where the branch left the base branch) in a hidden worktree, once per base, and compares every picture: same, timing, changed, new, gone. It prints `look <check>: ...` and a report path.
 - Changed pictures are not failures. Read the report, and when the change is not the intended one, fix it.
-- Merge waits until the developer approves changed pictures. Show them the report. Only after they agree, run `fearlezz say approve <check> --said "<their words, quoted>"`. Never approve on your own judgment. The approval holds while the check's inputs stay the same; any further change needs a new one.
+- Merge waits until the developer approves changed pictures. Show them the report: they mark each picture and copy either the approve command in their own words or feedback for you. Only after they agree, run `fearlezz say approve <check> --said "<their words, quoted>"`. Never approve on your own judgment. The approval holds while the check's inputs stay the same; any further change needs a new one.
 - `fearlezz setup compare BEFORE AFTER` compares any two stills or films directly, for quick tries while exploring.
 
 ## Seeing the work
