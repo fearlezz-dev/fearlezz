@@ -27,6 +27,10 @@ check = "tests"
 text = "a change to fearlezz.toml, fearlezz.lock or a local piece needs every check, so settings drift, changed rules and changed commands are proven"
 check = "tests"
 
+[claim.c15]
+text = "a missing settings file is reported as missing with the sync fix, and rust lints without a Cargo.toml are a finding instead of an error"
+check = "tests"
+
 [claim.c2]
 text = "fearlezz run --ci proves the commit without writing a journal and never says ready to merge"
 check = "tests"

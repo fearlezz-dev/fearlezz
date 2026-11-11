@@ -246,6 +246,10 @@ impl Settings {
     pub(crate) fn render(&self, root: &Path) -> Result<Vec<(String, String)>> {
         let mut out = Vec::new();
         for tool in self.tools.keys() {
+            // Nothing to write the Rust lints into; the settings check says so.
+            if *tool == Tool::CargoLints && self.cargo_lints_without_manifest(root) {
+                continue;
+            }
             let table = self.table(*tool);
             let path = tool.resolve(root)?;
             let whole = |table: &Table| -> Result<String> {
@@ -331,25 +335,48 @@ impl Settings {
 
     /// A gate finding for each file that drifted.
     pub(crate) fn drift(&self, root: &Path) -> Result<Vec<Finding>> {
-        Ok(self
+        let finding = |file: String, message: String, fix: &str| Finding {
+            file,
+            line: 1,
+            end_line: None,
+            level: Level::Gate,
+            rule: "settings".into(),
+            message,
+            fix: Some(fix.into()),
+            why: Some("shared settings keep every project's tools alike".into()),
+            anywhere: true,
+        };
+        let mut found: Vec<Finding> = self
             .render(root)?
             .into_iter()
-            .map(|(path, _)| Finding {
-                message: if SKILL_FILES.iter().any(|(_, file)| *file == path) {
-                    "differs from the skill this Fearlezz version ships".into()
+            .map(|(path, _)| {
+                let from = if SKILL_FILES.iter().any(|(_, file)| *file == path) {
+                    "the skill this Fearlezz version ships"
                 } else {
-                    "differs from the settings in fearlezz.toml".into()
-                },
-                file: path,
-                line: 1,
-                end_line: None,
-                level: Level::Gate,
-                rule: "settings".into(),
-                fix: Some("fearlezz setup sync".into()),
-                why: Some("shared settings keep every project's tools alike".into()),
-                anywhere: true,
+                    "the settings in fearlezz.toml"
+                };
+                // A finding names a file that exists, so a missing one is named in the message.
+                if root.join(&path).exists() {
+                    finding(path, format!("differs from {from}"), "fearlezz setup sync")
+                } else {
+                    let message = format!("{path} is missing; {from} write it");
+                    finding(String::new(), message, "fearlezz setup sync")
+                }
             })
-            .collect())
+            .collect();
+        if self.cargo_lints_without_manifest(root) {
+            found.push(finding(
+                String::new(),
+                "no Cargo.toml to write the [lints.clippy] and [lints.rustc] rules into".into(),
+                "add the Cargo.toml, or drop those tables (and the rust piece) from this project",
+            ));
+        }
+        Ok(found)
+    }
+
+    /// Rust lint settings in a project without a `Cargo.toml` to hold them.
+    fn cargo_lints_without_manifest(&self, root: &Path) -> bool {
+        self.tools.contains_key(&Tool::CargoLints) && !root.join("Cargo.toml").exists()
     }
 }
 
