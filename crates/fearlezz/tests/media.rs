@@ -56,6 +56,23 @@ fn a_moved_box_is_a_change_at_the_right_moment_and_place() {
 }
 
 #[test]
+fn an_mp4_whose_frames_are_stored_out_of_order_has_its_change_at_the_right_moment() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.mp4"), dir.path().join("b.mp4"));
+    let blue_from = |x: u32| format!("{},{}", box_at(20, 1.0), box_at(x, 2.0));
+    render(&a, 3.0, &blue_from(90));
+    render(&b, 3.0, &blue_from(110));
+    let c = compare(&a, &b);
+    assert_eq!(c["verdict"], "changed", "{c}");
+    let moments = c["moments"].as_array().unwrap();
+    assert_eq!(moments.len(), 1, "{c}");
+    let at = moments[0]["after"][0].as_f64().unwrap();
+    assert!((at - 2.0).abs() < 0.11, "change starts at {at}");
+    let area = &moments[0]["box"];
+    assert!(area[0].as_u64().unwrap() >= 70, "only the second box changed: {c}");
+}
+
+#[test]
 fn a_slower_film_with_the_same_pictures_only_changed_timing() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = (dir.path().join("a.gif"), dir.path().join("b.gif"));

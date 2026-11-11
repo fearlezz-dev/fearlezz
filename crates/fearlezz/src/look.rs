@@ -373,10 +373,8 @@ fn build(
                     s.spawn(move || {
                         let mut item = item.clone();
                         if let Some((b, a)) = pair {
-                            let compared = media::decode(b).and_then(|fb| {
-                                let fa = media::decode(a)?;
-                                media::compare(&fb, &fa)
-                            });
+                            let compared = media::decode_both(b, a)
+                                .and_then(|(fb, fa)| media::compare(&fb, &fa));
                             match compared {
                                 Ok(c) => {
                                     item.change = match c.verdict {
