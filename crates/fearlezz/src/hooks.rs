@@ -110,21 +110,12 @@ impl Input {
 /// What Fearlezz knows about the work, for judging a hook.
 pub(crate) struct Work {
     pub name: String,
-    pub declared: Declared,
     pub ready: bool,
     pub waiting: bool,
     /// The change touches files a check reads, outside `no_proof`.
     pub needs_proof: bool,
     pub now: String,
     pub next: String,
-}
-
-/// How much the work has said about itself.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Declared {
-    Nothing,
-    Goal,
-    GoalAndClaims,
 }
 
 pub(crate) enum Answer {
@@ -137,9 +128,6 @@ pub(crate) enum Answer {
     KeepGoing(String),
 }
 
-const SAY_START: &str = "fearlezz say start --kind bug|feature|refactor|other --goal \"<the goal \
-                         in the developer's words>\"";
-
 /// What Fearlezz tells the agent at `event`.
 pub(crate) fn judge(config: &Config, work: &Work, event: Event, input: &Input) -> Answer {
     let command = input.command.as_deref().unwrap_or("");
@@ -149,23 +137,12 @@ pub(crate) fn judge(config: &Config, work: &Work, event: Event, input: &Input) -
              counts as proof. Journal {}: {}. next: {}",
             work.name, work.now, work.next
         )),
-        Event::BeforeShell
-            if work.needs_proof && pushes(command) && work.declared == Declared::Nothing =>
-        {
-            Answer::Deny(format!(
-                "Fearlezz: a push needs the goal and claims of this work first, so CI can prove \
-                 them. Run {SAY_START}, then fearlezz say claim, and commit the work file."
-            ))
-        }
-        Event::BeforeShell
-            if work.needs_proof && pushes(command) && work.declared == Declared::Goal =>
-        {
-            Answer::Deny(
-                "Fearlezz: a push needs the claims of this work first, so CI can prove them. Run \
-                 fearlezz say claim \"<behavior>\" --check <check>, and commit the work file."
-                    .into(),
-            )
-        }
+        // Proof the base branch requires is weakened only by a person who read why.
+        Event::BeforeShell if merges_past_checks(command) => Answer::Deny(
+            "Fearlezz: merging past the required checks is for a person to do, after reading \
+             why they fail. Ask the developer: fearlezz say ask \"<question>\""
+                .into(),
+        ),
         Event::BeforeShell if work.needs_proof && opens_pull_request(command) && !work.ready => {
             Answer::Deny(format!(
                 "Fearlezz: a pull request that is not a draft needs the work ready to merge. Open \
@@ -248,26 +225,12 @@ fn commands(line: &str) -> Vec<Vec<&str>> {
         .collect()
 }
 
-/// The words of a `git` command after its own options, such as `-C <dir>`.
-fn git_args<'a>(words: &[&'a str]) -> Vec<&'a str> {
-    let mut rest = Vec::new();
-    let mut skip_value = false;
-    for word in words.iter().skip(1) {
-        if skip_value {
-            skip_value = false;
-        } else if rest.is_empty() && word.starts_with('-') {
-            skip_value = matches!(*word, "-C" | "-c" | "--git-dir" | "--work-tree");
-        } else {
-            rest.push(*word);
-        }
-    }
-    rest
-}
-
-fn pushes(line: &str) -> bool {
-    commands(line)
-        .iter()
-        .any(|w| w.first() == Some(&"git") && git_args(w).first() == Some(&"push"))
+/// `gh pr merge --admin`, which merges whatever the required checks say.
+fn merges_past_checks(line: &str) -> bool {
+    commands(line).iter().any(|w| match w.as_slice() {
+        ["gh", "pr", "merge", rest @ ..] => rest.contains(&"--admin"),
+        _ => false,
+    })
 }
 
 /// `gh pr create` without `--draft`, or `gh pr ready` without `--undo`.

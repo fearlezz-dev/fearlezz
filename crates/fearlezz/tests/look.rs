@@ -189,13 +189,6 @@ fn an_approval_survives_the_fresh_run_at_merge() {
     assert!(ok.stdout.contains("approved screens"), "{}", ok.stdout);
     let status = ran(&repo, &counter, &[]);
     assert!(status.stdout.contains("approved"), "{}", status.stdout);
-    let start = ["say", "start", "--kind", "feature", "--goal", "the goal"];
-    ran(&repo, &counter, &start);
-    ran(
-        &repo,
-        &counter,
-        &["say", "claim", "looks right", "--check", "screens"],
-    );
     repo.commit("the work");
     ran(&repo, &counter, &["run", "--stage", "merge", "--no-run"]);
     let out = ran(&repo, &counter, &["run"]);

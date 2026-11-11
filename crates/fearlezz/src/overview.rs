@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use crate::config::Config;
 use crate::journal::{Event, Journal};
 use crate::state::{CheckState, Group, View};
-use crate::{ago, claim_label, kind_name, state_label};
+use crate::{ago, state_label};
 
 const STYLE: &str = "
 :root { --bg:#f6f7f9; --card:#fff; --fg:#1b2230; --muted:#5d6675; --line:#dfe3ea;
@@ -88,9 +88,8 @@ fn journal_card(
     let last = v.last_at.map(|t| ago(now, t)).unwrap_or_default();
     write!(
         html,
-        "<section class=\"{class}\"><h3>{}</h3><p class=\"meta\">{}, last activity {}{}</p><p class=\"now\">{}</p><div class=\"stages\">",
+        "<section class=\"{class}\"><h3>{}</h3><p class=\"meta\">last activity {}{}</p><p class=\"now\">{}</p><div class=\"stages\">",
         esc(&v.name),
-        kind_name(v.kind),
         esc(&last),
         if v.live { "" } else { ", not checked out" },
         esc(&v.now)
@@ -110,23 +109,6 @@ fn journal_card(
     html.push_str("</div>");
     if let Some(reason) = &v.went_back {
         write!(html, "<p>Went back: {}</p>", esc(reason))?;
-    }
-    if !v.claims.is_empty() {
-        html.push_str("<strong>Claims</strong><ul>");
-        for c in &v.claims {
-            let class = if c.state == crate::state::ClaimState::Proven {
-                "ok"
-            } else {
-                "stale"
-            };
-            write!(
-                html,
-                "<li><span class=\"{class}\">{}</span> {}</li>",
-                claim_label(c.state),
-                esc(&c.text)
-            )?;
-        }
-        html.push_str("</ul>");
     }
     if !v.checks.is_empty() {
         html.push_str("<strong>Checks</strong><ul>");
@@ -184,12 +166,7 @@ fn timeline(html: &mut String, j: &Journal, now: Timestamp) -> std::fmt::Result 
                 run_at = Some(e.at);
                 continue;
             }
-            Event::Started { kind, goal } => match goal {
-                Some(g) => format!("started a {}: {g}", kind_name(Some(*kind))),
-                None => format!("started a {}", kind_name(Some(*kind))),
-            },
-            Event::Claim { id, text, .. } => format!("claim {id}: {text}"),
-            Event::Link { claim, check } => format!("{claim} proven by {check}"),
+            Event::Retired => continue,
             Event::Stage { to, reason } => match reason {
                 Some(r) => format!("stage {to}: {r}"),
                 None => format!("stage {to}"),

@@ -8,7 +8,7 @@ use jiff::Timestamp;
 
 use crate::config::{Config, Stage};
 use crate::git::Git;
-use crate::journal::{Event, Journal, Kind};
+use crate::journal::{Event, Journal};
 use crate::store::{Hasher, Inputs, Outcome, Store};
 
 /// The worktree a journal's branch is checked out in, as it is right now.
@@ -82,21 +82,6 @@ impl CheckView {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ClaimState {
-    NoProof,
-    Unproven,
-    NeedsRedFirst,
-    Proven,
-}
-
-pub(crate) struct ClaimView {
-    pub id: String,
-    pub text: String,
-    pub check: Option<String>,
-    pub state: ClaimState,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Group {
     NeedsYou,
@@ -107,17 +92,12 @@ pub(crate) enum Group {
 
 pub(crate) struct View {
     pub name: String,
-    pub kind: Option<Kind>,
-    pub goal: Option<String>,
     pub stage: Stage,
     /// False when something in the worktree is not committed; true when it is unknown.
     pub committed: bool,
-    /// False when the work file does not say what the journal declares; true when unknown.
-    pub work_file_current: bool,
     /// Why the work last went back a stage.
     pub went_back: Option<String>,
     pub checks: Vec<CheckView>,
-    pub claims: Vec<ClaimView>,
     pub waiting: Option<String>,
     pub last_note: Option<(Timestamp, String)>,
     pub last_at: Option<Timestamp>,
@@ -148,9 +128,6 @@ pub(crate) const READY: &str = "all proof is in: ready to merge";
 pub(crate) const COMMIT_PROVEN: &str =
     "this proved the commit, not the work; fearlezz shows where the work stands";
 
-const SAY_START: &str = "say what this work is: fearlezz say start --kind \
-                         bug|feature|refactor|other --goal \"<the goal in the developer's words>\"";
-
 pub(crate) fn view(
     config: &Config,
     store: &Store,
@@ -159,31 +136,14 @@ pub(crate) fn view(
     now: Timestamp,
 ) -> Result<View> {
     let stages = &config.stages;
-    let mut kind = None;
-    let mut goal = None;
     let mut stage = stages.first();
     let mut went_back = None;
     let mut waiting = None;
     let mut last_note = None;
-    let mut claims: Vec<(String, String, Option<String>)> = Vec::new();
     let mut approvals: std::collections::BTreeMap<String, (String, String)> =
         std::collections::BTreeMap::default();
     for entry in &journal.entries {
         match &entry.event {
-            Event::Started { kind: k, goal: g } => {
-                kind = Some(*k);
-                goal.clone_from(g);
-            }
-            Event::Claim { id, text, check } => {
-                claims.push((id.clone(), text.clone(), check.clone()));
-                waiting = None;
-            }
-            Event::Link { claim, check } => {
-                if let Some(c) = claims.iter_mut().find(|c| &c.0 == claim) {
-                    c.2 = Some(check.clone());
-                }
-                waiting = None;
-            }
             Event::Stage { to, reason } => {
                 if let Some(next) = stages.find(to) {
                     went_back = (next < stage).then(|| reason.clone()).flatten();
@@ -198,6 +158,7 @@ pub(crate) fn view(
             }
             Event::Wait { question } => waiting = Some(question.clone()),
             Event::Note { text } => last_note = Some((entry.at, text.clone())),
+            Event::Retired => {}
         }
     }
     let last_at = journal.entries.last().map(|e| e.at);
@@ -205,15 +166,11 @@ pub(crate) fn view(
     let final_stage = stages.last();
 
     let mut checks = Vec::new();
-    let mut tree = None;
     let mut skill_out_of_date = false;
     let mut committed = true;
-    let mut work_file_current = true;
     if let Some(wt) = worktree {
         committed = wt.committed;
-        work_file_current = journal.is_in_memory() || crate::work::current(&wt.git.root, journal)?;
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
-        tree = Some(wt.tree.clone());
         // The config shapes every check, though none reads it, so changing it needs them all.
         let config_files = crate::presets::config_files(&wt.git.root)?;
         let config_changed = wt.changed.iter().any(|p| config_files.contains(p));
@@ -286,29 +243,12 @@ pub(crate) fn view(
         }
     }
 
-    let claims = claims
-        .into_iter()
-        .map(|(id, text, check)| {
-            let state = claim_state(journal, check.as_deref(), tree.as_deref(), kind);
-            ClaimView {
-                id,
-                text,
-                check,
-                state,
-            }
-        })
-        .collect();
-
     let mut view = View {
         name: journal.name.clone(),
-        kind,
-        goal,
         stage,
         committed,
-        work_file_current,
         went_back,
         checks,
-        claims,
         waiting,
         last_note,
         last_at,
@@ -382,44 +322,8 @@ fn changed_parts(store: &Store, ran: Ran<'_>, now: &Inputs) -> Vec<String> {
     changed
 }
 
-/// A claim is proven by a green run of its check on the tree as it is now. A bug claim also
-/// needs that check to have been red before.
-fn claim_state(
-    journal: &Journal,
-    check: Option<&str>,
-    tree: Option<&str>,
-    kind: Option<Kind>,
-) -> ClaimState {
-    let Some(check) = check else {
-        return ClaimState::NoProof;
-    };
-    let runs: Vec<(Outcome, &str)> = journal
-        .entries
-        .iter()
-        .filter_map(|e| match &e.event {
-            Event::Ran {
-                check: c,
-                outcome,
-                tree,
-                ..
-            } if c == check => Some((*outcome, tree.as_str())),
-            _ => None,
-        })
-        .collect();
-    let green_now = runs
-        .iter()
-        .rposition(|(o, t)| *o == Outcome::Passed && tree.is_none_or(|now| now == *t));
-    let Some(green) = green_now else {
-        return ClaimState::Unproven;
-    };
-    if kind == Some(Kind::Bug) && !runs[..green].iter().any(|(o, _)| *o == Outcome::Failed) {
-        return ClaimState::NeedsRedFirst;
-    }
-    ClaimState::Proven
-}
-
 /// What the agent should do next, as one line. Order: the developer, the agent skill, failures,
-/// needed runs, claims, moving on.
+/// needed runs, moving on.
 fn next(config: &Config, v: &View, skill_out_of_date: bool) -> String {
     let stages = &config.stages;
     if let Some(q) = &v.waiting {
@@ -462,35 +366,8 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool) -> String {
             todo.join(", ")
         );
     }
-    if v.stage > stages.first() || stages.after(v.stage).is_none() {
-        for c in &v.claims {
-            match c.state {
-                ClaimState::NoProof => {
-                    return format!("link a check to {0}: fearlezz say link {0} <check>", c.id);
-                }
-                ClaimState::Unproven => {
-                    return format!(
-                        "prove {}: fearlezz run {}",
-                        c.id,
-                        c.check.as_deref().unwrap_or("<check>")
-                    );
-                }
-                ClaimState::NeedsRedFirst => {
-                    return format!(
-                        "show {} failing before the fix (a bug needs red, then green)",
-                        c.id
-                    );
-                }
-                ClaimState::Proven => {}
-            }
-        }
-    }
     if v.checks.is_empty() {
-        return if v.kind.is_none() {
-            SAY_START.into()
-        } else {
-            "make a change; fearlezz --plan shows the proof it will need".into()
-        };
+        return "make a change; fearlezz --plan shows the proof it will need".into();
     }
     if let Some(l) = due
         .iter()
@@ -505,39 +382,12 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool) -> String {
             l.check
         );
     }
-    // Work moves on only once it says what it is and what it must prove.
-    if let Some(line) = missing_declaration(v) {
-        return line;
-    }
     match stages.after(v.stage) {
         Some(s) => format!("when ready: fearlezz run --stage {}", stages.name(s)),
-        None => missing_for_ready(v).unwrap_or_else(|| READY.into()),
+        // Proof counts only for what is committed.
+        None if !v.committed => "commit the work: ready means everything is committed".into(),
+        None => READY.into(),
     }
-}
-
-/// The goal or claims the work has not declared yet.
-fn missing_declaration(v: &View) -> Option<String> {
-    if v.goal.is_none() {
-        return Some(SAY_START.into());
-    }
-    v.claims.is_empty().then(|| {
-        "say what this work must prove: fearlezz say claim \"<behavior>\" --check <check>".into()
-    })
-}
-
-/// What the work still lacks, beyond its checks, to be called ready: proof needs a goal and
-/// something to prove, and it counts only for what is committed.
-fn missing_for_ready(v: &View) -> Option<String> {
-    if let Some(line) = missing_declaration(v) {
-        return Some(line);
-    }
-    if !v.work_file_current {
-        return Some(format!(
-            "write the work file CI reads ({}): fearlezz setup sync, then commit it",
-            crate::work::path(&v.name)
-        ));
-    }
-    (!v.committed).then(|| "commit the work: ready means everything is committed".into())
 }
 
 fn now_line(config: &Config, v: &View) -> String {
@@ -561,18 +411,9 @@ fn now_line(config: &Config, v: &View) -> String {
         .iter()
         .filter(|c| c.state == CheckState::Ok)
         .count();
-    let proven = v
-        .claims
-        .iter()
-        .filter(|c| c.state == ClaimState::Proven)
-        .count();
-    let mut line = format!(
+    format!(
         "in {}: {ok} of {} checks ok",
         config.stages.name(v.stage),
         v.checks.len()
-    );
-    if !v.claims.is_empty() {
-        line = format!("{line}, {proven} of {} claims proven", v.claims.len());
-    }
-    line
+    )
 }

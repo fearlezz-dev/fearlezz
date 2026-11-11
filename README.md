@@ -7,18 +7,15 @@ Status: early. The core loop, stills and films, environments, settings and rules
 ## How it works
 
 - A project declares **checks** in `fearlezz.toml`: any command, the files it reads, and the stage it belongs to. `use = ["rust"]` pulls in ready pieces (built in, from the repo, or from someone's repo) that the project tunes field by field.
-- Each piece of work has a **journal**. The agent adds **claims** (what the change must prove), runs the checks the change touched, and moves through **stages**: exploring, working, look, merge.
+- Each piece of work has a **journal**. The agent runs the checks the change touched and moves through **stages**: exploring, working, look, merge.
 - Results are stored by the hash of their inputs, so unchanged work is never run twice, across worktrees too. The final stage runs everything fresh once.
 - Checks can report **findings** at file and line (clippy, SARIF from any linter, or their own). Only findings on lines the change touched block, so old code never blocks new work.
 - **Rules** cover what tests cannot: paths a change may not touch, naming, files that need a companion, and code patterns per language (through ast-grep), judged like findings.
 - Pieces also carry **settings** (lint levels, analyzer rules, agent permissions). `fearlezz setup sync` writes them into each tool's own file, so editors agree, and a check catches drift.
-- A claim is proven only by a green run on the tree as it is now. A bug needs red before the fix and green after.
 - Checks that record **stills and films** are compared with the same check run on the base commit, on the same machine: same, only timing, or changed (where and when), in one report.
 - An **environment** makes a fresh checkout usable and runs the services checks need, with their own ports per worktree. The final stage starts them from reset data once; idle ones stop on their own.
 
 ```console
-$ fearlezz say start --kind bug --goal "App crashes on empty list"
-$ fearlezz say claim "empty list no longer crashes" --check tests
 $ fearlezz run
 fail tests (exit 1)
   ...
@@ -27,7 +24,7 @@ $ fearlezz run
 next: when ready: fearlezz run --stage look
 $ fearlezz --all
 needs you  feat/onboarding  look  Waiting for you: which empty state copy?
-active     fix/crash        working  in working: 2 of 2 checks ok, 1 of 1 claims proven
+active     fix/crash        working  in working: 2 of 2 checks ok
 ```
 
 ## Use it

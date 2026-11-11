@@ -17,14 +17,13 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 
 ## The loop
 
-1. `fearlezz say start --kind bug|feature|refactor|other --goal "<the goal in the developer's words>"` once, on the work branch.
-2. Add what the change must prove: `fearlezz say claim "<behavior>" --check <check>`. Claims only add requirements; never remove one to get green.
-   `fearlezz say` writes the goal and claims into `.fearlezz/work/<branch>.toml`. Commit it with the change: CI reads it, needs it for any change a check reads, and proves each claim again by running its check. It is public with the code, so write the goal and claims for any reader.
+1. Work on a branch; its journal starts by itself.
+2. When the change fixes a bug or adds behavior, add a test that shows it, so a check proves it.
 3. Change code. `fearlezz --plan` shows which checks the change needs, per stage.
 4. `fearlezz run` runs the checks due in the current stage. Unchanged inputs reuse earlier results, so run it often. A change to `fearlezz.toml`, `fearlezz.lock` or a local piece needs every check.
 5. When a check fails, read the tail it prints (and the log path), fix the cause, run again.
 6. `fearlezz run --stage <next>` when the stage's proof is in. Going back is fine: `fearlezz run --stage working --no-run --reason "<why>"`.
-7. The last stage runs every check fresh once. `next: all proof is in: ready to merge` means done; it needs a goal, at least one claim, every claim proven and everything committed. Until then the run exits non-zero.
+7. The last stage runs every check fresh once. `next: all proof is in: ready to merge` means done; it needs every check it ran fresh and green, changed pictures approved, and everything committed. Until then the run exits non-zero.
 
 ## What counts as proof
 
@@ -32,12 +31,11 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 - `fearlezz run --ci` and the scripts around it prove a commit for CI. They say nothing about the work and keep no journal. On the base branch itself it runs every check.
 - The base branch's `fearlezz.toml` is the floor. At the final stage and in CI, a change that turns a check off, narrows its inputs, changes its command or env list, moves it to a later stage, stops counting its tests or findings, lowers or unsets a lint, turns off, lowers, narrows or changes a rule, changes the `[settings]` of a tool that judges code or anything in `[env]` (dropping an `[env]` input too), or adds to `no_proof` fails with `weakens ...`, and a changed file no check reads and `no_proof` does not declare fails with `unproven ...`. Never weaken proof to get green; when it must change, ask the developer, since only a person with admin rights merges past it.
 - Do not open a pull request before `fearlezz` says ready to merge. When you report proof, report that line from the journal.
-- Hooks hold you to this. A push needs the goal and claims; a pull request needs ready, unless it is a draft (`--draft`); stopping with unproven work is blocked once, unless you asked the developer with `fearlezz say ask`. When a hook refuses, do what its message says; never work around it.
+- Hooks hold you to this. A pull request needs ready, unless it is a draft (`--draft`); merging past the required checks (`gh pr merge --admin`) is for the developer; stopping with unproven work is blocked once, unless you asked the developer with `fearlezz say ask`. When a hook refuses, do what its message says; never work around it.
 
 ## Rules
 
-- A bug claim needs its check red before the fix and green after. Run the check before fixing.
-- A claim counts only for the tree it ran on. Any edit after the run makes it unproven again.
+- A run counts only for the inputs it ran on. Any edit to them makes the check stale again.
 - `unstable` means the same inputs gave both outcomes: the check is flaky or reads something it does not declare. Fix that; do not rerun until green.
 - When only the developer can decide, `fearlezz say ask "<question>"` and stop. Their journal moves to the top of `fearlezz --all`.
 - Leave `fearlezz say note "<one line>"` at turning points so whoever catches up later knows why.

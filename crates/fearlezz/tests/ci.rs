@@ -50,18 +50,11 @@ fn repo_with(config: &str) -> Repo {
     repo
 }
 
-/// Writes the work file with a goal and one claim proven by `check`.
-fn declare(repo: &Repo, check: &str) {
-    repo.fz(&["say", "start", "--kind", "feature", "--goal", "the goal"]);
-    repo.fz(&["say", "claim", "works", "--check", check]);
-}
-
-/// A branch off `main` with a committed change the checks read, and its work file.
+/// A branch off `main` with a committed change the checks read.
 fn branch_with_change() -> Repo {
     let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
     repo.branch("feat/x");
     repo.write("src/lib.rs", "fn b() {}\n");
-    declare(&repo, "tests");
     repo.commit("change");
     repo
 }
@@ -120,7 +113,7 @@ fn ci_fails_when_a_check_fails() {
 #[test]
 fn ci_leaves_the_journal_of_the_branch_alone() {
     let repo = branch_with_change();
-    repo.fz(&["say", "start", "--kind", "feature", "--goal", "the goal"]);
+    repo.fz(&["say", "note", "started"]);
     assert!(ci(&repo).ok);
     let status = repo.fz(&[]);
     assert!(
@@ -309,7 +302,6 @@ fn ci_after(edit: impl Fn(&str) -> String) -> common::Output {
     repo.commit("sync");
     repo.branch("feat/x");
     repo.write("src/lib.rs", "fn b() {}\n");
-    declare(&repo, "tests");
     repo.commit("change");
     repo.write(
         "fearlezz.toml",
@@ -443,7 +435,6 @@ fn ci_after_tuning(edit: impl Fn(&str) -> String) -> common::Output {
     repo.commit("sync");
     repo.branch("feat/x");
     repo.write("src/lib.rs", "fn b() {}\n");
-    declare(&repo, "tests");
     repo.commit("change");
     repo.write(
         "fearlezz.toml",
@@ -639,119 +630,17 @@ fn the_config_files_are_judged_by_the_floor_not_by_a_check() {
     );
 }
 
-// The work file: what the change claims, proven again
+// The proof is what CI ran, not what the change says about itself
 
 #[test]
-fn a_code_change_without_a_work_file_is_red() {
+fn a_code_change_needs_no_goal_or_claims() {
     let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
     repo.branch("feat/x");
     repo.write("src/lib.rs", "fn b() {}\n");
-    repo.commit("change");
-    let out = ci(&repo);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(out.stdout.contains("no goal or claims"), "{}", out.stdout);
-}
-
-#[test]
-fn a_change_with_only_files_needing_no_proof_needs_no_work_file() {
-    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
-    repo.branch("feat/x");
-    repo.write("docs/readme.md", "changed\n");
-    repo.commit("docs");
-    let out = ci(&repo);
-    assert!(out.ok, "{}", out.stdout);
-}
-
-#[test]
-fn each_claim_is_proven_again_in_ci() {
-    let repo = branch_with_change();
-    let out = ci(&repo);
-    assert!(out.ok, "{}", out.stdout);
-    assert!(
-        out.stdout.contains("proven c1 by tests: works"),
-        "{}",
-        out.stdout
-    );
-}
-
-#[test]
-fn the_check_of_a_claim_runs_even_when_the_change_does_not_need_it() {
-    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
-    repo.branch("feat/x");
-    repo.write("src/lib.rs", "fn b() {}\n");
-    declare(&repo, "docs");
     repo.commit("change");
     let out = ci(&repo);
     assert!(out.ok, "{}", out.stdout);
-    assert_eq!(runs(&repo.path(".runs/docs")), 1, "{}", out.stdout);
-    assert!(
-        out.stdout.contains("proven c1 by docs: works"),
-        "{}",
-        out.stdout
-    );
-}
-
-#[test]
-fn a_claim_whose_check_fails_is_red() {
-    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
-    repo.branch("feat/x");
-    repo.write("src/lib.rs", "fn b() {}\n");
-    repo.write("docs/broken", "x\n");
-    declare(&repo, "docs");
-    repo.commit("change");
-    let out = ci(&repo);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(
-        out.stdout.contains("unproven c1: docs failed"),
-        "{}",
-        out.stdout
-    );
-}
-
-#[test]
-fn a_claim_without_a_check_is_red() {
-    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
-    repo.branch("feat/x");
-    repo.write("src/lib.rs", "fn b() {}\n");
-    repo.fz(&["say", "start", "--kind", "feature", "--goal", "the goal"]);
-    repo.fz(&["say", "claim", "no check named"]);
-    repo.commit("change");
-    let out = ci(&repo);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(
-        out.stdout.contains("unproven c1: no check proves it"),
-        "{}",
-        out.stdout
-    );
-}
-
-#[test]
-fn a_work_file_without_claims_is_red() {
-    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
-    repo.branch("feat/x");
-    repo.write("src/lib.rs", "fn b() {}\n");
-    repo.fz(&["say", "start", "--kind", "feature", "--goal", "the goal"]);
-    repo.commit("change");
-    let out = ci(&repo);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(
-        out.stdout
-            .contains("no claims in .fearlezz/work/feat/x.toml"),
-        "{}",
-        out.stdout
-    );
-}
-
-#[test]
-fn the_job_summary_shows_the_claims() {
-    let repo = branch_with_change();
-    let summary = repo.path(".runs/summary.md");
-    repo.fz_env(
-        &["run", "--ci"],
-        &[("GITHUB_STEP_SUMMARY", summary.to_str().unwrap())],
-    );
-    let text = std::fs::read_to_string(&summary).unwrap();
-    assert!(text.contains("proven c1 by tests: works"), "{text}");
+    assert!(!out.stdout.contains("claim"), "{}", out.stdout);
 }
 
 // The agent finds out at its own final run
@@ -760,8 +649,6 @@ fn the_job_summary_shows_the_claims() {
 fn the_final_run_of_the_work_reports_a_weakening_too() {
     let repo = branch_with_change();
     with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
-    repo.fz(&["say", "start", "--kind", "feature", "--goal", "the goal"]);
-    repo.fz(&["say", "claim", "works", "--check", "tests"]);
     let out = repo.fz(&["run", "--stage", "merge", "--reason", "done"]);
     assert!(!out.ok, "{}", out.stdout);
     assert!(out.stdout.contains("weakens tests"), "{}", out.stdout);

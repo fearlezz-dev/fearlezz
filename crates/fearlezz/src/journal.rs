@@ -1,25 +1,15 @@
 //! A journal: the append-only record of one piece of work, one per branch. Everything shown
-//! about the work (stage, claims, what is stale, what is next) is derived from it.
+//! about the work (stage, what is stale, what is next) is derived from it.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use clap::ValueEnum;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::store::Outcome;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    Bug,
-    Feature,
-    Refactor,
-    Other,
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Entry {
@@ -31,19 +21,6 @@ pub(crate) struct Entry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum Event {
-    Started {
-        kind: Kind,
-        goal: Option<String>,
-    },
-    Claim {
-        id: String,
-        text: String,
-        check: Option<String>,
-    },
-    Link {
-        claim: String,
-        check: String,
-    },
     Ran {
         check: String,
         key: String,
@@ -68,6 +45,10 @@ pub(crate) enum Event {
     Note {
         text: String,
     },
+    /// An event of a feature since removed (the kind, goal and claims of the work), kept
+    /// readable so older journals still load.
+    #[serde(other)]
+    Retired,
 }
 
 pub(crate) struct Journal {
