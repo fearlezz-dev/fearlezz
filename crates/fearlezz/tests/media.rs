@@ -103,6 +103,33 @@ fn stills_are_same_or_changed_with_the_changed_area() {
     assert!(out.stdout.starts_with("changed: x "), "{}", out.stdout);
 }
 
+/// Found by the web stills spike: a blue accent turned green on every page, and the look
+/// said same, because pictures are compared in gray and the two colors are about 14 apart.
+#[test]
+#[ignore = "known problem: the comparison is blind to a change of color alone"]
+fn a_change_of_color_alone_is_a_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let solid = |name: &str, color: &str| {
+        let path = dir.path().join(name);
+        let ok = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-nostdin", "-f", "lavfi", "-i"])
+            .arg(format!("color=c={color}:s=200x100"))
+            .args(["-frames:v", "1"])
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "ffmpeg rendered {name}");
+        path
+    };
+    let blue = solid("blue.png", "0x2563eb");
+    let green = solid("green.png", "0x16a34a");
+    assert_eq!(compare(&blue, &green)["verdict"], "changed");
+    let red = solid("red.png", "red");
+    let dark_green = solid("dark-green.png", "0x008a00");
+    assert_eq!(compare(&red, &dark_green)["verdict"], "changed");
+}
+
 #[test]
 fn a_file_ffmpeg_cannot_read_says_so() {
     let dir = tempfile::tempdir().unwrap();
