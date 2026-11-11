@@ -1,0 +1,5 @@
+target/
+.devenv/
+.devenv.flake.nix
+devenv.lock.bak
+.DS_Store

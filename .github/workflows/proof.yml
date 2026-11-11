@@ -1,0 +1,26 @@
+name: proof
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: proof-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - run: nix profile install nixpkgs#devenv
+      - name: Run every check fresh with Fearlezz
+        env:
+          FEARLEZZ_JOURNAL: ci/${{ github.run_id }}
+        run: devenv shell -- check

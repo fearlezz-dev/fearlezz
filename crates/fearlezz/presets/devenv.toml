@@ -1,0 +1,10 @@
+# devenv makes the checkout usable, gives every check its toolchain, and runs the services: `devenv up -d` starts them and
+# `devenv processes list` knows the ports it allocated.
+
+[env]
+prepare = "devenv shell -- true"
+inputs = ["devenv.nix", "devenv.yaml", "devenv.lock"]
+shell = "devenv shell --"
+up = "devenv up -d"
+down = "devenv down"
+ports = { read = "devenv" }

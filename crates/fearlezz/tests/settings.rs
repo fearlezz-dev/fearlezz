@@ -1,0 +1,355 @@
+//! Shared settings: pieces carry tool settings, Fearlezz writes the tools' own files, and the
+//! settings check fails when a file drifts.
+
+// Clippy applies its test allowances (unwrap, expect, panic) only to cfg(test) code.
+#![cfg(test)]
+
+mod common;
+
+use common::Repo;
+
+const WORKSPACE: &str = "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n";
+const MEMBER: &str = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n";
+
+/// A piece with lint settings, used by the project, which overrides one level.
+const PIECE: &str = r#"
+[settings.cargo-lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+"#;
+
+fn workspace(project: &str) -> Repo {
+    Repo::new(
+        project,
+        &[
+            ("Cargo.toml", WORKSPACE),
+            ("crates/app/Cargo.toml", MEMBER),
+            ("base.toml", PIECE),
+        ],
+    )
+}
+
+const PROJECT: &str =
+    "use = [\"./base.toml\"]\n\n[settings.cargo-lints.clippy]\nunwrap_used = \"warn\"\n";
+
+#[test]
+fn sync_writes_the_lints_and_members_inherit_them() {
+    let repo = workspace(PROJECT);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    assert!(out.stdout.contains("wrote Cargo.toml"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("wrote crates/app/Cargo.toml"),
+        "{}",
+        out.stdout
+    );
+
+    let root = std::fs::read_to_string(repo.path("Cargo.toml")).unwrap();
+    assert!(root.starts_with(WORKSPACE), "{root}");
+    assert!(root.contains("# Managed by Fearlezz"), "{root}");
+    assert!(root.contains("[workspace.lints.clippy]"), "{root}");
+    // The project's override wins over the piece, field by field.
+    assert!(root.contains("unwrap_used = \"warn\""), "{root}");
+    assert!(
+        root.contains("pedantic = { level = \"warn\", priority = -1 }"),
+        "{root}"
+    );
+    let member = std::fs::read_to_string(repo.path("crates/app/Cargo.toml")).unwrap();
+    assert_eq!(member, format!("{MEMBER}\n[lints]\nworkspace = true\n"));
+
+    assert!(
+        repo.fz(&["setup", "sync"])
+            .stdout
+            .starts_with("settings already in sync\n")
+    );
+}
+
+#[test]
+fn the_settings_check_fails_on_drift_and_sync_fixes_it() {
+    let repo = workspace(PROJECT);
+    repo.fz(&["setup", "sync"]);
+    repo.commit("synced");
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    let synced = std::fs::read_to_string(repo.path("Cargo.toml")).unwrap();
+    repo.write("Cargo.toml", &synced.replace("\"warn\"\n", "\"allow\"\n"));
+
+    let out = repo.fz(&["run", "settings"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("gate Cargo.toml:1  settings  differs from the settings in fearlezz.toml"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("fix: fearlezz setup sync"),
+        "{}",
+        out.stdout
+    );
+
+    repo.fz(&["setup", "sync"]);
+    assert!(repo.fz(&["run", "settings"]).ok);
+}
+
+#[test]
+fn the_settings_check_can_be_turned_off() {
+    let repo = workspace(&format!("{PROJECT}\n[check.settings]\noff = true\n"));
+    let out = repo.fz(&["run", "settings"]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr.contains("no check \"settings\""),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn dart_analysis_options_are_written_whole() {
+    let config = r#"
+[settings.dart-analysis]
+include = "package:lints/recommended.yaml"
+
+[settings.dart-analysis.linter.rules]
+prefer_const_constructors = true
+"#;
+    let repo = Repo::new(config, &[]);
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    assert_eq!(
+        std::fs::read_to_string(repo.path("analysis_options.yaml")).unwrap(),
+        "# Managed by Fearlezz from [settings] in fearlezz.toml; change it there.\n\
+         include: \"package:lints/recommended.yaml\"\n\
+         linter:\n  rules:\n    prefer_const_constructors: true\n"
+    );
+}
+
+#[test]
+fn agent_permissions_merge_into_the_existing_settings() {
+    let config = r#"
+[settings.claude.permissions]
+allow = ["Bash(cargo test:*)", "Bash(fearlezz:*)"]
+"#;
+    let existing = "{\n  \"hooks\": {\n    \"Stop\": []\n  }\n}\n";
+    let repo = Repo::new(config, &[(".claude/settings.json", existing)]);
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.path(".claude/settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(written["hooks"]["Stop"], serde_json::json!([]));
+    assert_eq!(
+        written["permissions"]["allow"],
+        serde_json::json!(["Bash(cargo test:*)", "Bash(fearlezz:*)"])
+    );
+}
+
+#[test]
+fn clippy_options_are_set_and_other_options_stay() {
+    let config = "[settings.clippy]\nallow-unwrap-in-tests = true\n";
+    let repo = Repo::new(
+        config,
+        &[("clippy.toml", "too-many-lines-threshold = 80\n")],
+    );
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    assert_eq!(
+        std::fs::read_to_string(repo.path("clippy.toml")).unwrap(),
+        "too-many-lines-threshold = 80\nallow-unwrap-in-tests = true\n"
+    );
+}
+
+#[test]
+fn the_agents_piece_writes_the_shared_permissions() {
+    let repo = Repo::new("use = [\"agents\"]\n", &[]);
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.path(".claude/settings.json")).unwrap())
+            .unwrap();
+    let allow = written["permissions"]["allow"].as_array().unwrap();
+    assert!(allow.contains(&serde_json::json!("Bash(fearlezz:*)")));
+    assert_eq!(
+        written["permissions"]["deny"],
+        serde_json::json!(["Bash(rm:*)"])
+    );
+}
+
+#[test]
+fn settings_go_into_the_config_file_the_project_already_has() {
+    let config = r#"
+[lints.ruff]
+E501 = "gate"
+
+[lints.golangci]
+errcheck = "gate"
+
+[lints.biome]
+"suspicious/noDebugger" = "gate"
+"#;
+    let pyproject = "[project]\nname = \"app\"\n\n[tool.ruff]\nline-length = 100\n";
+    let repo = Repo::new(
+        config,
+        &[
+            ("pyproject.toml", pyproject),
+            (".golangci.yaml", "run:\n  timeout: 5m\n"),
+            (
+                "biome.jsonc",
+                "{\n  // the project's own\n  \"files\": {}\n}\n",
+            ),
+        ],
+    );
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    for shadow in ["ruff.toml", ".golangci.yml", "biome.json"] {
+        assert!(!repo.path(shadow).exists(), "{shadow}: {}", out.stdout);
+    }
+    let py = std::fs::read_to_string(repo.path("pyproject.toml")).unwrap();
+    assert!(py.contains("line-length = 100"), "{py}");
+    assert!(py.contains("[tool.ruff.lint]\nselect = [\"E501\"]"), "{py}");
+    let go = std::fs::read_to_string(repo.path(".golangci.yaml")).unwrap();
+    assert!(go.contains("- \"errcheck\""), "{go}");
+    let biome = std::fs::read_to_string(repo.path("biome.jsonc")).unwrap();
+    assert!(biome.contains("\"noDebugger\": \"error\""), "{biome}");
+    assert!(
+        repo.fz(&["setup", "sync"])
+            .stdout
+            .starts_with("settings already in sync")
+    );
+}
+
+#[test]
+fn a_pyproject_without_a_ruff_table_gets_a_ruff_toml() {
+    let repo = Repo::new(
+        "[lints.ruff]\nE501 = \"gate\"\n",
+        &[("pyproject.toml", "[project]\nname = \"app\"\n")],
+    );
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    assert!(repo.path("ruff.toml").exists());
+    assert_eq!(
+        std::fs::read_to_string(repo.path("pyproject.toml")).unwrap(),
+        "[project]\nname = \"app\"\n"
+    );
+}
+
+#[test]
+fn workspace_members_are_found_the_way_cargo_finds_them() {
+    let root = "[package]\nname = \"root\"\nversion = \"0.1.0\"\n\n[workspace]\nmembers = [\".\", \"crates/*\", \"tools/xtask-*\"]\nexclude = [\"crates/old\"]\n";
+    let repo = Repo::new(
+        "[settings.cargo-lints.clippy]\nunwrap_used = \"warn\"\n",
+        &[
+            ("Cargo.toml", root),
+            ("crates/app/Cargo.toml", MEMBER),
+            ("crates/old/Cargo.toml", MEMBER),
+            ("tools/xtask-gen/Cargo.toml", MEMBER),
+        ],
+    );
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    let root = std::fs::read_to_string(repo.path("Cargo.toml")).unwrap();
+    assert!(root.contains("[lints]\nworkspace = true"), "{root}");
+    assert!(root.contains("[workspace.lints.clippy]"), "{root}");
+    let inherits = format!("{MEMBER}\n[lints]\nworkspace = true\n");
+    for member in ["crates/app", "tools/xtask-gen"] {
+        let text = std::fs::read_to_string(repo.path(&format!("{member}/Cargo.toml"))).unwrap();
+        assert_eq!(text, inherits, "{member}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(repo.path("crates/old/Cargo.toml")).unwrap(),
+        MEMBER
+    );
+    // Writing again changes nothing.
+    assert!(
+        repo.fz(&["setup", "sync"])
+            .stdout
+            .starts_with("settings already in sync")
+    );
+}
+
+#[test]
+fn a_file_that_cannot_be_read_is_never_written_over() {
+    let repo = Repo::new("[settings.clippy]\nallow-unwrap-in-tests = true\n", &[]);
+    let bytes = b"too-many-lines-threshold = 80\n# \xff\n";
+    std::fs::write(repo.path("clippy.toml"), bytes).unwrap();
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("reading clippy.toml"), "{}", out.stderr);
+    assert_eq!(std::fs::read(repo.path("clippy.toml")).unwrap(), bytes);
+}
+
+#[test]
+fn an_editorconfig_block_without_its_end_is_not_doubled() {
+    let text = "root = true\n\n# Fearlezz: begin\n[*.kt]\nindent_size = 4\n\n[*.md]\ntrim_trailing_whitespace = false\n";
+    let repo = Repo::new(
+        "[lints.ktlint]\nno-wildcard-imports = \"gate\"\n",
+        &[(".editorconfig", text)],
+    );
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("do not pair up"), "{}", out.stderr);
+    assert_eq!(
+        std::fs::read_to_string(repo.path(".editorconfig")).unwrap(),
+        text
+    );
+}
+
+#[test]
+fn a_biome_rule_without_its_group_is_a_config_error() {
+    let repo = Repo::new("[lints.biome]\nnoDebugger = \"gate\"\n", &[]);
+    let out = repo.fz(&[]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr
+            .contains("[lints.biome] noDebugger: name the rule with its group"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn a_managed_file_git_ignores_still_counts_for_the_check() {
+    let config = "[settings.claude.permissions]\nallow = [\"Bash(fearlezz:*)\"]\n";
+    let repo = Repo::new(config, &[(".gitignore", ".claude/\n")]);
+    repo.fz(&["setup", "sync"]);
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    assert!(repo.fz(&["run", "settings"]).ok);
+    repo.write(".claude/settings.json", "{}\n");
+    let out = repo.fz(&["run", "settings"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains(".claude/settings.json"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn json_arrays_wrap_where_the_projects_formatter_wraps_them() {
+    // As Biome 2.6.5 lays it out: a line of exactly 80 columns stays on one line.
+    let fits = r#"["bbbb", "bbbb", "bbbb", "bbbb", "bbbb", "bbbb", "bbbb", "bbbbbbbbbbb"]"#;
+    let config = format!("[settings.tsconfig.compilerOptions]\nb = {fits}\n");
+    let repo = Repo::new(&config, &[]);
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    let line = format!("    \"b\": {fits}");
+    assert_eq!(line.len(), 80);
+    let written = std::fs::read_to_string(repo.path("tsconfig.json")).unwrap();
+    assert!(written.contains(&format!("{line}\n")), "{written}");
+
+    // One more column wraps, unless the project's Biome allows wider lines.
+    let longer = fits.replace("bbbbbbbbbbb", "bbbbbbbbbbbb");
+    let config = format!("[settings.tsconfig.compilerOptions]\nb = {longer}\n");
+    let repo = Repo::new(&config, &[]);
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    let written = std::fs::read_to_string(repo.path("tsconfig.json")).unwrap();
+    assert!(written.contains("    \"b\": [\n"), "{written}");
+    let repo = Repo::new(
+        &config,
+        &[(
+            "biome.json",
+            "{\n  \"formatter\": { \"lineWidth\": 100 }\n}\n",
+        )],
+    );
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    let written = std::fs::read_to_string(repo.path("tsconfig.json")).unwrap();
+    assert!(
+        written.contains(&format!("    \"b\": {longer}\n")),
+        "{written}"
+    );
+}

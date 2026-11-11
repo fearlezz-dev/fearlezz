@@ -1,0 +1,41 @@
+# Fearlezz
+
+Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearlezz`.
+
+## Working here
+
+- Read `ROADMAP.md` first: the purpose, what is built, what is not, and what comes next. Update it in the same change that moves something.
+- Enter the toolchain with `devenv shell`. `check` builds Fearlezz and runs every check in `fearlezz.toml` fresh at the final stage, the same command CI runs.
+- Fearlezz proves its own changes: follow `skills/fearlezz/SKILL.md` with the checks in `fearlezz.toml`. Build first (`cargo build`), then use `target/debug/fearlezz`.
+- Behavior is specified by the integration tests in `crates/fearlezz/tests/`, one file per feature, which drive the real binary in real git repositories. Add a failing test to the feature's file before changing behavior.
+
+## Model
+
+- `config.rs`: `fearlezz.toml`, stages and checks.
+- `git.rs`: the facts read from git (root, common dir, changed files, tree id, worktrees).
+- `store.rs`: results keyed by inputs hash, shared by every worktree.
+- `journal.rs`: the append-only events of one piece of work.
+- `state.rs`: everything shown, derived from journal, store and worktree. Nothing derived is stored.
+- `presets.rs`: `use`, pulling pieces of config in by name, path or pinned repository and merging them; built in pieces live in `crates/fearlezz/presets/`.
+- `run.rs`: running one check in a clean env, or a built in check in process.
+- `settings.rs`: shared tool settings from pieces, written into each tool's own file; drift is a finding of the built in `settings` check.
+- `lints.rs`: `[lints.<tool>]` tables, the level (gate, flag, hint, off) a finding of each rule gets, by rule name.
+- `rules.rs`: `[rule.<name>]` conventions (paths, naming, companion files, ast-grep code rules) that form the built in `rules` check.
+- `findings.rs`: findings a check reports at file and line (cargo JSON, SARIF, jsonl), the lines a change touched, and the verdict.
+- `env.rs`: the environment: preparing a fresh checkout (copy-on-write clones of ignored folders), and starting, reusing, resetting and stopping the services checks need.
+- `media.rs`: comparing two stills or films (stable states, time warping, blurred pixel diff).
+- `look.rs`: comparing a check's pictures with the same check run on the base commit; `report.rs`: the look report page.
+- `main.rs`: the CLI; `overview.rs`: the overview page.
+
+## Free and paid
+
+- Everything that runs locally (CLI, checks, journals, diffs, reports) belongs to the open core in `crates/`. Hosted, paid parts go under `ee/`. Keep the core free of any dependency on `ee/`.
+
+## Command line
+
+- When adding a capability, make it a flag on `fearlezz` or `fearlezz run`, or a `say` or `setup` subcommand, and teach it through `next:` or `fix:` lines. Never add a fourth intake point.
+
+## Style
+
+- No dashes as punctuation in prose, comments or commit messages.
+- Every command prints a `next:` line as its last line, except output meant for programs (`--check`, `setup compare --json`) and errors, whose message says what to do.

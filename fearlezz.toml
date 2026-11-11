@@ -1,0 +1,5 @@
+# Fearlezz proves its own changes with built in pieces: devenv gives every check the
+# toolchain, rust brings fmt, clippy and tests. Each check runs in a clean env inside
+# `devenv shell`: only the base variables and the ones listed under `env` reach it.
+
+use = ["devenv", "rust", "agents"]

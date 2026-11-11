@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(fearlezz:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo build:*)",
+      "Bash(dart analyze:*)",
+      "Bash(dart format:*)",
+      "Bash(flutter test:*)",
+      "Bash(bun test:*)",
+      "Bash(bunx biome:*)",
+      "Bash(devenv shell:*)",
+      "Bash(devenv up:*)",
+      "Bash(trash:*)",
+      "WebFetch",
+      "WebSearch"
+    ],
+    "ask": ["Bash(git push:*)", "Bash(curl:*)"],
+    "deny": ["Bash(rm:*)"]
+  }
+}
