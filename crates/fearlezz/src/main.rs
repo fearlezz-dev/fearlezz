@@ -1038,12 +1038,39 @@ fn run_checks(
         .then(|| CommitReport::start(ctx, &wt, targets.len(), comment))
         .transpose()?;
     if targets.is_empty() {
-        println!("nothing to run in {stage}");
+        // The change needs checks of a later stage only: say where they wait.
+        let later = (ids.is_empty() && !in_memory)
+            .then(|| {
+                let waiting = before
+                    .checks
+                    .iter()
+                    .filter(|c| c.needed && c.stage > before.stage);
+                let first = waiting.clone().map(|c| c.stage).min()?;
+                let names: Vec<&str> = waiting
+                    .filter(|c| c.stage == first)
+                    .map(|c| c.id.as_str())
+                    .collect();
+                Some((stages.name(first).to_string(), names))
+            })
+            .flatten();
+        match &later {
+            Some((next_stage, names)) => println!(
+                "nothing to run in {stage}; {} {} in {next_stage}",
+                names.join(", "),
+                if names.len() == 1 { "waits" } else { "wait" }
+            ),
+            None => println!("nothing to run in {stage}"),
+        }
         for line in &lines {
             println!("{line}");
         }
         report.map_or(Ok(()), |r| r.finish(&floor, &[], &[]))?;
-        println!("next: {}", next_line(&before));
+        match &later {
+            Some((next_stage, _)) if floor.holds() => {
+                println!("next: fearlezz run --stage {next_stage}");
+            }
+            _ => println!("next: {}", next_line(&before)),
+        }
         return Ok(settled(&before));
     }
 
@@ -1281,6 +1308,9 @@ fn look_at_media(ctx: &Ctx, green: &[(&config::Check, store::RunResult)], stage:
                     Some(why) => println!("look {}: no before ({why}); {}", check.id, l.counts()),
                     None => println!("look {}: {}", check.id, l.counts()),
                 }
+                if let Some(note) = &l.note {
+                    println!("  note: {note}");
+                }
                 println!("  report: {}", l.report.display());
             }
             Err(e) => println!("look {} failed: {e:#}", check.id),
@@ -1448,6 +1478,9 @@ fn prune_store(ctx: &Ctx) {
     };
     if let Err(e) = named().and_then(|n| ctx.store.prune(&n, ctx.now)) {
         eprintln!("could not clean up old results: {e:#}");
+    }
+    if let Err(e) = ctx.git.prune_bases(store::KEEP_DAYS) {
+        eprintln!("could not clean up old base checkouts: {e:#}");
     }
 }
 

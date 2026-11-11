@@ -1,11 +1,16 @@
 # Playwright end to end tests whose `toHaveScreenshot` calls are the stills of the look.
 #
 # Fearlezz compares each still with the same test run on the base commit, so there are no
-# golden files: Playwright only writes the pictures. Two lines in playwright.config point
-# them into the proof folder and keep what changes on its own out of them:
+# golden files: Playwright only writes the pictures. Fearlezz hands every run a free port in
+# FEARLEZZ_PORT, so Playwright's own webServer starts the app there and two worktrees, or a
+# worktree and its base, never collide. A few lines in playwright.config:
 #
+#   const port = Number(process.env.FEARLEZZ_PORT ?? 5173);
+#   webServer: { command: `vite --port ${port} --strictPort`, url: `http://localhost:${port}` },
+#   use: { baseURL: `http://localhost:${port}` },
 #   ...(process.env.FEARLEZZ_OUT && {
 #     snapshotPathTemplate: `${process.env.FEARLEZZ_OUT}/stills/{projectName}/{arg}{ext}`,
+#     outputDir: `${process.env.FEARLEZZ_OUT}/films`,   // videos, with use: { video: "on" }
 #   }),
 #   expect: { toHaveScreenshot: { stylePath: "e2e/stills.css" } },   // [data-volatile] { visibility: hidden }
 #
@@ -18,6 +23,7 @@ run = "PLAYWRIGHT_JUNIT_OUTPUT_FILE=\"$FEARLEZZ_OUT/junit.xml\" playwright test 
 stage = "look"
 tests = "junit"
 stills = "stills/**/*.png"
+films = "films/**/*.webm"
 inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.html", "**/*.css", "**/*.svg", "public/**", "package.json", "package-lock.json", "bun.lock", "pnpm-lock.yaml", "yarn.lock"]
 
 # The base commit's checkout needs the installed packages and browsers too; Playwright keeps

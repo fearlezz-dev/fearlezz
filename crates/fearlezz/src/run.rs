@@ -67,8 +67,8 @@ pub(crate) fn execute(
     let stdout_path = dir.join("stdout.txt");
 
     let (mut proofs, mut proof_errors) = read_proofs(&dir.join("proof.jsonl"));
-    if let Some(stills) = &check.stills {
-        proofs.extend(stills.proofs(&dir));
+    for glob in check.stills.iter().chain(&check.films) {
+        proofs.extend(glob.proofs(&dir));
     }
     let mut passed = exit_ok;
     let (mut findings, mut findings_elsewhere) = (Vec::new(), 0);
@@ -153,6 +153,7 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<std::pr
     if let Some(path) = project_path(at.root) {
         cmd.env("PATH", path);
     }
+    cmd.env("FEARLEZZ_PORT", free_port()?.to_string());
     cmd.envs(at.vars);
     cmd.env("FEARLEZZ_RUN", &check.run)
         .env("FEARLEZZ_OUT", dir)
@@ -161,6 +162,16 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<std::pr
 
     cmd.status()
         .with_context(|| format!("starting check {}", check.id))
+}
+
+/// A port nothing listens on right now, for a server the check starts itself (such as
+/// Playwright's `webServer`), so checks in two worktrees or on the base never collide. The
+/// system picks it from its wide ephemeral range, so another process taking it in the
+/// moment before the server starts is unlikely.
+fn free_port() -> Result<u16> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .context("finding a free port for FEARLEZZ_PORT")?;
+    Ok(listener.local_addr()?.port())
 }
 
 /// Folders where a project installs its own tools, found before the rest of PATH, as a

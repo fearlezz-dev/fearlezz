@@ -192,7 +192,11 @@ fn item_section(html: &mut String, dir: &Path, n: usize, item: &Item) -> Result<
         "<article><div class=\"title\"><h2>{}</h2><span class=\"word {label}\">{}</span></div><p class=\"what\">{}</p>",
         esc(&item.name),
         esc(word(item.change)),
-        esc(&plain_summary(item))
+        esc(&if item.flaky {
+            format!("Flaky: shown, never blocks. {}", plain_summary(item))
+        } else {
+            plain_summary(item)
+        })
     )?;
     match &item.comparison {
         Some(c) if c.verdict == media::Verdict::Changed => {

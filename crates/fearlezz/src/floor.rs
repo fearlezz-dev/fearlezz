@@ -170,6 +170,18 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
         if !b.test_files.is_empty() && h.test_files != b.test_files {
             say("it names other test files".into());
         }
+        let flaky: Vec<String> = h
+            .flaky
+            .iter()
+            .filter(|p| !b.flaky.contains(p))
+            .map(|p| format!("+{p}"))
+            .collect();
+        if !flaky.is_empty() {
+            say(format!(
+                "it calls more pictures flaky ({})",
+                flaky.join(", ")
+            ));
+        }
         let env: Vec<String> = h
             .env
             .iter()
