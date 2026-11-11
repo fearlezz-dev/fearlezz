@@ -7,7 +7,8 @@
 //!
 //! Films are read twice: once for the states' timing and thumbnails, and once more, both
 //! films in step along the matched path, for the pixel diffs. Only a few states are in
-//! memory at a time, however long or busy a film is.
+//! memory at a time, however long or busy a film is. The second read asks ffmpeg for the
+//! states' first frames only, so it decodes the film but converts and sends few frames.
 #![expect(
     clippy::indexing_slicing,
     clippy::cast_possible_truncation,
@@ -65,6 +66,8 @@ pub(crate) struct Film {
     pub frames: usize,
     pub total: f64,
     pub states: Vec<State>,
+    /// Each frame's start and duration, in seconds, so the second read needs no probe.
+    times: Vec<(f64, f64)>,
 }
 
 impl Film {
@@ -163,7 +166,7 @@ impl Comparison {
 /// Decodes a still or film with ffmpeg, keeping only its stable states.
 /// Reads a film's states: their timing and thumbnails.
 pub(crate) fn decode(path: &Path) -> Result<Film> {
-    let mut frames = Frames::open(path)?;
+    let mut frames = Frames::open(path, probe(path)?, None)?;
     let mut states: Vec<State> = Vec::new();
     // The current state's first frame, which each new frame is compared with.
     let mut first: Option<Gray> = None;
@@ -171,7 +174,7 @@ pub(crate) fn decode(path: &Path) -> Result<Film> {
         let (t, d) = frames.time();
         let gray = to_gray(&frames.buf, frames.w, frames.h);
         if let (Some(state), Some(f)) = (states.last_mut(), &first)
-            && diff(f, &gray).px == 0
+            && diff(f, &gray, false).px == 0
         {
             state.dur = frames.end - state.start;
             continue;
@@ -191,6 +194,23 @@ pub(crate) fn decode(path: &Path) -> Result<Film> {
         frames: frames.read,
         total: frames.end,
         states,
+        times: std::mem::take(&mut frames.times),
+    })
+}
+
+/// Decodes a before and an after side by side.
+pub(crate) fn decode_both(before: &Path, after: &Path) -> Result<(Film, Film)> {
+    std::thread::scope(|s| {
+        let b = s.spawn(|| decode(before));
+        let a = decode(after);
+        let b = b.join().map_err(|panic| {
+            anyhow::anyhow!(
+                "decoding {} crashed: {}",
+                before.display(),
+                crate::panic_text(&*panic)
+            )
+        })??;
+        Ok((b, a?))
     })
 }
 
@@ -203,9 +223,13 @@ struct Frames {
     w: usize,
     h: usize,
     times: Vec<(f64, f64)>,
+    /// When only some frames are asked for, their indices in the film, in order.
+    pick: Option<Vec<usize>>,
+    /// How many frames ffmpeg sent.
+    sent: usize,
     /// The last frame read, as RGB.
     buf: Vec<u8>,
-    /// How many frames were read.
+    /// How many frames of the film were read: one past the last frame's index.
     read: usize,
     /// Where the last frame read ends, in seconds.
     end: f64,
@@ -213,11 +237,17 @@ struct Frames {
 }
 
 impl Frames {
-    fn open(path: &Path) -> Result<Frames> {
-        let Probe { w, h, times } = probe(path)?;
-        let mut child = Command::new("ffmpeg")
-            .args(["-v", "error", "-i"])
-            .arg(path)
+    /// Streams every frame, or with `pick` only the frames at those indices (ascending).
+    fn open(path: &Path, probe: Probe, pick: Option<Vec<usize>>) -> Result<Frames> {
+        let Probe { w, h, times } = probe;
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(["-v", "error", "-i"]).arg(path);
+        if let Some(pick) = &pick {
+            // The filter still decodes every frame, but converts and sends only these.
+            let select: Vec<String> = pick.iter().map(|n| format!("eq(n\\,{n})")).collect();
+            cmd.args(["-vf", &format!("select='{}'", select.join("+"))]);
+        }
+        let mut child = cmd
             .args([
                 "-fps_mode",
                 "passthrough",
@@ -255,6 +285,8 @@ impl Frames {
             w,
             h,
             times,
+            pick,
+            sent: 0,
             buf: vec![0u8; w * h * 3],
             read: 0,
             end: 0.0,
@@ -277,7 +309,7 @@ impl Frames {
                     .take()
                     .and_then(|t| t.join().ok())
                     .unwrap_or_default();
-                if !status.success() || self.read == 0 {
+                if !status.success() || self.sent == 0 {
                     bail!(
                         "ffmpeg could not read {}: {}",
                         self.path.display(),
@@ -295,12 +327,17 @@ impl Frames {
                     .with_context(|| format!("reading frames of {}", self.path.display()));
             }
         }
+        let index = match &self.pick {
+            Some(pick) => pick.get(self.sent).copied().unwrap_or(self.read),
+            None => self.read,
+        };
         let (t, d) = self
             .times
-            .get(self.read)
+            .get(index)
             .copied()
             .unwrap_or((self.end, 0.05));
-        self.read += 1;
+        self.read = index + 1;
+        self.sent += 1;
         self.end = t + d;
         Ok(true)
     }
@@ -340,9 +377,17 @@ struct Window {
 
 impl Window {
     fn open(film: &Film) -> Result<Window> {
+        let starts: Vec<usize> = film.states.iter().map(|s| s.frame).collect();
+        let probe = Probe {
+            w: film.w,
+            h: film.h,
+            times: film.times.clone(),
+        };
+        // Picking pays off when most frames belong to a state they do not start.
+        let pick = (starts.len() * 2 <= film.frames).then(|| starts.clone());
         Ok(Window {
-            frames: Frames::open(&film.path)?,
-            starts: film.states.iter().map(|s| s.frame).collect(),
+            frames: Frames::open(&film.path, probe, pick)?,
+            starts,
             grays: VecDeque::new(),
             first: 0,
         })
@@ -399,7 +444,9 @@ struct Probe {
 fn probe(path: &Path) -> Result<Probe> {
     let out = Command::new("ffprobe")
         .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
-        .arg("stream=width,height:frame=pts_time,duration_time")
+        // Packets carry the frames' times without decoding them; sorted by time they are the
+        // frames in the order ffmpeg sends them.
+        .arg("stream=width,height:packet=pts_time,duration_time")
         .args(["-of", "json"])
         .arg(path)
         .output()
@@ -422,7 +469,7 @@ fn probe(path: &Path) -> Result<Probe> {
         let s = v.as_str()?;
         s.parse::<f64>().ok()
     };
-    let raw: Vec<(Option<f64>, Option<f64>)> = info["frames"]
+    let mut raw: Vec<(Option<f64>, Option<f64>)> = info["packets"]
         .as_array()
         .map(|a| {
             a.iter()
@@ -430,6 +477,9 @@ fn probe(path: &Path) -> Result<Probe> {
                 .collect()
         })
         .unwrap_or_default();
+    if raw.iter().all(|(t, _)| t.is_some()) {
+        raw.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    }
     let mut times = Vec::with_capacity(raw.len());
     for (i, (t, d)) in raw.iter().enumerate() {
         let start = t.unwrap_or(i as f64 * 0.05);
@@ -709,8 +759,9 @@ struct Diff {
     boxes: Vec<Box4>,
 }
 
-/// Pixels that really differ between two gray images, and boxes around them.
-fn diff(a: &Gray, b: &Gray) -> Diff {
+/// Pixels that really differ between two gray images, and with `want_boxes` boxes around
+/// them. Cutting a film into states only needs to know whether frames differ.
+fn diff(a: &Gray, b: &Gray, want_boxes: bool) -> Diff {
     if a.w != b.w || a.h != b.h {
         return Diff {
             px: a.w * a.h,
@@ -722,6 +773,12 @@ fn diff(a: &Gray, b: &Gray) -> Diff {
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
     for y in 0..h {
         let (ra, rb) = (&a.px[y * w..(y + 1) * w], &b.px[y * w..(y + 1) * w]);
+        // Most rows of two frames of one state differ by codec noise only; this check runs
+        // over whole rows at once, so only rows with a real difference are searched.
+        let most = ra.iter().zip(rb).map(|(p, q)| p.abs_diff(*q)).max();
+        if most.is_none_or(|m| i16::from(m) <= PIX_THRESH) {
+            continue;
+        }
         if let (Some(first), Some(last)) = (
             ra.iter().zip(rb).position(|(p, q)| far(p, q)),
             ra.iter().zip(rb).rposition(|(p, q)| far(p, q)),
@@ -762,7 +819,7 @@ fn diff(a: &Gray, b: &Gray) -> Diff {
     let mut mask = raw.open();
     mask.drop_specks();
     let px = mask.count();
-    let boxes = if px == 0 {
+    let boxes = if px == 0 || !want_boxes {
         Vec::new()
     } else {
         mask.boxes(BOX_GROW)
@@ -886,7 +943,7 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
             if let Some(d) = cache.get(&(i, j)) {
                 return Ok(d.clone());
             }
-            let d = diff(wo.gray(i)?, wn.gray(j)?);
+            let d = diff(wo.gray(i)?, wn.gray(j)?, true);
             let d = (d.px, d.boxes);
             cache.insert((i, j), d.clone());
             Ok(d)

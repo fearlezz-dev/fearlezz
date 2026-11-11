@@ -456,19 +456,8 @@ fn setup(what: Setup) -> Result<bool> {
             json,
         } => {
             let clock = std::time::Instant::now();
-            let (b, a) = std::thread::scope(|s| {
-                let b = s.spawn(|| media::decode(&before));
-                let a = media::decode(&after);
-                let b = b.join().map_err(|panic| {
-                    anyhow::anyhow!(
-                        "decoding {} crashed: {}",
-                        before.display(),
-                        panic_text(&*panic)
-                    )
-                });
-                (b, a)
-            });
-            let c = media::compare(&b??, &a?)?;
+            let (b, a) = media::decode_both(&before, &after)?;
+            let c = media::compare(&b, &a)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&c)?);
             } else {

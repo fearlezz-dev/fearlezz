@@ -66,7 +66,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 - **Releases as a layer.** Help with product releases, so publishing to many places at once is easy: GitHub, Homebrew, Nix, package registries and release notes. It should fit the existing system as layers, with pieces per destination and proof that each place really got the release.
 - **Name the failing test.** A failed test check shows its last lines; naming the failures directly would be better.
-- **Faster film comparison.** A 94 second 1080p film takes about 236 seconds.
+- **Faster film comparison.** A 94 second 1080p film took about 236 seconds. Timing from packets, a second read of state frames only, and cheaper frame checks cut the CPU time about in half; a film whose every frame changes still costs about 4 seconds per second of film, mostly the blur used to cut it into states.
 
 ## Next
 
