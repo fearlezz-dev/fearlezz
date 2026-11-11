@@ -1,0 +1,36 @@
+# Written by fearlezz say from the journal of this work. CI proves each claim again by running its check.
+
+kind = "feature"
+goal = "The CI cannot be green because you didn't run the checks; the agent should figure out it skipped the proof loop while working"
+
+[claim.c1]
+text = "ready to merge needs a goal, a claim, proof of every claim and a clean commit, and the exit code matches"
+check = "tests"
+
+[claim.c2]
+text = "fearlezz run --ci proves the commit without writing a journal and never says ready to merge"
+check = "tests"
+
+[claim.c3]
+text = "fearlezz say writes the goal and claims into a committed work file per change, and ready needs it current and committed"
+check = "tests"
+
+[claim.c4]
+text = "in CI a change the checks read needs a work file with a goal and claims, and each claim is proven again by running its check"
+check = "tests"
+
+[claim.c5]
+text = "a change that turns off, narrows, slows or changes a check of the base branch is red in CI and at the final run, naming the weakening and the admin bypass"
+check = "tests"
+
+[claim.c6]
+text = "a changed file that no check reads and the base branch does not declare in no_proof is red"
+check = "tests"
+
+[claim.c7]
+text = "fearlezz run --ci on the base branch runs every check"
+check = "tests"
+
+[claim.c8]
+text = "the CI output names the commit and each check with its command and time, and writes the GitHub job summary"
+check = "tests"

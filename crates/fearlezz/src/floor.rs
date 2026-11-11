@@ -48,7 +48,7 @@ impl Floor {
         let unproven = wt
             .changed
             .iter()
-            .filter(|p| !config_files.contains(p))
+            .filter(|p| !config_files.contains(p) && !crate::work::is_work_file(p))
             .filter(|p| !head.checks.iter().any(|c| c.reads(p)))
             .filter(|p| !floor.needs_no_proof(p))
             .cloned()

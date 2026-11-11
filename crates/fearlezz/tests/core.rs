@@ -367,6 +367,7 @@ fn ready_needs_a_goal() {
     assert!(no_goal.last_line().contains("--goal"), "{}", no_goal.stdout);
 
     start(&repo);
+    repo.commit("the work file");
     let out = repo.fz(FINAL);
     assert!(out.ok, "{}", out.stdout);
     assert_eq!(out.last_line(), READY);
@@ -379,6 +380,54 @@ fn ready_needs_a_claim() {
     let out = repo.fz(FINAL);
     assert!(!out.ok, "{}", out.stdout);
     assert!(out.last_line().contains("say claim"), "{}", out.stdout);
+}
+
+#[test]
+fn say_writes_the_goal_and_claims_into_the_work_file() {
+    let repo = committed_change();
+    start(&repo);
+    let out = repo.fz(&["say", "claim", "works", "--check", "tests"]);
+    assert!(
+        out.stdout.contains("wrote .fearlezz/work/feat/x.toml"),
+        "{}",
+        out.stdout
+    );
+    let text = std::fs::read_to_string(repo.path(".fearlezz/work/feat/x.toml")).unwrap();
+    for part in [
+        "kind = \"feature\"",
+        "goal = \"the goal\"",
+        "[claim.c1]",
+        "text = \"works\"",
+        "check = \"tests\"",
+    ] {
+        assert!(text.contains(part), "{part} in {text}");
+    }
+}
+
+#[test]
+fn ready_needs_the_work_file_as_the_journal_has_it() {
+    let repo = committed_change();
+    start(&repo);
+    repo.fz(&["say", "claim", "works", "--check", "tests"]);
+    repo.commit("the work file");
+    assert_eq!(repo.fz(FINAL).last_line(), READY);
+
+    repo.remove(".fearlezz/work/feat/x.toml");
+    let out = repo.fz(&["run"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.last_line().contains("fearlezz setup sync"),
+        "{}",
+        out.stdout
+    );
+
+    let sync = repo.fz(&["setup", "sync"]);
+    assert!(
+        sync.stdout.contains("wrote .fearlezz/work/feat/x.toml"),
+        "{}",
+        sync.stdout
+    );
+    assert_eq!(repo.fz(&[]).last_line(), READY);
 }
 
 #[test]

@@ -112,6 +112,8 @@ pub(crate) struct View {
     pub stage: Stage,
     /// False when something in the worktree is not committed; true when it is unknown.
     pub committed: bool,
+    /// False when the work file does not say what the journal declares; true when unknown.
+    pub work_file_current: bool,
     /// Why the work last went back a stage.
     pub went_back: Option<String>,
     pub checks: Vec<CheckView>,
@@ -206,8 +208,10 @@ pub(crate) fn view(
     let mut tree = None;
     let mut skill_out_of_date = false;
     let mut committed = true;
+    let mut work_file_current = true;
     if let Some(wt) = worktree {
         committed = wt.committed;
+        work_file_current = journal.is_in_memory() || crate::work::current(&wt.git.root, journal)?;
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
         tree = Some(wt.tree.clone());
         for check in &config.checks {
@@ -298,6 +302,7 @@ pub(crate) fn view(
         goal,
         stage,
         committed,
+        work_file_current,
         went_back,
         checks,
         claims,
@@ -514,6 +519,12 @@ fn missing_for_ready(v: &View) -> Option<String> {
             "say what this work must prove: fearlezz say claim \"<behavior>\" --check <check>"
                 .into(),
         );
+    }
+    if !v.work_file_current {
+        return Some(format!(
+            "write the work file CI reads ({}): fearlezz setup sync, then commit it",
+            crate::work::path(&v.name)
+        ));
     }
     (!v.committed).then(|| "commit the work: ready means everything is committed".into())
 }
