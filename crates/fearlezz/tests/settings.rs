@@ -171,6 +171,133 @@ fn the_agents_piece_writes_the_shared_permissions() {
     );
 }
 
+/// The skill the binary embeds; a project receives this text.
+const SHIPPED_SKILL: &str = include_str!("../../../skills/fearlezz/SKILL.md");
+const CLAUDE_SKILL: &str = ".claude/skills/fearlezz/SKILL.md";
+const AGENTS_SKILL: &str = ".agents/skills/fearlezz/SKILL.md";
+
+#[test]
+fn sync_writes_the_shipped_skill_for_every_agent() {
+    let repo = Repo::with_skill("", &[]);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    for path in [CLAUDE_SKILL, AGENTS_SKILL] {
+        assert!(
+            out.stdout.contains(&format!("wrote {path}")),
+            "{}",
+            out.stdout
+        );
+        let written = std::fs::read_to_string(repo.path(path)).unwrap();
+        // The frontmatter stays first, or the agent does not see a skill.
+        assert!(written.starts_with("---\nname: fearlezz\n"), "{written}");
+        assert!(written.contains("fearlezz setup sync"), "{written}");
+        let (_, body) = SHIPPED_SKILL.split_once("\n---\n").unwrap();
+        assert!(written.ends_with(body), "{written}");
+    }
+    assert_eq!(
+        out.last_line(),
+        "next: commit the written files with the change"
+    );
+}
+
+#[test]
+fn a_project_without_the_skill_is_led_to_it() {
+    let repo = Repo::with_skill("", &[]);
+    let before = repo.fz(&[]);
+    assert_eq!(
+        before.last_line(),
+        "next: write the agent skill for this Fearlezz version: fearlezz setup sync, then commit \
+         it"
+    );
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    repo.commit("synced");
+    let after = repo.fz(&[]);
+    assert!(
+        !after.stdout.contains("write the agent skill"),
+        "{}",
+        after.stdout
+    );
+}
+
+#[test]
+fn a_skill_that_differs_from_this_binary_is_drift() {
+    let repo = Repo::with_skill("", &[]);
+    repo.fz(&["setup", "sync"]);
+    repo.commit("synced");
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    // What an older Fearlezz left behind, or a hand edit.
+    repo.write(
+        CLAUDE_SKILL,
+        "---\nname: fearlezz\n---\n\nAn older skill.\n",
+    );
+
+    assert!(
+        repo.fz(&[])
+            .last_line()
+            .starts_with("next: write the agent skill"),
+    );
+    let out = repo.fz(&["run", "settings"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains(&format!(
+            "gate {CLAUDE_SKILL}:1  settings  differs from the skill this Fearlezz version ships"
+        )),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("fix: fearlezz setup sync"),
+        "{}",
+        out.stdout
+    );
+
+    repo.fz(&["setup", "sync"]);
+    assert!(repo.fz(&["run", "settings"]).ok);
+}
+
+#[test]
+fn a_project_can_choose_which_agents_get_the_skill() {
+    let repo = Repo::with_skill("[settings.skill]\nagents = [\"claude\"]\n", &[]);
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    assert!(repo.path(CLAUDE_SKILL).exists());
+    assert!(!repo.path(AGENTS_SKILL).exists());
+}
+
+#[test]
+fn a_project_can_opt_out_of_the_skill() {
+    let repo = Repo::with_skill("[settings.skill]\nagents = []\n", &[]);
+    let status = repo.fz(&[]);
+    assert!(
+        !status.stdout.contains("write the agent skill"),
+        "{}",
+        status.stdout
+    );
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    assert!(!repo.path(CLAUDE_SKILL).exists());
+    assert!(!repo.path(AGENTS_SKILL).exists());
+    // No skill to keep in line and no other settings: nothing for the check to do.
+    let out = repo.fz(&["run", "settings"]);
+    assert!(
+        out.stderr.contains("no check \"settings\""),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn an_unknown_skill_agent_says_which_exist() {
+    let repo = Repo::with_skill("[settings.skill]\nagents = [\"cluade\"]\n", &[]);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr
+            .contains("[settings.skill]: no agent \"cluade\"; agents are claude, agents"),
+        "{}",
+        out.stderr
+    );
+}
+
 #[test]
 fn settings_go_into_the_config_file_the_project_already_has() {
     let config = r#"

@@ -31,6 +31,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Findings | Only lines the change touched can block |
 | Rules | Paths, naming, companion files, ast-grep code rules |
 | Settings | One source written into each tool's own file, drift is a finding |
+| Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
 | Pieces | Rust, TypeScript, ESLint, Python, Go, Kotlin, Flutter, devenv, agents; pinned with `fearlezz.lock` |
 | Stills and films | Compared with the same check run on the base commit, with a report page |
 | Approvals | A visual change waits for the developer's words |
@@ -65,14 +66,13 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 ## Next
 
-1. Ship the agent skill with the CLI, since a new project needs it.
-2. Adopt Fearlezz in a first real project outside this repository.
-3. Decide what a run on `main` should prove (see below).
-4. Pick up the list above one piece at a time, each in its own thread.
+1. Adopt Fearlezz in a first real project outside this repository.
+2. Decide what a run on `main` should prove (see below).
+3. Pick up the list above one piece at a time, each in its own thread.
 
 ## Known problems
 
-- **CI has not run the full proof on the GitHub runner.** Fearlezz only runs checks whose inputs a change touched. A run on `main` has no change, and a pull request that touches only packaging files reads no check input, so both report "nothing to run" and pass. The first pull request that touches code gives the first real run.
+- **A run on `main` proves nothing yet.** Fearlezz only runs checks whose inputs a change touched. A run on `main` has no change, and a pull request that touches only packaging files reads no check input, so both report "nothing to run" and pass. A pull request that touches code does run them: the first one ran all 4 checks and 160 tests on the GitHub runner.
 - **macOS is not covered by CI.** It is only proven on the developer's machine.
 - **A flaky test.** One test in `core` has failed twice on CI and not locally; its name is still unknown. Failed checks now show 12 lines, so the next failure should name it.
 - **60 lint flags** in existing code, mostly possible panics from indexing. They do not block.

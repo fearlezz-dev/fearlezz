@@ -6,6 +6,9 @@
 //! `cargo-lints`, `clippy`, `claude`, `biome`, `ruff`, `tsconfig` and `ktlint` manage only
 //! their part of a file and keep the rest; `dart-analysis`, `eslint`, `detekt` and
 //! `golangci` own their whole file.
+//!
+//! `skill` is the one setting a project has without asking for it: the agent skill embedded in
+//! this binary, so every project's copy matches the Fearlezz it runs and needs no network.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -46,9 +49,11 @@ pub(crate) enum Tool {
     Golangci,
     /// `tsconfig.json`; its `compilerOptions`.
     Tsconfig,
+    /// The Fearlezz agent skill, in each agent's skills folder.
+    Skill,
 }
 
-const TOOLS: [(&str, Tool); 11] = [
+const TOOLS: [(&str, Tool); 12] = [
     ("cargo-lints", Tool::CargoLints),
     ("dart-analysis", Tool::DartAnalysis),
     ("clippy", Tool::Clippy),
@@ -60,6 +65,7 @@ const TOOLS: [(&str, Tool); 11] = [
     ("detekt", Tool::Detekt),
     ("golangci", Tool::Golangci),
     ("tsconfig", Tool::Tsconfig),
+    ("skill", Tool::Skill),
 ];
 
 /// Which file writer turns each lint table's rules on or off.
@@ -99,6 +105,10 @@ impl Settings {
             };
             tools.insert(*tool, t);
         }
+        // Every project gets the skill unless it lists no agent.
+        if skill_files(tools.entry(Tool::Skill).or_default())?.is_empty() {
+            tools.remove(&Tool::Skill);
+        }
         // A lint table is written into its tool's file.
         for (lint, file) in LINT_FILES {
             if lints.of(lint).is_some() {
@@ -123,7 +133,7 @@ impl Settings {
             Tool::Ktlint => ktlint_lint_table(&self.lints),
             Tool::Detekt => detekt_lint_table(&self.lints),
             Tool::Golangci => golangci_lint_table(&self.lints),
-            Tool::Clippy | Tool::Claude | Tool::Tsconfig => Table::new(),
+            Tool::Clippy | Tool::Claude | Tool::Tsconfig | Tool::Skill => Table::new(),
         };
         if let Some(own) = self.tools.get(&tool) {
             crate::presets::merge(&mut out, own.clone());
@@ -149,9 +159,25 @@ impl Settings {
             .collect()
     }
 
-    /// A stable text of the settings, part of the settings check's inputs.
+    /// A stable text of the settings, part of the settings check's inputs. It holds the skill
+    /// text, which can change between builds of one version.
     pub(crate) fn fingerprint(&self) -> String {
-        format!("{:?}{:?}", self.tools, self.lints)
+        format!("{:?}{:?}{SKILL}", self.tools, self.lints)
+    }
+
+    /// Whether an agent would miss the skill, or read another version's. Only the skill files
+    /// are read, so this is cheap enough for every command.
+    pub(crate) fn skill_out_of_date(&self, root: &Path) -> Result<bool> {
+        let Some(table) = self.tools.get(&Tool::Skill) else {
+            return Ok(false);
+        };
+        let text = skill_text();
+        for path in skill_files(table)? {
+            if read(root, path)?.as_deref() != Some(text.as_str()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Every managed file as it should be, given the files as they are now. Only files whose
@@ -195,6 +221,10 @@ impl Settings {
                     vec![(path, body)]
                 }
                 Tool::DartAnalysis | Tool::Detekt | Tool::Golangci => vec![(path, whole(&table)?)],
+                Tool::Skill => skill_files(&table)?
+                    .into_iter()
+                    .map(|path| (path.to_string(), skill_text()))
+                    .collect(),
             };
             for (path, content) in files {
                 if read(root, &path)?.as_deref() != Some(content.as_str()) {
@@ -233,12 +263,16 @@ impl Settings {
             .render(root)?
             .into_iter()
             .map(|(path, _)| Finding {
+                message: if SKILL_FILES.iter().any(|(_, file)| *file == path) {
+                    "differs from the skill this Fearlezz version ships".into()
+                } else {
+                    "differs from the settings in fearlezz.toml".into()
+                },
                 file: path,
                 line: 1,
                 end_line: None,
                 level: Level::Gate,
                 rule: "settings".into(),
-                message: "differs from the settings in fearlezz.toml".into(),
                 fix: Some("fearlezz setup sync".into()),
                 why: Some("shared settings keep every project's tools alike".into()),
                 anywhere: true,
@@ -274,6 +308,8 @@ impl Tool {
                 ".golangci.yml",
             ),
             Tool::Tsconfig => (&["tsconfig.json"], "tsconfig.json"),
+            // Unlike the others, every file is written; `skill_files` picks which.
+            Tool::Skill => (&[CLAUDE_SKILL, AGENTS_SKILL], CLAUDE_SKILL),
         }
     }
 
@@ -734,6 +770,47 @@ fn strip_jsonc(text: &str) -> String {
     out
 }
 
+/// The skill this binary ships. It is embedded, so it matches the version and needs no network.
+const SKILL: &str = include_str!("../../../skills/fearlezz/SKILL.md");
+const CLAUDE_SKILL: &str = ".claude/skills/fearlezz/SKILL.md";
+const AGENTS_SKILL: &str = ".agents/skills/fearlezz/SKILL.md";
+/// Each agent name of `[settings.skill] agents` and the file its agents read. Claude Code reads
+/// only its own folder; `.agents/skills` is the one Codex, Cursor and others share.
+const SKILL_FILES: [(&str, &str); 2] = [("claude", CLAUDE_SKILL), ("agents", AGENTS_SKILL)];
+
+/// The skill with a note after its frontmatter, which an agent needs to find first in the file.
+fn skill_text() -> String {
+    let note = "<!-- Written by `fearlezz setup sync` from the Fearlezz binary; edits are overwritten. -->";
+    SKILL.replacen("\n---\n", &format!("\n---\n\n{note}\n"), 1)
+}
+
+/// The skill files `[settings.skill]` asks for: every agent's when it names none.
+fn skill_files(table: &Table) -> Result<Vec<&'static str>> {
+    if let Some(key) = table.keys().find(|key| *key != "agents") {
+        bail!("[settings.skill]: no field \"{key}\"; the one field is agents");
+    }
+    let Some(agents) = table.get("agents") else {
+        return Ok(SKILL_FILES.iter().map(|(_, file)| *file).collect());
+    };
+    let Some(agents) = agents.as_array() else {
+        bail!("[settings.skill] agents must be a list");
+    };
+    agents
+        .iter()
+        .map(|agent| {
+            let name = agent.as_str().unwrap_or_default();
+            let Some((_, file)) = SKILL_FILES.iter().find(|(n, _)| *n == name) else {
+                let names: Vec<&str> = SKILL_FILES.iter().map(|(n, _)| *n).collect();
+                bail!(
+                    "[settings.skill]: no agent {agent}; agents are {}",
+                    names.join(", ")
+                );
+            };
+            Ok(*file)
+        })
+        .collect()
+}
+
 const ESLINT_FILE: &str = "eslint.fearlezz.mjs";
 const DETEKT_FILE: &str = "config/detekt/detekt.yml";
 
@@ -1006,7 +1083,7 @@ avoid_print = false
             .unwrap_err()
             .to_string();
         assert!(
-            e.contains("tools are cargo-lints, dart-analysis, clippy, claude, biome, eslint, ruff, ktlint, detekt, golangci, tsconfig"),
+            e.contains("tools are cargo-lints, dart-analysis, clippy, claude, biome, eslint, ruff, ktlint, detekt, golangci, tsconfig, skill"),
             "{e}"
         );
     }

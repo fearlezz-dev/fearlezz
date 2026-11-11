@@ -49,7 +49,7 @@ Prebuilt binaries for Linux and macOS are on the [releases](https://github.com/f
 
 To work on Fearlezz itself, enter the toolchain with `devenv shell`, then run `check`.
 
-Agents: see [skills/fearlezz/SKILL.md](skills/fearlezz/SKILL.md).
+Agents: `fearlezz setup sync` writes [the skill](skills/fearlezz/SKILL.md) into your project, matching the installed version, for Claude Code and any agent that reads `.agents/skills`.
 
 ## License
 

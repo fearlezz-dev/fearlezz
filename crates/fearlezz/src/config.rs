@@ -487,6 +487,7 @@ mod tests {
     #[test]
     fn a_check_turned_off_is_gone() {
         let table = toml::from_str("[check.tests]\noff = true\n").unwrap();
-        assert!(Config::from_table(table).unwrap().checks.is_empty());
+        let checks = Config::from_table(table).unwrap().checks;
+        assert!(!checks.iter().any(|c| c.id == "tests"));
     }
 }
