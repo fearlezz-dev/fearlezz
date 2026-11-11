@@ -726,6 +726,16 @@ struct Row {
     run: String,
 }
 
+/// The head commit of the pull request GitHub Actions runs for, from its event file.
+fn pull_request_head() -> Option<String> {
+    let path = std::env::var_os("GITHUB_EVENT_PATH")?;
+    let event: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    event
+        .pointer("/pull_request/head/sha")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// The first line of the status comment, so CI finds its own comment to replace.
 const COMMENT_MARKER: &str = "<!-- fearlezz -->";
 
@@ -736,7 +746,21 @@ impl CommitReport {
         to_run: usize,
         comment: Option<PathBuf>,
     ) -> Result<CommitReport> {
-        let commit = ctx.git.head_short()?;
+        let merge = ctx.git.head_short()?;
+        // A pull request's run proves the merge GitHub made of its head into the base branch;
+        // the head is the commit people know.
+        let head = pull_request_head().map(|sha| {
+            // A shallow checkout may lack the head itself.
+            ctx.git
+                .short(&sha)
+                .unwrap_or_else(|_| sha.chars().take(7).collect())
+        });
+        let commit = match head {
+            Some(head) if head != merge => {
+                format!("{head} (merged with {} as {merge})", ctx.config.base)
+            }
+            _ => merge,
+        };
         println!(
             "commit {commit}: {} changed files, {to_run} of {} checks to run",
             wt.changed.len(),
