@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 
-use crate::config::{self, Builtin, Config};
+use crate::config::{self, Builtin, Config, Env, Ports};
 use crate::findings::Scope;
 use crate::git::Git;
 use crate::presets;
@@ -163,8 +163,67 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
     // Checks that share a lints table would name its weakenings once each.
     let mut seen = std::collections::BTreeSet::new();
     found.retain(|w| seen.insert(w.clone()));
+    found.extend(base.settings.weakenings(&head.settings));
+    found.extend(env_weakenings(&base.env, &head.env));
     for glob in head.no_proof.iter().filter(|g| !base.no_proof.contains(g)) {
         found.push(("no_proof".into(), glob.clone()));
+    }
+    found
+}
+
+/// How `head` makes checks run in another environment: any command, variable, cloned folder
+/// or port source changed, since Fearlezz cannot tell which way that weakens them, and any
+/// input dropped. Each as `env.<field>` and how.
+fn env_weakenings(base: &Env, head: &Env) -> Vec<(String, String)> {
+    let ports = |p: &Option<Ports>| {
+        p.as_ref().map(|p| match p {
+            Ports::Command(cmd) => cmd.clone(),
+            Ports::Devenv => "read devenv".to_string(),
+        })
+    };
+    let commands = [
+        ("prepare", base.prepare.clone(), head.prepare.clone()),
+        ("shell", base.shell.clone(), head.shell.clone()),
+        ("up", base.up.clone(), head.up.clone()),
+        ("down", base.down.clone(), head.down.clone()),
+        ("reset", base.reset.clone(), head.reset.clone()),
+        ("ports", ports(&base.ports), ports(&head.ports)),
+    ];
+    let mut found = Vec::new();
+    for (field, was, now) in commands {
+        let how = match (was, now) {
+            (Some(b), Some(h)) if b != h => format!("it changes from {b} to {h}"),
+            (None, Some(h)) => format!("it is added ({h})"),
+            (Some(b), None) => format!("it is removed (was {b})"),
+            _ => continue,
+        };
+        found.push((format!("env.{field}"), how));
+    }
+    let lists = [
+        ("clone", &base.clone, &head.clone),
+        ("clone_when", &base.clone_when, &head.clone_when),
+        ("env", &base.vars, &head.vars),
+    ];
+    for (field, was, now) in lists {
+        let changes: Vec<String> = now
+            .iter()
+            .filter(|v| !was.contains(v))
+            .map(|v| format!("+{v}"))
+            .chain(
+                was.iter()
+                    .filter(|v| !now.contains(v))
+                    .map(|v| format!("-{v}")),
+            )
+            .collect();
+        if !changes.is_empty() {
+            found.push((
+                format!("env.{field}"),
+                format!("it changes ({})", changes.join(", ")),
+            ));
+        }
+    }
+    for input in base.inputs.iter().filter(|i| !head.inputs.contains(i)) {
+        found.push(("env.inputs".into(), format!("it no longer has {input}")));
     }
     found
 }

@@ -57,6 +57,8 @@ decided:
     what: "All three agents get hooks; detect which ones the project uses, and let the project choose. Codex and Cursor stay untested for now."
   - id: env-in-floor
     what: "Any change to a check's env list is a weakening (Any change, recommended)."
+  - id: settings-env-in-floor
+    what: "Any change to the settings of a tool that judges code, or to [env], is a weakening (Any change, recommended)."
   - id: protect-main
     what: "main requires the proof check, set only by GitHub Actions; admins can bypass. Ruleset 27014534."
 
@@ -69,7 +71,6 @@ slices:
   - id: ci-mode
     tests: [crates/fearlezz/tests/ci.rs]
     status: done
-    left: "[settings] and [env] in the floor"
   - id: claims-reach-ci
     tests: [crates/fearlezz/tests/ci.rs work file tests, crates/fearlezz/tests/core.rs say_writes_*, ready_needs_the_work_file_*]
     status: done
@@ -86,5 +87,9 @@ slices:
     tests: [crates/fearlezz/tests/ci.rs lints, rules and env tests]
     status: done
     note: "any change to a check's env list is red, chosen over only added variables, since a removed one can make tests skip quietly"
+  - id: floor-settings-env
+    tests: [crates/fearlezz/tests/ci.rs settings and env tests]
+    status: done
+    note: "any change to a code tool's settings or to [env] is red; agent settings, skill and hooks stay free; widening [env] inputs is fine"
 
-next: Show the floor slice for review; the proof gate design is built.
+next: Show the settings and env floor slice for review; the proof gate design is built.
