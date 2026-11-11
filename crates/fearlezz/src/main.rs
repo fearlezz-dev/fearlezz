@@ -14,6 +14,7 @@ mod look;
 mod media;
 mod overview;
 mod presets;
+mod red;
 mod report;
 mod rules;
 mod run;
@@ -713,6 +714,10 @@ struct CommitReport {
     rows: Vec<Row>,
     /// Where the short status for the pull request goes, when asked.
     comment: Option<PathBuf>,
+    /// What running the change's tests on the base commit showed, one line per check.
+    notes: Vec<String>,
+    /// Fixes whose tests do not fail on the base commit.
+    red_items: Vec<floor::Item>,
 }
 
 /// One check in the report.
@@ -726,12 +731,12 @@ struct Row {
     run: String,
 }
 
-/// The head commit of the pull request GitHub Actions runs for, from its event file.
-fn pull_request_head() -> Option<String> {
+/// A field of the pull request GitHub Actions runs for, from its event file.
+fn pull_request(pointer: &str) -> Option<String> {
     let path = std::env::var_os("GITHUB_EVENT_PATH")?;
     let event: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
     event
-        .pointer("/pull_request/head/sha")?
+        .pointer(&format!("/pull_request/{pointer}"))?
         .as_str()
         .map(str::to_string)
 }
@@ -749,7 +754,7 @@ impl CommitReport {
         let merge = ctx.git.head_short()?;
         // A pull request's run proves the merge GitHub made of its head into the base branch;
         // the head is the commit people know.
-        let head = pull_request_head().map(|sha| {
+        let head = pull_request("head/sha").map(|sha| {
             // A shallow checkout may lack the head itself.
             ctx.git
                 .short(&sha)
@@ -771,6 +776,8 @@ impl CommitReport {
             base: ctx.config.base.clone(),
             rows: Vec::new(),
             comment,
+            notes: Vec::new(),
+            red_items: Vec::new(),
         })
     }
 
@@ -816,6 +823,7 @@ impl CommitReport {
             fix: "make it give one answer: a flaky test, or an input it does not declare".into(),
         }));
         items.extend(floor.items(&self.base));
+        items.extend(self.red_items.iter().cloned());
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
             let page = self.page(&items, failures)?;
             std::fs::OpenOptions::new()
@@ -856,6 +864,7 @@ impl CommitReport {
             self.headline(items)
         )?;
         blockers(&mut text, items)?;
+        self.notes(&mut text)?;
         if !self.rows.is_empty() {
             writeln!(
                 text,
@@ -888,6 +897,7 @@ impl CommitReport {
         let mut text = String::new();
         writeln!(text, "### Fearlezz\n\n{}\n", self.headline(items))?;
         blockers(&mut text, items)?;
+        self.notes(&mut text)?;
         self.table(&mut text)?;
         if self.rows.is_empty() {
             writeln!(text, "\nNo check reads what this commit changed.")?;
@@ -904,6 +914,13 @@ impl CommitReport {
             writeln!(text, "```\n\n</details>")?;
         }
         Ok(text)
+    }
+
+    fn notes(&self, text: &mut String) -> std::fmt::Result {
+        for note in &self.notes {
+            writeln!(text, "{note}\n")?;
+        }
+        Ok(())
     }
 
     fn table(&self, text: &mut String) -> std::fmt::Result {
@@ -1139,6 +1156,10 @@ fn run_checks(
         print_findings(r);
     }
     look_at_media(ctx, &green, &stage);
+    let red_blocks = match report.as_mut() {
+        Some(r) => red_before_green(ctx, &wt, &green, &stage, r),
+        None => false,
+    };
     prune_store(ctx);
     println!(
         "{} checks: {passed} passed, {} failed, {reused} reused, {:.1} s",
@@ -1159,7 +1180,83 @@ fn run_checks(
         println!("services stopped: all proof is in");
     }
     println!("next: {}", next_line(&after));
-    Ok(failures.is_empty() && settled(&after))
+    Ok(failures.is_empty() && !red_blocks && settled(&after))
+}
+
+/// Runs each green check that reads changed test files on the base commit with those files,
+/// one line per check. True when the change is a fix and its tests do not fail there.
+fn red_before_green(
+    ctx: &Ctx,
+    wt: &Worktree,
+    green: &[(&config::Check, store::RunResult)],
+    stage: &str,
+    report: &mut CommitReport,
+) -> bool {
+    let subject = pull_request("title")
+        .or_else(|| ctx.git.subject().ok())
+        .unwrap_or_default();
+    let fix = red::is_fix(&subject);
+    let mut blocks = false;
+    for (check, _) in green {
+        let ran = red::run(
+            &ctx.git,
+            &ctx.config,
+            &ctx.store,
+            check,
+            wt,
+            stage,
+            &ctx.env(),
+        );
+        let red = match ran {
+            Ok(Some(red)) => red,
+            Ok(None) => continue,
+            Err(e) => {
+                println!("red before green {} failed: {e:#}", check.id);
+                continue;
+            }
+        };
+        let (what, fails, passes) = red.subject();
+        let it = if red.files.len() == 1 {
+            "it does"
+        } else {
+            "they do"
+        };
+        if red.is_red() {
+            println!(
+                "red before green {}: {what} {fails} on the base commit and {passes} here",
+                check.id
+            );
+            println!("  log on the base: {}", red.base.log.display());
+            report.notes.push(format!(
+                "Red before green: `{}` fails on the base commit with the change's test files \
+                 ({what}) and passes on this one.",
+                check.id
+            ));
+            continue;
+        }
+        println!(
+            "not red before green {}: {what} {passes} on the base commit too, so {it} not show \
+             the fix",
+            check.id
+        );
+        report.notes.push(format!(
+            "Not red before green: `{}` passes on the base commit with the change's test files \
+             ({what}).",
+            check.id
+        ));
+        if fix {
+            println!("  fix: change a test so it fails without the fix");
+            report.red_items.push(floor::Item {
+                what: format!("the tests of `{}` do not show the fix", check.id),
+                why: format!("{what} {passes} on the base commit too"),
+                fix: "change a test so it fails without the fix; when the change fixes no bug, \
+                      its title does not start with fix:"
+                    .into(),
+            });
+            blocks = true;
+        }
+    }
+    blocks
 }
 
 /// Compares the stills and films of green checks with the base commit, one line per check.

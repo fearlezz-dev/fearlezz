@@ -178,6 +178,15 @@ tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }  # numbers a
 
 Only reports written by the run count, so an old report never passes for a new run.
 
+## Red before green
+
+`test_files` names which of a check's inputs are tests. In CI, when the change touches some of them, Fearlezz runs the check again on the base commit with the change's test files laid over it, and prints `red before green <check>` when it fails there, or `not red before green <check>` when it passes there too. A test that does not build on the base commit counts as failing. When the pull request title (or the head commit) starts with `fix:`, tests that pass on the base commit do not show the fix and the commit is not proven: change a test so it fails without the fix.
+
+```toml
+[check.tests]
+test_files = ["tests/**"]
+```
+
 ## Environments
 
 `[env]` makes a fresh checkout usable, gives checks their toolchain, and runs services. With `shell` set (the devenv piece sets `devenv shell --`), every check runs inside it and the `[env] inputs` files are inputs of every check. Fearlezz prepares a checkout once before its first run (and the base checkout before a look), starts services only for checks with `needs = ["services"]`, and passes their ports as env vars. Do not start or stop services yourself; `fearlezz setup down` stops this checkout's services by hand.

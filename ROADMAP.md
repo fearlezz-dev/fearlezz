@@ -48,7 +48,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | --- | --- |
 | Overview of the work | A static page and `fearlezz --all` exist; nothing live for runs of hours or days |
 | Local and CI together | "Ready to merge" and the final exit code are honest. `fearlezz run --ci` proves a commit with no journal, runs every check on the base branch, and holds a change to the base branch's config as its floor; `main` requires the check. At the final stage `fearlezz` itself holds the work to the floor, so it never says ready while a changed file is unproven. CI posts one status comment on the pull request, replaced each run (proven or not, each blocker with why and what to do, naming the head commit and the merge it proved), and writes a check page with every check, its test count and the end of each failing output. Agent hooks (Claude Code, Codex, Cursor) refuse a pull request before ready and a merge past the required checks, block stopping once, and say a check's command run by hand is not proof. The rest of the proof gate is under Next |
-| Tests are real | Zero tests fails; no red before green, mutation or coverage proof |
+| Tests are real | Zero tests fails. Red before green is a spike (`test_files`, CI only, whole check on the base commit, a `fix:` title blocks when it passes there); no piece sets `test_files` yet, no mutation or coverage proof |
 | Extension layers | Pieces work; a new kind of proof and a library layer do not exist yet |
 
 ## Not built
@@ -71,7 +71,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 ## Next
 
 1. Finish the proof gate, so unproven work cannot look proven (design: `docs/drive/ci-proof-loop/record.yaml`):
-   - A bug fix cannot show red before green yet. CI could run the change's new tests on the base commit and show they fail there.
+   - Red before green: settle the spike on `spike/red-before-green` (its draft pull request lists the open decisions), then set `test_files` in the language pieces.
    - The Codex and Cursor hooks follow their docs but have not run in those agents yet. Hooks replace a project's own hooks for the same events in those files.
 2. Adopt Fearlezz in a first real project outside this repository, which then tests the gate for real.
 3. Pick up the list above one piece at a time, each in its own thread.

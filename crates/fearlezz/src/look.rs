@@ -127,14 +127,25 @@ impl Base {
         let Some(commit) = git.merge_base(&config.base) else {
             return Ok(None);
         };
-        let (base, hold) = git.base_worktree(&commit)?;
+        Base::at(git, config, commit, "").map(Some)
+    }
+
+    /// The base commit in a hidden worktree of its own, told apart from others by `name`.
+    pub(crate) fn at(git: &Git, config: &Config, commit: String, name: &str) -> Result<Base> {
+        let (base, hold) = git.base_worktree(&commit, name)?;
         let wt = Worktree::read(base, config)?;
-        Ok(Some(Base {
+        Ok(Base {
             commit,
             wt,
             prepared: false,
             _hold: hold,
-        }))
+        })
+    }
+
+    /// Reads the worktree again after its files changed.
+    pub(crate) fn reread(&mut self, config: &Config) -> Result<()> {
+        self.wt = Worktree::read(self.wt.git.clone(), config)?;
+        Ok(())
     }
 }
 
@@ -242,7 +253,7 @@ fn point(result: &RunResult, dir: &Path) -> Result<()> {
 
 /// Runs a check on the base checkout: prepared like any checkout, with its own services
 /// for this one run.
-fn run_on_base(
+pub(crate) fn run_on_base(
     store: &Store,
     check: &Check,
     inputs: &crate::store::Inputs,

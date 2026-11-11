@@ -21,6 +21,7 @@ pub(crate) struct Floor {
 }
 
 /// One thing that keeps a commit from being proven: what, why, and what to do about it.
+#[derive(Clone)]
 pub(crate) struct Item {
     pub what: String,
     pub why: String,
@@ -33,7 +34,7 @@ impl Floor {
     pub(crate) fn read(git: &Git, head: &Config, wt: &Worktree) -> Result<Floor> {
         let base = match git.merge_base(&head.base) {
             Some(commit) => {
-                let (base, _hold) = git.base_worktree(&commit)?;
+                let (base, _hold) = git.base_worktree(&commit, "")?;
                 if base.root.join(config::FILE).exists() {
                     let config = Config::load(&base.root, &git.common)?;
                     Some((config, presets::config_files(&base.root)?))
@@ -163,6 +164,11 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
         }
         if b.tests.is_some() && h.tests.is_none() {
             say("it no longer counts its tests".into());
+        }
+        // Which files are tests decides what runs on the base commit, so any change to it
+        // could hide a fix whose tests do not fail there. Naming them the first time is fine.
+        if !b.test_files.is_empty() && h.test_files != b.test_files {
+            say("it names other test files".into());
         }
         let env: Vec<String> = h
             .env
