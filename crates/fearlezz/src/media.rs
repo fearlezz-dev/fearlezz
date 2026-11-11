@@ -174,7 +174,7 @@ pub(crate) fn decode(path: &Path) -> Result<Film> {
         let (t, d) = frames.time();
         let gray = to_gray(&frames.buf, frames.w, frames.h);
         if let (Some(state), Some(f)) = (states.last_mut(), &first)
-            && diff(f, &gray).px == 0
+            && diff(f, &gray, false).px == 0
         {
             state.dur = frames.end - state.start;
             continue;
@@ -759,8 +759,9 @@ struct Diff {
     boxes: Vec<Box4>,
 }
 
-/// Pixels that really differ between two gray images, and boxes around them.
-fn diff(a: &Gray, b: &Gray) -> Diff {
+/// Pixels that really differ between two gray images, and with `want_boxes` boxes around
+/// them. Cutting a film into states only needs to know whether frames differ.
+fn diff(a: &Gray, b: &Gray, want_boxes: bool) -> Diff {
     if a.w != b.w || a.h != b.h {
         return Diff {
             px: a.w * a.h,
@@ -818,7 +819,7 @@ fn diff(a: &Gray, b: &Gray) -> Diff {
     let mut mask = raw.open();
     mask.drop_specks();
     let px = mask.count();
-    let boxes = if px == 0 {
+    let boxes = if px == 0 || !want_boxes {
         Vec::new()
     } else {
         mask.boxes(BOX_GROW)
@@ -942,7 +943,7 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
             if let Some(d) = cache.get(&(i, j)) {
                 return Ok(d.clone());
             }
-            let d = diff(wo.gray(i)?, wn.gray(j)?);
+            let d = diff(wo.gray(i)?, wn.gray(j)?, true);
             let d = (d.px, d.boxes);
             cache.insert((i, j), d.clone());
             Ok(d)
