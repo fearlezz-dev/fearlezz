@@ -9,7 +9,7 @@ use anyhow::{Context as _, Result, bail};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 
-use crate::findings::{Reader, Scope};
+use crate::findings::{Finding, Level, Reader, Scope};
 use crate::lints::{self, Lints};
 use crate::presets;
 use crate::rules::{self, Rules};
@@ -162,10 +162,37 @@ pub(crate) struct FindingsSpec {
     pub tools: Vec<lints::Tool>,
     /// Those tables.
     pub levels: Lints,
+    /// The level of every finding, for a tool that reports none (a scanner whose SARIF has
+    /// no levels). The tables above can still move a rule.
+    pub level: Option<Level>,
+    /// What to do about a finding the tool gave no fix for.
+    pub fix: Option<String>,
+}
+
+impl FindingsSpec {
+    /// Gives findings the level and fix this check declares, before the lint tables.
+    pub(crate) fn defaults(&self, mut found: Vec<Finding>) -> Vec<Finding> {
+        for f in &mut found {
+            if let Some(level) = self.level {
+                f.level = level;
+            }
+            if f.fix.is_none() {
+                f.fix.clone_from(&self.fix);
+            }
+        }
+        found
+    }
+
+    /// Part of the inputs of the check: a changed default is another proof.
+    pub(crate) fn defaults_fingerprint(&self) -> Option<String> {
+        (self.level.is_some() || self.fix.is_some())
+            .then(|| format!("{:?}\0{:?}", self.level, self.fix))
+    }
 }
 
 /// `findings = "cargo"`, or
-/// `findings = { read = "cargo", on = "everywhere", lints = ["clippy", "rustc"] }`.
+/// `findings = { read = "cargo", on = "everywhere", lints = ["clippy", "rustc"] }`, and for a
+/// scanner whose results carry no level, `level = "gate"` and `fix = "..."`.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum RawFindings {
@@ -176,6 +203,8 @@ enum RawFindings {
         on: Scope,
         #[serde(default)]
         lints: Vec<String>,
+        level: Option<Level>,
+        fix: Option<String>,
     },
 }
 
@@ -374,8 +403,16 @@ impl Config {
                         on: Scope::Changed,
                         tools: Vec::new(),
                         levels: Lints::default(),
+                        level: None,
+                        fix: None,
                     }),
-                    Some(RawFindings::Spec { read, on, lints }) => {
+                    Some(RawFindings::Spec {
+                        read,
+                        on,
+                        lints,
+                        level,
+                        fix,
+                    }) => {
                         let tools = lints
                             .iter()
                             .map(|t| lints::Tool::parse(t))
@@ -386,6 +423,8 @@ impl Config {
                             on,
                             levels: all_lints.only(&tools),
                             tools,
+                            level,
+                            fix,
                         })
                     }
                 },
@@ -465,6 +504,8 @@ fn builtin_check(id: &str, stages: &Stages, inputs: GlobSet, on: Scope, builtin:
             on,
             tools: Vec::new(),
             levels: Lints::default(),
+            level: None,
+            fix: None,
         }),
         shell: None,
         builtin: Some(builtin),

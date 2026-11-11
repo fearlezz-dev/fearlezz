@@ -75,7 +75,7 @@ pub(crate) fn execute(
     if let Some(spec) = &check.findings {
         let (found, errors) = spec.read.read(&stdout_path, &dir, at.root);
         proof_errors.extend(errors);
-        let found = spec.levels.apply(&spec.tools, found);
+        let found = spec.levels.apply(&spec.tools, spec.defaults(found));
         let verdict = crate::findings::judge(found, spec.on, at.changed, passed);
         passed = verdict.passed;
         findings = verdict.counted;
@@ -197,6 +197,16 @@ fn project_path(root: &Path) -> Option<std::ffi::OsString> {
     let rest = std::env::var_os("PATH").unwrap_or_default();
     std::env::join_paths(dirs.into_iter().chain(std::env::split_paths(&rest))).ok()
 }
+
+/// Tools the built in pieces run that nixpkgs packages under the same name, so a missing one
+/// can be answered with the line that adds it to a project's devenv.
+pub(crate) const NIX_TOOLS: [&str; 5] = [
+    "gitleaks",
+    "trufflehog",
+    "betterleaks",
+    "osv-scanner",
+    "zizmor",
+];
 
 /// The exit code a shell gives when it cannot find the command.
 pub(crate) const NOT_FOUND: i32 = 127;

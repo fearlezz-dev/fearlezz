@@ -1,0 +1,12 @@
+# GitHub Actions workflows audited by zizmor: template injection, unpinned actions, broad
+# permissions and the like. zizmor's SARIF has levels, which Fearlezz keeps: an error is a
+# gate, a warning a flag, a note a hint. Only lines the change touched count. Offline, so the
+# result depends on the workflow files alone and can be reused.
+#
+# Tune one audit in `zizmor.yml`, or turn the check off in a repository without workflows.
+
+[check.zizmor]
+run = "zizmor --format sarif --offline --no-exit-codes ."
+stage = "working"
+inputs = [".github/workflows/**", ".github/actions/**", "action.yml", "action.yaml", "zizmor.yml", ".github/zizmor.yml"]
+findings = "sarif"

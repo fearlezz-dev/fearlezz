@@ -87,7 +87,7 @@ In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter:
 
 ```toml
 use = [
-  "rust",                                  # built in: fmt, clippy, tests (also: flutter, typescript, eslint, playwright, python, kotlin, go, devenv, agents, safety: secret scanning with gitleaks, a leaked key on a changed line is a gate)
+  "rust",                                  # built in: fmt, clippy, tests (also: flutter, typescript, eslint, playwright, python, kotlin, go, devenv, agents, actions: zizmor over GitHub workflows, safety: secret scanning with gitleaks where a leaked key on a changed line is a gate, trufflehog and betterleaks as other secret scanners, osv-scanner: vulnerable dependencies as flags)
   "./proof/screens.toml",                  # a file in this repo
   "github:acme/presets//web.toml@v1.2",    # someone's repo, pinned to a tag or commit
 ]
@@ -167,6 +167,7 @@ stage = "working"
 inputs = ["**/*.rs"]
 findings = "cargo"     # or "dart" (dart analyze --format=machine), "eslint" (eslint --format json), "sarif" (stdout or $FEARLEZZ_OUT/findings.sarif), or "jsonl"
 # findings = { read = "sarif", on = "everywhere" }   to count old findings too
+# findings = { read = "sarif", level = "gate", fix = "..." }   for a tool whose results carry no level or fix
 ```
 
 `jsonl` reads `$FEARLEZZ_OUT/findings.jsonl`, one object per line: `file`, `line`, `level` (gate, flag, hint), `message`, and optionally `end_line`, `rule`, `fix`, `why`, `anywhere`.

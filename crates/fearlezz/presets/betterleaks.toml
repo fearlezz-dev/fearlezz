@@ -1,0 +1,11 @@
+# Secret scanning with betterleaks, a drop in alternative to gitleaks (same flags and report).
+# Use it instead of the `safety` piece, or beside it. A leaked key on a line this change
+# touched is a gate; `--redact` keeps the secret out of the report.
+#
+# To let a known fake value through, write `gitleaks:allow` on its line.
+
+[check.betterleaks]
+run = "betterleaks dir . --no-banner --redact --exit-code 0 --report-format sarif --report-path -"
+stage = "working"
+inputs = ["**"]
+findings = { read = "sarif", level = "gate", fix = "remove the secret, rotate it because it has been exposed, and read it from the environment or SecretSpec instead" }

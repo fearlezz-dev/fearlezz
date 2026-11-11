@@ -35,7 +35,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Rules | Paths, naming, companion files, ast-grep code rules |
 | Settings | One source written into each tool's own file, drift is a finding |
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
-| Pieces | Rust, TypeScript, ESLint, Playwright, Python, Go, Kotlin, Flutter, devenv, agents, safety; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
+| Pieces | Rust, TypeScript, ESLint, Playwright, Python, Go, Kotlin, Flutter, devenv, agents, safety, trufflehog, betterleaks, osv-scanner, actions; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
 | Stills and films | Compared with the same check run on the base commit, checked out in the user cache folder (outside the repository, so dev servers serve it), with a report page. Compared per color channel; films at 720p at most, stills at their own size. Listed in `proof.jsonl` or found by `stills` and `films` globs; `flaky` pictures show but never block. The `playwright` piece takes them from `toHaveScreenshot` and videos, its `webServer` on the free port every run gets (`FEARLEZZ_PORT`) |
 | Approvals | A visual change waits for the developer's words |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
@@ -57,7 +57,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | --- | --- |
 | Recording apps on macOS | A spike recorder (`tools/macos-recorder`) takes a still or film of one window, covered or offscreen, in about a second plus the film length. It needs Screen Recording for the app that started the agent, and hosted CI runners cannot be granted it. Flutter stills need no recorder: widget tests render them headlessly (`docs/spikes/look-native`). No built in piece yet |
 | Showcase | Stitch proofs into polished README films and release notes; prototyped once |
-| Safety proof | The `safety` piece scans for secrets (gitleaks, gate on changed lines). No dependency, workflow or code scanning yet |
+| Safety proof | Pieces to pick from, each a check named for its tool: `safety` (gitleaks, the default every starter gets), `trufflehog` and `betterleaks` for secrets (gate on changed lines, never printed or stored), `osv-scanner` for vulnerable dependencies (flag, counted when the change touched the lockfile), `actions` (zizmor, its own levels). No code scanning yet |
 | Hosted parts and proof links | `ee/` is empty; links may be hidden or need sign in |
 | Trends over months | Decided to live apart from journals, with the same IDs |
 | MCP layer | Decided to come later, as a thin layer on the CLI |
