@@ -682,3 +682,70 @@ fn views_of_the_work_do_not_combine_and_no_run_needs_a_stage() {
     assert!(!repo.fz(&["run", "--no-run"]).ok);
     assert!(!repo.fz(&["--all", "run"]).ok);
 }
+
+// Tools
+
+/// A check whose tool is missing; `node_modules` and `.venv` are ignored, as in real projects.
+fn missing_tool() -> Repo {
+    let repo = Repo::new(
+        "[check.lint]\nrun = \"lintr src\"\nstage = \"working\"\ninputs = [\"src/**\"]\n",
+        &[
+            (".gitignore", "node_modules/\n.venv/\n"),
+            ("src/lib.rs", "fn a() {}\n"),
+        ],
+    );
+    repo.branch("feat/x");
+    repo
+}
+
+/// Puts an executable `lintr` that passes into `folder`.
+fn install_tool(repo: &Repo, folder: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = repo.path(&format!("{folder}/lintr"));
+    repo.write(&format!("{folder}/lintr"), "#!/bin/sh\nexit 0\n");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn a_missing_tool_is_named_with_how_to_get_it() {
+    let repo = missing_tool();
+    let out = repo.fz(&["run", "lint"]);
+    assert!(!out.ok);
+    assert!(
+        out.stdout.contains("fail lint: lintr was not found"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("install lintr"), "{}", out.stdout);
+}
+
+#[test]
+fn tools_in_the_project_folders_are_found() {
+    for folder in ["node_modules/.bin", ".venv/bin"] {
+        let repo = missing_tool();
+        install_tool(&repo, folder);
+        let out = repo.fz(&["run", "lint"]);
+        assert!(out.ok, "{folder}: {}{}", out.stdout, out.stderr);
+    }
+}
+
+#[test]
+fn installing_a_missing_tool_does_not_make_the_check_unstable() {
+    let repo = missing_tool();
+    assert!(!repo.fz(&["run", "lint"]).ok);
+    install_tool(&repo, "node_modules/.bin");
+    let out = repo.fz(&["run", "lint"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("unstable"), "{}", out.stdout);
+    assert!(!repo.fz(&[]).stdout.contains("unstable"));
+}
+
+#[test]
+fn checks_see_the_toolchain_rustup_was_told_to_use() {
+    let repo = Repo::new(
+        "[check.rust]\nrun = 'test \"$RUSTUP_TOOLCHAIN\" = stable'\nstage = \"working\"\ninputs = [\"src/**\"]\n",
+        &[("src/lib.rs", "fn a() {}\n")],
+    );
+    let out = repo.fz_env(&["run", "rust"], &[("RUSTUP_TOOLCHAIN", "stable")]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+}

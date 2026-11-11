@@ -13,8 +13,19 @@ use crate::config::Check;
 use crate::store::{Inputs, Outcome, RunResult, Store};
 
 /// Env vars every check gets, so ordinary tools work. Everything else must be declared.
-pub(crate) const BASE_ENV: [&str; 8] = [
-    "PATH", "HOME", "TMPDIR", "TERM", "LANG", "LC_ALL", "USER", "SHELL",
+/// The rustup ones choose the toolchain, as PATH does for other tools.
+pub(crate) const BASE_ENV: [&str; 11] = [
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TERM",
+    "LANG",
+    "LC_ALL",
+    "USER",
+    "SHELL",
+    "RUSTUP_TOOLCHAIN",
+    "RUSTUP_HOME",
+    "CARGO_HOME",
 ];
 
 pub(crate) struct Where<'a> {
@@ -136,6 +147,9 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<std::pr
             cmd.env(name, value);
         }
     }
+    if let Some(path) = project_path(at.root) {
+        cmd.env("PATH", path);
+    }
     cmd.envs(at.vars);
     cmd.env("FEARLEZZ_RUN", &check.run)
         .env("FEARLEZZ_OUT", dir)
@@ -144,6 +158,38 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<std::pr
 
     cmd.status()
         .with_context(|| format!("starting check {}", check.id))
+}
+
+/// Folders where a project installs its own tools, found before the rest of PATH, as a
+/// package manager's scripts find them.
+pub(crate) const TOOL_DIRS: [&str; 2] = ["node_modules/.bin", ".venv/bin"];
+
+/// PATH with the project's tool folders that exist in front, or None when there are none.
+fn project_path(root: &Path) -> Option<std::ffi::OsString> {
+    let dirs: Vec<std::path::PathBuf> = TOOL_DIRS
+        .iter()
+        .map(|d| root.join(d))
+        .filter(|d| d.is_dir())
+        .collect();
+    if dirs.is_empty() {
+        return None;
+    }
+    let rest = std::env::var_os("PATH").unwrap_or_default();
+    std::env::join_paths(dirs.into_iter().chain(std::env::split_paths(&rest))).ok()
+}
+
+/// The exit code a shell gives when it cannot find the command.
+pub(crate) const NOT_FOUND: i32 = 127;
+
+/// The command the shell could not find, from the end of a check's log.
+pub(crate) fn missing_command(log: &Path) -> Option<String> {
+    // bash says "sh: line 1: biome: command not found", dash "sh: 1: biome: not found".
+    tail(log, 12).iter().rev().find_map(|line| {
+        let rest = line
+            .strip_suffix(": command not found")
+            .or_else(|| line.strip_suffix(": not found"))?;
+        rest.rsplit(": ").next().map(str::to_string)
+    })
 }
 
 /// Does a built in check's work, leaving its findings where the jsonl reader looks.

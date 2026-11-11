@@ -690,7 +690,14 @@ fn print_failure(f: &store::RunResult) {
     if f.findings.iter().any(|x| x.level == findings::Level::Gate) {
         println!("fail {}: blocking findings", f.check);
     } else {
-        if f.tests == Some(0) && f.exit_code == Some(0) {
+        if let Some(tool) = f
+            .not_found()
+            .then(|| run::missing_command(&f.log))
+            .flatten()
+        {
+            println!("fail {}: {tool} was not found", f.check);
+            println!("  fix: {}", install_fix(&tool));
+        } else if f.tests == Some(0) && f.exit_code == Some(0) {
             println!("fail {}: it ran no tests, so it proves nothing", f.check);
             for why in &f.proof_errors {
                 println!("  {why}");
@@ -921,8 +928,28 @@ fn blockers(text: &mut String, items: &[floor::Item]) -> std::fmt::Result {
 }
 
 /// A failed check as a blocker, for a reader who sees neither the agent nor the logs.
+/// How to make a missing tool reachable for checks.
+fn install_fix(tool: &str) -> String {
+    format!(
+        "install {tool} where checks find it: the project's dev dependencies ({}), its devenv, \
+         or PATH",
+        run::TOOL_DIRS.join(", ")
+    )
+}
+
 fn failure_item(f: &store::RunResult) -> floor::Item {
     let what = format!("check `{}` failed", f.check);
+    if let Some(tool) = f
+        .not_found()
+        .then(|| run::missing_command(&f.log))
+        .flatten()
+    {
+        return floor::Item {
+            what,
+            why: format!("{tool} was not found"),
+            fix: install_fix(&tool),
+        };
+    }
     if let Some(found) = f.findings.iter().find(|x| x.level == findings::Level::Gate) {
         return floor::Item {
             what,
