@@ -14,6 +14,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
   release-please:
@@ -28,6 +29,16 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+      # A pull request opened with the workflow token starts no workflow, so main's required
+      # proof check would never run on it. A dispatched run is allowed and reports on its head.
+      - name: Prove the release pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch=$(gh pr list --repo "$GITHUB_REPOSITORY" --label "autorelease: pending" --state open --json headRefName --jq '.[0].headRefName // empty')
+          if [ -n "$branch" ]; then
+            gh workflow run proof.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+          fi
 
   build:
     needs: release-please
