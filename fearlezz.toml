@@ -8,6 +8,6 @@ use = ["devenv", "rust", "agents"]
 # a change to them is red in CI until a person with admin rights merges past it.
 no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
 
-# The binary embeds the agent skill, so the tests read it too.
+# The binary embeds the agent skill and the built in pieces, so the tests read them too.
 [check.tests]
-inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md"]
+inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**"]
