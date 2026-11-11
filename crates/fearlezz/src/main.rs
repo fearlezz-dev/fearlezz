@@ -829,8 +829,7 @@ impl CommitReport {
                 .write_all(picture_outputs(looks).as_bytes())?;
         }
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-            let mut page = self.page(&items, failures)?;
-            pictures(&mut page, looks)?;
+            let page = self.page(&items, failures, looks)?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -838,9 +837,8 @@ impl CommitReport {
                 .write_all(page.as_bytes())?;
         }
         if let Some(path) = &self.comment {
-            let mut status = self.status(&items)?;
-            pictures(&mut status, looks)?;
-            std::fs::write(path, status).with_context(|| format!("writing {}", path.display()))?;
+            std::fs::write(path, self.status(&items, looks)?)
+                .with_context(|| format!("writing {}", path.display()))?;
         }
         Ok(())
     }
@@ -867,7 +865,11 @@ impl CommitReport {
 
     /// The short status for the pull request: the headline, what blocks it, the checks folded
     /// away, and a link to the check page.
-    fn status(&self, items: &[floor::Item]) -> Result<String, std::fmt::Error> {
+    fn status(
+        &self,
+        items: &[floor::Item],
+        looks: &[(look::Look, String)],
+    ) -> Result<String, std::fmt::Error> {
         let mut text = String::new();
         writeln!(
             text,
@@ -875,6 +877,7 @@ impl CommitReport {
             self.headline(items)
         )?;
         blockers(&mut text, items)?;
+        pictures(&mut text, looks)?;
         if !self.rows.is_empty() {
             writeln!(
                 text,
@@ -903,10 +906,12 @@ impl CommitReport {
         &self,
         items: &[floor::Item],
         failures: &[store::RunResult],
+        looks: &[(look::Look, String)],
     ) -> Result<String, std::fmt::Error> {
         let mut text = String::new();
         writeln!(text, "### Fearlezz\n\n{}\n", self.headline(items))?;
         blockers(&mut text, items)?;
+        pictures(&mut text, looks)?;
         self.table(&mut text)?;
         if self.rows.is_empty() {
             writeln!(text, "\nNo check reads what this commit changed.")?;

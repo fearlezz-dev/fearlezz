@@ -95,7 +95,8 @@ runs:
       run: |
         command -v ffmpeg > /dev/null && exit 0
         if command -v apt-get > /dev/null; then
-          sudo apt-get update -q > /dev/null && sudo apt-get install -qy --no-install-recommends ffmpeg > /dev/null
+          sudo=$([ "$(id -u)" = 0 ] || echo sudo)
+          $sudo apt-get update -q > /dev/null && $sudo apt-get install -qy --no-install-recommends ffmpeg > /dev/null
         else
           echo "ffmpeg is missing; install it before this action to compare pictures"
         fi
@@ -131,6 +132,7 @@ runs:
         path: .git/fearlezz/results
         key: fearlezz-base-${{ github.event.pull_request.base.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     - name: Put the pictures on the pictures branch
+      continue-on-error: true
       if: always() && steps.prove.outputs.url != '' && steps.prove.outputs.pictures != '0' && steps.prove.outputs.pictures != ''
       shell: bash
       env:
@@ -138,16 +140,16 @@ runs:
         PR: ${{ github.event.pull_request.number }}
         URL: ${{ steps.prove.outputs.url }}
       run: |
-        dir="$RUNNER_TEMP/fearlezz-pictures"
         run="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-        git init -q "$dir"
-        cd "$dir"
-        git config user.name github-actions[bot]
-        git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-        git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
-        # gh hands git the token, so it never lands in a URL or a file.
-        git config credential.helper '!gh auth git-credential'
         for attempt in 1 2 3; do
+          dir="$RUNNER_TEMP/fearlezz-pictures-$attempt"
+          git init -q "$dir"
+          cd "$dir"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          # gh hands git the token, so it never lands in a URL or a file.
+          git config credential.helper '!gh auth git-credential'
           if git fetch -q --depth 1 origin fearlezz-pictures 2> /dev/null; then
             git checkout -q -B fearlezz-pictures FETCH_HEAD
           else
@@ -167,7 +169,6 @@ runs:
             echo "pictures at $URL"
             exit 0
           fi
-          git reset -q --hard
         done
         echo "could not push the pictures"
     - name: Mark what an approval covers
