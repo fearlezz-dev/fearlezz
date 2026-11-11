@@ -29,15 +29,14 @@ impl Floor {
                 let (base, _hold) = git.base_worktree(&commit)?;
                 if base.root.join(config::FILE).exists() {
                     let config = Config::load(&base.root, &git.common)?;
-                    Some((config, presets::local_pieces(&base.root)?))
+                    Some((config, presets::config_files(&base.root)?))
                 } else {
                     None
                 }
             }
             None => None,
         };
-        let mut config_files = vec![config::FILE.to_string(), presets::LOCK.to_string()];
-        config_files.extend(presets::local_pieces(&wt.git.root)?);
+        let mut config_files = presets::config_files(&wt.git.root)?;
         let floor = base.as_ref().map_or(head, |(config, _)| config);
         if let Some((_, pieces)) = &base {
             config_files.extend(pieces.iter().cloned());

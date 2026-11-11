@@ -23,6 +23,10 @@ check = "tests"
 text = "a change to the settings of a tool that judges code, or to [env], is red, naming the key"
 check = "tests"
 
+[claim.c14]
+text = "a change to fearlezz.toml, fearlezz.lock or a local piece needs every check, so settings drift, changed rules and changed commands are proven"
+check = "tests"
+
 [claim.c2]
 text = "fearlezz run --ci proves the commit without writing a journal and never says ready to merge"
 check = "tests"

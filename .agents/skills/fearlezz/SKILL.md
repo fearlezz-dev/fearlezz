@@ -21,7 +21,7 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 2. Add what the change must prove: `fearlezz say claim "<behavior>" --check <check>`. Claims only add requirements; never remove one to get green.
    `fearlezz say` writes the goal and claims into `.fearlezz/work/<branch>.toml`. Commit it with the change: CI reads it, needs it for any change a check reads, and proves each claim again by running its check. It is public with the code, so write the goal and claims for any reader.
 3. Change code. `fearlezz --plan` shows which checks the change needs, per stage.
-4. `fearlezz run` runs the checks due in the current stage. Unchanged inputs reuse earlier results, so run it often.
+4. `fearlezz run` runs the checks due in the current stage. Unchanged inputs reuse earlier results, so run it often. A change to `fearlezz.toml`, `fearlezz.lock` or a local piece needs every check.
 5. When a check fails, read the tail it prints (and the log path), fix the cause, run again.
 6. `fearlezz run --stage <next>` when the stage's proof is in. Going back is fine: `fearlezz run --stage working --no-run --reason "<why>"`.
 7. The last stage runs every check fresh once. `next: all proof is in: ready to merge` means done; it needs a goal, at least one claim, every claim proven and everything committed. Until then the run exits non-zero.

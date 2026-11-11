@@ -91,5 +91,9 @@ slices:
     tests: [crates/fearlezz/tests/ci.rs settings and env tests]
     status: done
     note: "any change to a code tool's settings or to [env] is red; agent settings, skill and hooks stay free; widening [env] inputs is fine"
+  - id: config-change-needs-every-check
+    tests: [crates/fearlezz/tests/ci.rs settings_changed_without_a_sync_are_caught, a_change_to_the_config_alone_runs_every_check]
+    status: done
+    note: "a change to the config alone ran no check, so settings drift, changed rules and stricter commands went unproven; now every check is needed"
 
-next: Show the settings and env floor slice for review; the proof gate design is built.
+next: Show the config change fix for review; the proof gate design is built.

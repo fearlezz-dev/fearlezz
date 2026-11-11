@@ -33,7 +33,7 @@ const NEXT: &str =
 
 /// `fearlezz.toml` as `Repo::new` writes it, so a branch can change it.
 fn full(config: &str) -> String {
-    format!("{config}\n[settings.skill]\nagents = []\n")
+    format!("{config}\n[settings.skill]\nagents = []\n\n[settings.hooks]\nagents = []\n")
 }
 
 fn repo_with(config: &str) -> Repo {
@@ -282,11 +282,11 @@ run = "touch \"$FEARLEZZ_OUT/findings.jsonl\""
 stage = "working"
 inputs = ["src/**"]
 env = ["HOME"]
-findings = { read = "jsonl", on = "everywhere", lints = ["clippy"] }
+findings = { read = "jsonl", on = "everywhere", lints = ["ruff"] }
 
-[lints.clippy]
-unwrap_used = "gate"
-dbg_macro = "flag"
+[lints.ruff]
+E501 = "gate"
+F401 = "flag"
 
 [rule.no-secrets]
 level = "gate"
@@ -301,43 +301,48 @@ files = ["src/**"]
 name = "snake_case"
 "#;
 
-/// A branch whose config turns `LINTED` into `edit(LINTED)`, and what CI says about it.
+/// A branch whose config turns `LINTED` into `edit(LINTED)`, with the tool files synced on both
+/// sides, and what CI says about it.
 fn ci_after(edit: impl Fn(&str) -> String) -> common::Output {
     let repo = repo_with(&format!("{NO_PROOF}{CHECKS}{LINTED}"));
+    repo.fz(&["setup", "sync"]);
+    repo.commit("sync");
     repo.branch("feat/x");
     repo.write("src/lib.rs", "fn b() {}\n");
     declare(&repo, "tests");
     repo.commit("change");
-    with_checks(&repo, &format!("{CHECKS}{}", edit(LINTED)));
+    repo.write(
+        "fearlezz.toml",
+        &full(&format!("{NO_PROOF}{CHECKS}{}", edit(LINTED))),
+    );
+    repo.fz(&["setup", "sync"]);
+    repo.commit("config");
     ci(&repo)
 }
 
 fn assert_weakens(out: &common::Output, line: &str) {
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(out.stdout.contains(line), "{}", out.stdout);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains(line), "{}\n{}", out.stdout, out.stderr);
 }
 
 #[test]
 fn lowering_a_lint_is_red_and_named() {
-    let out = ci_after(|c| c.replace("unwrap_used = \"gate\"", "unwrap_used = \"flag\""));
-    assert_weakens(
-        &out,
-        "weakens lints.clippy.unwrap_used: it goes from gate to flag",
-    );
+    let out = ci_after(|c| c.replace("E501 = \"gate\"", "E501 = \"flag\""));
+    assert_weakens(&out, "weakens lints.ruff.E501: it goes from gate to flag");
 }
 
 #[test]
 fn unsetting_a_lint_is_red_and_named() {
-    let out = ci_after(|c| c.replace("dbg_macro = \"flag\"\n", ""));
-    assert_weakens(&out, "weakens lints.clippy.dbg_macro: it is no longer set");
+    let out = ci_after(|c| c.replace("F401 = \"flag\"\n", ""));
+    assert_weakens(&out, "weakens lints.ruff.F401: it is no longer set");
 }
 
 #[test]
 fn a_check_that_drops_its_lints_table_is_red() {
-    let out = ci_after(|c| c.replace(", lints = [\"clippy\"]", ""));
+    let out = ci_after(|c| c.replace(", lints = [\"ruff\"]", ""));
     assert_weakens(
         &out,
-        "weakens lint: its findings no longer get the levels of [lints.clippy]",
+        "weakens lint: its findings no longer get the levels of [lints.ruff]",
     );
 }
 
@@ -401,7 +406,7 @@ fn a_rule_that_checks_something_else_is_red() {
 #[test]
 fn raising_levels_and_rewording_a_rule_is_fine() {
     let out = ci_after(|c| {
-        c.replace("dbg_macro = \"flag\"", "dbg_macro = \"gate\"")
+        c.replace("F401 = \"flag\"", "F401 = \"gate\"")
             .replace("keep secrets out", "never commit secrets")
             .replace("level = \"flag\"", "level = \"gate\"")
     });
@@ -442,14 +447,57 @@ fn ci_after_tuning(edit: impl Fn(&str) -> String) -> common::Output {
     repo.commit("change");
     repo.write(
         "fearlezz.toml",
-        &format!(
-            "{}\n[settings.hooks]\nagents = []\n",
-            full(&format!("{NO_PROOF}{CHECKS}{}", edit(TUNED)))
-        ),
+        &full(&format!("{NO_PROOF}{CHECKS}{}", edit(TUNED))),
     );
     repo.fz(&["setup", "sync"]);
     repo.commit("tune");
     ci(&repo)
+}
+
+/// A synced repository with `TUNED`, and a branch whose only change is `fearlezz.toml` turned
+/// into `edit(TUNED)`, left unsynced.
+fn config_only_branch(edit: impl Fn(&str) -> String) -> Repo {
+    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}{TUNED}"));
+    repo.fz(&["setup", "sync"]);
+    repo.commit("sync");
+    repo.branch("feat/x");
+    repo.write(
+        "fearlezz.toml",
+        &full(&format!("{NO_PROOF}{CHECKS}{}", edit(TUNED))),
+    );
+    repo.commit("tune");
+    repo
+}
+
+#[test]
+fn settings_changed_without_a_sync_are_caught() {
+    let repo = config_only_branch(|c| c.replace("Bash(ls)", "Bash(eza)"));
+    let out = ci(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("differs from the settings in fearlezz.toml"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_change_to_the_config_alone_runs_every_check() {
+    let repo = config_only_branch(|c| {
+        format!("{c}\n[check.extra]\nrun = \"true\"\nstage = \"working\"\ninputs = [\"lib/**\"]\n")
+    });
+    let out = ci(&repo);
+    assert!(out.ok, "{}", out.stdout);
+    for check in ["tests", "e2e", "docs"] {
+        assert_eq!(
+            runs(&repo.path(&format!(".runs/{check}"))),
+            1,
+            "{check}: {}",
+            out.stdout
+        );
+    }
+    assert!(out.stdout.contains("passed extra"), "{}", out.stdout);
 }
 
 #[test]
