@@ -18,6 +18,7 @@ run = "go test -v ./..."
 stage = "working"
 tests = { count = '(?m)^\s*--- (?:PASS|FAIL):' }
 inputs = ["**/*.go", "go.mod", "go.sum"]
+test_files = ["**/*_test.go"]
 
 # Every rule, decided once on the maintainer's Lint Desk: gate means it must never happen, flag
 # means there is little or no reason for it, hint means there can be a reason so an agent looks

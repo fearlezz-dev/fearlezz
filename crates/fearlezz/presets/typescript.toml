@@ -23,6 +23,7 @@ run = "vitest run --reporter=default --reporter=junit --outputFile.junit=\"$FEAR
 stage = "working"
 tests = "junit"
 inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "package.json", "vitest.config.*", "vite.config.*"]
+test_files = ["**/*.test.*", "**/*.spec.*", "**/__tests__/**"]
 
 # Strictness switches, decided on the Lint Desk.
 [settings.tsconfig.compilerOptions]

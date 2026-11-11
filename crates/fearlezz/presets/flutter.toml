@@ -19,6 +19,7 @@ run = "flutter test"
 stage = "working"
 tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
 inputs = ["**/*.dart", "pubspec.yaml", "pubspec.lock"]
+test_files = ["test/**"]
 
 # Flutter's own excludes come too: every flutter command appends build/** and each platform
 # folder the app has to this list when one is missing, so a list without them never stays in sync.
