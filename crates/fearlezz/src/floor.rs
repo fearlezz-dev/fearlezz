@@ -162,6 +162,9 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
             }
             (None, _) => {}
         }
+        if b.record.is_some() && h.record.is_none() {
+            say("it no longer records its app's window".into());
+        }
         if b.tests.is_some() && h.tests.is_none() {
             say("it no longer counts its tests".into());
         }

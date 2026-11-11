@@ -53,12 +53,15 @@ pub(crate) enum Tool {
     Tsconfig,
     /// The Fearlezz agent skill, in each agent's skills folder.
     Skill,
+    /// The helpers of the `flutter-look` piece's widget tests in `look_test/`: real fonts,
+    /// and `still`, which writes a still into `$FEARLEZZ_OUT`.
+    FlutterLook,
     /// The proof hooks of Codex (`.codex/hooks.json`) and Cursor (`.cursor/hooks.json`);
     /// Claude Code's go into `.claude/settings.json` with the `claude` settings.
     Hooks,
 }
 
-const TOOLS: [(&str, Tool); 13] = [
+const TOOLS: [(&str, Tool); 14] = [
     ("cargo-lints", Tool::CargoLints),
     ("dart-analysis", Tool::DartAnalysis),
     ("clippy", Tool::Clippy),
@@ -70,6 +73,7 @@ const TOOLS: [(&str, Tool); 13] = [
     ("detekt", Tool::Detekt),
     ("golangci", Tool::Golangci),
     ("tsconfig", Tool::Tsconfig),
+    ("flutter-look", Tool::FlutterLook),
     ("skill", Tool::Skill),
     ("hooks", Tool::Hooks),
 ];
@@ -148,7 +152,9 @@ impl Settings {
             Tool::Detekt => detekt_lint_table(&self.lints),
             Tool::Golangci => golangci_lint_table(&self.lints),
             Tool::Claude => self.claude_hooks(),
-            Tool::Clippy | Tool::Tsconfig | Tool::Skill | Tool::Hooks => Table::new(),
+            Tool::Clippy | Tool::Tsconfig | Tool::Skill | Tool::Hooks | Tool::FlutterLook => {
+                Table::new()
+            }
         };
         if let Some(own) = self.tools.get(&tool) {
             crate::presets::merge(&mut out, own.clone());
@@ -286,6 +292,15 @@ impl Settings {
                     vec![(path, body)]
                 }
                 Tool::DartAnalysis | Tool::Detekt | Tool::Golangci => vec![(path, whole(&table)?)],
+                Tool::FlutterLook => {
+                    if let Some(key) = table.keys().next() {
+                        bail!("[settings.flutter-look]: no field \"{key}\"; it has none");
+                    }
+                    FLUTTER_LOOK
+                        .iter()
+                        .map(|(path, text)| ((*path).to_string(), dart_file(text)))
+                        .collect()
+                }
                 Tool::Skill => skill_files(&table)?
                     .into_iter()
                     .map(|path| (path.to_string(), skill_text()))
@@ -430,6 +445,8 @@ impl Tool {
                 ".golangci.yml",
             ),
             Tool::Tsconfig => (&["tsconfig.json"], "tsconfig.json"),
+            // Every file is written, like the skill.
+            Tool::FlutterLook => (&[FLUTTER_LOOK[0].0, FLUTTER_LOOK[1].0], FLUTTER_LOOK[0].0),
             // Unlike the others, every file is written; `skill_files` picks which.
             Tool::Skill => (&[CLAUDE_SKILL, AGENTS_SKILL], CLAUDE_SKILL),
             // Likewise; `hook_agents` picks which.
@@ -894,6 +911,26 @@ fn strip_jsonc(text: &str) -> String {
     out
 }
 
+/// The helpers of the `flutter-look` piece, shipped in the binary like the skill.
+const FLUTTER_LOOK: [(&str, &str); 2] = [
+    (
+        "look_test/fearlezz_look.dart",
+        include_str!("../presets/flutter-look/fearlezz_look.dart"),
+    ),
+    (
+        "look_test/flutter_test_config.dart",
+        include_str!("../presets/flutter-look/flutter_test_config.dart"),
+    ),
+];
+
+/// A Dart file Fearlezz owns whole, with a first line that says so.
+fn dart_file(text: &str) -> String {
+    format!(
+        "// Written by fearlezz setup sync for the flutter-look piece; do not edit.
+{text}"
+    )
+}
+
 /// The skill this binary ships. It is embedded, so it matches the version and needs no network.
 const SKILL: &str = include_str!("../../../skills/fearlezz/SKILL.md");
 const CLAUDE_SKILL: &str = ".claude/skills/fearlezz/SKILL.md";
@@ -1264,7 +1301,7 @@ avoid_print = false
             .unwrap_err()
             .to_string();
         assert!(
-            e.contains("tools are cargo-lints, dart-analysis, clippy, claude, biome, eslint, ruff, ktlint, detekt, golangci, tsconfig, skill, hooks"),
+            e.contains("tools are cargo-lints, dart-analysis, clippy, claude, biome, eslint, ruff, ktlint, detekt, golangci, tsconfig, flutter-look, skill, hooks"),
             "{e}"
         );
     }

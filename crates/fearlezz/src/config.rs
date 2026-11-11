@@ -110,6 +110,8 @@ pub(crate) struct Check {
     test_globs: GlobSet,
     /// For a check that writes pictures into a folder: which files in it are stills.
     pub stills: Option<crate::look::StillGlob>,
+    /// For a check that records an app's window while its command runs.
+    pub record: Option<crate::record::Spec>,
     /// The environment's shell it runs inside, part of its inputs.
     pub shell: Option<String>,
     /// Work Fearlezz does itself instead of running a command.
@@ -210,6 +212,7 @@ struct RawCheck {
     #[serde(default)]
     test_files: Vec<String>,
     stills: Option<String>,
+    record: Option<toml::Value>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
     #[expect(
@@ -340,6 +343,11 @@ impl Config {
                     .map(crate::look::StillGlob::parse)
                     .transpose()
                     .with_context(|| format!("check {id}"))?,
+                record: c
+                    .record
+                    .map(crate::record::Spec::parse)
+                    .transpose()
+                    .with_context(|| format!("check {id}"))?,
                 id: id.clone(),
                 run: c.run,
                 stage,
@@ -455,6 +463,7 @@ fn builtin_check(id: &str, stages: &Stages, inputs: GlobSet, on: Scope, builtin:
         test_files: Vec::new(),
         test_globs: GlobSet::empty(),
         stills: None,
+        record: None,
     }
 }
 

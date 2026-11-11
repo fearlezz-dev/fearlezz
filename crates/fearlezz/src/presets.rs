@@ -25,6 +25,7 @@ pub(crate) const BUILTIN: &[(&str, &str)] = &[
     ("devenv", include_str!("../presets/devenv.toml")),
     ("eslint", include_str!("../presets/eslint.toml")),
     ("flutter", include_str!("../presets/flutter.toml")),
+    ("flutter-look", include_str!("../presets/flutter-look.toml")),
     ("go", include_str!("../presets/go.toml")),
     ("kotlin", include_str!("../presets/kotlin.toml")),
     ("playwright", include_str!("../presets/playwright.toml")),

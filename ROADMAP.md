@@ -37,6 +37,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
 | Pieces | Rust, TypeScript, ESLint, Playwright, Python, Go, Kotlin, Flutter, devenv, agents, safety; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
 | Stills and films | Compared with the same check run on the base commit, with a report page. Listed in `proof.jsonl` or found by a `stills` glob; the `playwright` piece takes them from `toHaveScreenshot` (spike, `spike/look-web`) |
+| Recording app windows | macOS, in the binary (ScreenCaptureKit via objc2): `fearlezz --still <window>` for the agent to look at its running app, and `record` on a check films or stills the window of the app its command starts. Where nothing can record it fails locally with the one time fix and is not run in CI. `flutter-look` piece: headless widget test stills, and integration test films. A virtual display (`display = "virtual"`) is experimental: it works, but a window manager rearranges windows while it exists |
 | Approvals | A visual change waits for the developer's words |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
 | Distribution | GitHub Releases for Linux and macOS through release-please (merging its pull request tags and builds), `install.sh`, Homebrew tap, Nix flake and devenv input, `cargo install --git`. The tap follows new releases once its workflow (tap pull request 1) is merged |
@@ -55,7 +56,6 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 | Capability | State |
 | --- | --- |
-| Recording apps on macOS | A spike recorder (`tools/macos-recorder`) takes a still or film of one window, covered or offscreen, in about a second plus the film length. It needs Screen Recording for the app that started the agent, and hosted CI runners cannot be granted it. Flutter stills need no recorder: widget tests render them headlessly (`docs/spikes/look-native`). No built in piece yet |
 | Showcase | Stitch proofs into polished README films and release notes; prototyped once |
 | Safety proof | The `safety` piece scans for secrets (gitleaks, gate on changed lines). No dependency, workflow or code scanning yet |
 | Hosted parts and proof links | `ee/` is empty; links may be hidden or need sign in |
