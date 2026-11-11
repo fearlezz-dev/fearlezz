@@ -686,7 +686,8 @@ fn the_change_cannot_declare_its_own_files_as_needing_no_proof() {
     let out = ci(&repo);
     assert!(!out.ok, "{}", out.stdout);
     assert!(
-        out.stdout.contains("weakens no_proof: *.md"),
+        out.stdout
+            .contains("weakens no_proof: it newly says *.md needs no proof"),
         "{}",
         out.stdout
     );
