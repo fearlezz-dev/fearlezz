@@ -589,13 +589,14 @@ fn setup(what: Setup) -> Result<bool> {
         Setup::Needs => {
             let ctx = ctx()?;
             let stages = &ctx.config.stages;
-            // A check records pictures when it names them by a glob, or by convention when it
-            // runs in the look stage and lists them in `proof.jsonl`.
-            if ctx
-                .config
-                .checks
-                .iter()
-                .any(|c| c.stills.is_some() || stages.name(c.stage) == "look")
+            // A check records pictures when it names them by a glob or a `record` table, or by
+            // convention when it runs in the look stage and lists them in `proof.jsonl`.
+            if ctx.config.checks.iter().any(|c| {
+                c.stills.is_some()
+                    || c.films.is_some()
+                    || c.record.is_some()
+                    || stages.name(c.stage) == "look"
+            })
             {
                 println!("ffmpeg");
             }

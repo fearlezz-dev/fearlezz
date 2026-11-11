@@ -928,6 +928,32 @@ fn the_comment_shows_before_and_after_from_the_pictures_folder() {
 }
 
 #[test]
+fn the_comment_marks_flaky_pictures() {
+    let record = RECORD.replace("still about white", "still about \"$(cat src/about.txt)\"");
+    let repo = Repo::new(
+        &format!("{SCREENS}flaky = [\"about.png\"]\n"),
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", &record),
+            ("src/color.txt", "red"),
+            ("src/about.txt", "white"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/look");
+    repo.write("src/color.txt", "blue");
+    repo.write("src/about.txt", "black");
+    repo.commit("colors");
+    let (out, text, _) = ci_with_pictures(&repo, None);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(text.contains("**home.png** changed:"), "{text}");
+    assert!(
+        text.contains("**about.png** changed (flaky, never blocks)"),
+        "{text}"
+    );
+}
+
+#[test]
 fn without_a_pictures_url_the_comment_names_the_artifact() {
     let repo = screens_branch("blue");
     let (out, text, _) = ci_with_pictures(&repo, None);
@@ -994,4 +1020,20 @@ fn the_tools_fearlezz_needs_name_ffmpeg_only_for_pictures() {
     let out = plain.fz(&["setup", "needs"]);
     assert!(out.ok, "{}", out.stderr);
     assert_eq!(out.stdout, "");
+}
+
+#[test]
+fn films_and_recordings_outside_the_look_stage_need_ffmpeg_too() {
+    for field in [
+        "films = \"films/*.webm\"",
+        "record = { film = \"home\", seconds = 1 }",
+    ] {
+        let repo = Repo::new(
+            &format!("[check.ui]\nrun = \"true\"\nstage = \"working\"\n{field}\n"),
+            &[],
+        );
+        let out = repo.fz(&["setup", "needs"]);
+        assert!(out.ok, "{}", out.stderr);
+        assert_eq!(out.stdout, "ffmpeg\n", "{field}");
+    }
 }
