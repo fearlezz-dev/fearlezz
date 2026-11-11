@@ -19,6 +19,7 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 
 1. `fearlezz say start --kind bug|feature|refactor|other --goal "<the goal in the developer's words>"` once, on the work branch.
 2. Add what the change must prove: `fearlezz say claim "<behavior>" --check <check>`. Claims only add requirements; never remove one to get green.
+   `fearlezz say` writes the goal and claims into `.fearlezz/work/<branch>.toml`. Commit it with the change: CI reads it, needs it for any change a check reads, and proves each claim again by running its check. It is public with the code, so write the goal and claims for any reader.
 3. Change code. `fearlezz --plan` shows which checks the change needs, per stage.
 4. `fearlezz run` runs the checks due in the current stage. Unchanged inputs reuse earlier results, so run it often.
 5. When a check fails, read the tail it prints (and the log path), fix the cause, run again.

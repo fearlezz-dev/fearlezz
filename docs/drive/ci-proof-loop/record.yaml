@@ -67,10 +67,11 @@ slices:
     status: done
     left: test counts and zero tests red; lint levels, rules and env in the floor
   - id: claims-reach-ci
-    tests: []
-    status: todo
+    tests: [crates/fearlezz/tests/ci.rs work file tests, crates/fearlezz/tests/core.rs say_writes_*, ready_needs_the_work_file_*]
+    status: done
+    note: the file is .fearlezz/work/<journal>.toml and stays after merging
   - id: agent-hooks
     tests: []
     status: todo
 
-next: Show the CI slice for review, then build claims reaching CI.
+next: Show the claims slice for review, then build the agent hooks.
