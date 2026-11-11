@@ -82,7 +82,7 @@ In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter:
 
 ```toml
 use = [
-  "rust",                                  # built in: fmt, clippy, tests (also: flutter, typescript, eslint, python, kotlin, go, devenv, agents)
+  "rust",                                  # built in: fmt, clippy, tests (also: flutter, typescript, eslint, python, kotlin, go, devenv, agents, safety: secret scanning with gitleaks, a leaked key on a changed line is a gate)
   "./proof/screens.toml",                  # a file in this repo
   "github:acme/presets//web.toml@v1.2",    # someone's repo, pinned to a tag or commit
 ]
