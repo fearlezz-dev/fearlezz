@@ -405,6 +405,12 @@ fn lowering_a_lint_is_red_and_named() {
 }
 
 #[test]
+fn calling_more_pictures_flaky_is_red_and_named() {
+    let out = ci_after(|c| c.replace("env = [\"HOME\"]", "env = [\"HOME\"]\nflaky = [\"home\"]"));
+    assert_weakens(&out, "weakens lint: it calls more pictures flaky (+home)");
+}
+
+#[test]
 fn unsetting_a_lint_is_red_and_named() {
     let out = ci_after(|c| c.replace("F401 = \"flag\"\n", ""));
     assert_weakens(&out, "weakens lints.ruff.F401: it is no longer set");

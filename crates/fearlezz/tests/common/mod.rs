@@ -14,6 +14,9 @@ use tempfile::TempDir;
 pub(crate) struct Repo {
     _dir: TempDir,
     pub root: PathBuf,
+    /// The per user cache folder Fearlezz sees (`XDG_CACHE_HOME`), apart from the repository.
+    _cache: TempDir,
+    pub cache: PathBuf,
 }
 
 pub(crate) struct Output {
@@ -46,7 +49,14 @@ impl Repo {
     pub(crate) fn with_skill(config: &str, files: &[(&str, &str)]) -> Repo {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let repo = Repo { _dir: dir, root };
+        let cache_dir = tempfile::tempdir().unwrap();
+        let cache = cache_dir.path().canonicalize().unwrap();
+        let repo = Repo {
+            _dir: dir,
+            root,
+            _cache: cache_dir,
+            cache,
+        };
         repo.git(&["init", "-q", "-b", "main"]);
         repo.git(&["config", "user.email", "dev@example.com"]);
         repo.git(&["config", "user.name", "Dev"]);
@@ -101,15 +111,33 @@ impl Repo {
             branch,
             path.to_str().unwrap(),
         ]);
-        Worktree { root: path }
+        Worktree {
+            root: path,
+            cache: self.cache.clone(),
+        }
     }
 
     pub(crate) fn fz(&self, args: &[&str]) -> Output {
-        fz_in(&self.root, args, &[])
+        fz_in(&self.root, Some(&self.cache), args, &[])
     }
 
     pub(crate) fn fz_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
-        fz_in(&self.root, args, env)
+        fz_in(&self.root, Some(&self.cache), args, env)
+    }
+
+    /// The folder holding this repository's base checkouts, one per base commit.
+    pub(crate) fn bases(&self) -> PathBuf {
+        let dir = self.cache.join("fearlezz").join("bases");
+        let mut found: Vec<PathBuf> = fs::read_dir(&dir)
+            .map(|d| d.filter_map(Result::ok).map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert_eq!(
+            found.len(),
+            1,
+            "one repository's bases in {}",
+            dir.display()
+        );
+        found.remove(0)
     }
 
     /// Runs `fearlezz` with `input` on stdin, as an agent runs a hook.
@@ -118,6 +146,7 @@ impl Repo {
             .unwrap()
             .args(args)
             .current_dir(&self.root)
+            .env("XDG_CACHE_HOME", &self.cache)
             .env_remove("CI")
             .env_remove("FEARLEZZ_JOURNAL")
             .write_stdin(input)
@@ -133,15 +162,16 @@ impl Repo {
 
 pub(crate) struct Worktree {
     pub root: PathBuf,
+    cache: PathBuf,
 }
 
 impl Worktree {
     pub(crate) fn fz(&self, args: &[&str]) -> Output {
-        fz_in(&self.root, args, &[])
+        fz_in(&self.root, Some(&self.cache), args, &[])
     }
 
     pub(crate) fn fz_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
-        fz_in(&self.root, args, env)
+        fz_in(&self.root, Some(&self.cache), args, env)
     }
 
     pub(crate) fn write(&self, path: &str, content: &str) {
@@ -173,8 +203,11 @@ pub(crate) fn git_in(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-fn fz_in(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+fn fz_in(dir: &Path, cache: Option<&Path>, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut cmd = Command::cargo_bin("fearlezz").unwrap();
+    if let Some(cache) = cache {
+        cmd.env("XDG_CACHE_HOME", cache);
+    }
     // Tests choose for themselves whether they run as on CI.
     cmd.args(args)
         .current_dir(dir)
@@ -229,5 +262,5 @@ pub(crate) fn box_at(x: u32, from: f64) -> String {
 
 /// `fearlezz` run in `dir` without a repository.
 pub(crate) fn fz_at(dir: &Path, args: &[&str]) -> Output {
-    fz_in(dir, args, &[])
+    fz_in(dir, None, args, &[])
 }

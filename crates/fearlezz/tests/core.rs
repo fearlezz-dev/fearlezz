@@ -73,6 +73,29 @@ fn projects_can_add_their_own_stages() {
     assert!(out.stdout.contains("qa"), "{}", out.stdout);
 }
 
+#[test]
+fn a_run_with_nothing_due_names_the_stage_that_has_checks() {
+    let repo = Repo::new(
+        "[check.screens]\nrun = \"true\"\nstage = \"look\"\ninputs = [\"src/**\"]\n",
+        &[("src/a.txt", "a")],
+    );
+    repo.branch("feat/look");
+    repo.write("src/a.txt", "b");
+    let out = repo.fz(&["run"]);
+    assert!(
+        out.stdout
+            .contains("nothing to run in exploring; screens waits in look"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(
+        out.last_line(),
+        "next: fearlezz run --stage look",
+        "{}",
+        out.stdout
+    );
+}
+
 // Plan
 
 #[test]

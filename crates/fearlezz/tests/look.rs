@@ -249,7 +249,8 @@ fn a_base_another_command_uses_is_not_removed() {
     };
     run(&repo);
     let first = base(&repo);
-    let held = repo.path(&format!(".git/fearlezz/base-holds/{first}"));
+    let bases = repo.bases();
+    let held = bases.join("holds").join(&first);
     let hold = std::fs::File::open(&held).unwrap();
     hold.lock_shared().unwrap();
 
@@ -258,7 +259,7 @@ fn a_base_another_command_uses_is_not_removed() {
         advance(&repo, n);
         run(&repo);
     }
-    let dir = repo.path(&format!(".git/fearlezz/base/{first}"));
+    let dir = bases.join("checkouts").join(&first);
     assert!(dir.exists(), "a held base was removed");
 
     drop(hold);
@@ -268,6 +269,140 @@ fn a_base_another_command_uses_is_not_removed() {
         !dir.exists(),
         "a base nobody holds stays after three newer ones"
     );
+}
+
+#[test]
+fn the_base_checkout_lives_outside_the_repository() {
+    // Tools refuse files below `.git` (Vite's dev server answers 403 there), so a base
+    // checkout there would take no pictures.
+    let (repo, counter) = repo();
+    repo.write(
+        "record.sh",
+        &format!("case \"$PWD\" in */.git/*) exit 9;; esac\n{RECORD}"),
+    );
+    repo.commit("guard");
+    repo.git(&["checkout", "--quiet", "main"]);
+    repo.write(
+        "record.sh",
+        &format!("case \"$PWD\" in */.git/*) exit 9;; esac\n{RECORD}"),
+    );
+    repo.commit("guard");
+    repo.git(&["checkout", "--quiet", "feat/blue"]);
+    repo.git(&["merge", "--quiet", "--no-edit", "main"]);
+    let out = repo.fz_env(&["run"], &[("COUNTER", &counter)]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("look screens: 1 changed, 1 new, 1 same"),
+        "{}",
+        out.stdout
+    );
+    let checkouts: Vec<_> = std::fs::read_dir(repo.bases().join("checkouts"))
+        .unwrap()
+        .collect();
+    assert_eq!(checkouts.len(), 1, "one base checkout in the user cache");
+    assert!(!repo.path(".git/fearlezz/base").exists());
+}
+
+#[test]
+fn a_base_that_passed_without_pictures_is_called_suspicious() {
+    let repo = Repo::new(
+        CONFIG,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", "echo run >> \"$COUNTER\"\n"),
+            ("src/color.txt", "red"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    let counter = repo.path(".runs/screens").to_string_lossy().to_string();
+    repo.branch("feat/record");
+    repo.write("record.sh", RECORD);
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz_env(&["run"], &[("COUNTER", &counter)]);
+    assert!(out.ok, "{}", out.stderr);
+    assert!(out.stdout.contains("look screens: 2 new"), "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("the base run passed without any pictures"),
+        "{}",
+        out.stdout
+    );
+}
+
+/// Films a tool writes into a folder, such as Playwright videos.
+const WRITE_FILMS: &str = r#"set -e
+mkdir -p "$FEARLEZZ_OUT/films/home"
+ffmpeg -v error -nostdin -f lavfi -i "color=c=white:s=64x48:r=10:d=1" -vf "drawbox=x=$(cat src/x.txt):y=10:w=20:h=20:color=blue:t=fill" "$FEARLEZZ_OUT/films/home/video.gif"
+"#;
+
+#[test]
+fn films_can_be_named_by_a_glob_in_the_proof_folder() {
+    let repo = Repo::new(
+        r#"
+[check.screens]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+films = "films/**/*.gif"
+"#,
+        &[("record.sh", WRITE_FILMS), ("src/x.txt", "5")],
+    );
+    repo.branch("feat/move");
+    repo.write("src/x.txt", "35");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("look screens: 1 changed"),
+        "{}",
+        out.stdout
+    );
+    let status = repo.fz(&["--check", "screens"]);
+    assert!(
+        status.stdout.contains("\"id\": \"home/video\"")
+            && status.stdout.contains("\"kind\": \"film\""),
+        "{}",
+        status.stdout
+    );
+}
+
+#[test]
+fn flaky_pictures_are_shown_but_never_wait_for_approval() {
+    let repo = Repo::new(
+        &format!("{CONFIG}flaky = [\"home.png\"]\n"),
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", RECORD),
+            ("src/color.txt", "red"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    let counter = repo.path(".runs/screens").to_string_lossy().to_string();
+    repo.branch("feat/blue");
+    repo.write("src/color.txt", "blue");
+    repo.commit("blue");
+    ran(&repo, &counter, &["run", "--stage", "merge", "--no-run"]);
+    let out = ran(&repo, &counter, &["run"]);
+    assert!(
+        out.stdout.contains("look screens: 1 same, 1 flaky"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(
+        out.last_line(),
+        "next: all proof is in: ready to merge",
+        "{}",
+        out.stdout
+    );
+    let report = out
+        .lines()
+        .iter()
+        .find_map(|l| l.trim().strip_prefix("report: "))
+        .map(std::path::PathBuf::from)
+        .expect("a report line");
+    let html = std::fs::read_to_string(report).unwrap();
+    assert!(html.contains("Flaky"), "the report says which are flaky");
 }
 
 /// Stands in for Playwright: `toHaveScreenshot` writes each still under the snapshot path the

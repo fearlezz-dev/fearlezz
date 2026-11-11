@@ -108,8 +108,14 @@ pub(crate) struct Check {
     /// commit to show they fail there (red before green).
     pub test_files: Vec<String>,
     test_globs: GlobSet,
-    /// For a check that writes pictures into a folder: which files in it are stills.
-    pub stills: Option<crate::look::StillGlob>,
+    /// For a check that writes pictures into a folder: which files in it are stills and
+    /// which are films.
+    pub stills: Option<crate::look::MediaGlob>,
+    pub films: Option<crate::look::MediaGlob>,
+    /// Pictures (ids or globs, as written) that are compared and shown but never block or
+    /// wait for approval.
+    pub flaky: Vec<String>,
+    flaky_globs: GlobSet,
     /// The environment's shell it runs inside, part of its inputs.
     pub shell: Option<String>,
     /// Work Fearlezz does itself instead of running a command.
@@ -210,6 +216,9 @@ struct RawCheck {
     #[serde(default)]
     test_files: Vec<String>,
     stills: Option<String>,
+    films: Option<String>,
+    #[serde(default)]
+    flaky: Vec<String>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
     #[expect(
@@ -337,9 +346,17 @@ impl Config {
                 stills: c
                     .stills
                     .as_deref()
-                    .map(crate::look::StillGlob::parse)
+                    .map(|g| crate::look::MediaGlob::parse("still", g))
                     .transpose()
                     .with_context(|| format!("check {id}"))?,
+                films: c
+                    .films
+                    .as_deref()
+                    .map(|g| crate::look::MediaGlob::parse("film", g))
+                    .transpose()
+                    .with_context(|| format!("check {id}"))?,
+                flaky_globs: globs(&c.flaky).with_context(|| format!("check {id}: flaky"))?,
+                flaky: c.flaky,
                 id: id.clone(),
                 run: c.run,
                 stage,
@@ -455,6 +472,9 @@ fn builtin_check(id: &str, stages: &Stages, inputs: GlobSet, on: Scope, builtin:
         test_files: Vec::new(),
         test_globs: GlobSet::empty(),
         stills: None,
+        films: None,
+        flaky: Vec::new(),
+        flaky_globs: GlobSet::empty(),
     }
 }
 
@@ -475,6 +495,11 @@ impl Check {
     /// Whether `path` is one of its tests, by `test_files`.
     pub(crate) fn is_test(&self, path: &str) -> bool {
         self.test_globs.is_match(path)
+    }
+
+    /// Whether the picture named `name` is flaky, by `flaky`.
+    pub(crate) fn is_flaky(&self, name: &str) -> bool {
+        self.flaky_globs.is_match(name)
     }
 
     pub(crate) fn needs_services(&self) -> bool {
