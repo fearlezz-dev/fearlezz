@@ -42,6 +42,8 @@ Or pick what fits the project:
 | devenv | add `fearlezz.url = "github:fearlezz-dev/fearlezz"` to `inputs` in `devenv.yaml`, and `inputs.fearlezz.packages.${pkgs.stdenv.system}.default` to `packages` |
 | Cargo | `cargo install --git https://github.com/fearlezz-dev/fearlezz fearlezz` |
 
+In a project, `fearlezz setup init` writes a starter `fearlezz.toml` from the languages it finds; `fearlezz setup sync` then writes the agent skill, hooks and lint settings.
+
 Prebuilt binaries for Linux and macOS are on the [releases](https://github.com/fearlezz-dev/fearlezz/releases) page. Stills and films need `ffmpeg`, and code rules need `ast-grep`.
 
 To work on Fearlezz itself, enter the toolchain with `devenv shell`, then run `check`.

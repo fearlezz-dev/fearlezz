@@ -74,6 +74,10 @@ Files that need no proof, such as prose, are declared once at the top of `fearle
 no_proof = ["*.md", "docs/**"]
 ```
 
+## Starting out
+
+In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter: the built in pieces of the languages at its root, and `no_proof` for prose. Commit it on the base branch first, then run `fearlezz setup sync`.
+
 ## Pieces
 
 `use` pulls in pieces of config with the same shape as `fearlezz.toml`. The project file wins field by field, so write only what changes; `off = true` drops a check a piece brings in.

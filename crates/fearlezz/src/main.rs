@@ -7,6 +7,7 @@ mod findings;
 mod floor;
 mod git;
 mod hooks;
+mod init;
 mod journal;
 mod lints;
 mod look;
@@ -127,6 +128,8 @@ enum Say {
 
 #[derive(Subcommand)]
 enum Setup {
+    /// Write a starter fearlezz.toml from the languages this repository shows.
+    Init,
     /// Write the shared settings into each tool's own file (lint levels and more).
     Sync,
     /// Move pieces from a repository to their newest tag of the same major version (or only
@@ -397,8 +400,33 @@ fn say(ctx: &Ctx, what: Say) -> Result<bool> {
     Ok(true)
 }
 
+/// Writes the starter config and says what it found.
+fn setup_init() -> Result<()> {
+    let git = Git::discover(&std::env::current_dir()?)?;
+    let started = init::init(&git.root)?;
+    let list = |found: &[init::Found]| -> String {
+        let names: Vec<String> = found.iter().map(ToString::to_string).collect();
+        names.join(", ")
+    };
+    if started.pieces.is_empty() {
+        println!("wrote fearlezz.toml: no language found, so fill in its checks");
+    } else {
+        println!("wrote fearlezz.toml: uses {}", list(&started.pieces));
+    }
+    if !started.others.is_empty() {
+        println!(
+            "also found {}: language pieces share check names, so declare their checks \
+             in fearlezz.toml",
+            list(&started.others)
+        );
+    }
+    println!("next: fearlezz setup sync");
+    Ok(())
+}
+
 fn setup(what: Setup) -> Result<bool> {
     match what {
+        Setup::Init => setup_init()?,
         Setup::Update { piece } => {
             let git = Git::discover(&std::env::current_dir()?)?;
             let updated = presets::update(&git.root, &git.common, piece.as_deref())?;

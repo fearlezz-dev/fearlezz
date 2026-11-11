@@ -220,8 +220,14 @@ fn release(tag: &str) -> Option<(&str, Vec<u64>)> {
 
 fn read_config(root: &Path) -> Result<(String, Table)> {
     let path = root.join(FILE);
-    let text =
-        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let text = match std::fs::read_to_string(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
+            "no fearlezz.toml in {}; `fearlezz setup init` writes a starter from the languages \
+             it finds",
+            root.display()
+        ),
+        r => r.with_context(|| format!("reading {}", path.display()))?,
+    };
     let table = toml::from_str(&text).with_context(|| format!("in {}", path.display()))?;
     Ok((text, table))
 }
