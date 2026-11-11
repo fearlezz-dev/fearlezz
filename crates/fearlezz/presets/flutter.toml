@@ -1,20 +1,20 @@
 # A Flutter app: formatting, the analyzer, and the tests.
 
-[check.format]
+[check.dart-format]
 run = "dart format --output=none --set-exit-if-changed ."
 stage = "working"
 inputs = ["**/*.dart"]
 
 # Lint findings get the level [lints.dart] gives them; other analyzer issues block. Only lines
 # the change touched count; compile errors block wherever they are.
-[check.analyze]
+[check.dart-analyze]
 run = "dart analyze --format=machine"
 stage = "working"
 inputs = ["**/*.dart", "analysis_options.yaml", "pubspec.yaml", "pubspec.lock"]
 findings = { read = "dart", lints = ["dart"] }
 
 # The last line says "+12: All tests passed!" or "+10 -2: Some tests failed.".
-[check.tests]
+[check.flutter-test]
 run = "flutter test"
 stage = "working"
 tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }

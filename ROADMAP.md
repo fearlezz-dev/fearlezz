@@ -29,13 +29,13 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Results by input hash | Shared across worktrees, pruned after 30 days |
 | Journals | One per piece of work, append only |
 | Command line | See, run, say, setup |
-| Starting out | Without `fearlezz.toml`, every command leads to `fearlezz setup init`, which writes a starter from the languages at the root (one language piece; others are named) and `no_proof` for prose |
+| Starting out | Without `fearlezz.toml`, every command leads to `fearlezz setup init`, which writes a starter from the languages at the root and `no_proof` for prose |
 | Findings | Only lines the change touched can block |
 | Test counts | A check's `tests` reader (JUnit reports, or a pattern in the output) counts what ran; zero tests fails it. Every language piece runs and counts its tests |
 | Rules | Paths, naming, companion files, ast-grep code rules |
 | Settings | One source written into each tool's own file, drift is a finding |
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
-| Pieces | Rust, TypeScript, ESLint, Python, Go, Kotlin, Flutter, devenv, agents; pinned with `fearlezz.lock` |
+| Pieces | Rust, TypeScript, ESLint, Python, Go, Kotlin, Flutter, devenv, agents; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
 | Stills and films | Compared with the same check run on the base commit, with a report page |
 | Approvals | A visual change waits for the developer's words |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
@@ -77,8 +77,6 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 ## Known problems
 
-- **Language pieces cannot be combined.** They name their checks alike (`tests`, `lint`, `format`), so `use = ["rust", "typescript"]` merges both into one broken check. `setup init` uses one language and names the others.
-- **The first pull request with the floor is red for its own prose.** The base branch declares no `no_proof` yet, so its changed Markdown is unproven until an admin merges past it once.
 - **macOS is not covered by CI.** It is only proven on the developer's machine.
 - **A flaky test.** One test in `core` has failed twice on CI and not locally; its name is still unknown. Failed checks now show 12 lines, so the next failure should name it.
 - **60 lint flags** in existing code, mostly possible panics from indexing. They do not block.

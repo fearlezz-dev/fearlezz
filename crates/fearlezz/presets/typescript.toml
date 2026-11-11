@@ -1,24 +1,24 @@
 # TypeScript and JavaScript with Biome (lint and formatting), the type checker, and Vitest.
-# A project on another test runner overrides the tests check's run and its JUnit path.
+# A project on another test runner overrides the vitest check's run and its JUnit path.
 
 # Lint findings get the level [lints.biome] gives them. Only lines the change touched count.
-[check.lint]
+[check.biome-lint]
 run = "biome lint --reporter=sarif ."
 stage = "working"
 inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "biome.json", "biome.jsonc", ".biome.json", ".biome.jsonc"]
 findings = { read = "sarif", lints = ["biome"] }
 
-[check.format]
+[check.biome-format]
 run = "biome format ."
 stage = "working"
 inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.json", "biome.json", "biome.jsonc", ".biome.json", ".biome.jsonc"]
 
-[check.types]
+[check.tsc]
 run = "tsc --noEmit"
 stage = "working"
 inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "tsconfig.json", "package.json"]
 
-[check.tests]
+[check.vitest]
 run = "vitest run --reporter=default --reporter=junit --outputFile.junit=\"$FEARLEZZ_OUT/junit.xml\""
 stage = "working"
 tests = "junit"

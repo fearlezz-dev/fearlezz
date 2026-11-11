@@ -8,11 +8,9 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::config::FILE;
 
-/// Pieces that bring no checks of their own names, so any number of them combine.
-const TOOLCHAINS: &[&str] = &["devenv"];
-
 /// Each built in piece and the files at a repository's root that show its language, in the
 /// order the starter names them. devenv comes first: it gives the others their toolchain.
+/// The pieces name their checks after their tools, so any of them combine.
 const MARKERS: &[(&str, &[&str])] = &[
     ("devenv", &["devenv.nix"]),
     ("rust", &["Cargo.toml"]),
@@ -38,13 +36,7 @@ const MARKERS: &[(&str, &[&str])] = &[
 /// when the first change to docs alone comes.
 const NO_PROOF: &str = r#"no_proof = ["*.md", "docs/**"]"#;
 
-/// What `init` wrote: the pieces it used, and the languages it found but left to the developer.
-pub(crate) struct Started {
-    pub pieces: Vec<Found>,
-    pub others: Vec<Found>,
-}
-
-/// A piece and the file at the root that showed it.
+/// A piece `init` used and the file at the root that showed it.
 pub(crate) struct Found {
     pub piece: &'static str,
     pub file: &'static str,
@@ -56,8 +48,9 @@ impl std::fmt::Display for Found {
     }
 }
 
-/// Writes the starter `fearlezz.toml` in `root`; never over one that is there.
-pub(crate) fn init(root: &Path) -> Result<Started> {
+/// Writes the starter `fearlezz.toml` in `root`, never over one that is there, and returns
+/// the pieces it used.
+pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
     let path = root.join(FILE);
     if path.exists() {
         bail!(
@@ -65,41 +58,24 @@ pub(crate) fn init(root: &Path) -> Result<Started> {
             root.display()
         );
     }
-    let mut started = Started {
-        pieces: Vec::new(),
-        others: Vec::new(),
-    };
-    for (piece, files) in MARKERS {
-        let Some(file) = files.iter().find(|f| root.join(f).is_file()) else {
-            continue;
-        };
-        let found = Found { piece, file };
-        // Language pieces name their checks alike (tests, lint, format), so a second one
-        // would merge into the first's checks instead of adding its own.
-        let language = !TOOLCHAINS.contains(piece);
-        if language
-            && started
-                .pieces
-                .iter()
-                .any(|p| !TOOLCHAINS.contains(&p.piece))
-        {
-            started.others.push(found);
-        } else {
-            started.pieces.push(found);
-        }
-    }
-    std::fs::write(&path, starter(&started)?)
+    let found: Vec<Found> = MARKERS
+        .iter()
+        .filter_map(|(piece, files)| {
+            let file = files.iter().find(|f| root.join(f).is_file())?;
+            Some(Found { piece, file })
+        })
+        .collect();
+    std::fs::write(&path, starter(&found)?)
         .with_context(|| format!("writing {}", path.display()))?;
-    Ok(started)
+    Ok(found)
 }
 
-fn starter(started: &Started) -> Result<String, std::fmt::Error> {
-    let pieces = &started.pieces;
+fn starter(found: &[Found]) -> Result<String, std::fmt::Error> {
     let mut text = String::from(
         "# The proof this project's changes need. `fearlezz --plan` shows which checks a change\n\
          # needs; the agent skill (`fearlezz setup sync` writes it) explains the rest.\n\n",
     );
-    if pieces.is_empty() {
+    if found.is_empty() {
         text.push_str(
             "# No language was found. Declare each check: a command that exits 0 on success, and\n\
              # every file it reads.\n\
@@ -109,22 +85,12 @@ fn starter(started: &Started) -> Result<String, std::fmt::Error> {
              # inputs = [\"src/**\", \"Makefile\"]\n\n",
         );
     } else {
-        let names: Vec<String> = pieces.iter().map(|p| format!("\"{}\"", p.piece)).collect();
+        let names: Vec<String> = found.iter().map(|p| format!("\"{}\"", p.piece)).collect();
         writeln!(
             text,
             "# Built in pieces; override any field below, or drop a check with `off = true`.\n\
              use = [{}]\n",
             names.join(", ")
-        )?;
-    }
-    if !started.others.is_empty() {
-        let others: Vec<String> = started.others.iter().map(ToString::to_string).collect();
-        writeln!(
-            text,
-            "# Also found: {}.\n\
-             # Language pieces name their checks alike (tests, lint, format), so these need\n\
-             # checks of their own names, written here, until pieces can be combined.\n",
-            others.join(", ")
         )?;
     }
     writeln!(text, "{NO_PROOF}")?;

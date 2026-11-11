@@ -403,22 +403,12 @@ fn say(ctx: &Ctx, what: Say) -> Result<bool> {
 /// Writes the starter config and says what it found.
 fn setup_init() -> Result<()> {
     let git = Git::discover(&std::env::current_dir()?)?;
-    let started = init::init(&git.root)?;
-    let list = |found: &[init::Found]| -> String {
-        let names: Vec<String> = found.iter().map(ToString::to_string).collect();
-        names.join(", ")
-    };
-    if started.pieces.is_empty() {
+    let found = init::init(&git.root)?;
+    if found.is_empty() {
         println!("wrote fearlezz.toml: no language found, so fill in its checks");
     } else {
-        println!("wrote fearlezz.toml: uses {}", list(&started.pieces));
-    }
-    if !started.others.is_empty() {
-        println!(
-            "also found {}: language pieces share check names, so declare their checks \
-             in fearlezz.toml",
-            list(&started.others)
-        );
+        let names: Vec<String> = found.iter().map(ToString::to_string).collect();
+        println!("wrote fearlezz.toml: uses {}", names.join(", "));
     }
     println!("next: fearlezz setup sync");
     Ok(())

@@ -1,19 +1,19 @@
 # Go: golangci-lint, formatting, and the tests.
 
 # Findings get the level [lints.golangci] gives them. Only lines the change touched count.
-[check.lint]
+[check.golangci-lint]
 run = "golangci-lint run --output.sarif.path=stdout --output.text.path=stderr --show-stats=false ./..."
 stage = "working"
 inputs = ["**/*.go", "go.mod", "go.sum", ".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"]
 findings = { read = "sarif", lints = ["golangci"] }
 
-[check.format]
+[check.gofmt]
 run = "test -z \"$(gofmt -l .)\" || { gofmt -l .; exit 1; }"
 stage = "working"
 inputs = ["**/*.go"]
 
 # -v prints one "--- PASS" or "--- FAIL" line per test and subtest, which are counted.
-[check.tests]
+[check.go-test]
 run = "go test -v ./..."
 stage = "working"
 tests = { count = '(?m)^\s*--- (?:PASS|FAIL):' }

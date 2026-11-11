@@ -51,11 +51,10 @@ fn init_uses_the_pieces_of_the_languages_it_finds() {
     let out = repo.fz(&["setup", "init"]);
     assert!(out.ok, "{}{}", out.stdout, out.stderr);
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
-    // Language pieces share check names (tests, lint, format), so one language is used and
-    // the others are named for the developer to declare.
-    assert!(config.contains(r#"use = ["devenv", "rust"]"#), "{config}");
     assert!(
-        config.contains("# Also found: typescript (package.json), python (pyproject.toml), go (go.mod), kotlin (settings.gradle.kts), flutter (pubspec.yaml)."),
+        config.contains(
+            r#"use = ["devenv", "rust", "typescript", "python", "go", "kotlin", "flutter"]"#
+        ),
         "{config}"
     );
     // Prose needs no proof from the first commit on, so the base branch has it before any
@@ -69,6 +68,32 @@ fn init_uses_the_pieces_of_the_languages_it_finds() {
     // What it wrote is a config every command reads.
     let plan = repo.fz(&["--plan"]);
     assert!(plan.ok, "{}{}", plan.stdout, plan.stderr);
+
+    // Each language keeps its own checks, named for their tools, so the pieces combine.
+    repo.commit("starter");
+    repo.branch("feat/x");
+    for file in [
+        "src/a.rs",
+        "src/a.ts",
+        "a.py",
+        "a.go",
+        "src/A.kt",
+        "lib/a.dart",
+    ] {
+        repo.write(file, "\n");
+    }
+    let plan = repo.fz(&["--plan"]);
+    for check in [
+        "clippy",
+        "tsc",
+        "vitest",
+        "pytest",
+        "go-test",
+        "gradle-test",
+        "flutter-test",
+    ] {
+        assert!(plan.stdout.contains(check), "{check}: {}", plan.stdout);
+    }
 }
 
 #[test]

@@ -1,18 +1,18 @@
 # Python with Ruff (lint and formatting) and pytest.
 
 # Findings get the level [lints.ruff] gives them. Only lines the change touched count.
-[check.lint]
+[check.ruff]
 run = "ruff check --output-format=sarif ."
 stage = "working"
 inputs = ["**/*.py", "**/*.pyi", ".ruff.toml", "ruff.toml", "pyproject.toml"]
 findings = { read = "sarif", lints = ["ruff"] }
 
-[check.format]
+[check.ruff-format]
 run = "ruff format --check ."
 stage = "working"
 inputs = ["**/*.py", "**/*.pyi", ".ruff.toml", "ruff.toml", "pyproject.toml"]
 
-[check.tests]
+[check.pytest]
 run = "pytest -q --junitxml=\"$FEARLEZZ_OUT/junit.xml\""
 stage = "working"
 tests = "junit"
