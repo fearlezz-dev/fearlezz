@@ -993,11 +993,6 @@ fn failure_item(f: &store::RunResult) -> floor::Item {
     }
 }
 
-/// The next line of a final run whose change fails the floor of the base branch.
-const FLOOR_NEXT: &str = "the change takes away proof the base branch requires (above): restore \
-                          it, or ask the developer whether to merge past CI: fearlezz say ask \
-                          \"<question>\"";
-
 fn run_checks(
     ctx: &Ctx,
     mut j: Journal,
@@ -1028,7 +1023,7 @@ fn run_checks(
         if in_memory {
             state::COMMIT_PROVEN.to_string()
         } else if !floor.holds() {
-            FLOOR_NEXT.to_string()
+            state::FLOOR_NEXT.to_string()
         } else {
             view.next.clone()
         }

@@ -664,6 +664,28 @@ fn a_changed_file_no_check_reads_is_red() {
 }
 
 #[test]
+fn the_work_is_never_ready_while_a_changed_file_is_unproven() {
+    for with_proven_change in [false, true] {
+        let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
+        repo.branch("feat/x");
+        repo.write("README.md", "changed\n");
+        if with_proven_change {
+            repo.write("src/lib.rs", "fn b() {}\n");
+        }
+        repo.commit("readme");
+        assert!(!repo.fz(&["run", "--stage", "merge"]).ok);
+        let out = repo.fz(&[]);
+        assert!(!out.stdout.contains("ready to merge"), "{}", out.stdout);
+        assert!(
+            out.last_line()
+                .contains("takes away proof the base branch requires"),
+            "{}",
+            out.stdout
+        );
+    }
+}
+
+#[test]
 fn a_file_the_base_declares_as_needing_no_proof_is_fine() {
     let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
     repo.branch("feat/x");

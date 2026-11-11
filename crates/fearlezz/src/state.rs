@@ -124,6 +124,11 @@ const ACTIVE_SECONDS: i64 = 30 * 60;
 /// The next line once all proof is in at the final stage.
 pub(crate) const READY: &str = "all proof is in: ready to merge";
 
+/// The next line at the final stage when the change fails the floor of the base branch.
+pub(crate) const FLOOR_NEXT: &str = "the change takes away proof the base branch requires \
+                                     (above): restore it, or ask the developer whether to \
+                                     merge past CI: fearlezz say ask \"<question>\"";
+
 /// The next line after proving a commit, where no work is being judged.
 pub(crate) const COMMIT_PROVEN: &str =
     "this proved the commit, not the work; fearlezz shows where the work stands";
@@ -168,8 +173,13 @@ pub(crate) fn view(
     let mut checks = Vec::new();
     let mut skill_out_of_date = false;
     let mut committed = true;
+    let mut floor_fails = false;
     if let Some(wt) = worktree {
         committed = wt.committed;
+        // Only the final stage answers for what the base branch requires.
+        if stage == final_stage && !wt.changed.is_empty() {
+            floor_fails = !crate::floor::Floor::read(&wt.git, config, wt)?.holds();
+        }
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
         // The config shapes every check, though none reads it, so changing it needs them all.
         let config_files = crate::presets::config_files(&wt.git.root)?;
@@ -271,7 +281,7 @@ pub(crate) fn view(
     } else {
         Group::Idle
     };
-    view.next = next(config, &view, skill_out_of_date);
+    view.next = next(config, &view, skill_out_of_date, floor_fails);
     view.now = now_line(config, &view);
     Ok(view)
 }
@@ -324,7 +334,7 @@ fn changed_parts(store: &Store, ran: Ran<'_>, now: &Inputs) -> Vec<String> {
 
 /// What the agent should do next, as one line. Order: the developer, the agent skill, failures,
 /// needed runs, moving on.
-fn next(config: &Config, v: &View, skill_out_of_date: bool) -> String {
+fn next(config: &Config, v: &View, skill_out_of_date: bool, floor_fails: bool) -> String {
     let stages = &config.stages;
     if let Some(q) = &v.waiting {
         return format!("waiting for the developer: {q}");
@@ -365,6 +375,9 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool) -> String {
             todo.len(),
             todo.join(", ")
         );
+    }
+    if floor_fails {
+        return FLOOR_NEXT.into();
     }
     if v.checks.is_empty() {
         return "make a change; fearlezz --plan shows the proof it will need".into();
