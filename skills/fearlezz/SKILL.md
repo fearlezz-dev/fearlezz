@@ -26,7 +26,8 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 ## What counts as proof
 
 - Only `fearlezz run` on your journal is proof. Raw commands (`cargo test`, `bun test`, a project's `check` script) are quick feedback; running them proves nothing.
-- `fearlezz run --ci` and the scripts around it prove a commit for CI. They say nothing about the work and keep no journal.
+- `fearlezz run --ci` and the scripts around it prove a commit for CI. They say nothing about the work and keep no journal. On the base branch itself it runs every check.
+- The base branch's `fearlezz.toml` is the floor. At the final stage and in CI, a change that turns a check off, narrows its inputs, changes its command, moves it to a later stage or adds to `no_proof` fails with `weakens ...`, and a changed file no check reads and `no_proof` does not declare fails with `unproven ...`. Never weaken proof to get green; when it must change, ask the developer, since only a person with admin rights merges past it.
 - Do not open a pull request before `fearlezz` says ready to merge. When you report proof, report that line from the journal.
 
 ## Rules
@@ -63,6 +64,12 @@ run = "cargo test --quiet"
 stage = "working"          # exploring, working, look, merge, or the project's own [stages] order
 inputs = ["src/**", "Cargo.toml", "Cargo.lock"]
 env = ["DATABASE_URL"]
+```
+
+Files that need no proof, such as prose, are declared once at the top of `fearlezz.toml`. CI reads this list from the base branch, so add to it in a change of its own first:
+
+```toml
+no_proof = ["*.md", "docs/**"]
 ```
 
 ## Pieces

@@ -26,6 +26,10 @@ pub(crate) struct Config {
     pub env: Env,
     /// Tool settings Fearlezz writes into each tool's own file, lint tables included.
     pub settings: Settings,
+    /// Globs of files that need no proof, such as prose. A change cannot add to them for
+    /// itself: CI reads them from the base branch.
+    pub no_proof: Vec<String>,
+    no_proof_globs: GlobSet,
 }
 
 /// What makes a checkout usable and runs its services. Every part is optional; a project
@@ -172,6 +176,8 @@ struct RawConfig {
     settings: Option<toml::Table>,
     lints: Option<BTreeMap<String, BTreeMap<String, lints::Level>>>,
     rule: Option<BTreeMap<String, toml::Table>>,
+    #[serde(default)]
+    no_proof: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -372,12 +378,18 @@ impl Config {
         }
         checks.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(Config {
+            no_proof_globs: globs(&raw.no_proof).context("no_proof")?,
+            no_proof: raw.no_proof,
             settings,
             stages,
             checks,
             base: raw.base.unwrap_or_else(|| "main".into()),
             env,
         })
+    }
+
+    pub(crate) fn needs_no_proof(&self, path: &str) -> bool {
+        self.no_proof_globs.is_match(path)
     }
 
     pub(crate) fn check(&self, id: &str) -> Result<&Check> {

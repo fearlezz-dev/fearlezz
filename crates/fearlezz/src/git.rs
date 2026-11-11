@@ -115,6 +115,14 @@ impl Git {
         })
     }
 
+    /// The short id of the commit checked out.
+    pub(crate) fn head_short(&self) -> Result<String> {
+        Ok(self
+            .git(&["rev-parse", "--short", "HEAD"])?
+            .trim()
+            .to_string())
+    }
+
     /// Whether every file in the worktree is committed; new files count, ignored ones do not.
     pub(crate) fn committed(&self) -> Result<bool> {
         Ok(self.git(&["status", "--porcelain"])?.trim().is_empty())

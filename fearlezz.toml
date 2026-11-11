@@ -4,6 +4,10 @@
 
 use = ["devenv", "rust", "agents"]
 
+# Prose needs no proof. Packaging, the workflows and the Nix flake are left out on purpose:
+# a change to them is red in CI until a person with admin rights merges past it.
+no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
+
 # The binary embeds the agent skill, so the tests read it too.
 [check.tests]
 inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md"]

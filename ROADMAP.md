@@ -44,7 +44,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Capability | Missing |
 | --- | --- |
 | Overview of the work | A static page and `fearlezz --all` exist; nothing live for runs of hours or days |
-| Local and CI together | "Ready to merge" and the final exit code are honest, and `fearlezz run --ci` proves a commit with no journal; the rest of the proof gate is under Next |
+| Local and CI together | "Ready to merge" and the final exit code are honest. `fearlezz run --ci` proves a commit with no journal, runs every check on the base branch, and holds a change to the base branch's config as its floor; `main` requires the check. The rest of the proof gate is under Next |
 | Tests are real | Red then green only; no mutation or coverage proof |
 | Extension layers | Pieces work; a new kind of proof and a library layer do not exist yet |
 
@@ -68,7 +68,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 ## Next
 
 1. Finish the proof gate, so unproven work cannot look proven (design: `docs/drive/ci-proof-loop/record.yaml`):
-   - CI mode: the base branch's config is the floor, so a change that weakens its own proof is red and names it, and only an admin merges past it. A run on `main` runs every check. A changed file that no check reads and that is not declared as needing no proof is red. The log shows every check's command, time and test count, and zero tests is red. `main` requires the check.
+   - What CI shows: every check's test count, and zero tests is red. The floor does not yet compare `[lints]` levels, `[rule]` tables or check `env`, so lowering a lint or a rule is not caught.
    - Claims reach CI: the goal and claims are a small committed file per change, written by `fearlezz say`, and CI proves each claim again.
    - Agent hooks, written by `fearlezz setup sync`: push needs a goal and a claim, a non draft pull request needs ready, the end of a turn blocks once.
 2. Adopt Fearlezz in a first real project outside this repository, which then tests the gate for real.
@@ -76,7 +76,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 ## Known problems
 
-- **A run on `main` proves nothing yet.** Fearlezz only runs checks whose inputs a change touched. A run on `main` has no change, and a pull request that touches only packaging files reads no check input, so both report "nothing to run" and pass. A pull request that touches code does run them: the first one ran all 4 checks and 160 tests on the GitHub runner.
+- **The first pull request with the floor is red for its own prose.** The base branch declares no `no_proof` yet, so its changed Markdown is unproven until an admin merges past it once.
 - **macOS is not covered by CI.** It is only proven on the developer's machine.
 - **A flaky test.** One test in `core` has failed twice on CI and not locally; its name is still unknown. Failed checks now show 12 lines, so the next failure should name it.
 - **60 lint flags** in existing code, mostly possible panics from indexing. They do not block.
