@@ -28,24 +28,26 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Checks, stages | A check counts only for the inputs it ran on; the final stage runs everything fresh |
 | Results by input hash | Shared across worktrees, pruned after 30 days |
 | Journals | One per piece of work, append only |
-| Command line | See, run, say, setup |
+| Command line | See, run, say, setup. A tool a check cannot find is named with how to install it; tools in `node_modules/.bin` and `.venv/bin` are found |
+| Starting out | Without `fearlezz.toml`, every command leads to `fearlezz setup init`, which writes a starter from the languages at the root and `no_proof` for prose |
 | Findings | Only lines the change touched can block |
 | Test counts | A check's `tests` reader (JUnit reports, or a pattern in the output) counts what ran; zero tests fails it. Every language piece runs and counts its tests |
 | Rules | Paths, naming, companion files, ast-grep code rules |
 | Settings | One source written into each tool's own file, drift is a finding |
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
-| Pieces | Rust, TypeScript, ESLint, Python, Go, Kotlin, Flutter, devenv, agents; pinned with `fearlezz.lock` |
+| Pieces | Rust, TypeScript, ESLint, Python, Go, Kotlin, Flutter, devenv, agents; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
 | Stills and films | Compared with the same check run on the base commit, with a report page |
 | Approvals | A visual change waits for the developer's words |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
-| Distribution | `v0.1.0` on GitHub Releases for Linux and macOS, `install.sh`, Homebrew tap, Nix flake and devenv input, `cargo install --git`. A new release does not update the tap by itself yet |
+| Distribution | GitHub Releases for Linux and macOS through release-please (merging its pull request tags and builds), `install.sh`, Homebrew tap, Nix flake and devenv input, `cargo install --git`. The tap follows new releases once its workflow (tap pull request 1) is merged |
+| CI for other projects | `fearlezz-dev/fearlezz@v0`, a composite action: installs a release, proves the commit, posts the status comment, keeps the logs. Not yet run in another project |
 
 ## Partly built
 
 | Capability | Missing |
 | --- | --- |
 | Overview of the work | A static page and `fearlezz --all` exist; nothing live for runs of hours or days |
-| Local and CI together | "Ready to merge" and the final exit code are honest. `fearlezz run --ci` proves a commit with no journal, runs every check on the base branch, and holds a change to the base branch's config as its floor; `main` requires the check. CI posts one status comment on the pull request, replaced each run (proven or not, each blocker with why and what to do), and writes a check page with every check, its test count and the end of each failing output. Agent hooks (Claude Code, Codex, Cursor) refuse a pull request before ready and a merge past the required checks, block stopping once, and say a check's command run by hand is not proof. The rest of the proof gate is under Next |
+| Local and CI together | "Ready to merge" and the final exit code are honest. `fearlezz run --ci` proves a commit with no journal, runs every check on the base branch, and holds a change to the base branch's config as its floor; `main` requires the check. At the final stage `fearlezz` itself holds the work to the floor, so it never says ready while a changed file is unproven. CI posts one status comment on the pull request, replaced each run (proven or not, each blocker with why and what to do, naming the head commit and the merge it proved), and writes a check page with every check, its test count and the end of each failing output. Agent hooks (Claude Code, Codex, Cursor) refuse a pull request before ready and a merge past the required checks, block stopping once, and say a check's command run by hand is not proof. The rest of the proof gate is under Next |
 | Tests are real | Zero tests fails; no red before green, mutation or coverage proof |
 | Extension layers | Pieces work; a new kind of proof and a library layer do not exist yet |
 
@@ -76,7 +78,8 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 ## Known problems
 
-- **The first pull request with the floor is red for its own prose.** The base branch declares no `no_proof` yet, so its changed Markdown is unproven until an admin merges past it once.
+- **Sync never removes a rule a piece dropped.** Biome's `linter.rules` keeps stale keys and the `settings` check calls it in sync.
+- **Monorepos.** `setup init` and the language pieces look only at the repository root.
 - **macOS is not covered by CI.** It is only proven on the developer's machine.
 - **A flaky test.** One test in `core` has failed twice on CI and not locally; its name is still unknown. Failed checks now show 12 lines, so the next failure should name it.
 - **60 lint flags** in existing code, mostly possible panics from indexing. They do not block.

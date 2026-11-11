@@ -16,7 +16,7 @@ findings = { read = "sarif", lints = ["detekt"] }
 
 # --rerun runs the tests even when Gradle thinks they are up to date, so this run writes the
 # reports it is judged on.
-[check.tests]
+[check.gradle-test]
 run = "./gradlew test --rerun"
 stage = "working"
 tests = { junit = "**/build/test-results/test/*.xml" }

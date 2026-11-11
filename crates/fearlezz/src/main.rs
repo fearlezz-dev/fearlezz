@@ -7,6 +7,7 @@ mod findings;
 mod floor;
 mod git;
 mod hooks;
+mod init;
 mod journal;
 mod lints;
 mod look;
@@ -127,6 +128,8 @@ enum Say {
 
 #[derive(Subcommand)]
 enum Setup {
+    /// Write a starter fearlezz.toml from the languages this repository shows.
+    Init,
     /// Write the shared settings into each tool's own file (lint levels and more).
     Sync,
     /// Move pieces from a repository to their newest tag of the same major version (or only
@@ -397,8 +400,23 @@ fn say(ctx: &Ctx, what: Say) -> Result<bool> {
     Ok(true)
 }
 
+/// Writes the starter config and says what it found.
+fn setup_init() -> Result<()> {
+    let git = Git::discover(&std::env::current_dir()?)?;
+    let found = init::init(&git.root)?;
+    if found.is_empty() {
+        println!("wrote fearlezz.toml: no language found, so fill in its checks");
+    } else {
+        let names: Vec<String> = found.iter().map(ToString::to_string).collect();
+        println!("wrote fearlezz.toml: uses {}", names.join(", "));
+    }
+    println!("next: fearlezz setup sync");
+    Ok(())
+}
+
 fn setup(what: Setup) -> Result<bool> {
     match what {
+        Setup::Init => setup_init()?,
         Setup::Update { piece } => {
             let git = Git::discover(&std::env::current_dir()?)?;
             let updated = presets::update(&git.root, &git.common, piece.as_deref())?;
@@ -662,7 +680,14 @@ fn print_failure(f: &store::RunResult) {
     if f.findings.iter().any(|x| x.level == findings::Level::Gate) {
         println!("fail {}: blocking findings", f.check);
     } else {
-        if f.tests == Some(0) && f.exit_code == Some(0) {
+        if let Some(tool) = f
+            .not_found()
+            .then(|| run::missing_command(&f.log))
+            .flatten()
+        {
+            println!("fail {}: {tool} was not found", f.check);
+            println!("  fix: {}", install_fix(&tool));
+        } else if f.tests == Some(0) && f.exit_code == Some(0) {
             println!("fail {}: it ran no tests, so it proves nothing", f.check);
             for why in &f.proof_errors {
                 println!("  {why}");
@@ -701,6 +726,16 @@ struct Row {
     run: String,
 }
 
+/// The head commit of the pull request GitHub Actions runs for, from its event file.
+fn pull_request_head() -> Option<String> {
+    let path = std::env::var_os("GITHUB_EVENT_PATH")?;
+    let event: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    event
+        .pointer("/pull_request/head/sha")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// The first line of the status comment, so CI finds its own comment to replace.
 const COMMENT_MARKER: &str = "<!-- fearlezz -->";
 
@@ -711,7 +746,21 @@ impl CommitReport {
         to_run: usize,
         comment: Option<PathBuf>,
     ) -> Result<CommitReport> {
-        let commit = ctx.git.head_short()?;
+        let merge = ctx.git.head_short()?;
+        // A pull request's run proves the merge GitHub made of its head into the base branch;
+        // the head is the commit people know.
+        let head = pull_request_head().map(|sha| {
+            // A shallow checkout may lack the head itself.
+            ctx.git
+                .short(&sha)
+                .unwrap_or_else(|_| sha.chars().take(7).collect())
+        });
+        let commit = match head {
+            Some(head) if head != merge => {
+                format!("{head} (merged with {} as {merge})", ctx.config.base)
+            }
+            _ => merge,
+        };
         println!(
             "commit {commit}: {} changed files, {to_run} of {} checks to run",
             wt.changed.len(),
@@ -893,8 +942,28 @@ fn blockers(text: &mut String, items: &[floor::Item]) -> std::fmt::Result {
 }
 
 /// A failed check as a blocker, for a reader who sees neither the agent nor the logs.
+/// How to make a missing tool reachable for checks.
+fn install_fix(tool: &str) -> String {
+    format!(
+        "install {tool} where checks find it: the project's dev dependencies ({}), its devenv, \
+         or PATH",
+        run::TOOL_DIRS.join(", ")
+    )
+}
+
 fn failure_item(f: &store::RunResult) -> floor::Item {
     let what = format!("check `{}` failed", f.check);
+    if let Some(tool) = f
+        .not_found()
+        .then(|| run::missing_command(&f.log))
+        .flatten()
+    {
+        return floor::Item {
+            what,
+            why: format!("{tool} was not found"),
+            fix: install_fix(&tool),
+        };
+    }
     if let Some(found) = f.findings.iter().find(|x| x.level == findings::Level::Gate) {
         return floor::Item {
             what,
@@ -923,11 +992,6 @@ fn failure_item(f: &store::RunResult) -> floor::Item {
         fix: "fix what it reports; the check page shows the end of its output".into(),
     }
 }
-
-/// The next line of a final run whose change fails the floor of the base branch.
-const FLOOR_NEXT: &str = "the change takes away proof the base branch requires (above): restore \
-                          it, or ask the developer whether to merge past CI: fearlezz say ask \
-                          \"<question>\"";
 
 fn run_checks(
     ctx: &Ctx,
@@ -959,7 +1023,7 @@ fn run_checks(
         if in_memory {
             state::COMMIT_PROVEN.to_string()
         } else if !floor.holds() {
-            FLOOR_NEXT.to_string()
+            state::FLOOR_NEXT.to_string()
         } else {
             view.next.clone()
         }

@@ -664,6 +664,28 @@ fn a_changed_file_no_check_reads_is_red() {
 }
 
 #[test]
+fn the_work_is_never_ready_while_a_changed_file_is_unproven() {
+    for with_proven_change in [false, true] {
+        let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
+        repo.branch("feat/x");
+        repo.write("README.md", "changed\n");
+        if with_proven_change {
+            repo.write("src/lib.rs", "fn b() {}\n");
+        }
+        repo.commit("readme");
+        assert!(!repo.fz(&["run", "--stage", "merge"]).ok);
+        let out = repo.fz(&[]);
+        assert!(!out.stdout.contains("ready to merge"), "{}", out.stdout);
+        assert!(
+            out.last_line()
+                .contains("takes away proof the base branch requires"),
+            "{}",
+            out.stdout
+        );
+    }
+}
+
+#[test]
 fn a_file_the_base_declares_as_needing_no_proof_is_fine() {
     let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
     repo.branch("feat/x");
@@ -735,4 +757,38 @@ fn the_final_run_of_the_work_reports_a_weakening_too() {
     assert!(!out.ok, "{}", out.stdout);
     assert!(out.stdout.contains("weakens tests"), "{}", out.stdout);
     assert!(!out.stdout.contains("ready to merge"), "{}", out.stdout);
+}
+
+#[test]
+fn the_status_comment_names_the_pull_requests_head_not_the_merge_commit() {
+    let repo = branch_with_change();
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    let short = repo
+        .git(&["rev-parse", "--short", "HEAD"])
+        .trim()
+        .to_string();
+    // GitHub checks out a merge of the head into the base branch.
+    repo.git(&["checkout", "-q", "--detach", "main"]);
+    repo.write("src/other.rs", "fn c() {}\n");
+    repo.commit("base moved on");
+    repo.git(&["merge", "-q", "--no-ff", "--no-edit", "feat/x"]);
+    let merge = repo
+        .git(&["rev-parse", "--short", "HEAD"])
+        .trim()
+        .to_string();
+    let event = repo.path(".runs/event.json");
+    std::fs::write(
+        &event,
+        format!(r#"{{"pull_request": {{"head": {{"sha": "{head}"}}}}}}"#),
+    )
+    .unwrap();
+    let path = repo.path(".runs/comment.md");
+    let mut env = GITHUB.to_vec();
+    env.push(("GITHUB_EVENT_PATH", event.to_str().unwrap()));
+    let out = repo.fz_env(&["run", "--ci", "--comment", path.to_str().unwrap()], &env);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{}", out.stdout));
+    assert!(
+        text.contains(&format!("commit {short} (merged with main as {merge})")),
+        "{text}"
+    );
 }

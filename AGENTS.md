@@ -12,6 +12,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 ## Model
 
 - `config.rs`: `fearlezz.toml`, stages and checks.
+- `init.rs`: `fearlezz setup init`, the starter `fearlezz.toml` from the languages at a repository's root.
 - `git.rs`: the facts read from git (root, common dir, changed files, tree id, worktrees).
 - `store.rs`: results keyed by inputs hash, shared by every worktree.
 - `journal.rs`: the append-only events of one piece of work.
@@ -29,6 +30,11 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `look.rs`: comparing a check's pictures with the same check run on the base commit; `report.rs`: the look report page.
 - `hooks.rs`: agent hooks (Claude Code, Codex, Cursor): what `setup sync` writes into each agent's settings, and the answers of `fearlezz setup hook` that hold an agent to the proof while it works.
 - `main.rs`: the CLI; `overview.rs`: the overview page.
+
+## Releases
+
+- release-please opens the release PR from commits on `main`; merging it tags `vX.Y.Z` and builds the binaries (`.github/workflows/release.yml`).
+- Only conventional commits count: a change that should release starts with `fix:` or `feat:` (`feat!:` for a breaking one). Plain sentence commits are fine but cause no release; with a squash merge the pull request title is the commit.
 
 ## Free and paid
 

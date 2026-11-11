@@ -57,6 +57,11 @@ pub(crate) struct RunResult {
 }
 
 impl RunResult {
+    /// The shell could not find the check's command, so the run proves nothing either way.
+    pub(crate) fn not_found(&self) -> bool {
+        self.exit_code == Some(crate::run::NOT_FOUND)
+    }
+
     /// Whether `journal` made this run at its final stage `final_stage`: the only kind of
     /// pass the final stage counts, so the proof before a merge is fresh.
     pub(crate) fn made_at_final(&self, journal: &str, final_stage: &str) -> bool {
@@ -275,7 +280,10 @@ impl Store {
     /// Same inputs gave both outcomes: a flaky check or an input nobody declared.
     pub(crate) fn unstable(&self, key: &str) -> bool {
         let results = self.for_key(key);
+        // A command the shell could not find says nothing about the inputs.
         results.iter().any(|r| r.outcome == Outcome::Passed)
-            && results.iter().any(|r| r.outcome == Outcome::Failed)
+            && results
+                .iter()
+                .any(|r| r.outcome == Outcome::Failed && !r.not_found())
     }
 }

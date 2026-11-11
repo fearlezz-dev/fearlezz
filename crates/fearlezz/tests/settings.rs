@@ -528,3 +528,34 @@ fn json_arrays_wrap_where_the_projects_formatter_wraps_them() {
         "{written}"
     );
 }
+
+#[test]
+fn the_typescript_piece_keeps_biome_off_the_files_fearlezz_writes() {
+    let repo = Repo::new("use = [\"typescript\"]\n", &[]);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    let biome = std::fs::read_to_string(repo.path("biome.json")).unwrap();
+    for skipped in ["!.claude", "!.agents", "!.codex", "!.cursor"] {
+        assert!(biome.contains(&format!("\"{skipped}\"")), "{biome}");
+    }
+    // Biome rejects the whole file over one rule it does not know; these started in nursery
+    // and are not in Biome 2.6.6.
+    assert!(!biome.contains("noComponentHookFactories"), "{biome}");
+}
+
+#[test]
+fn the_flutter_piece_excludes_the_folders_flutter_adds_to_the_analyzer() {
+    let repo = Repo::new("use = [\"flutter\"]\n", &[]);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    let options = std::fs::read_to_string(repo.path("analysis_options.yaml")).unwrap();
+    // `flutter test` appends whichever of these a missing platform folder asks for.
+    for folder in [
+        "build", "android", "ios", "web", "windows", "macos", "linux",
+    ] {
+        assert!(
+            options.contains(&format!("    - \"{folder}/**\"\n")),
+            "{options}"
+        );
+    }
+}

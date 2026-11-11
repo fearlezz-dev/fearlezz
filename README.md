@@ -42,11 +42,35 @@ Or pick what fits the project:
 | devenv | add `fearlezz.url = "github:fearlezz-dev/fearlezz"` to `inputs` in `devenv.yaml`, and `inputs.fearlezz.packages.${pkgs.stdenv.system}.default` to `packages` |
 | Cargo | `cargo install --git https://github.com/fearlezz-dev/fearlezz fearlezz` |
 
+In a project, `fearlezz setup init` writes a starter `fearlezz.toml` from the languages it finds; `fearlezz setup sync` then writes the agent skill, hooks and lint settings.
+
 Prebuilt binaries for Linux and macOS are on the [releases](https://github.com/fearlezz-dev/fearlezz/releases) page. Stills and films need `ffmpeg`, and code rules need `ast-grep`.
 
 To work on Fearlezz itself, enter the toolchain with `devenv shell`, then run `check`.
 
 Agents: `fearlezz setup sync` writes [the skill](skills/fearlezz/SKILL.md) into your project, matching the installed version, for Claude Code and any agent that reads `.agents/skills`.
+
+## CI in your project
+
+```yaml
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: fearlezz-dev/fearlezz@v0
+```
+
+The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. The action installs the latest release (`version: v0.2.0` pins one), runs `fearlezz run --ci`, keeps one status comment on the pull request (`comment: false` turns it off) and uploads the check logs. Set `devenv: true` when the checks run in a devenv shell.
 
 ## License
 

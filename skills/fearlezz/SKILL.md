@@ -56,7 +56,7 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 
 ## Writing a check
 
-A check is any command that exits 0 on success. Fearlezz gives it `FEARLEZZ_OUT`, a folder for proof files, and reads `$FEARLEZZ_OUT/proof.jsonl` (one JSON object per proof, with at least `kind` and `file`). The command sees only base env vars (PATH, HOME, TMPDIR, TERM, LANG, LC_ALL, USER, SHELL) plus those listed under `env`. Everything it reads must match `inputs`, or reuse will be wrong.
+A check is any command that exits 0 on success. Fearlezz gives it `FEARLEZZ_OUT`, a folder for proof files, and reads `$FEARLEZZ_OUT/proof.jsonl` (one JSON object per proof, with at least `kind` and `file`). The command sees only base env vars (PATH, HOME, TMPDIR, TERM, LANG, LC_ALL, USER, SHELL, and rustup's RUSTUP_TOOLCHAIN, RUSTUP_HOME, CARGO_HOME) plus those listed under `env`. Tools a project installs in `node_modules/.bin` or `.venv/bin` come first on PATH; a command that is not found fails the check with how to install it, and never makes it unstable. Everything it reads must match `inputs`, or reuse will be wrong.
 
 ```toml
 [check.tests]
@@ -71,6 +71,10 @@ Files that need no proof, such as prose, are declared once at the top of `fearle
 ```toml
 no_proof = ["*.md", "docs/**"]
 ```
+
+## Starting out
+
+In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter: the built in pieces of the languages at its root, and `no_proof` for prose. Commit it on the base branch first, then run `fearlezz setup sync`.
 
 ## Pieces
 
