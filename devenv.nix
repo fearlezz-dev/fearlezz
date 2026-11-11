@@ -9,7 +9,7 @@
     components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" ];
   };
 
-  packages = [ pkgs.git pkgs.ffmpeg pkgs.ast-grep pkgs.actionlint pkgs.shellcheck pkgs.jq pkgs.yq-go pkgs.gitleaks ];
+  packages = [ pkgs.git pkgs.ffmpeg pkgs.ast-grep pkgs.actionlint pkgs.shellcheck pkgs.jq pkgs.yq-go pkgs.gitleaks pkgs.trufflehog pkgs.betterleaks pkgs.osv-scanner pkgs.zizmor ];
 
   scripts = {
     format = {

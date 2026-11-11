@@ -2,21 +2,15 @@
 #
 # gitleaks scans the working tree and Fearlezz keeps only the findings on lines this change
 # touched, so a secret committed long ago never blocks new work. Every match is a gate: a
-# leaked key is not a style question. The report is a Go template that writes one finding per
-# line in Fearlezz's own shape; it carries the rule and a description, never the secret.
+# leaked key is not a style question. gitleaks reports SARIF without levels, so the check
+# gives them. `--redact` keeps the secret out of the report, so it is never printed or stored.
 #
 # To let a known fake value through, write `gitleaks:allow` on its line, or list the finding's
-# fingerprint in `.gitleaksignore`. Do not turn the check off.
+# fingerprint in `.gitleaksignore`. Do not turn the check off. To scan with another tool,
+# `use` the `trufflehog` or `betterleaks` piece and turn this check off.
 
-[check.secrets]
-run = '''
-cat > "$FEARLEZZ_OUT/finding.tmpl" <<'TEMPLATE'
-{{ range . }}{"file":{{ printf "%q" .File }},"line":{{ .StartLine }},"level":"gate","rule":{{ printf "%q" .RuleID }},"message":{{ printf "%q" .Description }},"fix":"remove the secret, rotate it because it has been exposed, and read it from the environment or SecretSpec instead"}
-{{ end }}
-TEMPLATE
-gitleaks dir . --no-banner --exit-code 0 --report-format template \
-  --report-template "$FEARLEZZ_OUT/finding.tmpl" --report-path "$FEARLEZZ_OUT/findings.jsonl"
-'''
+[check.gitleaks]
+run = "gitleaks dir . --no-banner --redact --exit-code 0 --report-format sarif --report-path -"
 stage = "working"
 inputs = ["**"]
-findings = "jsonl"
+findings = { read = "sarif", level = "gate", fix = "remove the secret, rotate it because it has been exposed, and read it from the environment or SecretSpec instead" }

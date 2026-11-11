@@ -21,16 +21,20 @@ use toml::{Table, Value};
 use crate::config::FILE;
 
 pub(crate) const BUILTIN: &[(&str, &str)] = &[
+    ("actions", include_str!("../presets/actions.toml")),
     ("agents", include_str!("../presets/agents.toml")),
+    ("betterleaks", include_str!("../presets/betterleaks.toml")),
     ("devenv", include_str!("../presets/devenv.toml")),
     ("eslint", include_str!("../presets/eslint.toml")),
     ("flutter", include_str!("../presets/flutter.toml")),
     ("go", include_str!("../presets/go.toml")),
     ("kotlin", include_str!("../presets/kotlin.toml")),
+    ("osv-scanner", include_str!("../presets/osv-scanner.toml")),
     ("playwright", include_str!("../presets/playwright.toml")),
     ("python", include_str!("../presets/python.toml")),
     ("rust", include_str!("../presets/rust.toml")),
     ("safety", include_str!("../presets/safety.toml")),
+    ("trufflehog", include_str!("../presets/trufflehog.toml")),
     ("typescript", include_str!("../presets/typescript.toml")),
 ];
 

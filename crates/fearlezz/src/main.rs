@@ -405,12 +405,11 @@ fn say(ctx: &Ctx, what: Say) -> Result<bool> {
 fn setup_init() -> Result<()> {
     let git = Git::discover(&std::env::current_dir()?)?;
     let found = init::init(&git.root)?;
-    if found.is_empty() {
+    if found.iter().all(|p| p.file.is_none()) {
         println!("wrote fearlezz.toml: no language found, so fill in its checks");
-    } else {
-        let names: Vec<String> = found.iter().map(ToString::to_string).collect();
-        println!("wrote fearlezz.toml: uses {}", names.join(", "));
     }
+    let names: Vec<String> = found.iter().map(ToString::to_string).collect();
+    println!("wrote fearlezz.toml: uses {}", names.join(", "));
     println!("next: fearlezz setup sync");
     Ok(())
 }
@@ -950,8 +949,13 @@ fn blockers(text: &mut String, items: &[floor::Item]) -> std::fmt::Result {
 /// A failed check as a blocker, for a reader who sees neither the agent nor the logs.
 /// How to make a missing tool reachable for checks.
 fn install_fix(tool: &str) -> String {
+    let nix = if run::NIX_TOOLS.contains(&tool) {
+        format!(" (in devenv.nix: add `pkgs.{tool}` to packages)")
+    } else {
+        String::new()
+    };
     format!(
-        "install {tool} where checks find it: the project's dev dependencies ({}), its devenv, \
+        "install {tool} where checks find it: the project's dev dependencies ({}), its devenv{nix}, \
          or PATH",
         run::TOOL_DIRS.join(", ")
     )
