@@ -657,24 +657,34 @@ impl Source {
     }
 }
 
-/// Merges `from` into `into`: tables merge key by key, anything else replaces. Pieces merge
-/// this way, and so does each tool's settings over its lint tables.
-/// The pieces `fearlezz.toml` in `root` names by a path in the repository, as repository paths.
-pub(crate) fn local_pieces(root: &Path) -> Result<Vec<String>> {
-    let Ok(text) = std::fs::read_to_string(root.join(FILE)) else {
-        return Ok(Vec::new());
-    };
-    let table: Table = toml::from_str(&text).with_context(|| format!("reading {FILE}"))?;
-    let named = table.get("use").and_then(Value::as_array);
-    Ok(named
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .filter_map(|spec| spec.strip_prefix("./"))
-        .map(String::from)
-        .collect())
+/// The files in `root` that make up the config, as repository paths: `fearlezz.toml`, the
+/// lock, and every piece used by a path, however deep.
+pub(crate) fn config_files(root: &Path) -> Result<Vec<String>> {
+    let mut files = vec![FILE.to_string(), LOCK.to_string()];
+    let mut todo = vec![FILE.to_string()];
+    while let Some(file) = todo.pop() {
+        let Ok(text) = std::fs::read_to_string(root.join(&file)) else {
+            continue;
+        };
+        let table: Table = toml::from_str(&text).with_context(|| format!("reading {file}"))?;
+        let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
+        let named = table.get("use").and_then(Value::as_array);
+        for spec in named.into_iter().flatten().filter_map(Value::as_str) {
+            if !(spec.starts_with("./") || spec.starts_with("../")) {
+                continue;
+            }
+            let path = normalize(&format!("{dir}/{spec}"))?;
+            if !files.contains(&path) {
+                files.push(path.clone());
+                todo.push(path);
+            }
+        }
+    }
+    Ok(files)
 }
 
+/// Merges `from` into `into`: tables merge key by key, anything else replaces. Pieces merge
+/// this way, and so does each tool's settings over its lint tables.
 pub(crate) fn merge(into: &mut Table, from: Table) {
     for (key, value) in from {
         match (into.get_mut(&key), value) {

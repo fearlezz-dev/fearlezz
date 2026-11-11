@@ -214,8 +214,11 @@ pub(crate) fn view(
         work_file_current = journal.is_in_memory() || crate::work::current(&wt.git.root, journal)?;
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
         tree = Some(wt.tree.clone());
+        // The config shapes every check, though none reads it, so changing it needs them all.
+        let config_files = crate::presets::config_files(&wt.git.root)?;
+        let config_changed = wt.changed.iter().any(|p| config_files.contains(p));
         for check in &config.checks {
-            let needed = wt.changed.iter().any(|p| check.reads(p));
+            let needed = config_changed || wt.changed.iter().any(|p| check.reads(p));
             let latest = latest_ran(journal, &check.id);
             if !needed && latest.is_none() {
                 continue;
