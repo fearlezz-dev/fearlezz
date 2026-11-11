@@ -2,8 +2,12 @@
 //!
 //! The method (proven on 29 labelled pairs of real app films): cut each film into stable
 //! states, match states across films with dynamic time warping over small thumbnails, then
-//! pixel diff matched states after a light blur, ignoring blobs too small to matter. A frame
-//! caught mid transition counts as unchanged when it sits inside its neighbours' range.
+//! pixel diff matched states after a light blur, ignoring blobs too small to matter. Pixels
+//! are compared per color channel, so a change of hue alone is found. A pair of states caught
+//! mid transition counts as unchanged when each sits inside the other film's neighbours.
+//!
+//! Films are compared at 720p at most, which keeps a UI's changes and costs less than half of
+//! 1080p; stills keep their own size. Boxes and sizes are always in the file's own pixels.
 //!
 //! Films are read twice: once for the states' timing and thumbnails, and once more, both
 //! films in step along the matched path, for the pixel diffs. Only a few states are in
@@ -18,7 +22,7 @@
               height, and convert between pixel coordinates and sample values in range"
 )]
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -28,8 +32,10 @@ use serde::{Deserialize, Serialize};
 
 /// Gaussian blur sigma that removes codec noise before differencing.
 const BLUR_SIGMA: f32 = 1.0;
-/// Per pixel gray difference (0 to 255) that counts as different.
+/// Per pixel difference in any color channel (0 to 255) that counts as different.
 const PIX_THRESH: i16 = 28;
+/// Films are compared no larger than this, long side by short side.
+const FILM_MAX: (usize, usize) = (1280, 720);
 /// Changed areas smaller than this many pixels are noise.
 const MIN_BLOB: usize = 40;
 /// Seconds of timing difference that still count as the same timing.
@@ -40,9 +46,9 @@ const THUMB_W: usize = 48;
 /// Changed areas closer than this many pixels share one box.
 const BOX_GROW: u32 = 12;
 
-/// A gray image, one byte per pixel.
+/// An RGB image, three bytes per pixel.
 #[derive(Clone)]
-pub(crate) struct Gray {
+pub(crate) struct Image {
     pub w: usize,
     pub h: usize,
     pub px: Vec<u8>,
@@ -61,8 +67,13 @@ pub(crate) struct State {
 pub(crate) struct Film {
     /// Where it is read from again for the pixel diffs.
     pub path: PathBuf,
+    /// Its own size.
     pub w: usize,
     pub h: usize,
+    /// The size its frames are compared at.
+    seen: (usize, usize),
+    /// The ffmpeg filter that gives that size, when it is not its own.
+    scale: Option<String>,
     pub frames: usize,
     pub total: f64,
     pub states: Vec<State>,
@@ -73,6 +84,24 @@ pub(crate) struct Film {
 impl Film {
     pub(crate) fn is_still(&self) -> bool {
         self.frames == 1
+    }
+
+    /// A box at the size the film is compared at, in the film's own pixels.
+    fn own_pixels(&self, b: Box4) -> Box4 {
+        if self.seen == (self.w, self.h) {
+            return b;
+        }
+        let along = |v: u32, seen: usize, own: usize, up: bool| {
+            let at = f64::from(v) * own as f64 / seen as f64;
+            (if up { at.ceil() } else { at.floor() } as u32).min(own as u32)
+        };
+        let (sw, sh) = self.seen;
+        [
+            along(b[0], sw, self.w, false),
+            along(b[1], sh, self.h, false),
+            along(b[2], sw, self.w, true),
+            along(b[3], sh, self.h, true),
+        ]
     }
 }
 
@@ -166,15 +195,35 @@ impl Comparison {
 /// Decodes a still or film with ffmpeg, keeping only its stable states.
 /// Reads a film's states: their timing and thumbnails.
 pub(crate) fn decode(path: &Path) -> Result<Film> {
-    let mut frames = Frames::open(path, probe(path)?, None)?;
+    let Probe {
+        w,
+        h,
+        format,
+        times,
+    } = probe(path)?;
+    let seen = if times.len() > 1 {
+        fit(w, h, FILM_MAX)
+    } else {
+        (w, h)
+    };
+    let scale = (seen != (w, h)).then(|| {
+        // Scaling in the film's own YUV format, before the RGB conversion, costs about a third
+        // of scaling RGB. Other formats (a GIF's palette) are scaled as RGB.
+        let keep = if format.starts_with("yuv") || format.starts_with("nv") {
+            format!(",format={format}")
+        } else {
+            String::new()
+        };
+        format!("scale={}:{}:flags=area{keep}", seen.0, seen.1)
+    });
+    let mut frames = Frames::open(path, seen, scale.as_deref(), times, None)?;
     let mut states: Vec<State> = Vec::new();
     // The current state's first frame, which each new frame is compared with.
-    let mut first: Option<Gray> = None;
+    let mut first: Option<Image> = None;
     while frames.next()? {
         let (t, d) = frames.time();
-        let gray = to_gray(&frames.buf, frames.w, frames.h);
         if let (Some(state), Some(f)) = (states.last_mut(), &first)
-            && diff(f, &gray, false).px == 0
+            && diff(f, &frames.buf, false).px == 0
         {
             state.dur = frames.end - state.start;
             continue;
@@ -183,14 +232,16 @@ pub(crate) fn decode(path: &Path) -> Result<Film> {
             start: t,
             dur: d,
             frame: frames.read - 1,
-            thumb: thumb(&gray),
+            thumb: thumb(&frames.buf),
         });
-        first = Some(gray);
+        first = Some(frames.buf.clone());
     }
     Ok(Film {
         path: path.to_path_buf(),
-        w: frames.w,
-        h: frames.h,
+        w,
+        h,
+        seen,
+        scale,
         frames: frames.read,
         total: frames.end,
         states,
@@ -220,15 +271,13 @@ struct Frames {
     child: std::process::Child,
     out: std::process::ChildStdout,
     errors: Option<std::thread::JoinHandle<String>>,
-    w: usize,
-    h: usize,
     times: Vec<(f64, f64)>,
     /// When only some frames are asked for, their indices in the film, in order.
     pick: Option<Vec<usize>>,
     /// How many frames ffmpeg sent.
     sent: usize,
-    /// The last frame read, as RGB.
-    buf: Vec<u8>,
+    /// The last frame read, at the size it is compared at.
+    buf: Image,
     /// How many frames of the film were read: one past the last frame's index.
     read: usize,
     /// Where the last frame read ends, in seconds.
@@ -237,15 +286,29 @@ struct Frames {
 }
 
 impl Frames {
-    /// Streams every frame, or with `pick` only the frames at those indices (ascending).
-    fn open(path: &Path, probe: Probe, pick: Option<Vec<usize>>) -> Result<Frames> {
-        let Probe { w, h, times } = probe;
+    /// Streams every frame at size `seen`, which the `scale` filter gives when it is not the
+    /// film's own, or with `pick` only the frames at those indices (ascending). Times come
+    /// from the probe, never from the filters.
+    fn open(
+        path: &Path,
+        seen: (usize, usize),
+        scale: Option<&str>,
+        times: Vec<(f64, f64)>,
+        pick: Option<Vec<usize>>,
+    ) -> Result<Frames> {
+        let (w, h) = seen;
         let mut cmd = Command::new("ffmpeg");
         cmd.args(["-v", "error", "-i"]).arg(path);
+        let mut filters = Vec::new();
         if let Some(pick) = &pick {
             // The filter still decodes every frame, but converts and sends only these.
             let select: Vec<String> = pick.iter().map(|n| format!("eq(n\\,{n})")).collect();
-            cmd.args(["-vf", &format!("select='{}'", select.join("+"))]);
+            filters.push(format!("select='{}'", select.join("+")));
+        }
+        // After picking, so only the frames sent are scaled.
+        filters.extend(scale.map(str::to_owned));
+        if !filters.is_empty() {
+            cmd.args(["-vf", &filters.join(",")]);
         }
         let mut child = cmd
             .args([
@@ -282,12 +345,14 @@ impl Frames {
             child,
             out,
             errors,
-            w,
-            h,
             times,
             pick,
             sent: 0,
-            buf: vec![0u8; w * h * 3],
+            buf: Image {
+                w,
+                h,
+                px: vec![0u8; w * h * 3],
+            },
             read: 0,
             end: 0.0,
             done: false,
@@ -299,7 +364,7 @@ impl Frames {
         if self.done {
             return Ok(false);
         }
-        match self.out.read_exact(&mut self.buf) {
+        match self.out.read_exact(&mut self.buf.px) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 self.done = true;
@@ -367,39 +432,41 @@ struct Window {
     /// Each state's first frame.
     starts: Vec<usize>,
     /// States from index `first` on, in order.
-    grays: VecDeque<Gray>,
+    images: VecDeque<Image>,
     first: usize,
 }
 
 impl Window {
     fn open(film: &Film) -> Result<Window> {
         let starts: Vec<usize> = film.states.iter().map(|s| s.frame).collect();
-        let probe = Probe {
-            w: film.w,
-            h: film.h,
-            times: film.times.clone(),
-        };
         // Picking pays off when most frames belong to a state they do not start.
         let pick = (starts.len() * 2 <= film.frames).then(|| starts.clone());
+
         Ok(Window {
-            frames: Frames::open(&film.path, probe, pick)?,
+            frames: Frames::open(
+                &film.path,
+                film.seen,
+                film.scale.as_deref(),
+                film.times.clone(),
+                pick,
+            )?,
             starts,
-            grays: VecDeque::new(),
+            images: VecDeque::new(),
             first: 0,
         })
     }
 
     /// Makes states `lo..=hi` available (as far as the film has them), dropping earlier ones.
     fn span(&mut self, lo: usize, hi: usize) -> Result<()> {
-        while self.first < lo && !self.grays.is_empty() {
-            self.grays.pop_front();
+        while self.first < lo && !self.images.is_empty() {
+            self.images.pop_front();
             self.first += 1;
         }
-        if self.grays.is_empty() {
+        if self.images.is_empty() {
             self.first = self.first.max(lo);
         }
-        while self.first + self.grays.len() <= hi {
-            let Some(&frame) = self.starts.get(self.first + self.grays.len()) else {
+        while self.first + self.images.len() <= hi {
+            let Some(&frame) = self.starts.get(self.first + self.images.len()) else {
                 break;
             };
             while self.frames.read <= frame {
@@ -410,30 +477,30 @@ impl Window {
                     );
                 }
             }
-            self.grays
-                .push_back(to_gray(&self.frames.buf, self.frames.w, self.frames.h));
+            self.images.push_back(self.frames.buf.clone());
         }
         Ok(())
     }
 
     /// State `c` and its neighbours, of a film with `len` states.
-    fn near(&self, c: usize, len: usize) -> Result<Vec<&Gray>> {
+    fn near(&self, c: usize, len: usize) -> Result<Vec<&Image>> {
         (c.saturating_sub(1)..(c + 2).min(len))
-            .map(|x| self.gray(x))
+            .map(|x| self.image(x))
             .collect()
     }
 
-    fn gray(&self, i: usize) -> Result<&Gray> {
+    fn image(&self, i: usize) -> Result<&Image> {
         i.checked_sub(self.first)
-            .and_then(|k| self.grays.get(k))
+            .and_then(|k| self.images.get(k))
             .with_context(|| format!("state {i} of {} is not read", self.frames.path.display()))
     }
 }
 
-/// A film's size and each frame's start and duration, in seconds.
+/// A film's size, pixel format and each frame's start and duration, in seconds.
 struct Probe {
     w: usize,
     h: usize,
+    format: String,
     times: Vec<(f64, f64)>,
 }
 
@@ -442,7 +509,7 @@ fn probe(path: &Path) -> Result<Probe> {
         .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
         // Packets carry the frames' times without decoding them; sorted by time they are the
         // frames in the order ffmpeg sends them.
-        .arg("stream=width,height:packet=pts_time,duration_time")
+        .arg("stream=width,height,pix_fmt:packet=pts_time,duration_time")
         .args(["-of", "json"])
         .arg(path)
         .output()
@@ -458,6 +525,7 @@ fn probe(path: &Path) -> Result<Probe> {
     let stream = &info["streams"][0];
     let w = stream["width"].as_u64().context("no width")? as usize;
     let h = stream["height"].as_u64().context("no height")? as usize;
+    let format = stream["pix_fmt"].as_str().unwrap_or_default().to_owned();
     if w == 0 || h == 0 {
         bail!("{} is not a still or film ffmpeg can read", path.display());
     }
@@ -482,21 +550,38 @@ fn probe(path: &Path) -> Result<Probe> {
         let next = raw.get(i + 1).and_then(|n| n.0).map(|n| n - start);
         times.push((start, d.or(next).unwrap_or(0.05)));
     }
-    Ok(Probe { w, h, times })
+    Ok(Probe {
+        w,
+        h,
+        format,
+        times,
+    })
+}
+
+/// The largest size within `max` (long side by short side) with the aspect of `w` by `h`;
+/// `w` by `h` itself when it fits.
+fn fit(w: usize, h: usize, max: (usize, usize)) -> (usize, usize) {
+    let (long, short) = (w.max(h), w.min(h));
+    let scale = (max.0 as f64 / long as f64)
+        .min(max.1 as f64 / short as f64)
+        .min(1.0);
+    if scale >= 1.0 {
+        return (w, h);
+    }
+    let side = |v: usize| ((v as f64 * scale).round() as usize).max(1);
+    (side(w), side(h))
 }
 
 /// Luma as Pillow computes it, so results match the prototype.
-fn to_gray(rgb: &[u8], w: usize, h: usize) -> Gray {
-    let px = rgb
-        .as_chunks::<3>()
+fn luma(rgb: &[u8]) -> Vec<u8> {
+    rgb.as_chunks::<3>()
         .0
         .iter()
         .map(|p| {
             ((u32::from(p[0]) * 19595 + u32::from(p[1]) * 38470 + u32::from(p[2]) * 7471 + 0x8000)
                 >> 16) as u8
         })
-        .collect();
-    Gray { w, h, px }
+        .collect()
 }
 
 // ----- resampling -----------------------------------------------------------------------
@@ -556,9 +641,10 @@ fn resize(px: &[u8], w: usize, h: usize, nw: usize, nh: usize) -> Vec<u8> {
     out
 }
 
-fn thumb(g: &Gray) -> Vec<f32> {
+/// A small gray copy, for matching states across films.
+fn thumb(g: &Image) -> Vec<f32> {
     let th = ((THUMB_W * g.h) as f64 / g.w as f64).round().max(1.0) as usize;
-    resize(&g.px, g.w, g.h, THUMB_W, th)
+    resize(&luma(&g.px), g.w, g.h, THUMB_W, th)
         .into_iter()
         .map(f32::from)
         .collect()
@@ -751,13 +837,14 @@ fn blur(px: &[f32], w: usize, h: usize) -> Vec<f32> {
 // ----- comparing ------------------------------------------------------------------------
 
 struct Diff {
+    /// How many pixels differ; without boxes asked for, only whether any do.
     px: usize,
     boxes: Vec<Box4>,
 }
 
-/// Pixels that really differ between two gray images, and with `want_boxes` boxes around
-/// them. Cutting a film into states only needs to know whether frames differ.
-fn diff(a: &Gray, b: &Gray, want_boxes: bool) -> Diff {
+/// Pixels that really differ between two images in any color channel, and with `want_boxes`
+/// boxes around them. Cutting a film into states only needs to know whether frames differ.
+fn diff(a: &Image, b: &Image, want_boxes: bool) -> Diff {
     if a.w != b.w || a.h != b.h {
         return Diff {
             px: a.w * a.h,
@@ -765,19 +852,22 @@ fn diff(a: &Gray, b: &Gray, want_boxes: bool) -> Diff {
         };
     }
     let (w, h) = (a.w, a.h);
-    let far = |p: &u8, q: &u8| (i16::from(*p) - i16::from(*q)).abs() > PIX_THRESH;
+    let far =
+        |p: &[u8; 3], q: &[u8; 3]| (0..3).any(|c| i16::from(p[c].abs_diff(q[c])) > PIX_THRESH);
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
     for y in 0..h {
-        let (ra, rb) = (&a.px[y * w..(y + 1) * w], &b.px[y * w..(y + 1) * w]);
+        let row = y * w * 3..(y + 1) * w * 3;
+        let (ra, rb) = (&a.px[row.clone()], &b.px[row]);
         // Most rows of two frames of one state differ by codec noise only; this check runs
         // over whole rows at once, so only rows with a real difference are searched.
         let most = ra.iter().zip(rb).map(|(p, q)| p.abs_diff(*q)).max();
         if most.is_none_or(|m| i16::from(m) <= PIX_THRESH) {
             continue;
         }
+        let (pa, pb) = (ra.as_chunks::<3>().0, rb.as_chunks::<3>().0);
         if let (Some(first), Some(last)) = (
-            ra.iter().zip(rb).position(|(p, q)| far(p, q)),
-            ra.iter().zip(rb).rposition(|(p, q)| far(p, q)),
+            pa.iter().zip(pb).position(|(p, q)| far(p, q)),
+            pa.iter().zip(pb).rposition(|(p, q)| far(p, q)),
         ) {
             x0 = x0.min(first);
             x1 = x1.max(last);
@@ -794,26 +884,45 @@ fn diff(a: &Gray, b: &Gray, want_boxes: bool) -> Diff {
     let (x0, y0) = (x0.saturating_sub(8), y0.saturating_sub(8));
     let (x1, y1) = ((x1 + 9).min(w), (y1 + 9).min(h));
     let (cw, ch) = (x1 - x0, y1 - y0);
-    // The blur is linear, so blurring the difference equals differencing the blurs.
-    let delta: Vec<f32> = (y0..y1)
-        .flat_map(|y| {
-            let row = y * w + x0..y * w + x1;
-            a.px[row.clone()]
-                .iter()
-                .zip(&b.px[row])
-                .map(|(p, q)| f32::from(*p) - f32::from(*q))
-        })
-        .collect();
-    let raw = Mask {
+    let mut raw = Mask {
         w: cw,
         h: ch,
-        on: blur(&delta, cw, ch)
-            .iter()
-            .map(|d| d.abs() > f32::from(PIX_THRESH))
-            .collect(),
+        on: vec![false; cw * ch],
     };
-    let mut mask = raw.open();
-    mask.drop_specks();
+    let mut mask = Mask {
+        w: cw,
+        h: ch,
+        on: Vec::new(),
+    };
+    // Green first: it carries most of the brightness, so it alone finds most changes.
+    let channels = [1, 0, 2];
+    for (k, c) in channels.into_iter().enumerate() {
+        // The blur is linear, so blurring the difference equals differencing the blurs.
+        let delta: Vec<f32> = (y0..y1)
+            .flat_map(|y| {
+                (x0..x1).map(move |x| {
+                    let i = (y * w + x) * 3 + c;
+                    f32::from(a.px[i]) - f32::from(b.px[i])
+                })
+            })
+            .collect();
+        // A blur never raises the largest difference, so a channel within the threshold
+        // everywhere needs none.
+        if !delta.iter().all(|d| d.abs() <= f32::from(PIX_THRESH)) {
+            for (o, d) in raw.on.iter_mut().zip(blur(&delta, cw, ch)) {
+                *o |= d.abs() > f32::from(PIX_THRESH);
+            }
+        }
+        // Without boxes only whether anything differs matters, and the channels seen so far
+        // can only grow the areas, so a real area in them is enough.
+        if (!want_boxes || k + 1 == channels.len()) && raw.on.contains(&true) {
+            mask = raw.open();
+            mask.drop_specks();
+            if !want_boxes && mask.on.contains(&true) {
+                break;
+            }
+        }
+    }
     let px = mask.count();
     let boxes = if px == 0 || !want_boxes {
         Vec::new()
@@ -833,19 +942,21 @@ fn diff(a: &Gray, b: &Gray, want_boxes: bool) -> Diff {
     Diff { px, boxes }
 }
 
-/// Pixels of `x` outside the per pixel range of its neighbours, after noise filtering. A
-/// frame caught inside a transition sits within its neighbours' range.
-fn outside_range(x: &Gray, near: &[&Gray]) -> usize {
+/// Pixels of `x` outside the per pixel and channel range of its neighbours, after noise
+/// filtering. A frame caught inside a transition sits within its neighbours' range.
+fn outside_range(x: &Image, near: &[&Image]) -> usize {
     if near.iter().any(|n| n.w != x.w || n.h != x.h) {
         return x.w * x.h;
     }
-    let on = (0..x.px.len())
-        .map(|i| {
-            let (lo, hi) = near.iter().fold((255i16, 0i16), |(lo, hi), n| {
-                (lo.min(i16::from(n.px[i])), hi.max(i16::from(n.px[i])))
-            });
-            let v = i16::from(x.px[i]);
-            v < lo - PIX_THRESH || v > hi + PIX_THRESH
+    let on = (0..x.w * x.h)
+        .map(|p| {
+            (p * 3..p * 3 + 3).any(|i| {
+                let (lo, hi) = near.iter().fold((255i16, 0i16), |(lo, hi), n| {
+                    (lo.min(i16::from(n.px[i])), hi.max(i16::from(n.px[i])))
+                });
+                let v = i16::from(x.px[i]);
+                v < lo - PIX_THRESH || v > hi + PIX_THRESH
+            })
         })
         .collect::<Vec<_>>();
     if !on.iter().any(|v| *v) {
@@ -930,6 +1041,7 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
 
     // The path only moves forward, so each film needs the states one before to one after.
     let (mut wo, mut wn) = (Window::open(before)?, Window::open(after)?);
+    let visited: BTreeSet<(usize, usize)> = path.iter().copied().collect();
     let mut cache: BTreeMap<(usize, usize), (usize, Vec<Box4>)> = BTreeMap::new();
     for &(i, j) in &path {
         wo.span(i.saturating_sub(1), i + 1)?;
@@ -939,30 +1051,37 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
             if let Some(d) = cache.get(&(i, j)) {
                 return Ok(d.clone());
             }
-            let d = diff(wo.gray(i)?, wn.gray(j)?, true);
+            let d = diff(wo.image(i)?, wn.image(j)?, true);
             let d = (d.px, d.boxes);
             cache.insert((i, j), d.clone());
             Ok(d)
         };
         let (mut px, mut boxes) = pd(i, j)?;
         if px > 0 {
-            // A neighbouring state in the other film is the true counterpart when the films
-            // caught a transition at different moments; then it matches fully. A neighbour
-            // that only matches better is not, and would hide where the change is.
+            // When the films caught a transition at different moments, each side of the pair
+            // has its true counterpart next to the other: a neighbour the path also visits
+            // that matches it fully, or the other film's neighbours, whose range it sits in.
+            // Both sides must have one; a state only one film shows is a change.
+            let mut before_found = false;
             for jj in [j.wrapping_sub(1), j + 1] {
-                if jj < kn.len() && pd(i, jj)?.0 == 0 {
-                    (px, boxes) = (0, Vec::new());
+                if jj < kn.len() && visited.contains(&(i, jj)) && pd(i, jj)?.0 == 0 {
+                    before_found = true;
                 }
             }
-        }
-        if px > 0 {
-            let nn = wn.near(j, kn.len())?;
-            let no = wo.near(i, ko.len())?;
-            if outside_range(wo.gray(i)?, &nn) == 0 || outside_range(wn.gray(j)?, &no) == 0 {
+            let mut after_found = false;
+            for ii in [i.wrapping_sub(1), i + 1] {
+                if ii < ko.len() && visited.contains(&(ii, j)) && pd(ii, j)?.0 == 0 {
+                    after_found = true;
+                }
+            }
+            before_found = before_found || outside_range(wo.image(i)?, &wn.near(j, kn.len())?) == 0;
+            after_found = after_found || outside_range(wn.image(j)?, &wo.near(i, ko.len())?) == 0;
+            if before_found && after_found {
                 px = 0;
                 boxes.clear();
             }
         }
+        let boxes = boxes.into_iter().map(|b| after.own_pixels(b)).collect();
         out.pairs.push(Pair {
             before: i,
             after: j,
