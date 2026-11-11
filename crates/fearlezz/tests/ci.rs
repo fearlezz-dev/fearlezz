@@ -409,6 +409,127 @@ fn raising_levels_and_rewording_a_rule_is_fine() {
     assert!(!out.stdout.contains("weakens"), "{}", out.stdout);
 }
 
+// Settings and the environment are part of the floor
+
+/// Tool settings, agent settings, and an environment.
+const TUNED: &str = r#"
+[env]
+prepare = "true"
+inputs = ["env.nix"]
+up = "true"
+down = "true"
+env = ["HOME"]
+
+[settings.clippy]
+allow-unwrap-in-tests = false
+
+[settings.ruff]
+line-length = 100
+
+[settings.claude]
+permissions = { allow = ["Bash(ls)"] }
+"#;
+
+/// A branch whose config turns `TUNED` into `edit(TUNED)`, with the tool files synced on both
+/// sides, and what CI says about it.
+fn ci_after_tuning(edit: impl Fn(&str) -> String) -> common::Output {
+    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}{TUNED}"));
+    repo.fz(&["setup", "sync"]);
+    repo.commit("sync");
+    repo.branch("feat/x");
+    repo.write("src/lib.rs", "fn b() {}\n");
+    declare(&repo, "tests");
+    repo.commit("change");
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{}\n[settings.hooks]\nagents = []\n",
+            full(&format!("{NO_PROOF}{CHECKS}{}", edit(TUNED)))
+        ),
+    );
+    repo.fz(&["setup", "sync"]);
+    repo.commit("tune");
+    ci(&repo)
+}
+
+#[test]
+fn adding_a_tool_setting_is_red_and_named() {
+    let out = ci_after_tuning(|c| c.replace("line-length = 100", "line-length = 100\nfix = true"));
+    assert_weakens(&out, "weakens settings.ruff.fix: it is added (true)");
+}
+
+#[test]
+fn changing_a_tool_setting_is_red_and_named() {
+    let out = ci_after_tuning(|c| {
+        c.replace(
+            "allow-unwrap-in-tests = false",
+            "allow-unwrap-in-tests = true",
+        )
+    });
+    assert_weakens(
+        &out,
+        "weakens settings.clippy.allow-unwrap-in-tests: it changes from false to true",
+    );
+}
+
+#[test]
+fn removing_a_tool_setting_is_red_and_named() {
+    let out = ci_after_tuning(|c| c.replace("line-length = 100\n", ""));
+    assert_weakens(
+        &out,
+        "weakens settings.ruff.line-length: it is removed (was 100)",
+    );
+}
+
+#[test]
+fn agent_settings_may_change() {
+    let out = ci_after_tuning(|c| c.replace("Bash(ls)", "Bash(eza)"));
+    assert!(out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains("weakens"), "{}", out.stdout);
+}
+
+#[test]
+fn changing_an_env_command_is_red_and_named() {
+    let out = ci_after_tuning(|c| c.replace("prepare = \"true\"", "prepare = \"echo skip\""));
+    assert_weakens(
+        &out,
+        "weakens env.prepare: it changes from true to echo skip",
+    );
+}
+
+#[test]
+fn adding_a_shell_is_red_and_named() {
+    let out =
+        ci_after_tuning(|c| c.replace("prepare = \"true\"", "prepare = \"true\"\nshell = \"env\""));
+    assert_weakens(&out, "weakens env.shell: it is added (env)");
+}
+
+#[test]
+fn removing_a_service_command_is_red_and_named() {
+    let out = ci_after_tuning(|c| c.replace("down = \"true\"\n", ""));
+    assert_weakens(&out, "weakens env.down: it is removed (was true)");
+}
+
+#[test]
+fn changing_the_env_variables_is_red_and_named() {
+    let out = ci_after_tuning(|c| c.replace("env = [\"HOME\"]", "env = [\"CI\"]"));
+    assert_weakens(&out, "weakens env.env: it changes (+CI, -HOME)");
+}
+
+#[test]
+fn narrowing_the_env_inputs_is_red_but_widening_is_fine() {
+    let out = ci_after_tuning(|c| c.replace("inputs = [\"env.nix\"]", "inputs = []"));
+    assert_weakens(&out, "weakens env.inputs: it no longer has env.nix");
+    let out = ci_after_tuning(|c| {
+        c.replace(
+            "inputs = [\"env.nix\"]",
+            "inputs = [\"env.nix\", \"env.lock\"]",
+        )
+    });
+    assert!(out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains("weakens"), "{}", out.stdout);
+}
+
 // Every changed file is proven or declared
 
 #[test]

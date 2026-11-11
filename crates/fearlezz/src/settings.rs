@@ -189,6 +189,37 @@ impl Settings {
             .collect()
     }
 
+    /// How `head` tunes the tools that judge code differently: any setting added, removed or
+    /// changed, since Fearlezz cannot tell which way a tool's option loosens it. Each as
+    /// `settings.<tool>.<key>` and how. Agent settings, the skill and hooks are left out.
+    pub(crate) fn weakenings(&self, head: &Settings) -> Vec<(String, String)> {
+        let empty = Table::new();
+        let mut found = Vec::new();
+        let tools: BTreeSet<Tool> = self
+            .tools
+            .keys()
+            .chain(head.tools.keys())
+            .copied()
+            .filter(|t| !matches!(t, Tool::Claude | Tool::Skill | Tool::Hooks))
+            .collect();
+        for tool in tools {
+            let base = leaves(self.tools.get(&tool).unwrap_or(&empty));
+            let now = leaves(head.tools.get(&tool).unwrap_or(&empty));
+            let keys: BTreeSet<&String> = base.keys().chain(now.keys()).collect();
+            for key in keys {
+                let how = match (base.get(key), now.get(key)) {
+                    (Some(b), Some(h)) if b == h => continue,
+                    (Some(b), Some(h)) => format!("it changes from {b} to {h}"),
+                    (None, Some(h)) => format!("it is added ({h})"),
+                    (Some(b), None) => format!("it is removed (was {b})"),
+                    (None, None) => continue,
+                };
+                found.push((format!("settings.{}.{key}", tool.name()), how));
+            }
+        }
+        found
+    }
+
     /// A stable text of the settings, part of the settings check's inputs. It holds the skill
     /// text, which can change between builds of one version.
     pub(crate) fn fingerprint(&self) -> String {
@@ -322,7 +353,30 @@ impl Settings {
     }
 }
 
+/// Every value of a settings table by its dotted key, tables walked into and the rest as
+/// written.
+fn leaves(table: &Table) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (key, value) in table {
+        if let Value::Table(t) = value {
+            for (k, v) in leaves(t) {
+                out.insert(format!("{key}.{k}"), v);
+            }
+        } else {
+            out.insert(key.clone(), value.to_string());
+        }
+    }
+    out
+}
+
 impl Tool {
+    fn name(self) -> &'static str {
+        TOOLS
+            .iter()
+            .find(|(_, t)| *t == self)
+            .map_or("", |(n, _)| *n)
+    }
+
     /// The files the tool reads its settings from, in its own lookup order, and the one
     /// Fearlezz creates when none exists.
     fn lookup(self) -> (&'static [&'static str], &'static str) {
