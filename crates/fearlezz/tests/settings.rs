@@ -266,7 +266,10 @@ fn a_project_can_choose_which_agents_get_the_skill() {
 
 #[test]
 fn a_project_can_opt_out_of_the_skill() {
-    let repo = Repo::with_skill("[settings.skill]\nagents = []\n", &[]);
+    let repo = Repo::with_skill(
+        "[settings.skill]\nagents = []\n\n[settings.hooks]\nagents = []\n",
+        &[],
+    );
     let status = repo.fz(&[]);
     assert!(
         !status.stdout.contains("write the agent skill"),
@@ -276,7 +279,7 @@ fn a_project_can_opt_out_of_the_skill() {
     assert!(repo.fz(&["setup", "sync"]).ok);
     assert!(!repo.path(CLAUDE_SKILL).exists());
     assert!(!repo.path(AGENTS_SKILL).exists());
-    // No skill to keep in line and no other settings: nothing for the check to do.
+    // No skill or hooks to keep in line and no other settings: nothing for the check to do.
     let out = repo.fz(&["run", "settings"]);
     assert!(
         out.stderr.contains("no check \"settings\""),

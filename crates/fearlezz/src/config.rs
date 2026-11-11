@@ -392,6 +392,12 @@ impl Config {
         self.no_proof_globs.is_match(path)
     }
 
+    /// Whether a change to `path` needs proof: a check reads it and `no_proof` does not
+    /// declare it.
+    pub(crate) fn needs_proof(&self, path: &str) -> bool {
+        !self.needs_no_proof(path) && self.checks.iter().any(|c| c.reads(path))
+    }
+
     pub(crate) fn check(&self, id: &str) -> Result<&Check> {
         self.checks.iter().find(|c| c.id == id).with_context(|| {
             let ids: Vec<&str> = self.checks.iter().map(|c| c.id.as_str()).collect();

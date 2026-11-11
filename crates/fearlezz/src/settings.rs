@@ -7,8 +7,9 @@
 //! their part of a file and keep the rest; `dart-analysis`, `eslint`, `detekt` and
 //! `golangci` own their whole file.
 //!
-//! `skill` is the one setting a project has without asking for it: the agent skill embedded in
-//! this binary, so every project's copy matches the Fearlezz it runs and needs no network.
+//! `skill` and `hooks` are the settings a project has without asking for them: the agent skill
+//! embedded in this binary, so every project's copy matches the Fearlezz it runs and needs no
+//! network, and the agent hooks that tell an agent it skipped the proof.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -18,6 +19,7 @@ use anyhow::{Context as _, Result, bail};
 use toml::{Table, Value};
 
 use crate::findings::{Finding, Level};
+use crate::hooks::{AGENTS, Agent};
 use crate::lints::{self, Lints};
 
 const MANAGED: &str = "Managed by Fearlezz from [settings] in fearlezz.toml; change it there.";
@@ -51,9 +53,12 @@ pub(crate) enum Tool {
     Tsconfig,
     /// The Fearlezz agent skill, in each agent's skills folder.
     Skill,
+    /// The proof hooks of Codex (`.codex/hooks.json`) and Cursor (`.cursor/hooks.json`);
+    /// Claude Code's go into `.claude/settings.json` with the `claude` settings.
+    Hooks,
 }
 
-const TOOLS: [(&str, Tool); 12] = [
+const TOOLS: [(&str, Tool); 13] = [
     ("cargo-lints", Tool::CargoLints),
     ("dart-analysis", Tool::DartAnalysis),
     ("clippy", Tool::Clippy),
@@ -66,6 +71,7 @@ const TOOLS: [(&str, Tool); 12] = [
     ("golangci", Tool::Golangci),
     ("tsconfig", Tool::Tsconfig),
     ("skill", Tool::Skill),
+    ("hooks", Tool::Hooks),
 ];
 
 /// Which file writer turns each lint table's rules on or off.
@@ -109,6 +115,14 @@ impl Settings {
         if skill_files(tools.entry(Tool::Skill).or_default())?.is_empty() {
             tools.remove(&Tool::Skill);
         }
+        // And the hooks, for the agents it names or else the ones it uses.
+        let hooks = hook_agents(tools.entry(Tool::Hooks).or_default())?;
+        if hooks.as_ref().is_some_and(Vec::is_empty) {
+            tools.remove(&Tool::Hooks);
+        }
+        if hooks.is_none_or(|agents| agents.contains(&Agent::Claude)) {
+            tools.entry(Tool::Claude).or_default();
+        }
         // A lint table is written into its tool's file.
         for (lint, file) in LINT_FILES {
             if lints.of(lint).is_some() {
@@ -133,12 +147,28 @@ impl Settings {
             Tool::Ktlint => ktlint_lint_table(&self.lints),
             Tool::Detekt => detekt_lint_table(&self.lints),
             Tool::Golangci => golangci_lint_table(&self.lints),
-            Tool::Clippy | Tool::Claude | Tool::Tsconfig | Tool::Skill => Table::new(),
+            Tool::Claude => self.claude_hooks(),
+            Tool::Clippy | Tool::Tsconfig | Tool::Skill | Tool::Hooks => Table::new(),
         };
         if let Some(own) = self.tools.get(&tool) {
             crate::presets::merge(&mut out, own.clone());
         }
         out
+    }
+
+    /// Claude Code's proof hooks, when the project gives Claude Code hooks.
+    fn claude_hooks(&self) -> Table {
+        let wanted = self.tools.get(&Tool::Hooks).is_some_and(|table| {
+            hook_agents(table)
+                .ok()
+                .flatten()
+                .is_none_or(|agents| agents.contains(&Agent::Claude))
+        });
+        if wanted {
+            serde_json::from_value(Agent::Claude.settings()).unwrap_or_default()
+        } else {
+            Table::new()
+        }
     }
 
     /// The files these settings may touch, as input globs.
@@ -225,6 +255,17 @@ impl Settings {
                     .into_iter()
                     .map(|path| (path.to_string(), skill_text()))
                     .collect(),
+                Tool::Hooks => {
+                    let agents = hook_agents(&table)?.unwrap_or_else(|| agents_in_use(root));
+                    agents
+                        .into_iter()
+                        .filter_map(|agent| hooks_file(agent).map(|file| (agent, file)))
+                        .map(|(agent, file)| {
+                            let hooks: Table = serde_json::from_value(agent.settings())?;
+                            json_file(root, file, &hooks, false)
+                        })
+                        .collect::<Result<_>>()?
+                }
             };
             for (path, content) in files {
                 if read(root, &path)?.as_deref() != Some(content.as_str()) {
@@ -310,6 +351,8 @@ impl Tool {
             Tool::Tsconfig => (&["tsconfig.json"], "tsconfig.json"),
             // Unlike the others, every file is written; `skill_files` picks which.
             Tool::Skill => (&[CLAUDE_SKILL, AGENTS_SKILL], CLAUDE_SKILL),
+            // Likewise; `hook_agents` picks which.
+            Tool::Hooks => (&[CODEX_HOOKS, CURSOR_HOOKS], CODEX_HOOKS),
         }
     }
 
@@ -811,6 +854,63 @@ fn skill_files(table: &Table) -> Result<Vec<&'static str>> {
         .collect()
 }
 
+const CODEX_HOOKS: &str = ".codex/hooks.json";
+const CURSOR_HOOKS: &str = ".cursor/hooks.json";
+
+/// The file of an agent's hooks, unless they live in another tool's file.
+fn hooks_file(agent: Agent) -> Option<&'static str> {
+    match agent {
+        Agent::Claude => None,
+        Agent::Codex => Some(CODEX_HOOKS),
+        Agent::Cursor => Some(CURSOR_HOOKS),
+    }
+}
+
+/// The agents `[settings.hooks] agents` names, or `None` when it names none, which means the
+/// agents the project uses.
+fn hook_agents(table: &Table) -> Result<Option<Vec<Agent>>> {
+    if let Some(key) = table.keys().find(|key| *key != "agents") {
+        bail!("[settings.hooks]: no field \"{key}\"; the one field is agents");
+    }
+    let Some(agents) = table.get("agents") else {
+        return Ok(None);
+    };
+    let Some(agents) = agents.as_array() else {
+        bail!("[settings.hooks] agents must be a list");
+    };
+    agents
+        .iter()
+        .map(|agent| {
+            let name = agent.as_str().unwrap_or_default();
+            AGENTS
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, a)| *a)
+                .with_context(|| {
+                    let names: Vec<&str> = AGENTS.iter().map(|(n, _)| *n).collect();
+                    format!(
+                        "[settings.hooks]: no agent {agent}; agents are {}",
+                        names.join(", ")
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+/// Claude Code, whose folder the skill makes anyway, and every other agent whose folder the
+/// project has.
+fn agents_in_use(root: &Path) -> Vec<Agent> {
+    let mut agents = vec![Agent::Claude];
+    agents.extend(
+        [(".codex", Agent::Codex), (".cursor", Agent::Cursor)]
+            .into_iter()
+            .filter(|(dir, _)| root.join(dir).is_dir())
+            .map(|(_, agent)| agent),
+    );
+    agents
+}
+
 const ESLINT_FILE: &str = "eslint.fearlezz.mjs";
 const DETEKT_FILE: &str = "config/detekt/detekt.yml";
 
@@ -1083,7 +1183,7 @@ avoid_print = false
             .unwrap_err()
             .to_string();
         assert!(
-            e.contains("tools are cargo-lints, dart-analysis, clippy, claude, biome, eslint, ruff, ktlint, detekt, golangci, tsconfig, skill"),
+            e.contains("tools are cargo-lints, dart-analysis, clippy, claude, biome, eslint, ruff, ktlint, detekt, golangci, tsconfig, skill, hooks"),
             "{e}"
         );
     }

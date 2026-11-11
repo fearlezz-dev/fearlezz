@@ -27,6 +27,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `env.rs`: the environment: preparing a fresh checkout (copy-on-write clones of ignored folders), and starting, reusing, resetting and stopping the services checks need.
 - `media.rs`: comparing two stills or films (stable states, time warping, blurred pixel diff).
 - `look.rs`: comparing a check's pictures with the same check run on the base commit; `report.rs`: the look report page.
+- `hooks.rs`: agent hooks (Claude Code, Codex, Cursor): what `setup sync` writes into each agent's settings, and the answers of `fearlezz setup hook` that hold an agent to the proof while it works.
 - `main.rs`: the CLI; `overview.rs`: the overview page.
 
 ## Free and paid
@@ -40,4 +41,4 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 ## Style
 
 - No dashes as punctuation in prose, comments or commit messages.
-- Every command prints a `next:` line as its last line, except output meant for programs (`--check`, `setup compare --json`) and errors, whose message says what to do.
+- Every command prints a `next:` line as its last line, except output meant for programs (`--check`, `setup compare --json`, `setup hook`) and errors, whose message says what to do.

@@ -7,6 +7,10 @@ goal = "The CI cannot be green because you didn't run the checks; the agent shou
 text = "ready to merge needs a goal, a claim, proof of every claim and a clean commit, and the exit code matches"
 check = "tests"
 
+[claim.c10]
+text = "the hooks refuse a push without a goal and claim and a non draft pull request before ready, block stopping once, show the state at session start, and say a check's command run by hand is not proof"
+check = "tests"
+
 [claim.c2]
 text = "fearlezz run --ci proves the commit without writing a journal and never says ready to merge"
 check = "tests"
@@ -33,4 +37,8 @@ check = "tests"
 
 [claim.c8]
 text = "the CI output names the commit and each check with its command and time, and writes the GitHub job summary"
+check = "tests"
+
+[claim.c9]
+text = "fearlezz setup sync writes proof hooks for Claude Code by default, for Codex and Cursor when the project uses them, and [settings.hooks] agents chooses"
 check = "tests"

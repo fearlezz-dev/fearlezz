@@ -53,6 +53,8 @@ decided:
     what: "Hooks are firm at the door: push needs a goal and a claim, a non-draft pull request needs ready, end of turn blocks once."
   - id: weakening-red-admin-bypass
     what: "A change that weakens its own proof is red and names the weakening; a person with admin rights merges past it after reading."
+  - id: hooks-all-agents
+    what: "All three agents get hooks; detect which ones the project uses, and let the project choose. Codex and Cursor stay untested for now."
   - id: protect-main
     what: "main requires the proof check, set only by GitHub Actions; admins can bypass. Ruleset 27014534."
 
@@ -71,7 +73,8 @@ slices:
     status: done
     note: the file is .fearlezz/work/<journal>.toml and stays after merging
   - id: agent-hooks
-    tests: []
-    status: todo
+    tests: [crates/fearlezz/tests/hooks.rs]
+    status: done
+    note: Claude Code, Codex and Cursor; Codex and Cursor untested in the agents themselves
 
-next: Show the claims slice for review, then build the agent hooks.
+next: Show the hooks slice for review; the proof gate design is built.
