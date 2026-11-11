@@ -374,7 +374,10 @@ const FAKE_TOKEN: &str = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
 fn the_safety_piece_gates_a_secret_on_a_changed_line_and_never_prints_it() {
     let repo = Repo::new(
         "use = [\"safety\"]\n",
-        &[("src/old.rs", &format!("const T: &str = \"{FAKE_TOKEN}\";\n"))],
+        &[(
+            "src/old.rs",
+            &format!("const T: &str = \"{FAKE_TOKEN}\";\n"),
+        )],
     );
     assert_eq!(checks(&repo), "secrets");
     repo.branch("feat/x");

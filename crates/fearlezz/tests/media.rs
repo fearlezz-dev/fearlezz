@@ -69,7 +69,10 @@ fn an_mp4_whose_frames_are_stored_out_of_order_has_its_change_at_the_right_momen
     let at = moments[0]["after"][0].as_f64().unwrap();
     assert!((at - 2.0).abs() < 0.11, "change starts at {at}");
     let area = &moments[0]["box"];
-    assert!(area[0].as_u64().unwrap() >= 70, "only the second box changed: {c}");
+    assert!(
+        area[0].as_u64().unwrap() >= 70,
+        "only the second box changed: {c}"
+    );
 }
 
 #[test]

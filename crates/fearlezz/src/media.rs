@@ -331,11 +331,7 @@ impl Frames {
             Some(pick) => pick.get(self.sent).copied().unwrap_or(self.read),
             None => self.read,
         };
-        let (t, d) = self
-            .times
-            .get(index)
-            .copied()
-            .unwrap_or((self.end, 0.05));
+        let (t, d) = self.times.get(index).copied().unwrap_or((self.end, 0.05));
         self.read = index + 1;
         self.sent += 1;
         self.end = t + d;
