@@ -349,11 +349,11 @@ impl Film {
         if self.stopped.is_none() && self.done.is_none() {
             let (tx, rx) = mpsc::channel();
             let block = RcBlock::new(move |error: *mut NSError| {
-                drop(tx.send(error.is_null()));
+                tx.send(error.is_null()).unwrap_or_default();
             });
             // SAFETY: the stream is running; the block is copied by the callee.
             unsafe { self.stream.stopCaptureWithCompletionHandler(Some(&block)) };
-            drop(rx.recv_timeout(TIMEOUT));
+            rx.recv_timeout(TIMEOUT).unwrap_or_default();
         }
         let until = std::time::Instant::now() + TIMEOUT;
         while self.done.is_none() {

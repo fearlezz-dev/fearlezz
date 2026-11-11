@@ -235,7 +235,8 @@ impl Virtual {
 /// the events go to that process only. Prototype, not used by checks. Measured on macOS 27:
 /// the cursor stays put, but a Flutter app in the background on a virtual display ignored
 /// the clicks.
-pub(crate) fn click(pid: i32, at: CGPoint) -> Result<()> {
+#[cfg(test)]
+fn click(pid: i32, at: CGPoint) -> Result<()> {
     use objc2_core_graphics::{CGEvent, CGEventType, CGMouseButton};
     for kind in [CGEventType::LeftMouseDown, CGEventType::LeftMouseUp] {
         let event = CGEvent::new_mouse_event(None, kind, at, CGMouseButton::Left)
@@ -247,7 +248,8 @@ pub(crate) fn click(pid: i32, at: CGPoint) -> Result<()> {
 }
 
 /// Where the developer's cursor is, in global points.
-pub(crate) fn cursor() -> CGPoint {
+#[cfg(test)]
+fn cursor() -> CGPoint {
     let event = objc2_core_graphics::CGEvent::new(None);
     objc2_core_graphics::CGEvent::location(event.as_deref())
 }

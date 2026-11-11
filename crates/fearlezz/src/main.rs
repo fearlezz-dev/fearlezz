@@ -1304,23 +1304,24 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         // need it (looks of app windows are proven on a developer's machine); locally it
         // fails with the one time fix. Neither is stored, so it is not called unstable once
         // recording works.
-        if reuse.is_none() && check.record.is_some() {
-            if let Some(u) = record::unavailable() {
-                if let Some(r) = report.as_mut() {
-                    println!("not run {}: {}", check.id, u.why);
-                    r.notes.push(format!(
-                        "Not run: `{}` records an app's window, and {}. It is proven on a \
+        if reuse.is_none()
+            && check.record.is_some()
+            && let Some(u) = record::unavailable()
+        {
+            if let Some(r) = report.as_mut() {
+                println!("not run {}: {}", check.id, u.why);
+                r.notes.push(format!(
+                    "Not run: `{}` records an app's window, and {}. It is proven on a \
                          developer's machine.",
-                        check.id, u.why
-                    ));
-                    not_run += 1;
-                } else {
-                    println!("fail {}: {}", check.id, u.why);
-                    println!("  fix: {}", u.fix);
-                    cannot_record += 1;
-                }
-                continue;
+                    check.id, u.why
+                ));
+                not_run += 1;
+            } else {
+                println!("fail {}: {}", check.id, u.why);
+                println!("  fix: {}", u.fix);
+                cannot_record += 1;
             }
+            continue;
         }
         let (result, was_reused) = if let Some(r) = reuse {
             (r, true)
@@ -1454,11 +1455,11 @@ fn test_names(names: &[String], quote: &str) -> String {
         .take(NAMES_SHOWN)
         .map(|n| format!("{quote}{n}{quote}"))
         .collect();
-    let mut text = shown.join(", ");
-    if names.len() > NAMES_SHOWN {
-        write!(text, " and {} more", names.len() - NAMES_SHOWN).ok();
+    let text = shown.join(", ");
+    match names.len().checked_sub(NAMES_SHOWN) {
+        Some(more) if more > 0 => format!("{text} and {more} more"),
+        _ => text,
     }
-    text
 }
 
 /// Runs each green check that reads changed test files on the base commit with those files,
@@ -1516,12 +1517,9 @@ fn red_before_green(
                         "  failed on the base, passed here: {}",
                         test_names(tests, "")
                     );
-                    write!(
-                        text,
-                        " Failed on the base, passed here: {}.",
-                        test_names(tests, "`")
-                    )
-                    .ok();
+                    text.push_str(" Failed on the base, passed here: ");
+                    text.push_str(&test_names(tests, "`"));
+                    text.push('.');
                 }
                 println!("  log on the base: {}", red.base.log.display());
                 note(text);
@@ -1565,7 +1563,9 @@ fn red_before_green(
                 );
                 if !tests.is_empty() {
                     println!("  passed on both: {}", test_names(tests, ""));
-                    write!(text, " Passed on both: {}.", test_names(tests, "`")).ok();
+                    text.push_str(" Passed on both: ");
+                    text.push_str(&test_names(tests, "`"));
+                    text.push('.');
                 }
                 note(text);
                 if fix {

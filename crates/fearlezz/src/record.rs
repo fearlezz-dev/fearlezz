@@ -231,7 +231,7 @@ fn parent(pid: i32) -> Option<i32> {
     // SAFETY: the buffer is a proc_bsdinfo of the size passed.
     let n =
         unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
-    (n == size).then(|| info.pbi_ppid as i32)
+    (n == size).then_some(info.pbi_ppid as i32)
 }
 
 /// Every process below `root`, and `root` itself.
@@ -607,9 +607,9 @@ mod tests {
     #[test]
     fn a_record_names_what_it_records_as_plain_names() {
         let parse = |s: &str| Spec::parse(toml::from_str::<toml::Value>(s).unwrap());
-        assert!(parse("film = \"app\"").is_ok());
-        assert!(parse("window = \"x\"").is_err());
-        assert!(parse("still = \"../x\"").is_err());
-        assert!(parse("film = \"a\"\nseconds = 0").is_err());
+        parse("film = \"app\"").unwrap();
+        parse("window = \"x\"").unwrap_err();
+        parse("still = \"../x\"").unwrap_err();
+        parse("film = \"a\"\nseconds = 0").unwrap_err();
     }
 }
