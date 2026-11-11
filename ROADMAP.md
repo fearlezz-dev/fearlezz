@@ -36,7 +36,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Settings | One source written into each tool's own file, drift is a finding |
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
 | Pieces | Rust, TypeScript, ESLint, Playwright, Python, Go, Kotlin, Flutter, devenv, agents, safety; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
-| Stills and films | Compared with the same check run on the base commit, with a report page. Listed in `proof.jsonl` or found by a `stills` glob; the `playwright` piece takes them from `toHaveScreenshot` (spike, `spike/look-web`) |
+| Stills and films | Compared with the same check run on the base commit, with a report page. Compared per color channel; films at 720p at most, stills at their own size. Listed in `proof.jsonl` or found by a `stills` glob; the `playwright` piece takes them from `toHaveScreenshot` (spike, `spike/look-web`) |
 | Approvals | A visual change waits for the developer's words |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
 | Distribution | GitHub Releases for Linux and macOS through release-please (merging its pull request tags and builds), `install.sh`, Homebrew tap, Nix flake and devenv input, `cargo install --git`. The tap follows new releases once its workflow (tap pull request 1) is merged |
@@ -66,7 +66,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 - **Releases as a layer.** Help with product releases, so publishing to many places at once is easy: GitHub, Homebrew, Nix, package registries and release notes. It should fit the existing system as layers, with pieces per destination and proof that each place really got the release.
 - **Name the failing test.** A failed test check shows its last lines; naming the failures directly would be better.
-- **Faster film comparison.** A 94 second 1080p film took about 236 seconds. Timing from packets, a second read of state frames only, and cheaper frame checks cut the CPU time about in half; a film whose every frame changes still costs about 4 seconds per second of film, mostly the blur used to cut it into states.
+- **Faster film comparison.** A 94 second 1080p film took about 236 seconds. Timing from packets, a second read of state frames only, cheaper frame checks and comparing films at 720p at most cut the CPU time to less than half; on a 60 second 1080p film most of what is left is ffmpeg decoding it twice (the second read only picks state frames). Keeping state frames in memory would save that read at a cost in memory.
 
 ## Next
 
@@ -78,7 +78,6 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 ## Known problems
 
-- **The comparison is blind to color.** Pictures are compared in gray, so a blue accent turned green (or red turned green) is called same, and the report outlines only noise. Repro: the ignored test `a_change_of_color_alone_is_a_change`.
 - **The base checkout lives under `.git`.** Tools that refuse or skip `.git` paths break there: the Vite dev server answers 403 to every file (its `server.fs.deny` has `**/.git/**`), so a look against a dev server has no before.
 - **Sync never removes a rule a piece dropped.** Biome's `linter.rules` keeps stale keys and the `settings` check calls it in sync.
 - **Monorepos.** `setup init` and the language pieces look only at the repository root.
