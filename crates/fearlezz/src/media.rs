@@ -772,6 +772,12 @@ fn diff(a: &Gray, b: &Gray) -> Diff {
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
     for y in 0..h {
         let (ra, rb) = (&a.px[y * w..(y + 1) * w], &b.px[y * w..(y + 1) * w]);
+        // Most rows of two frames of one state differ by codec noise only; this check runs
+        // over whole rows at once, so only rows with a real difference are searched.
+        let most = ra.iter().zip(rb).map(|(p, q)| p.abs_diff(*q)).max();
+        if most.is_none_or(|m| i16::from(m) <= PIX_THRESH) {
+            continue;
+        }
         if let (Some(first), Some(last)) = (
             ra.iter().zip(rb).position(|(p, q)| far(p, q)),
             ra.iter().zip(rb).rposition(|(p, q)| far(p, q)),
