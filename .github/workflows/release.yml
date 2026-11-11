@@ -1,14 +1,37 @@
 name: release
 
+# Merging the release pull request tags and publishes the release. A tag made with the
+# workflow token starts no other workflow, so the binaries are built and uploaded here.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild the binaries for (for example v0.2.0)
+        required: true
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   build:
+    needs: release-please
+    if: ${{ !cancelled() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
@@ -20,6 +43,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
       - run: rustup target add ${{ matrix.target }}
       - if: runner.os == 'Linux'
         run: sudo apt-get update -q && sudo apt-get install -qy musl-tools
@@ -37,14 +62,24 @@ jobs:
           path: fearlezz-*.tar.gz*
 
   publish:
-    needs: build
+    needs: [release-please, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-      - env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Attach the binaries to the release
+        run: gh release upload "$TAG" fearlezz-*.tar.gz* --clobber --repo "$GITHUB_REPOSITORY"
+      # The action `fearlezz-dev/fearlezz@v0` follows the newest 0.x release.
+      - name: Move the major version tag
         run: |
-          gh release create "$GITHUB_REF_NAME" fearlezz-*.tar.gz* \
-            --repo "$GITHUB_REPOSITORY" --generate-notes
+          major="${TAG%%.*}"
+          git tag -f "$major"
+          git push -f origin "refs/tags/$major"
