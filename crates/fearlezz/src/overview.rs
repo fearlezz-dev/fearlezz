@@ -235,6 +235,12 @@ fn timeline(html: &mut String, j: &Journal, now: Timestamp) -> std::fmt::Result 
                 None => format!("stage {to}"),
             },
             Event::Wait { question } => format!("asked you: {question}"),
+            Event::Approve {
+                check,
+                said,
+                by: Some(by),
+                ..
+            } => format!("approved {check} on GitHub by @{by}: \"{said}\""),
             Event::Approve { check, said, .. } => format!("approved {check}: \"{said}\""),
             Event::Note { text } => format!("note: {text}"),
         };

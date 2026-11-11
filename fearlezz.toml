@@ -23,3 +23,9 @@ inputs = [".github/workflows/**"]
 run = "jq empty release-please-config.json .release-please-manifest.json && yq '.' action.yml > /dev/null && shellcheck install.sh"
 stage = "working"
 inputs = ["release-please-config.json", ".release-please-manifest.json", "action.yml", "install.sh"]
+
+# The steps of the action, which runs them with bash on GitHub's runners.
+[check.action]
+run = "shellcheck action.sh"
+stage = "working"
+inputs = ["action.sh"]

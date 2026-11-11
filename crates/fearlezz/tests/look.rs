@@ -230,6 +230,166 @@ fn there_is_nothing_to_approve_without_changed_pictures() {
     assert!(out.stderr.contains("nothing to approve"), "{}", out.stderr);
 }
 
+// Approvals given on the pull request
+
+/// Stands in for the GitHub CLI: pull request 7 of the current branch, whose comments are the
+/// JSON in `.runs/comments.json`, filtered with the real jq as `gh --jq` would.
+const FAKE_GH: &str = r#"#!/bin/sh
+case "$1 $2" in
+  "pr view") echo 7 ;;
+  "api repos/{owner}/{repo}/issues/7/comments")
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --jq ]; then jq -c "$2" "$GH_COMMENTS"; exit; fi
+      shift
+    done
+    cat "$GH_COMMENTS" ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+"#;
+
+/// The comments on the pull request: one approval by `author` (of `kind`, `Bot` or `User`) for
+/// `head`, covering `screens`.
+fn comments(head: &str, author: &str, kind: &str) -> String {
+    let hidden = serde_json::json!({
+        "head": head,
+        "fingerprint": "f00d",
+        "checks": ["screens"],
+        "by": "lead",
+        "said": "ship it",
+    });
+    serde_json::json!([
+        { "user": { "login": "lead", "type": "User" }, "body": "/fearlezz approve ship it",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-1" },
+        { "user": { "login": author, "type": kind },
+          "body": format!("@lead approved the pictures.\n<!-- fearlezz-approved {hidden} -->"),
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-2" },
+    ])
+    .to_string()
+}
+
+/// Runs `fearlezz` with the fake GitHub CLI answering for `comments`.
+fn with_gh(repo: &Repo, counter: &str, comments: &str, args: &[&str]) -> common::Output {
+    repo.write(".runs/bin/gh", FAKE_GH);
+    let gh = repo.path(".runs/bin/gh");
+    let mut perms = std::fs::metadata(&gh).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    std::fs::set_permissions(&gh, perms).unwrap();
+    repo.write(".runs/comments.json", comments);
+    let path = format!(
+        "{}:{}",
+        repo.path(".runs/bin").display(),
+        std::env::var("PATH").unwrap()
+    );
+    let file = repo.path(".runs/comments.json");
+    repo.fz_env(
+        args,
+        &[
+            ("COUNTER", counter),
+            ("PATH", &path),
+            ("GH_COMMENTS", file.to_str().unwrap()),
+        ],
+    )
+}
+
+/// The work run and committed, so its head is what the pull request shows.
+fn committed() -> (Repo, String, String) {
+    let (repo, counter) = repo();
+    ran(&repo, &counter, &["run"]);
+    repo.commit("the work");
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    (repo, counter, head)
+}
+
+#[test]
+fn the_next_line_names_approving_on_the_pull_request() {
+    let (repo, counter, _) = committed();
+    let status = ran(&repo, &counter, &[]);
+    assert!(
+        status
+            .last_line()
+            .contains("fearlezz say approve screens --github"),
+        "{}",
+        status.stdout
+    );
+}
+
+#[test]
+fn an_approval_on_the_pull_request_counts_with_who_gave_it() {
+    let (repo, counter, head) = committed();
+    let out = with_gh(
+        &repo,
+        &counter,
+        &comments(&head, "github-actions[bot]", "Bot"),
+        &["say", "approve", "screens", "--github"],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("approved screens on GitHub by @lead (\"ship it\")"),
+        "{}",
+        out.stdout
+    );
+    let status = ran(&repo, &counter, &[]);
+    assert!(
+        status
+            .stdout
+            .contains("approved on GitHub by @lead (\"ship it\")"),
+        "{}",
+        status.stdout
+    );
+    ran(&repo, &counter, &["run", "--stage", "merge", "--no-run"]);
+    let out = ran(&repo, &counter, &["run"]);
+    assert_eq!(
+        out.last_line(),
+        "next: all proof is in: ready to merge",
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn an_approval_for_another_commit_does_not_count() {
+    let (repo, counter, _) = committed();
+    let other = "0".repeat(40);
+    let out = with_gh(
+        &repo,
+        &counter,
+        &comments(&other, "github-actions[bot]", "Bot"),
+        &["say", "approve", "screens", "--github"],
+    );
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("0000000"), "{}", out.stderr);
+    assert!(out.stderr.contains("push"), "{}", out.stderr);
+}
+
+#[test]
+fn an_approval_line_a_person_wrote_does_not_count() {
+    let (repo, counter, head) = committed();
+    let out = with_gh(
+        &repo,
+        &counter,
+        &comments(&head, "lead", "User"),
+        &["say", "approve", "screens", "--github"],
+    );
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("/fearlezz approve"), "{}", out.stderr);
+}
+
+#[test]
+fn approving_on_the_pull_request_needs_the_work_committed() {
+    let (repo, counter) = repo();
+    ran(&repo, &counter, &["run"]);
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    let out = with_gh(
+        &repo,
+        &counter,
+        &comments(&head, "github-actions[bot]", "Bot"),
+        &["say", "approve", "screens", "--github"],
+    );
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("commit"), "{}", out.stderr);
+}
+
 #[test]
 fn a_base_another_command_uses_is_not_removed() {
     let (repo, counter) = repo();

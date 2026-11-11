@@ -52,14 +52,19 @@ Agents: `fearlezz setup sync` writes [the skill](skills/fearlezz/SKILL.md) into 
 
 ## CI in your project
 
+Two workflows. The first proves every pull request and push:
+
 ```yaml
+# .github/workflows/proof.yml
+name: proof
 on:
   pull_request:
   push:
     branches: [main]
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
+  statuses: write
 jobs:
   proof:
     runs-on: ubuntu-latest
@@ -67,10 +72,41 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: fearlezz-dev/fearlezz@v0
 ```
 
-The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. The action installs the latest release (`version: v0.2.0` pins one), runs `fearlezz run --ci`, keeps one status comment on the pull request (`comment: false` turns it off) and uploads the check logs. Set `devenv: true` when the checks run in a devenv shell.
+The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. The action installs the release of its own tag (`version: v0.2.0` pins one), runs `fearlezz run --ci`, keeps one status comment on the pull request (`comment: false` turns it off) and uploads the check logs. Set `devenv: true` when the checks run in a devenv shell. When a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg, cached (`ffmpeg: false` skips it).
+
+Changed pictures show on the pull request, before and after, from the `fearlezz-pictures` branch (one folder per pull request; in a private repository only people who can read it see them). A pull request from a fork cannot push there, so its pictures are in the run's `fearlezz-pictures` artifact. Changed pictures do not fail the proof: they set the `fearlezz/pictures` status to pending, and the comment says they wait. Require that status next to the proof check to make merging wait for a person.
+
+The second workflow answers approvals and keeps the pictures branch small:
+
+```yaml
+# .github/workflows/pictures.yml
+name: pictures
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "0 4 * * 1"
+permissions:
+  contents: write
+  pull-requests: write
+  statuses: write
+jobs:
+  pictures:
+    if: github.event_name != 'issue_comment' || startsWith(github.event.comment.body, '/fearlezz approve')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: fearlezz-dev/fearlezz@v0
+```
+
+A person with write access approves the pictures by commenting `/fearlezz approve <what they think of them>`. When the proof in the status comment is for the pull request's current head, CI sets `fearlezz/pictures` to green, linked to that comment, and replies quoting the words; a new push needs a new approval. Closing a pull request removes its pictures, and the schedule removes those of pull requests closed without it; both squash the branch into one commit. On the developer's machine, `fearlezz say approve <check> --github` records the approval in the journal.
+
+The approval is only as strong as the identities behind it. Give the agent its own GitHub account or app, so a `/fearlezz approve` from the developer's account is the developer's (the agent hooks refuse to post one), and review changes to `.github/workflows`, since a pull request runs its own version of them.
 
 ## License
 

@@ -32,6 +32,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `page.rs`: what the static pages share (colours, controls, motion); they fetch nothing.
 - `red.rs`: red before green, a check run on the base commit with the change's test files laid over it.
 - `hooks.rs`: agent hooks (Claude Code, Codex, Cursor): what `setup sync` writes into each agent's settings, and the answers of `fearlezz setup hook` that hold an agent to the proof while it works.
+- `github.rs`: the pull request: changed pictures in the status comment, the hidden line an approval by comment checks, and approvals read back into the journal. The action's steps around it (pictures branch, statuses, `/fearlezz approve`) are in `action.sh`.
 - `main.rs`: the CLI; `overview.rs`: the overview page.
 
 ## Releases
@@ -50,4 +51,4 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 ## Style
 
 - No dashes as punctuation in prose, comments or commit messages.
-- Every command prints a `next:` line as its last line, except output meant for programs (`--check`, `setup compare --json`, `setup hook`) and errors, whose message says what to do.
+- Every command prints a `next:` line as its last line, except output meant for programs (`--check`, `setup compare --json`, `setup hook`, `setup needs`) and errors, whose message says what to do.
