@@ -162,6 +162,40 @@ impl Rules {
         self.0.is_empty()
     }
 
+    /// How `head` enforces less than these rules: a rule gone or off, at a lower level,
+    /// covering fewer of `files`, or checking something else. Each as `rule.<id>` and how.
+    pub(crate) fn weakenings(&self, head: &Rules, files: &[String]) -> Vec<(String, String)> {
+        let mut found = Vec::new();
+        for b in &self.0 {
+            let mut say = |how: String| found.push((format!("rule.{}", b.id), how));
+            let Some(h) = head.0.iter().find(|h| h.id == b.id) else {
+                say("it is gone".into());
+                continue;
+            };
+            if h.level < b.level {
+                say(format!(
+                    "its level goes from {} to {}",
+                    b.level.name(),
+                    h.level.name()
+                ));
+            }
+            let lost: Vec<&String> = files
+                .iter()
+                .filter(|f| b.covers(f) && !h.covers(f))
+                .collect();
+            if let Some(first) = lost.first() {
+                say(match lost.len() {
+                    1 => format!("it no longer covers {first}"),
+                    n => format!("it no longer covers {first} and {} more files", n - 1),
+                });
+            }
+            if !b.kind.same(&h.kind) {
+                say("it checks something else".into());
+            }
+        }
+        found
+    }
+
     /// A stable text of every rule, part of the check's inputs.
     pub(crate) fn fingerprint(&self) -> String {
         format!("{:?}", self.0)
@@ -392,6 +426,19 @@ impl Rule {
             fix: self.fix.clone(),
             why: self.why.clone(),
             anywhere,
+        }
+    }
+}
+
+impl Kind {
+    /// Whether both check the same thing, as written.
+    fn same(&self, other: &Kind) -> bool {
+        match (self, other) {
+            (Kind::Changed(a), Kind::Changed(b)) => a.text == b.text,
+            (Kind::Name(a), Kind::Name(b)) => a.to_string() == b.to_string(),
+            (Kind::Needs(a), Kind::Needs(b)) => a == b,
+            (Kind::Code(a), Kind::Code(b)) => a == b,
+            _ => false,
         }
     }
 }

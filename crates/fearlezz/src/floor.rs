@@ -5,7 +5,8 @@
 
 use anyhow::Result;
 
-use crate::config::{self, Config};
+use crate::config::{self, Builtin, Config};
+use crate::findings::Scope;
 use crate::git::Git;
 use crate::presets;
 use crate::state::Worktree;
@@ -114,13 +115,54 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
                 n => format!("it no longer reads {first} and {} more files", n - 1),
             });
         }
-        if b.findings.is_some() && h.findings.is_none() {
-            say("it no longer reports findings".into());
+        match (&b.findings, &h.findings) {
+            (Some(_), None) => say("it no longer reports findings".into()),
+            (Some(bf), Some(hf)) => {
+                for tool in bf.tools.iter().filter(|t| !hf.tools.contains(t)) {
+                    say(format!(
+                        "its findings no longer get the levels of [lints.{}]",
+                        tool.name()
+                    ));
+                }
+                if bf.on == Scope::Everywhere && hf.on == Scope::Changed {
+                    say("its findings count only on changed lines".into());
+                }
+            }
+            (None, _) => {}
         }
         if b.tests.is_some() && h.tests.is_none() {
             say("it no longer counts its tests".into());
         }
+        let env: Vec<String> = h
+            .env
+            .iter()
+            .filter(|v| !b.env.contains(v))
+            .map(|v| format!("+{v}"))
+            .chain(
+                b.env
+                    .iter()
+                    .filter(|v| !h.env.contains(v))
+                    .map(|v| format!("-{v}")),
+            )
+            .collect();
+        if !env.is_empty() {
+            say(format!(
+                "it sees other environment variables ({})",
+                env.join(", ")
+            ));
+        }
+        if let (Some(bf), Some(hf)) = (&b.findings, &h.findings) {
+            for tool in bf.tools.iter().filter(|t| hf.tools.contains(t)) {
+                found.extend(bf.levels.weakenings(&hf.levels, *tool));
+            }
+        }
+        if let (Some(Builtin::Rules(br)), Some(Builtin::Rules(hr))) = (&b.builtin, &h.builtin) {
+            found.extend(br.weakenings(hr, files));
+        }
     }
+    // Checks that share a lints table would name its weakenings once each.
+    let mut seen = std::collections::BTreeSet::new();
+    found.retain(|w| seen.insert(w.clone()));
     for glob in head.no_proof.iter().filter(|g| !base.no_proof.contains(g)) {
         found.push(("no_proof".into(), glob.clone()));
     }

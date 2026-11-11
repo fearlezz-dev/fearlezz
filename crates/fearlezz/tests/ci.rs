@@ -273,6 +273,142 @@ fn the_fix_line_names_the_admin_bypass() {
     assert!(out.stdout.contains("admin"), "{}", out.stdout);
 }
 
+// Lints, rules and env are part of the floor
+
+/// A findings check with lint levels, an env list, and two rules.
+const LINTED: &str = r#"
+[check.lint]
+run = "touch \"$FEARLEZZ_OUT/findings.jsonl\""
+stage = "working"
+inputs = ["src/**"]
+env = ["HOME"]
+findings = { read = "jsonl", on = "everywhere", lints = ["clippy"] }
+
+[lints.clippy]
+unwrap_used = "gate"
+dbg_macro = "flag"
+
+[rule.no-secrets]
+level = "gate"
+message = "keep secrets out"
+files = ["src/**"]
+skip = ["src/vendor/**"]
+changed = ["secrets/**"]
+
+[rule.snake]
+level = "flag"
+files = ["src/**"]
+name = "snake_case"
+"#;
+
+/// A branch whose config turns `LINTED` into `edit(LINTED)`, and what CI says about it.
+fn ci_after(edit: impl Fn(&str) -> String) -> common::Output {
+    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}{LINTED}"));
+    repo.branch("feat/x");
+    repo.write("src/lib.rs", "fn b() {}\n");
+    declare(&repo, "tests");
+    repo.commit("change");
+    with_checks(&repo, &format!("{CHECKS}{}", edit(LINTED)));
+    ci(&repo)
+}
+
+fn assert_weakens(out: &common::Output, line: &str) {
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stdout.contains(line), "{}", out.stdout);
+}
+
+#[test]
+fn lowering_a_lint_is_red_and_named() {
+    let out = ci_after(|c| c.replace("unwrap_used = \"gate\"", "unwrap_used = \"flag\""));
+    assert_weakens(
+        &out,
+        "weakens lints.clippy.unwrap_used: it goes from gate to flag",
+    );
+}
+
+#[test]
+fn unsetting_a_lint_is_red_and_named() {
+    let out = ci_after(|c| c.replace("dbg_macro = \"flag\"\n", ""));
+    assert_weakens(&out, "weakens lints.clippy.dbg_macro: it is no longer set");
+}
+
+#[test]
+fn a_check_that_drops_its_lints_table_is_red() {
+    let out = ci_after(|c| c.replace(", lints = [\"clippy\"]", ""));
+    assert_weakens(
+        &out,
+        "weakens lint: its findings no longer get the levels of [lints.clippy]",
+    );
+}
+
+#[test]
+fn findings_that_count_only_on_changed_lines_again_are_red() {
+    let out = ci_after(|c| c.replace("on = \"everywhere\", ", ""));
+    assert_weakens(
+        &out,
+        "weakens lint: its findings count only on changed lines",
+    );
+}
+
+#[test]
+fn adding_an_env_variable_is_red() {
+    let out = ci_after(|c| c.replace("env = [\"HOME\"]", "env = [\"HOME\", \"SKIP_SLOW\"]"));
+    assert_weakens(
+        &out,
+        "weakens lint: it sees other environment variables (+SKIP_SLOW)",
+    );
+}
+
+#[test]
+fn removing_an_env_variable_is_red() {
+    let out = ci_after(|c| c.replace("env = [\"HOME\"]", "env = []"));
+    assert_weakens(
+        &out,
+        "weakens lint: it sees other environment variables (-HOME)",
+    );
+}
+
+#[test]
+fn turning_a_rule_off_is_red() {
+    let out = ci_after(|c| c.replace("[rule.no-secrets]\n", "[rule.no-secrets]\noff = true\n"));
+    assert_weakens(&out, "weakens rule.no-secrets: it is gone");
+}
+
+#[test]
+fn lowering_a_rule_is_red() {
+    let out = ci_after(|c| c.replacen("level = \"gate\"", "level = \"hint\"", 1));
+    assert_weakens(
+        &out,
+        "weakens rule.no-secrets: its level goes from gate to hint",
+    );
+}
+
+#[test]
+fn a_rule_covering_fewer_files_is_red() {
+    let out = ci_after(|c| c.replace("skip = [\"src/vendor/**\"]", "skip = [\"src/**\"]"));
+    assert_weakens(
+        &out,
+        "weakens rule.no-secrets: it no longer covers src/lib.rs",
+    );
+}
+
+#[test]
+fn a_rule_that_checks_something_else_is_red() {
+    let out = ci_after(|c| c.replace("changed = [\"secrets/**\"]", "changed = [\"keys/**\"]"));
+    assert_weakens(&out, "weakens rule.no-secrets: it checks something else");
+}
+
+#[test]
+fn raising_levels_and_rewording_a_rule_is_fine() {
+    let out = ci_after(|c| {
+        c.replace("dbg_macro = \"flag\"", "dbg_macro = \"gate\"")
+            .replace("keep secrets out", "never commit secrets")
+            .replace("level = \"flag\"", "level = \"gate\"")
+    });
+    assert!(out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains("weakens"), "{}", out.stdout);
+}
+
 // Every changed file is proven or declared
 
 #[test]

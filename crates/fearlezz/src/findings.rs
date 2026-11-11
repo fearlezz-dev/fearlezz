@@ -266,13 +266,19 @@ pub(crate) fn judge(
     }
 }
 
-impl fmt::Display for Finding {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let level = match self.level {
+impl Level {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
             Level::Gate => "gate",
             Level::Flag => "flag",
             Level::Hint => "hint",
-        };
+        }
+    }
+}
+
+impl fmt::Display for Finding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let level = self.level.name();
         let place = if self.file.is_empty() {
             "(no file)".to_string()
         } else {
