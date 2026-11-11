@@ -182,11 +182,23 @@ Only reports written by the run count, so an old report never passes for a new r
 
 ## Red before green
 
-`test_files` names which of a check's inputs are tests. In CI, when the change touches some of them, Fearlezz runs the check again on the base commit with the change's test files laid over it, and prints `red before green <check>` when it fails there, or `not red before green <check>` when it passes there too. A test that does not build on the base commit counts as failing. When the pull request title (or the head commit) starts with `fix:`, tests that pass on the base commit do not show the fix and the commit is not proven: change a test so it fails without the fix.
+`test_files` names which of a check's inputs are tests; the language pieces set them (Rust only for `tests` folders, since unit tests inside `src` cannot be split from the code). When the change touches some of them, the final stage and CI run the check again on the base commit with the change's test files laid over it:
+
+- `red before green <check>`: it fails there and passes here. A check with a JUnit reader names the tests that failed there; a test that does not build there counts as failing, and says so.
+- `not red before green <check>`: it passes there too, naming the change's tests that passed on both.
+- `the base already fails`: it fails there without the change's test files too, so failing there shows nothing.
+
+When the pull request title (or the head commit's subject) starts with `fix:`, tests that pass on the base commit do not show the fix: the final stage's run fails and the commit is not proven. Change a test so it fails without the fix.
 
 ```toml
 [check.tests]
 test_files = ["tests/**"]
+```
+
+```
+passed go-test  2.8 s  2 tests  go test -v ./...
+red before green go-test: sum_test.go fails on the base commit and passes here
+  log on the base: .../output.log
 ```
 
 ## Environments
