@@ -16,6 +16,7 @@ inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "clippy.toml", "rust-toolcha
 [check.tests]
 run = "cargo test --quiet"
 stage = "working"
+tests = "cargo"
 inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
 
 # Production code never unwraps or panics; tests may.

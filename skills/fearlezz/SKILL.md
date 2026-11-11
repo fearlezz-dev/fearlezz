@@ -164,6 +164,17 @@ findings = "cargo"     # or "dart" (dart analyze --format=machine), "eslint" (es
 
 `jsonl` reads `$FEARLEZZ_OUT/findings.jsonl`, one object per line: `file`, `line`, `level` (gate, flag, hint), `message`, and optionally `end_line`, `rule`, `fix`, `why`, `anywhere`.
 
+## Test counts
+
+A check that runs tests says where its runner reports how many ran, with `tests`. A run of zero tests fails the check, as does a run with no count, so a filter that matches nothing or a runner that found no tests cannot pass. CI shows each count. The rust piece sets `tests = "cargo"`.
+
+```toml
+[check.tests]
+run = "cargo test --quiet"
+stage = "working"
+tests = "cargo"       # the "test result" lines in the output; or "junit" ($FEARLEZZ_OUT/junit.xml, skipped cases left out)
+```
+
 ## Environments
 
 `[env]` makes a fresh checkout usable, gives checks their toolchain, and runs services. With `shell` set (the devenv piece sets `devenv shell --`), every check runs inside it and the `[env] inputs` files are inputs of every check. Fearlezz prepares a checkout once before its first run (and the base checkout before a look), starts services only for checks with `needs = ["services"]`, and passes their ports as env vars. Do not start or stop services yourself; `fearlezz setup down` stops this checkout's services by hand.

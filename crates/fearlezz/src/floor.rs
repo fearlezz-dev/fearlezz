@@ -117,6 +117,9 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
         if b.findings.is_some() && h.findings.is_none() {
             say("it no longer reports findings".into());
         }
+        if b.tests.is_some() && h.tests.is_none() {
+            say("it no longer counts its tests".into());
+        }
     }
     for glob in head.no_proof.iter().filter(|g| !base.no_proof.contains(g)) {
         found.push(("no_proof".into(), glob.clone()));

@@ -1,6 +1,7 @@
 //! `fearlezz`: helps coding agents prove their work. See the README for the model.
 
 mod config;
+mod counts;
 mod env;
 mod findings;
 mod floor;
@@ -770,7 +771,14 @@ fn print_failure(f: &store::RunResult) {
     if f.findings.iter().any(|x| x.level == findings::Level::Gate) {
         println!("fail {}: blocking findings", f.check);
     } else {
-        println!("fail {} (exit {code})", f.check);
+        if f.tests == Some(0) && f.exit_code == Some(0) {
+            println!("fail {}: it ran no tests, so it proves nothing", f.check);
+            for why in &f.proof_errors {
+                println!("  {why}");
+            }
+        } else {
+            println!("fail {} (exit {code})", f.check);
+        }
         for line in run::tail(&f.log, 12) {
             println!("  {line}");
         }
@@ -783,7 +791,18 @@ fn print_failure(f: &store::RunResult) {
 /// the commit, each check with its command and time, and the GitHub job summary.
 struct CommitReport {
     commit: String,
-    rows: Vec<(String, &'static str, f64, String)>,
+    rows: Vec<Row>,
+}
+
+/// One check in the report.
+struct Row {
+    id: String,
+    outcome: &'static str,
+    /// How many tests ran, for a check that counts them.
+    tests: Option<u64>,
+    secs: f64,
+    /// The first line of the command, marked when there is more.
+    run: String,
 }
 
 impl CommitReport {
@@ -807,9 +826,23 @@ impl CommitReport {
         };
         #[expect(clippy::cast_precision_loss, reason = "a duration shown in seconds")]
         let secs = result.duration_ms as f64 / 1000.0;
-        println!("{word} {}  {secs:.1} s  {}", check.id, check.run);
-        self.rows
-            .push((check.id.clone(), word, secs, check.run.clone()));
+        let run = match check.run.trim().split_once('\n') {
+            Some((first, _)) => format!("{first} ..."),
+            None => check.run.trim().to_string(),
+        };
+        let tests = match result.tests {
+            Some(1) => "  1 test".to_string(),
+            Some(n) => format!("  {n} tests"),
+            None => String::new(),
+        };
+        println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
+        self.rows.push(Row {
+            id: check.id.clone(),
+            outcome: word,
+            tests: result.tests,
+            secs,
+            run,
+        });
     }
 
     /// Appends the job summary to the file GitHub Actions names, when it names one.
@@ -820,13 +853,18 @@ impl CommitReport {
             return Ok(());
         };
         let mut text = format!(
-            "### Fearlezz: commit {}\n\n| check | result | time | command |\n| --- | --- | --- \
-             | --- |\n",
+            "### Fearlezz: commit {}\n\n| check | result | tests | time | command |\n| --- | --- \
+             | --- | --- | --- |\n",
             self.commit
         );
-        for (id, outcome, secs, run) in &self.rows {
-            let run = run.replace('|', "\\|");
-            writeln!(text, "| {id} | {outcome} | {secs:.1} s | `{run}` |")?;
+        for row in &self.rows {
+            let run = row.run.replace('|', "\\|");
+            let tests = row.tests.map(|n| n.to_string()).unwrap_or_default();
+            writeln!(
+                text,
+                "| {} | {} | {tests} | {:.1} s | `{run}` |",
+                row.id, row.outcome, row.secs
+            )?;
         }
         if self.rows.is_empty() {
             text.push_str("\nNo check reads what this commit changed.\n");

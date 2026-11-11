@@ -65,6 +65,17 @@ pub(crate) fn execute(
         findings = verdict.counted;
         findings_elsewhere = verdict.elsewhere;
     }
+    let tests = check.tests.map(|reader| {
+        reader
+            .count(&[&log, &stdout_path], &dir)
+            .unwrap_or_else(|why| {
+                proof_errors.push(why);
+                0
+            })
+    });
+    if tests == Some(0) {
+        passed = false;
+    }
     let result = RunResult {
         id,
         check: check.id.clone(),
@@ -85,6 +96,7 @@ pub(crate) fn execute(
         proof_errors,
         findings,
         findings_elsewhere,
+        tests,
         dir,
         log,
     };

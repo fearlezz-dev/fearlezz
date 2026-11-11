@@ -35,7 +35,7 @@ use = ["rust"]
 off = true
 
 [check.tests]
-run = "echo tuned > \"$FEARLEZZ_OUT/proof.txt\""
+run = "echo tuned > \"$FEARLEZZ_OUT/proof.txt\"; echo 'test result: ok. 1 passed; 0 failed'"
 "#;
     let repo = Repo::new(config, &[("src/lib.rs", "")]);
     assert_eq!(checks(&repo), "fmt, settings, tests");

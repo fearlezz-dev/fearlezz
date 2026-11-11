@@ -24,6 +24,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `rules.rs`: `[rule.<name>]` conventions (paths, naming, companion files, ast-grep code rules) that form the built in `rules` check.
 - `floor.rs`: the base branch's config as the floor of a change's proof: what the change weakens, and changed files no check reads and `no_proof` does not declare.
 - `findings.rs`: findings a check reports at file and line (cargo JSON, SARIF, jsonl), the lines a change touched, and the verdict.
+- `counts.rs`: how many tests a check ran (cargo output, JUnit); zero fails the check.
 - `env.rs`: the environment: preparing a fresh checkout (copy-on-write clones of ignored folders), and starting, reusing, resetting and stopping the services checks need.
 - `media.rs`: comparing two stills or films (stable states, time warping, blurred pixel diff).
 - `look.rs`: comparing a check's pictures with the same check run on the base commit; `report.rs`: the look report page.

@@ -30,6 +30,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Journals | One per piece of work, append only |
 | Command line | See, run, say, setup |
 | Findings | Only lines the change touched can block |
+| Test counts | A check's `tests` reader (cargo, JUnit) counts what ran; zero tests fails it |
 | Rules | Paths, naming, companion files, ast-grep code rules |
 | Settings | One source written into each tool's own file, drift is a finding |
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
@@ -68,7 +69,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 ## Next
 
 1. Finish the proof gate, so unproven work cannot look proven (design: `docs/drive/ci-proof-loop/record.yaml`):
-   - What CI shows: every check's test count, and zero tests is red. The floor does not yet compare `[lints]` levels, `[rule]` tables or check `env`, so lowering a lint or a rule is not caught.
+   - The floor does not yet compare `[lints]` levels, `[rule]` tables or check `env`, so lowering a lint or a rule is not caught. Test counts read only cargo output and JUnit; other runners need a reader.
    - Claims in CI cannot show red before green for a bug, or that a check really tests its claim; both stay the agent's word until "tests are real". Work files stay in the repository after merging.
    - The Codex and Cursor hooks follow their docs but have not run in those agents yet. Hooks replace a project's own hooks for the same events in those files.
 2. Adopt Fearlezz in a first real project outside this repository, which then tests the gate for real.
