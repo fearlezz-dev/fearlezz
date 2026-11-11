@@ -197,7 +197,10 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
     found.extend(base.settings.weakenings(&head.settings));
     found.extend(env_weakenings(&base.env, &head.env));
     for glob in head.no_proof.iter().filter(|g| !base.no_proof.contains(g)) {
-        found.push(("no_proof".into(), glob.clone()));
+        found.push((
+            "no_proof".into(),
+            format!("it newly says {glob} needs no proof"),
+        ));
     }
     found
 }
