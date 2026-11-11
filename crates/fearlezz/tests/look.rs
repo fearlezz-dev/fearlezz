@@ -167,7 +167,7 @@ fn merge_waits_for_approval_of_changed_pictures() {
     let (repo, counter) = repo();
     ran(&repo, &counter, &["run", "--stage", "merge", "--no-run"]);
     let out = ran(&repo, &counter, &["run"]);
-    assert!(out.ok, "{}", out.stderr);
+    assert!(!out.ok, "merge is not proven yet: {}", out.stdout);
     assert!(
         out.last_line()
             .contains("fearlezz say approve screens --said"),
@@ -189,6 +189,14 @@ fn an_approval_survives_the_fresh_run_at_merge() {
     assert!(ok.stdout.contains("approved screens"), "{}", ok.stdout);
     let status = ran(&repo, &counter, &[]);
     assert!(status.stdout.contains("approved"), "{}", status.stdout);
+    let start = ["say", "start", "--kind", "feature", "--goal", "the goal"];
+    ran(&repo, &counter, &start);
+    ran(
+        &repo,
+        &counter,
+        &["say", "claim", "looks right", "--check", "screens"],
+    );
+    repo.commit("the work");
     ran(&repo, &counter, &["run", "--stage", "merge", "--no-run"]);
     let out = ran(&repo, &counter, &["run"]);
     assert_eq!(

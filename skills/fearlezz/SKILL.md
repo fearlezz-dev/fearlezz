@@ -21,7 +21,13 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 4. `fearlezz run` runs the checks due in the current stage. Unchanged inputs reuse earlier results, so run it often.
 5. When a check fails, read the tail it prints (and the log path), fix the cause, run again.
 6. `fearlezz run --stage <next>` when the stage's proof is in. Going back is fine: `fearlezz run --stage working --no-run --reason "<why>"`.
-7. The last stage runs every check fresh once. `next: all proof is in: ready to merge` means done.
+7. The last stage runs every check fresh once. `next: all proof is in: ready to merge` means done; it needs a goal, at least one claim, every claim proven and everything committed. Until then the run exits non-zero.
+
+## What counts as proof
+
+- Only `fearlezz run` on your journal is proof. Raw commands (`cargo test`, `bun test`, a project's `check` script) are quick feedback; running them proves nothing.
+- `fearlezz run --ci` and the scripts around it prove a commit for CI. They say nothing about the work and keep no journal.
+- Do not open a pull request before `fearlezz` says ready to merge. When you report proof, report that line from the journal.
 
 ## Rules
 

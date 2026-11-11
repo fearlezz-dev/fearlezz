@@ -20,7 +20,5 @@ jobs:
         with:
           name: devenv
       - run: nix profile install nixpkgs#devenv
-      - name: Run every check fresh with Fearlezz
-        env:
-          FEARLEZZ_JOURNAL: ci/${{ github.run_id }}
+      - name: Prove this commit with Fearlezz
         run: devenv shell -- check

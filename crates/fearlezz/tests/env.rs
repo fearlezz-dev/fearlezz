@@ -121,6 +121,9 @@ fn a_check_without_services_never_starts_them() {
 fn the_final_stage_starts_from_reset_data_once_and_stops_when_all_proof_is_in() {
     let s = working();
     s.fz(&["run"]);
+    s.fz(&["say", "start", "--kind", "feature", "--goal", "the goal"]);
+    s.fz(&["say", "claim", "works", "--check", "unit"]);
+    s.repo.commit("the work");
     s.fz(&["run", "--stage", "merge", "--no-run"]);
     let out = s.fz(&["run"]);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);

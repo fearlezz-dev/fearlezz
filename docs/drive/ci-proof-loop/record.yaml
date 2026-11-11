@@ -1,0 +1,75 @@
+# docs/drive/ci-proof-loop/record.yaml: the working state of this piece of work.
+goal: "The CI cannot be green because you didn't run the checks. It should be in the agent loop: the agent should figure out it skipped the proof while working."
+
+pieces:
+  - id: honest-verdict
+    status: figuring-out
+    open: What exactly makes "ready to merge" true, including work with no claims.
+    tries:
+      - id: one-derived-verdict
+        what: One verdict derived in state.rs, used by next lines, agent hooks and the CI exit code.
+        taught: Twelve scratch cases show ready to merge and exit 0 for work with no goal, unproven claims or an uncommitted edit.
+        state: trying
+        evidence: [scratchpad repro.sh, cases 3, 7, 8, 9, 12]
+  - id: local-to-ci
+    status: figuring-out
+    open: How the goal and claims reach CI.
+    tries:
+      - id: committed-declarations
+        what: The goal and claims are committed with the change; CI proves them again by running the bound checks.
+        state: trying
+      - id: ci-only
+        what: CI judges only what it runs and never learns the claims.
+        state: trying
+      - id: out-of-band-receipt
+        what: The journal or a receipt travels on a custom ref or git notes.
+        state: trying
+      - id: pull-request-body
+        what: The goal and claims live in a block in the pull request body.
+        state: trying
+  - id: ci-floor
+    status: figuring-out
+    open: How a change is stopped from weakening its own proof.
+    tries:
+      - id: base-config-floor
+        what: CI takes the required checks from the base branch's config, so a change can only add proof.
+        taught: Turning a check off or narrowing its inputs in the change gives nothing to run and exit 0 today.
+        state: trying
+        evidence: [scratchpad repro.sh, cases 10, 11]
+  - id: agent-loop
+    status: figuring-out
+    open: How hard the agent hooks should stop the agent.
+    tries:
+      - id: hooks-from-setup-sync
+        what: setup sync writes agent hooks at session start, before push and pull request, and at stop.
+        state: trying
+
+decided:
+  - id: claims-committed
+    what: "How claims reach CI: a committed file per change, written by fearlezz say."
+    why: Reviewers read it in the diff, and CI proves each claim again by running its check.
+
+  - id: hooks-firm-at-the-door
+    what: "Hooks are firm at the door: push needs a goal and a claim, a non-draft pull request needs ready, end of turn blocks once."
+  - id: weakening-red-admin-bypass
+    what: "A change that weakens its own proof is red and names the weakening; a person with admin rights merges past it after reading."
+
+open:
+  - id: protect-main
+    ask: May main get a ruleset requiring the proof check? Asked at the CI slice.
+
+slices:
+  - id: honest-ready
+    tests: [crates/fearlezz/tests/core.rs ready_*, ci_*]
+    status: done
+  - id: ci-mode
+    tests: []
+    status: todo
+  - id: claims-reach-ci
+    tests: []
+    status: todo
+  - id: agent-hooks
+    tests: []
+    status: todo
+
+next: Show slice 1 for review, then ask about protecting main before the CI slice.

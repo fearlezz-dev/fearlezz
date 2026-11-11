@@ -86,6 +86,9 @@ enum Cmd {
         /// Only move the stage, such as going back to fix something first.
         #[arg(long, requires = "stage")]
         no_run: bool,
+        /// Prove this commit, for CI: every check the change needs, fresh, with no journal.
+        #[arg(long, conflicts_with_all = ["checks", "stage"])]
+        ci: bool,
     },
     /// Tell: record what only you know, such as the goal, a claim, or a question.
     Say {
@@ -279,8 +282,15 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
             stage,
             reason,
             no_run,
+            ci,
         } => {
             let ctx = prepared()?;
+            if ci {
+                let mut journal = Journal::in_memory("ci");
+                let to = ctx.config.stages.name(ctx.config.stages.last()).to_string();
+                journal.append(ctx.now, Event::Stage { to, reason: None })?;
+                return run_checks(&ctx, journal, &[], true);
+            }
             if let Some(name) = stage {
                 move_stage(&ctx, name, reason)?;
                 if no_run {
@@ -288,7 +298,7 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
                     return Ok(true);
                 }
             }
-            run_checks(&ctx, &checks, fresh)
+            run_checks(&ctx, ctx.journal()?, &checks, fresh)
         }
         Cmd::Say { what } => say(&prepared()?, what),
         Cmd::Setup { what } => setup(what),
@@ -642,8 +652,7 @@ fn plan(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-fn run_checks(ctx: &Ctx, ids: &[String], fresh: bool) -> Result<bool> {
-    let mut j = ctx.journal()?;
+fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<bool> {
     let mut wt = ctx.worktree()?;
     let before = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
     let stages = &ctx.config.stages;
@@ -666,10 +675,25 @@ fn run_checks(ctx: &Ctx, ids: &[String], fresh: bool) -> Result<bool> {
             .map(|id| ctx.config.check(id))
             .collect::<Result<_>>()?
     };
+    // A full run at the final stage answers for the whole work, not only for its checks.
+    let in_memory = j.is_in_memory();
+    let answers_for_work = !in_memory && ids.is_empty() && stage == final_stage;
+    let settled = |view: &View| {
+        !answers_for_work
+            || view.next == state::READY
+            || (view.checks.is_empty() && view.claims.is_empty())
+    };
+    let next_line = |view: &View| {
+        if in_memory {
+            state::COMMIT_PROVEN.to_string()
+        } else {
+            view.next.clone()
+        }
+    };
     if targets.is_empty() {
         println!("nothing to run in {stage}");
-        println!("next: {}", before.next);
-        return Ok(true);
+        println!("next: {}", next_line(&before));
+        return Ok(settled(&before));
     }
 
     let clock = std::time::Instant::now();
@@ -790,14 +814,14 @@ fn run_checks(ctx: &Ctx, ids: &[String], fresh: bool) -> Result<bool> {
     );
     let after = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
     if stage == final_stage
-        && after.next == state::READY
+        && (after.next == state::READY || in_memory)
         && env.state.services(&wt.git.root).is_some()
     {
         env.state.stop(env.cfg, &wt.git.root)?;
         println!("services stopped: all proof is in");
     }
-    println!("next: {}", after.next);
-    Ok(failures.is_empty())
+    println!("next: {}", next_line(&after));
+    Ok(failures.is_empty() && settled(&after))
 }
 
 /// Compares the stills and films of green checks with the base commit, one line per check.

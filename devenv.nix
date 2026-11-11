@@ -17,14 +17,13 @@
       exec = ''cd "$DEVENV_ROOT" && cargo fmt --all'';
     };
     check = {
-      description = "Run every Fearlezz check fresh, as CI does";
+      description = "Prove this commit with every check the change needs, fresh, as CI does";
       exec = ''
         set -euo pipefail
         cd "$DEVENV_ROOT"
         cargo build --quiet
-        # Its own journal at the final stage, so the branch's journal keeps its stage.
-        export FEARLEZZ_JOURNAL="''${FEARLEZZ_JOURNAL:-check}"
-        target/debug/fearlezz run --stage merge --reason "every check, fresh" --fresh
+        # Proves the commit, not the work: no journal, and never "ready to merge".
+        target/debug/fearlezz run --ci
       '';
     };
   };

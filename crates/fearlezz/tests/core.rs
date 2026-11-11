@@ -336,6 +336,171 @@ fn another_worktree_reuses_results_but_keeps_its_own_journal() {
     );
 }
 
+// Ready to merge
+
+const READY: &str = "next: all proof is in: ready to merge";
+const FINAL: &[&str] = &["run", "--stage", "merge", "--reason", "done"];
+
+/// A branch with a committed change that the checks read.
+fn committed_change() -> Repo {
+    let repo = repo();
+    repo.write("src/lib.rs", "fn b() {}\n");
+    repo.commit("change");
+    repo
+}
+
+fn start(repo: &Repo) {
+    repo.fz(&["say", "start", "--kind", "feature", "--goal", "the goal"]);
+}
+
+#[test]
+fn ready_needs_a_goal() {
+    let repo = committed_change();
+    repo.fz(&["say", "claim", "works", "--check", "tests"]);
+    let out = repo.fz(FINAL);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.last_line().contains("say start"), "{}", out.stdout);
+
+    repo.fz(&["say", "start", "--kind", "feature"]);
+    let no_goal = repo.fz(FINAL);
+    assert!(!no_goal.ok, "{}", no_goal.stdout);
+    assert!(no_goal.last_line().contains("--goal"), "{}", no_goal.stdout);
+
+    start(&repo);
+    let out = repo.fz(FINAL);
+    assert!(out.ok, "{}", out.stdout);
+    assert_eq!(out.last_line(), READY);
+}
+
+#[test]
+fn ready_needs_a_claim() {
+    let repo = committed_change();
+    start(&repo);
+    let out = repo.fz(FINAL);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.last_line().contains("say claim"), "{}", out.stdout);
+}
+
+#[test]
+fn ready_needs_everything_committed() {
+    let repo = committed_change();
+    start(&repo);
+    repo.fz(&["say", "claim", "works", "--check", "tests"]);
+    repo.write("src/lib.rs", "fn c() {}\n");
+    let out = repo.fz(FINAL);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.last_line().contains("commit"), "{}", out.stdout);
+
+    repo.commit("the rest");
+    let status = repo.fz(&[]);
+    assert_eq!(status.last_line(), READY, "{}", status.stdout);
+}
+
+#[test]
+fn a_claim_without_a_check_fails_the_final_run() {
+    let repo = committed_change();
+    start(&repo);
+    repo.fz(&["say", "claim", "no check named"]);
+    let out = repo.fz(FINAL);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.last_line().contains("say link"), "{}", out.stdout);
+}
+
+#[test]
+fn a_bug_never_seen_red_fails_the_final_run() {
+    let repo = committed_change();
+    repo.fz(&["say", "start", "--kind", "bug", "--goal", "the goal"]);
+    repo.fz(&["say", "claim", "fixed", "--check", "tests"]);
+    let out = repo.fz(FINAL);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.last_line().contains("failing"), "{}", out.stdout);
+}
+
+#[test]
+fn a_claim_counts_at_the_final_stage_of_a_single_stage_project() {
+    let repo = Repo::new(
+        "[stages]\norder = [\"only\"]\n\n[check.a]\nrun = \"true\"\nstage = \"only\"\ninputs = [\"src/**\"]\n",
+        &[("src/a", "1\n")],
+    );
+    repo.branch("feat/x");
+    repo.write("src/a", "2\n");
+    repo.commit("change");
+    start(&repo);
+    repo.fz(&["say", "claim", "no check named"]);
+    let out = repo.fz(&["run"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.last_line().contains("say link"), "{}", out.stdout);
+}
+
+#[test]
+fn only_a_final_run_of_the_whole_work_answers_for_it() {
+    let repo = committed_change();
+    assert!(repo.fz(&["run", "--stage", "working", "--reason", "x"]).ok);
+
+    repo.fz(&["run", "--stage", "merge", "--no-run"]);
+    let named = repo.fz(&["run", "tests"]);
+    assert!(named.ok, "{}", named.stdout);
+}
+
+// Proving a commit for CI
+
+const CI_NEXT: &str =
+    "next: this proved the commit, not the work; fearlezz shows where the work stands";
+
+#[test]
+fn ci_runs_what_the_change_needs_fresh_and_writes_no_journal() {
+    let repo = committed_change();
+    for round in 1..=2 {
+        let out = repo.fz_env(&["run", "--ci"], &[("FEARLEZZ_JOURNAL", "ci/1")]);
+        assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+        assert_eq!(out.last_line(), CI_NEXT);
+        assert!(!out.stdout.contains("ready to merge"), "{}", out.stdout);
+        for check in ["tests", "screens", "e2e"] {
+            assert_eq!(
+                runs(&repo.path(&format!(".runs/{check}"))),
+                round,
+                "{check}"
+            );
+        }
+    }
+    assert!(!repo.path(".git/fearlezz/journals").exists());
+}
+
+#[test]
+fn ci_fails_when_a_check_fails() {
+    let repo = committed_change();
+    repo.write("src/broken", "x\n");
+    repo.commit("break");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert_eq!(out.last_line(), CI_NEXT);
+}
+
+#[test]
+fn ci_leaves_the_journal_of_the_branch_alone() {
+    let repo = committed_change();
+    start(&repo);
+    assert!(repo.fz(&["run", "--ci"]).ok);
+    let status = repo.fz(&[]);
+    assert!(
+        status.stdout.contains("stage exploring"),
+        "{}",
+        status.stdout
+    );
+    assert!(
+        status.stdout.contains("tests never run"),
+        "{}",
+        status.stdout
+    );
+}
+
+#[test]
+fn ci_does_not_combine_with_a_stage_or_named_checks() {
+    let repo = committed_change();
+    assert!(!repo.fz(&["run", "--ci", "--stage", "merge"]).ok);
+    assert!(!repo.fz(&["run", "--ci", "tests"]).ok);
+}
+
 // Stages and claims
 
 #[test]
