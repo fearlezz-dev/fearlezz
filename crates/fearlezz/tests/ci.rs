@@ -170,6 +170,87 @@ fn ci_writes_the_job_summary_when_asked() {
     assert!(text.contains("| e2e | passed |"), "{text}");
 }
 
+#[test]
+fn the_job_summary_shows_the_end_of_a_failing_output() {
+    let repo = repo_with(&format!(
+        "{NO_PROOF}[check.tests]\nrun = \"echo boom-output; test ! -e src/broken\"\nstage = \"working\"\ninputs = \
+         [\"src/**\"]\n"
+    ));
+    repo.branch("feat/x");
+    repo.write("src/broken", "x\n");
+    repo.commit("break");
+    let summary = repo.path(".runs/summary.md");
+    let out = repo.fz_env(
+        &["run", "--ci"],
+        &[("GITHUB_STEP_SUMMARY", summary.to_str().unwrap())],
+    );
+    assert!(!out.ok, "{}", out.stdout);
+    let text = std::fs::read_to_string(&summary)
+        .unwrap_or_else(|_| panic!("{}\n{}", out.stdout, out.stderr));
+    assert!(text.contains("boom-output"), "{text}");
+}
+
+// The status comment on the pull request
+
+/// The variables GitHub Actions sets, so the comment can link the run.
+const GITHUB: [(&str, &str); 3] = [
+    ("GITHUB_SERVER_URL", "https://github.com"),
+    ("GITHUB_REPOSITORY", "owner/repo"),
+    ("GITHUB_RUN_ID", "42"),
+];
+
+fn comment(repo: &Repo) -> (common::Output, String) {
+    let path = repo.path(".runs/comment.md");
+    let out = repo.fz_env(
+        &["run", "--ci", "--comment", path.to_str().unwrap()],
+        &GITHUB,
+    );
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{}", out.stdout));
+    (out, text)
+}
+
+#[test]
+fn the_status_comment_says_proven_and_lists_the_checks() {
+    let repo = branch_with_change();
+    let (out, text) = comment(&repo);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(text.starts_with("<!-- fearlezz -->"), "{text}");
+    assert!(text.contains("**Proven**"), "{text}");
+    assert!(text.contains("| tests | passed |"), "{text}");
+    assert!(
+        text.contains("https://github.com/owner/repo/actions/runs/42"),
+        "{text}"
+    );
+    assert!(!text.contains("| what |"), "{text}");
+}
+
+#[test]
+fn the_status_comment_names_each_blocker_and_what_to_do() {
+    let repo = branch_with_change();
+    repo.write("src/broken", "x\n");
+    repo.write("README.md", "changed\n");
+    repo.commit("break");
+    with_checks(
+        &repo,
+        &CHECKS.replace("[check.e2e]\n", "[check.e2e]\noff = true\n"),
+    );
+    let (out, text) = comment(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(text.contains("**Not proven**"), "{text}");
+    assert!(text.contains("| what | why | what to do |"), "{text}");
+    assert!(text.contains("| check `tests` failed |"), "{text}");
+    assert!(text.contains("| `README.md` has no proof |"), "{text}");
+    assert!(text.contains("add it to a check's inputs"), "{text}");
+    assert!(text.contains("| check `e2e` is weaker |"), "{text}");
+    assert!(text.contains("it is gone"), "{text}");
+}
+
+#[test]
+fn the_status_comment_needs_ci() {
+    let repo = branch_with_change();
+    assert!(!repo.fz(&["run", "--comment", "x.md"]).ok);
+}
+
 // The base branch is the floor
 
 #[test]

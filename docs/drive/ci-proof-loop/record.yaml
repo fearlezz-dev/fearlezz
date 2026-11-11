@@ -106,12 +106,14 @@ slices:
     tests: [crates/fearlezz/tests/core.rs ready_needs_only_fresh_proof_*, a_journal_from_before_claims_*, say_has_no_claims_anymore, crates/fearlezz/tests/ci.rs a_code_change_needs_no_goal_or_claims, crates/fearlezz/tests/hooks.rs merging_past_ci_*]
     status: done
   - id: pr-status
-    status: next
+    tests: [crates/fearlezz/tests/ci.rs the_status_comment_*, the_job_summary_shows_the_end_of_a_failing_output]
+    status: done
     note: "a short bot comment replaced each run, and a check run page; written by CI, out of the agent's reach; the CI messages are redesigned for it"
   - id: test-counts-every-piece
-    status: next
+    tests: [crates/fearlezz/tests/test_counts.rs, crates/fearlezz/src/presets.rs every_language_piece_runs_and_counts_its_tests]
+    status: done
   - id: paid-approval-page
     status: roadmap
     note: "ee/: approve weakenings on a page with its own sign in; CI checks the signed approval"
 
-next: Build the PR status block, then test counts for every piece.
+next: Merge, then find what Fearlezz needs to be used in other projects.

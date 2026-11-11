@@ -23,7 +23,7 @@
         cd "$DEVENV_ROOT"
         cargo build --quiet
         # Proves the commit, not the work: no journal, and never "ready to merge".
-        target/debug/fearlezz run --ci
+        target/debug/fearlezz run --ci "$@"
       '';
     };
   };

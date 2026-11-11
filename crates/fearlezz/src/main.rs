@@ -21,7 +21,8 @@ mod state;
 mod store;
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context as _, Result, bail};
@@ -93,6 +94,9 @@ enum Cmd {
         /// Prove this commit, for CI: every check the change needs, fresh, with no journal.
         #[arg(long, conflicts_with_all = ["checks", "stage"])]
         ci: bool,
+        /// With --ci: also write the short status for the pull request to this file.
+        #[arg(long, value_name = "PATH", requires = "ci")]
+        comment: Option<PathBuf>,
     },
     /// Tell: record what only you know, such as a note, a question, or an approval.
     Say {
@@ -145,8 +149,8 @@ enum Setup {
     },
     /// Compare two stills or films: same, only timing, or changed (where and when).
     Compare {
-        before: std::path::PathBuf,
-        after: std::path::PathBuf,
+        before: PathBuf,
+        after: PathBuf,
         /// Print the full comparison as JSON.
         #[arg(long)]
         json: bool,
@@ -281,13 +285,14 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
             reason,
             no_run,
             ci,
+            comment,
         } => {
             let ctx = prepared()?;
             if ci {
                 let mut journal = Journal::in_memory("ci");
                 let to = ctx.config.stages.name(ctx.config.stages.last()).to_string();
                 journal.append(ctx.now, Event::Stage { to, reason: None })?;
-                return run_checks(&ctx, journal, &[], true);
+                return run_checks(&ctx, journal, &[], true, comment);
             }
             if let Some(name) = stage {
                 move_stage(&ctx, name, reason)?;
@@ -296,7 +301,7 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
                     return Ok(true);
                 }
             }
-            run_checks(&ctx, ctx.journal()?, &checks, fresh)
+            run_checks(&ctx, ctx.journal()?, &checks, fresh, None)
         }
         Cmd::Say { what } => say(&prepared()?, what),
         Cmd::Setup { what } => setup(what),
@@ -490,7 +495,7 @@ fn setup(what: Setup) -> Result<bool> {
             let ctx = prepared()?;
             {
                 let env = ctx.env();
-                let roots: Vec<std::path::PathBuf> = if all {
+                let roots: Vec<PathBuf> = if all {
                     env.state
                         .all_services()
                         .into_iter()
@@ -674,10 +679,15 @@ fn print_failure(f: &store::RunResult) {
 }
 
 /// What proving a commit shows besides the usual lines, so a reader can tell the checks ran:
-/// the commit, each check with its command and time, and the GitHub job summary.
+/// the commit and each check with its command and time, and for GitHub the check page (the
+/// job summary) and the short status for the pull request. Only CI writes these, so the agent
+/// whose work they judge cannot change them.
 struct CommitReport {
     commit: String,
+    base: String,
     rows: Vec<Row>,
+    /// Where the short status for the pull request goes, when asked.
+    comment: Option<PathBuf>,
 }
 
 /// One check in the report.
@@ -691,8 +701,16 @@ struct Row {
     run: String,
 }
 
+/// The first line of the status comment, so CI finds its own comment to replace.
+const COMMENT_MARKER: &str = "<!-- fearlezz -->";
+
 impl CommitReport {
-    fn start(ctx: &Ctx, wt: &Worktree, to_run: usize) -> Result<CommitReport> {
+    fn start(
+        ctx: &Ctx,
+        wt: &Worktree,
+        to_run: usize,
+        comment: Option<PathBuf>,
+    ) -> Result<CommitReport> {
         let commit = ctx.git.head_short()?;
         println!(
             "commit {commit}: {} changed files, {to_run} of {} checks to run",
@@ -701,7 +719,9 @@ impl CommitReport {
         );
         Ok(CommitReport {
             commit,
+            base: ctx.config.base.clone(),
             rows: Vec::new(),
+            comment,
         })
     }
 
@@ -731,18 +751,115 @@ impl CommitReport {
         });
     }
 
-    /// Appends the job summary to the file GitHub Actions names, when it names one.
-    fn finish(self, lines: &[String]) -> Result<()> {
-        use std::fmt::Write as _;
+    /// Writes the check page into the job summary GitHub Actions names, when it names one,
+    /// and the status for the pull request, when asked.
+    fn finish(
+        self,
+        floor: &floor::Floor,
+        failures: &[store::RunResult],
+        unstable: &[String],
+    ) -> Result<()> {
         use std::io::Write as _;
-        let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") else {
-            return Ok(());
+        let mut items: Vec<floor::Item> = failures.iter().map(failure_item).collect();
+        items.extend(unstable.iter().map(|id| floor::Item {
+            what: format!("check `{id}` is unstable"),
+            why: "the same inputs gave passed and failed".into(),
+            fix: "make it give one answer: a flaky test, or an input it does not declare".into(),
+        }));
+        items.extend(floor.items(&self.base));
+        if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+            let page = self.page(&items, failures)?;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(Path::new(&path))?
+                .write_all(page.as_bytes())?;
+        }
+        if let Some(path) = &self.comment {
+            std::fs::write(path, self.status(&items)?)
+                .with_context(|| format!("writing {}", path.display()))?;
+        }
+        Ok(())
+    }
+
+    /// The headline: proven or not, with the commit and how many checks passed.
+    fn headline(&self, items: &[floor::Item]) -> String {
+        let passed = self.rows.iter().filter(|r| r.outcome == "passed").count();
+        let word = if items.is_empty() {
+            "Proven"
+        } else {
+            "Not proven"
         };
-        let mut text = format!(
-            "### Fearlezz: commit {}\n\n| check | result | tests | time | command |\n| --- | --- \
-             | --- | --- | --- |\n",
-            self.commit
-        );
+        format!(
+            "**{word}**: commit {}, {passed} of {} checks passed",
+            self.commit,
+            self.rows.len()
+        )
+    }
+
+    /// The short status for the pull request: the headline, what blocks it, the checks folded
+    /// away, and a link to the check page.
+    fn status(&self, items: &[floor::Item]) -> Result<String, std::fmt::Error> {
+        let mut text = String::new();
+        writeln!(
+            text,
+            "{COMMENT_MARKER}\n### Fearlezz\n\n{}\n",
+            self.headline(items)
+        )?;
+        blockers(&mut text, items)?;
+        if !self.rows.is_empty() {
+            writeln!(
+                text,
+                "<details><summary>{} checks</summary>\n",
+                self.rows.len()
+            )?;
+            self.table(&mut text)?;
+            writeln!(text, "\n</details>\n")?;
+        }
+        if let (Ok(server), Ok(repo), Ok(run)) = (
+            std::env::var("GITHUB_SERVER_URL"),
+            std::env::var("GITHUB_REPOSITORY"),
+            std::env::var("GITHUB_RUN_ID"),
+        ) {
+            writeln!(
+                text,
+                "[The check page]({server}/{repo}/actions/runs/{run}) has each check's output."
+            )?;
+        }
+        Ok(text)
+    }
+
+    /// The check page: the headline, what blocks it, every check, and the end of each failing
+    /// output.
+    fn page(
+        &self,
+        items: &[floor::Item],
+        failures: &[store::RunResult],
+    ) -> Result<String, std::fmt::Error> {
+        let mut text = String::new();
+        writeln!(text, "### Fearlezz\n\n{}\n", self.headline(items))?;
+        blockers(&mut text, items)?;
+        self.table(&mut text)?;
+        if self.rows.is_empty() {
+            writeln!(text, "\nNo check reads what this commit changed.")?;
+        }
+        for f in failures {
+            writeln!(
+                text,
+                "\n<details><summary>The end of what {} printed</summary>\n\n```",
+                f.check
+            )?;
+            for line in run::tail(&f.log, 40) {
+                writeln!(text, "{}", line.replace("```", "'''"))?;
+            }
+            writeln!(text, "```\n\n</details>")?;
+        }
+        Ok(text)
+    }
+
+    fn table(&self, text: &mut String) -> std::fmt::Result {
+        writeln!(text, "| check | result | tests | time | command |")?;
+        writeln!(text, "| --- | --- | --- | --- | --- |")?;
         for row in &self.rows {
             let run = row.run.replace('|', "\\|");
             let tests = row.tests.map(|n| n.to_string()).unwrap_or_default();
@@ -752,21 +869,58 @@ impl CommitReport {
                 row.id, row.outcome, row.secs
             )?;
         }
-        if self.rows.is_empty() {
-            text.push_str("\nNo check reads what this commit changed.\n");
-        }
-        if !lines.is_empty() {
-            text.push('\n');
-            for line in lines {
-                writeln!(text, "- {}", line.trim())?;
-            }
-        }
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(Path::new(&path))?
-            .write_all(text.as_bytes())?;
         Ok(())
+    }
+}
+
+/// The table of what keeps the commit from being proven, if anything does.
+fn blockers(text: &mut String, items: &[floor::Item]) -> std::fmt::Result {
+    if items.is_empty() {
+        return Ok(());
+    }
+    writeln!(text, "| what | why | what to do |\n| --- | --- | --- |")?;
+    let cell = |s: &str| s.replace('|', "\\|").replace('\n', " ");
+    for item in items {
+        writeln!(
+            text,
+            "| {} | {} | {} |",
+            cell(&item.what),
+            cell(&item.why),
+            cell(&item.fix)
+        )?;
+    }
+    writeln!(text)
+}
+
+/// A failed check as a blocker, for a reader who sees neither the agent nor the logs.
+fn failure_item(f: &store::RunResult) -> floor::Item {
+    let what = format!("check `{}` failed", f.check);
+    if let Some(found) = f.findings.iter().find(|x| x.level == findings::Level::Gate) {
+        return floor::Item {
+            what,
+            why: format!("blocking findings, such as {found}"),
+            fix: "fix the findings; the check page lists them".into(),
+        };
+    }
+    if f.tests == Some(0) && f.exit_code == Some(0) {
+        let detail = f
+            .proof_errors
+            .first()
+            .map(|e| format!(": {e}"))
+            .unwrap_or_default();
+        return floor::Item {
+            what,
+            why: format!("it ran no tests, so it proves nothing{detail}"),
+            fix: "make it run its tests, or give it the tests reader its runner needs".into(),
+        };
+    }
+    let code = f
+        .exit_code
+        .map_or_else(|| "a signal".to_string(), |c| format!("exit code {c}"));
+    floor::Item {
+        what,
+        why: format!("its command ended with {code}"),
+        fix: "fix what it reports; the check page shows the end of its output".into(),
     }
 }
 
@@ -775,7 +929,13 @@ const FLOOR_NEXT: &str = "the change takes away proof the base branch requires (
                           it, or ask the developer whether to merge past CI: fearlezz say ask \
                           \"<question>\"";
 
-fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<bool> {
+fn run_checks(
+    ctx: &Ctx,
+    mut j: Journal,
+    ids: &[String],
+    fresh: bool,
+    comment: Option<PathBuf>,
+) -> Result<bool> {
     let mut wt = ctx.worktree()?;
     let before = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
     let stages = &ctx.config.stages;
@@ -805,14 +965,14 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
         }
     };
     let mut report = in_memory
-        .then(|| CommitReport::start(ctx, &wt, targets.len()))
+        .then(|| CommitReport::start(ctx, &wt, targets.len(), comment))
         .transpose()?;
     if targets.is_empty() {
         println!("nothing to run in {stage}");
         for line in &lines {
             println!("{line}");
         }
-        report.map_or(Ok(()), |r| r.finish(&lines))?;
+        report.map_or(Ok(()), |r| r.finish(&floor, &[], &[]))?;
         println!("next: {}", next_line(&before));
         return Ok(settled(&before));
     }
@@ -925,7 +1085,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
     for line in &lines {
         println!("{line}");
     }
-    report.map_or(Ok(()), |r| r.finish(&lines))?;
+    report.map_or(Ok(()), |r| r.finish(&floor, &failures, &unstable))?;
     let after = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
     if stage == final_stage
         && (after.next == state::READY || in_memory)
