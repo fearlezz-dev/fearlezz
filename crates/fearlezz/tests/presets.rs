@@ -86,7 +86,7 @@ fn an_unknown_piece_says_what_exists() {
     assert!(!out.ok);
     assert!(
         out.stderr.contains(
-            "built in are agents, devenv, eslint, flutter, go, kotlin, playwright, python, rust, typescript"
+            "built in are agents, devenv, eslint, flutter, go, kotlin, playwright, python, rust, safety, typescript"
         ),
         "{}",
         out.stderr
@@ -364,4 +364,35 @@ fn update_stays_in_the_major_and_says_when_a_bigger_one_is_out() {
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
     assert!(config.contains("@v1.5\""), "{config}");
     assert!(repo.fz(&["setup", "update"]).stdout.contains("v3.1 is out"));
+}
+
+/// The documented fake GitHub token from secret scanners' own test data. The AWS example key
+/// is allowlisted by the scanner, so it cannot stand in here.
+const FAKE_TOKEN: &str = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+
+#[test]
+fn the_safety_piece_gates_a_secret_on_a_changed_line_and_never_prints_it() {
+    let repo = Repo::new(
+        "use = [\"safety\"]\n",
+        &[("src/old.rs", &format!("const T: &str = \"{FAKE_TOKEN}\";\n"))],
+    );
+    assert_eq!(checks(&repo), "secrets");
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+
+    // A leak that was already committed does not block new work.
+    repo.write("src/new.rs", "fn main() {}\n");
+    let out = repo.fz(&["run", "secrets"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+
+    // The same leak on a line this change adds does.
+    repo.write(
+        "src/new.rs",
+        &format!("fn main() {{}}\nconst T: &str = \"{FAKE_TOKEN}\";\n"),
+    );
+    let out = repo.fz(&["run", "secrets"]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("src/new.rs:2"), "{}", out.stdout);
+    assert!(out.stdout.contains("github-pat"), "{}", out.stdout);
+    assert!(!out.stdout.contains(FAKE_TOKEN), "{}", out.stdout);
 }

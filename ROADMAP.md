@@ -35,7 +35,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Rules | Paths, naming, companion files, ast-grep code rules |
 | Settings | One source written into each tool's own file, drift is a finding |
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
-| Pieces | Rust, TypeScript, ESLint, Playwright, Python, Go, Kotlin, Flutter, devenv, agents; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
+| Pieces | Rust, TypeScript, ESLint, Playwright, Python, Go, Kotlin, Flutter, devenv, agents, safety; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
 | Stills and films | Compared with the same check run on the base commit, with a report page. Listed in `proof.jsonl` or found by a `stills` glob; the `playwright` piece takes them from `toHaveScreenshot` (spike, `spike/look-web`) |
 | Approvals | A visual change waits for the developer's words |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
@@ -57,7 +57,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | --- | --- |
 | Recording apps on macOS | Spike proved a covered window can be recorded with ScreenCaptureKit; no recorder yet |
 | Showcase | Stitch proofs into polished README films and release notes; prototyped once |
-| Safety proof | No secret scanning or security piece |
+| Safety proof | The `safety` piece scans for secrets (gitleaks, gate on changed lines). No dependency, workflow or code scanning yet |
 | Hosted parts and proof links | `ee/` is empty; links may be hidden or need sign in |
 | Trends over months | Decided to live apart from journals, with the same IDs |
 | MCP layer | Decided to come later, as a thin layer on the CLI |

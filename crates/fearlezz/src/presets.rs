@@ -30,6 +30,7 @@ pub(crate) const BUILTIN: &[(&str, &str)] = &[
     ("playwright", include_str!("../presets/playwright.toml")),
     ("python", include_str!("../presets/python.toml")),
     ("rust", include_str!("../presets/rust.toml")),
+    ("safety", include_str!("../presets/safety.toml")),
     ("typescript", include_str!("../presets/typescript.toml")),
 ];
 
