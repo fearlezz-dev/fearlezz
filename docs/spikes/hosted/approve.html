@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approve changed pictures</title>
+<style>/* The light table of the local look report, carried to the hosted pages: pictures on mats,
+   magenta only for changed pictures, green and red only for proof. */
+:root {
+  --surface:#eef0f3; --mat:#ffffff; --ink:#14171c; --quiet:#5b6270; --rule:#d5d9df;
+  --signal:#c8106f; --pass:#17703c; --fail:#b42318; --wait:#9a5205; --focus:#1f5fd1;
+  --series-1:#2a78d6; --series-2:#eb6834; --tint:#f6f7f9;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface:#15181d; --mat:#0c0e11; --ink:#eceef2; --quiet:#a0a7b3; --rule:#2c313a;
+    --signal:#ff5aab; --pass:#4cc27a; --fail:#ff7468; --wait:#f0a63a; --focus:#7aa7ff;
+    --series-1:#3987e5; --series-2:#d95926; --tint:#1b1f25;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--surface); color: var(--ink);
+  font: 18px/1.6 "Atkinson Hyperlegible", "Verdana", system-ui, sans-serif; }
+main { max-width: 1080px; margin: 0 auto; padding: 28px 16px 96px; }
+a { color: var(--focus); }
+a:focus-visible, button:focus-visible, summary:focus-visible, textarea:focus-visible,
+input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+code { font: 15px/1.4 ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; }
+
+.bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; justify-content: space-between;
+  padding-bottom: 18px; border-bottom: 1px solid var(--rule); margin-bottom: 36px; font-size: 16px; }
+.bar .repo { font-weight: 700; }
+.bar .who { color: var(--quiet); }
+
+h1 { font-size: 36px; line-height: 1.15; margin: 0 0 10px; letter-spacing: -0.01em; }
+h2 { font-size: 25px; line-height: 1.25; margin: 0 0 6px; }
+h3 { font-size: 19px; margin: 22px 0 8px; }
+p { margin: 0 0 12px; max-width: 68ch; }
+.quiet { color: var(--quiet); }
+.small { font-size: 15px; }
+
+section { padding: 34px 0; border-top: 1px solid var(--rule); }
+section.first { border-top: 0; padding-top: 0; }
+.lede { font-size: 19px; color: var(--quiet); margin-bottom: 18px; }
+
+.verdict { display: flex; gap: 18px; align-items: flex-start; padding: 22px 22px;
+  background: var(--mat); border-radius: 10px; border-left: 8px solid var(--wait); margin: 20px 0 8px; }
+.verdict.pass { border-left-color: var(--pass); }
+.verdict.fail { border-left-color: var(--fail); }
+.verdict .word { font-size: 28px; font-weight: 700; line-height: 1.2; margin: 0 0 6px; }
+.verdict p { margin: 0 0 6px; }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 28px;
+  margin: 22px 0 0; padding: 0; }
+.facts div { margin: 0; }
+.facts dt { font-size: 15px; color: var(--quiet); }
+.facts dd { margin: 0; font-weight: 700; }
+
+table { width: 100%; border-collapse: collapse; background: var(--mat); border-radius: 10px;
+  overflow: hidden; font-size: 17px; }
+th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 15px; color: var(--quiet); font-weight: 400; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.state { font-weight: 700; white-space: nowrap; }
+.state.pass { color: var(--pass); } .state.fail { color: var(--fail); }
+.state.wait { color: var(--wait); } .state.changed { color: var(--signal); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px;
+  background: currentColor; vertical-align: 1px; }
+@media (max-width: 640px) {
+  .hide-narrow { display: none; }
+  th, td { padding: 10px 10px; }
+  h1 { font-size: 29px; }
+}
+
+details { background: var(--mat); border-radius: 10px; padding: 0 18px; margin: 12px 0; }
+details > summary { cursor: pointer; padding: 14px 0; font-weight: 700; }
+details[open] > summary { border-bottom: 1px solid var(--rule); margin-bottom: 12px; }
+details > :last-child { margin-bottom: 16px; }
+
+.button { font: inherit; font-size: 17px; font-weight: 700; border-radius: 8px; padding: 11px 18px;
+  cursor: pointer; border: 2px solid var(--ink); background: var(--ink); color: var(--surface); }
+.button.plain { background: transparent; color: var(--ink); border-color: var(--rule); }
+.button[disabled] { opacity: .45; cursor: not-allowed; }
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 640px) { .pair { grid-template-columns: 1fr; } }
+.pair figure { margin: 0; }
+.pair figcaption { font-size: 15px; color: var(--quiet); margin: 0 0 6px; }
+.mat { background: var(--mat); padding: 10px; border-radius: 8px; }
+.mat svg { display: block; width: 100%; height: auto; }
+
+.item { padding: 26px 0; border-top: 1px dashed var(--rule); }
+.item:first-of-type { border-top: 0; }
+.item-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
+.item-head h3 { margin: 0; }
+
+.strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 640px) { .strip { grid-template-columns: repeat(2, 1fr); } }
+.strip figure { margin: 0; }
+.strip figcaption { font-size: 14px; color: var(--quiet); }
+
+.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+.steps li { background: var(--mat); border-radius: 10px; padding: 14px 18px; display: grid;
+  grid-template-columns: 34px 1fr; gap: 12px; align-items: start; }
+.steps .n { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--quiet);
+  display: grid; place-items: center; font-weight: 700; font-size: 15px; }
+.steps p { margin: 0; }
+
+.quote { border-left: 4px solid var(--ink); padding: 4px 0 4px 14px; margin: 8px 0; font-size: 19px; }
+
+textarea { width: 100%; min-height: 96px; font: inherit; color: var(--ink); background: var(--mat);
+  border: 2px solid var(--rule); border-radius: 8px; padding: 12px; resize: vertical; }
+label { font-weight: 700; display: block; margin: 0 0 6px; }
+.form { background: var(--mat); border-radius: 10px; padding: 20px; margin-top: 20px; }
+.form .who { margin: 0 0 16px; }
+.actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+.done { display: none; }
+.done.shown { display: block; }
+.old td:first-child { color: var(--quiet); }
+</style>
+</head>
+<body>
+<main>
+  <div class="bar">
+    <span class="repo">example-org/example-app</span>
+    <span class="who">Signed in as example-dev, write access</span>
+  </div>
+
+  <section class="first">
+    <p class="quiet"><a href="proof.html">Pull request 128</a>, check ui-shots</p>
+    <h1>2 pictures changed</h1>
+    <p class="lede">Do they look the way you want? Your words go into the proof.</p>
+  </section>
+
+  <section>
+    <div class="item">
+      <div class="item-head"><h3>settings-page</h3><span class="state changed">Changed</span></div>
+      <p>A new row. The Save button moved down.</p>
+      <div class="pair">
+        <figure><figcaption>Before, on main</figcaption><div class="mat"><svg viewBox="0 0 320 250" role="img" aria-label="Settings screen"><rect width="320" height="250" fill="#f4f5f7"/><rect x="16" y="14" width="288" height="226" rx="10" fill="#ffffff"/><text x="32" y="44" font-size="16" font-weight="700" fill="#1d2128" font-family="system-ui">Settings</text><line x1="32" y1="62" x2="288" y2="62" stroke="#e3e6ea"/><text x="32" y="88" font-size="13" fill="#1d2128" font-family="system-ui">Notifications</text><rect x="248" y="75" width="34" height="18" rx="9" fill="#2a62d6"/><circle cx="273" cy="84" r="7" fill="#fff"/><line x1="32" y1="102" x2="288" y2="102" stroke="#e3e6ea"/><text x="32" y="128" font-size="13" fill="#1d2128" font-family="system-ui">Language</text><text x="282" y="128" font-size="13" text-anchor="end" fill="#6b7280" font-family="system-ui">English</text><rect x="32" y="156" width="84" height="30" rx="6" fill="#2a62d6"/><text x="74" y="176" font-size="13" text-anchor="middle" fill="#fff" font-family="system-ui">Save</text><rect x="24" y="142" width="272" height="86" rx="6" fill="none" stroke="var(--signal)" stroke-width="2.5" stroke-dasharray="6 4"/></svg></div></figure>
+        <figure><figcaption>After</figcaption><div class="mat"><svg viewBox="0 0 320 250" role="img" aria-label="Settings screen with a dark mode row"><rect width="320" height="250" fill="#f4f5f7"/><rect x="16" y="14" width="288" height="226" rx="10" fill="#ffffff"/><text x="32" y="44" font-size="16" font-weight="700" fill="#1d2128" font-family="system-ui">Settings</text><line x1="32" y1="62" x2="288" y2="62" stroke="#e3e6ea"/><text x="32" y="88" font-size="13" fill="#1d2128" font-family="system-ui">Notifications</text><rect x="248" y="75" width="34" height="18" rx="9" fill="#2a62d6"/><circle cx="273" cy="84" r="7" fill="#fff"/><line x1="32" y1="102" x2="288" y2="102" stroke="#e3e6ea"/><text x="32" y="128" font-size="13" fill="#1d2128" font-family="system-ui">Language</text><text x="282" y="128" font-size="13" text-anchor="end" fill="#6b7280" font-family="system-ui">English</text><line x1="32" y1="142" x2="288" y2="142" stroke="#e3e6ea"/><text x="32" y="168" font-size="13" fill="#1d2128" font-family="system-ui">Dark mode</text><rect x="248" y="155" width="34" height="18" rx="9" fill="#e3e6ea"/><circle cx="257" cy="164" r="7" fill="#fff"/><rect x="32" y="196" width="84" height="30" rx="6" fill="#2a62d6"/><text x="74" y="216" font-size="13" text-anchor="middle" fill="#fff" font-family="system-ui">Save</text><rect x="24" y="142" width="272" height="86" rx="6" fill="none" stroke="var(--signal)" stroke-width="2.5" stroke-dasharray="6 4"/></svg></div></figure>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-head"><h3>settings-page-dark</h3><span class="state changed">Changed</span></div>
+      <p>The same change in the dark theme.</p>
+      <div class="pair">
+        <figure><figcaption>Before, on main</figcaption><div class="mat"><svg viewBox="0 0 320 250" role="img" aria-label="Settings screen"><rect width="320" height="250" fill="#1a1d23"/><rect x="16" y="14" width="288" height="226" rx="10" fill="#23272f"/><text x="32" y="44" font-size="16" font-weight="700" fill="#e9ebef" font-family="system-ui">Settings</text><line x1="32" y1="62" x2="288" y2="62" stroke="#343944"/><text x="32" y="88" font-size="13" fill="#e9ebef" font-family="system-ui">Notifications</text><rect x="248" y="75" width="34" height="18" rx="9" fill="#6f9cff"/><circle cx="273" cy="84" r="7" fill="#fff"/><line x1="32" y1="102" x2="288" y2="102" stroke="#343944"/><text x="32" y="128" font-size="13" fill="#e9ebef" font-family="system-ui">Language</text><text x="282" y="128" font-size="13" text-anchor="end" fill="#9aa1ad" font-family="system-ui">English</text><rect x="32" y="156" width="84" height="30" rx="6" fill="#6f9cff"/><text x="74" y="176" font-size="13" text-anchor="middle" fill="#fff" font-family="system-ui">Save</text><rect x="24" y="142" width="272" height="86" rx="6" fill="none" stroke="var(--signal)" stroke-width="2.5" stroke-dasharray="6 4"/></svg></div></figure>
+        <figure><figcaption>After</figcaption><div class="mat"><svg viewBox="0 0 320 250" role="img" aria-label="Settings screen with a dark mode row"><rect width="320" height="250" fill="#1a1d23"/><rect x="16" y="14" width="288" height="226" rx="10" fill="#23272f"/><text x="32" y="44" font-size="16" font-weight="700" fill="#e9ebef" font-family="system-ui">Settings</text><line x1="32" y1="62" x2="288" y2="62" stroke="#343944"/><text x="32" y="88" font-size="13" fill="#e9ebef" font-family="system-ui">Notifications</text><rect x="248" y="75" width="34" height="18" rx="9" fill="#6f9cff"/><circle cx="273" cy="84" r="7" fill="#fff"/><line x1="32" y1="102" x2="288" y2="102" stroke="#343944"/><text x="32" y="128" font-size="13" fill="#e9ebef" font-family="system-ui">Language</text><text x="282" y="128" font-size="13" text-anchor="end" fill="#9aa1ad" font-family="system-ui">English</text><line x1="32" y1="142" x2="288" y2="142" stroke="#343944"/><text x="32" y="168" font-size="13" fill="#e9ebef" font-family="system-ui">Dark mode</text><rect x="248" y="155" width="34" height="18" rx="9" fill="#343944"/><circle cx="257" cy="164" r="7" fill="#fff"/><rect x="32" y="196" width="84" height="30" rx="6" fill="#6f9cff"/><text x="74" y="216" font-size="13" text-anchor="middle" fill="#fff" font-family="system-ui">Save</text><rect x="24" y="142" width="272" height="86" rx="6" fill="none" stroke="var(--signal)" stroke-width="2.5" stroke-dasharray="6 4"/></svg></div></figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="decide">
+    <h2>Your answer</h2>
+    <p>One answer covers both pictures, for these exact inputs.</p>
+    <p>If the code changes again, this answer stops counting.</p>
+
+    <form class="form" id="form" onsubmit="return approve(event)">
+      <p class="who">You answer as <strong>example-dev</strong>, a person. Agents cannot use this page.</p>
+      <label for="said">In your words</label>
+      <textarea id="said" required placeholder="For example: the new row looks right, ship it"></textarea>
+      <div class="actions">
+        <button class="button" id="yes" type="submit" disabled>Approve 2 pictures</button>
+        <button class="button plain" type="button" onclick="ask()">Ask for changes</button>
+      </div>
+      <p class="small quiet" style="margin:12px 0 0">Ask for changes posts your words on the pull request, so the agent can read them.</p>
+    </form>
+
+    <div class="done verdict pass" id="done" role="status">
+      <div>
+        <p class="word">Approved</p>
+        <p class="quote" id="echo"></p>
+        <p class="small quiet">example-dev, just now, for ui-shots inputs <code>k_5f2a91c07e</code></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What happens next</h2>
+    <ol class="steps">
+      <li><span class="n">1</span><p><strong>Recorded and signed.</strong> Your name, your words, the check and its inputs. The service signs it with the repository's key.</p></li>
+      <li><span class="n">2</span><p><strong>CI runs again.</strong> <code>fearlezz run --ci</code> fetches approvals for these inputs and checks the signature. Nothing is trusted on the service's word.</p></li>
+      <li><span class="n">3</span><p><strong>The pull request shows it.</strong> The status comment says: approved by example-dev, with your words.</p></li>
+      <li><span class="n">4</span><p><strong>The agent sees it.</strong> On its next <code>fearlezz</code>, the journal gains the approval, marked as from the browser.</p></li>
+    </ol>
+    <details>
+      <summary>Why nothing is written into the repository</summary>
+      <p>A file in the branch would change the tree, so every check would run again.</p>
+      <p>An approval belongs to inputs, not to a commit. It lives next to the results, with the same keys.</p>
+      <p>Download every approval as JSON at any time. They stay valid without this site, because the signature can be checked offline.</p>
+    </details>
+  </section>
+
+  <section>
+    <h2>Earlier answers</h2>
+    <table>
+      <thead><tr><th>When</th><th>Who</th><th>Words</th><th class="hide-narrow">Counts</th></tr></thead>
+      <tbody>
+        <tr class="old"><td>Yesterday</td><td>example-dev<br><span class="small quiet">in the browser</span></td><td>Toggle is too far right, move it in.</td><td class="hide-narrow">Asked for changes</td></tr>
+        <tr class="old"><td>2 days ago</td><td>example-dev<br><span class="small quiet">relayed by an agent</span></td><td>"Looks fine for a first try."</td><td class="hide-narrow">No, inputs changed</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+<script>
+const said = document.getElementById('said');
+const yes = document.getElementById('yes');
+said.addEventListener('input', () => { yes.disabled = said.value.trim().length < 3; });
+function approve(e) {
+  e.preventDefault();
+  document.getElementById('echo').textContent = '"' + said.value.trim() + '"';
+  document.getElementById('form').style.display = 'none';
+  document.getElementById('done').classList.add('shown');
+  return false;
+}
+function ask() { said.focus(); }
+</script>
+</body>
+</html>

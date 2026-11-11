@@ -58,7 +58,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Recording apps on macOS | Spike proved a covered window can be recorded with ScreenCaptureKit; no recorder yet |
 | Showcase | Stitch proofs into polished README films and release notes; prototyped once |
 | Safety proof | No secret scanning or security piece |
-| Hosted parts and proof links | `ee/` is empty; links may be hidden or need sign in |
+| Hosted parts and proof links | `ee/` holds only its boundary; a design spike with mocks and open decisions is in `docs/spikes/hosted`. Links may be hidden or need sign in |
 | Trends over months | Decided to live apart from journals, with the same IDs |
 | MCP layer | Decided to come later, as a thin layer on the CLI |
 

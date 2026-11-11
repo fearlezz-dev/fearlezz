@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trends for example-app</title>
+<style>/* The light table of the local look report, carried to the hosted pages: pictures on mats,
+   magenta only for changed pictures, green and red only for proof. */
+:root {
+  --surface:#eef0f3; --mat:#ffffff; --ink:#14171c; --quiet:#5b6270; --rule:#d5d9df;
+  --signal:#c8106f; --pass:#17703c; --fail:#b42318; --wait:#9a5205; --focus:#1f5fd1;
+  --series-1:#2a78d6; --series-2:#eb6834; --tint:#f6f7f9;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface:#15181d; --mat:#0c0e11; --ink:#eceef2; --quiet:#a0a7b3; --rule:#2c313a;
+    --signal:#ff5aab; --pass:#4cc27a; --fail:#ff7468; --wait:#f0a63a; --focus:#7aa7ff;
+    --series-1:#3987e5; --series-2:#d95926; --tint:#1b1f25;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--surface); color: var(--ink);
+  font: 18px/1.6 "Atkinson Hyperlegible", "Verdana", system-ui, sans-serif; }
+main { max-width: 1080px; margin: 0 auto; padding: 28px 16px 96px; }
+a { color: var(--focus); }
+a:focus-visible, button:focus-visible, summary:focus-visible, textarea:focus-visible,
+input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+code { font: 15px/1.4 ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; }
+
+.bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; justify-content: space-between;
+  padding-bottom: 18px; border-bottom: 1px solid var(--rule); margin-bottom: 36px; font-size: 16px; }
+.bar .repo { font-weight: 700; }
+.bar .who { color: var(--quiet); }
+
+h1 { font-size: 36px; line-height: 1.15; margin: 0 0 10px; letter-spacing: -0.01em; }
+h2 { font-size: 25px; line-height: 1.25; margin: 0 0 6px; }
+h3 { font-size: 19px; margin: 22px 0 8px; }
+p { margin: 0 0 12px; max-width: 68ch; }
+.quiet { color: var(--quiet); }
+.small { font-size: 15px; }
+
+section { padding: 34px 0; border-top: 1px solid var(--rule); }
+section.first { border-top: 0; padding-top: 0; }
+.lede { font-size: 19px; color: var(--quiet); margin-bottom: 18px; }
+
+.verdict { display: flex; gap: 18px; align-items: flex-start; padding: 22px 22px;
+  background: var(--mat); border-radius: 10px; border-left: 8px solid var(--wait); margin: 20px 0 8px; }
+.verdict.pass { border-left-color: var(--pass); }
+.verdict.fail { border-left-color: var(--fail); }
+.verdict .word { font-size: 28px; font-weight: 700; line-height: 1.2; margin: 0 0 6px; }
+.verdict p { margin: 0 0 6px; }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 28px;
+  margin: 22px 0 0; padding: 0; }
+.facts div { margin: 0; }
+.facts dt { font-size: 15px; color: var(--quiet); }
+.facts dd { margin: 0; font-weight: 700; }
+
+table { width: 100%; border-collapse: collapse; background: var(--mat); border-radius: 10px;
+  overflow: hidden; font-size: 17px; }
+th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 15px; color: var(--quiet); font-weight: 400; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.state { font-weight: 700; white-space: nowrap; }
+.state.pass { color: var(--pass); } .state.fail { color: var(--fail); }
+.state.wait { color: var(--wait); } .state.changed { color: var(--signal); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px;
+  background: currentColor; vertical-align: 1px; }
+@media (max-width: 640px) {
+  .hide-narrow { display: none; }
+  th, td { padding: 10px 10px; }
+  h1 { font-size: 29px; }
+}
+
+details { background: var(--mat); border-radius: 10px; padding: 0 18px; margin: 12px 0; }
+details > summary { cursor: pointer; padding: 14px 0; font-weight: 700; }
+details[open] > summary { border-bottom: 1px solid var(--rule); margin-bottom: 12px; }
+details > :last-child { margin-bottom: 16px; }
+
+.button { font: inherit; font-size: 17px; font-weight: 700; border-radius: 8px; padding: 11px 18px;
+  cursor: pointer; border: 2px solid var(--ink); background: var(--ink); color: var(--surface); }
+.button.plain { background: transparent; color: var(--ink); border-color: var(--rule); }
+.button[disabled] { opacity: .45; cursor: not-allowed; }
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 640px) { .pair { grid-template-columns: 1fr; } }
+.pair figure { margin: 0; }
+.pair figcaption { font-size: 15px; color: var(--quiet); margin: 0 0 6px; }
+.mat { background: var(--mat); padding: 10px; border-radius: 8px; }
+.mat svg { display: block; width: 100%; height: auto; }
+
+.item { padding: 26px 0; border-top: 1px dashed var(--rule); }
+.item:first-of-type { border-top: 0; }
+.item-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
+.item-head h3 { margin: 0; }
+
+.strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 640px) { .strip { grid-template-columns: repeat(2, 1fr); } }
+.strip figure { margin: 0; }
+.strip figcaption { font-size: 14px; color: var(--quiet); }
+
+.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+.steps li { background: var(--mat); border-radius: 10px; padding: 14px 18px; display: grid;
+  grid-template-columns: 34px 1fr; gap: 12px; align-items: start; }
+.steps .n { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--quiet);
+  display: grid; place-items: center; font-weight: 700; font-size: 15px; }
+.steps p { margin: 0; }
+
+.quote { border-left: 4px solid var(--ink); padding: 4px 0 4px 14px; margin: 8px 0; font-size: 19px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-top: 18px; }
+.tile { background: var(--mat); border-radius: 10px; padding: 16px 18px; }
+.tile .v { font-size: 34px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tile .l { color: var(--quiet); font-size: 16px; }
+.tile .d { font-size: 15px; margin-top: 4px; }
+.chart { background: var(--mat); border-radius: 10px; padding: 16px 16px 8px; margin-top: 14px; position: relative; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { fill: var(--quiet); font-size: 13px; font-family: inherit; }
+.chart .grid { stroke: var(--rule); stroke-width: 1; }
+.legend { display: flex; gap: 20px; flex-wrap: wrap; font-size: 15px; margin: 0 0 8px; }
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--surface); font-size: 14px;
+  padding: 6px 10px; border-radius: 6px; white-space: nowrap; opacity: 0; transform: translate(-50%, -120%); }
+.tip.on { opacity: 1; }
+.range { display: flex; gap: 8px; flex-wrap: wrap; }
+.range button { font: inherit; font-size: 15px; padding: 6px 12px; border-radius: 6px; border: 1.5px solid var(--rule);
+  background: var(--mat); color: var(--ink); cursor: pointer; }
+.range button[aria-pressed="true"] { border-color: var(--ink); font-weight: 700; }
+.spark { width: 110px; height: 28px; display: block; }
+</style>
+</head>
+<body>
+<main>
+  <div class="bar">
+    <span class="repo">example-org/example-app</span>
+    <div class="range" role="group" aria-label="Time range">
+      <button aria-pressed="false">30 days</button>
+      <button aria-pressed="true">6 months</button>
+      <button aria-pressed="false">1 year</button>
+    </div>
+  </div>
+
+  <section class="first">
+    <h1>Trends</h1>
+    <p class="lede">June to November 2026. Only CI proofs count.</p>
+    <div class="tiles">
+      <div class="tile"><div class="l">Pass on the first try</div><div class="v">86%</div><div class="d quiet">71% in June</div></div>
+      <div class="tile"><div class="l">Time to proof, median</div><div class="v">4.1 h</div><div class="d quiet">9.5 h in June</div></div>
+      <div class="tile"><div class="l">Flaky checks</div><div class="v">3</div><div class="d quiet">playwright most often</div></div>
+      <div class="tile"><div class="l">Pull requests proven</div><div class="v">236</div><div class="d quiet">this month</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Pass on the first try</h2>
+    <p class="quiet">Pull requests whose first CI proof was green.</p>
+    <div class="chart" id="pass"></div>
+  </section>
+
+  <section>
+    <h2>Time to proof</h2>
+    <p class="quiet">From the first commit to "ready to merge", median hours.</p>
+    <div class="chart" id="time"></div>
+  </section>
+
+  <section>
+    <h2>Who approved pictures</h2>
+    <p class="quiet">A person in the browser, or a person's words relayed by an agent.</p>
+    <div class="chart" id="approvals">
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--series-1)"></span>Person, in the browser</span>
+        <span><span class="swatch" style="background:var(--series-2)"></span>Relayed by an agent</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Flaky checks</h2>
+    <p class="quiet">The same inputs gave both outcomes.</p>
+    <table>
+      <thead><tr><th>Check</th><th class="num">Unstable runs</th><th class="num hide-narrow">Share</th><th>Last seen</th></tr></thead>
+      <tbody>
+        <tr><td>playwright</td><td class="num">14</td><td class="num hide-narrow">2.1%</td><td>Yesterday</td></tr>
+        <tr><td>vitest</td><td class="num">3</td><td class="num hide-narrow">0.3%</td><td>9 days ago</td></tr>
+        <tr><td>ui-shots</td><td class="num">2</td><td class="num hide-narrow">0.4%</td><td>3 weeks ago</td></tr>
+      </tbody>
+    </table>
+    <details>
+      <summary>Which tests flip in playwright</summary>
+      <p><code>settings &gt; saves the language</code>: 9 times</p>
+      <p><code>search &gt; shows results while typing</code>: 5 times</p>
+    </details>
+  </section>
+
+  <section>
+    <h2>Check durations</h2>
+    <p class="quiet">Per run in CI, this month.</p>
+    <table>
+      <thead><tr><th>Check</th><th class="num">Median</th><th class="num">Slowest 5%</th><th class="hide-narrow">6 months</th></tr></thead>
+      <tbody id="durations"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <details>
+      <summary>All numbers as a table</summary>
+      <table>
+        <thead><tr><th>Month</th><th class="num">First try</th><th class="num">Hours</th><th class="num">Person</th><th class="num">Agent</th></tr></thead>
+        <tbody id="all"></tbody>
+      </table>
+    </details>
+  </section>
+</main>
+<script>
+const months = ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov'];
+const pass = [71, 74, 78, 81, 84, 86];
+const hours = [9.5, 8.1, 6.4, 5.2, 4.8, 4.1];
+const person = [0, 0, 4, 11, 17, 22];
+const agent = [14, 18, 15, 9, 6, 4];
+const durations = [
+  ['vitest', '38 s', '51 s', [44, 42, 41, 40, 39, 38]],
+  ['playwright', '1 min 52 s', '3 min 10 s', [98, 104, 110, 108, 114, 112]],
+  ['ui-shots', '1 min 5 s', '1 min 40 s', [80, 75, 71, 68, 66, 65]],
+  ['tsc', '11 s', '14 s', [9, 9, 10, 10, 11, 11]],
+  ['biome', '4 s', '6 s', [4, 4, 4, 4, 4, 4]],
+];
+
+// Draw at the chart's real width, so labels keep their size on a phone.
+const W = Math.max(300, Math.min(900, document.getElementById('pass').clientWidth - 32));
+const H = 240, L = 44, R = 16, T = 16, B = 30;
+const x = i => L + (i + 0.5) * (W - L - R) / months.length;
+const ns = 'http://www.w3.org/2000/svg';
+function svg(tag, attrs, text) {
+  const el = document.createElementNS(ns, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  if (text != null) el.textContent = text;
+  return el;
+}
+function frame(host, max, ticks, unit) {
+  const s = svg('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img' });
+  const y = v => T + (H - T - B) * (1 - v / max);
+  ticks.forEach(t => {
+    s.append(svg('line', { x1: L, x2: W - R, y1: y(t), y2: y(t), class: 'grid' }));
+    s.append(svg('text', { x: L - 8, y: y(t) + 4, 'text-anchor': 'end' }, t + unit));
+  });
+  months.forEach((m, i) => s.append(svg('text', { x: x(i), y: H - 8, 'text-anchor': 'middle' }, m)));
+  const tip = document.createElement('div');
+  tip.className = 'tip';
+  host.append(s, tip);
+  return { s, y, tip };
+}
+function hover(host, tip, el, text, cx, cy) {
+  const show = () => {
+    const r = host.querySelector('svg').getBoundingClientRect(), h = host.getBoundingClientRect();
+    tip.textContent = text;
+    tip.style.left = (r.left - h.left + cx * r.width / W) + 'px';
+    tip.style.top = (r.top - h.top + cy * r.height / H) + 'px';
+    tip.classList.add('on');
+  };
+  el.addEventListener('mouseenter', show);
+  el.addEventListener('focus', show);
+  el.addEventListener('mouseleave', () => tip.classList.remove('on'));
+  el.addEventListener('blur', () => tip.classList.remove('on'));
+  el.setAttribute('tabindex', '0');
+  el.setAttribute('aria-label', text);
+}
+
+(function () {
+  const host = document.getElementById('pass');
+  const { s, y, tip } = frame(host, 100, [0, 50, 100], '%');
+  s.setAttribute('aria-label', 'Pass on the first try rose from 71% to 86%');
+  s.append(svg('polyline', { points: pass.map((v, i) => `${x(i)},${y(v)}`).join(' '), fill: 'none',
+    stroke: 'var(--series-1)', 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+  pass.forEach((v, i) => {
+    s.append(svg('circle', { cx: x(i), cy: y(v), r: 5, fill: 'var(--series-1)', stroke: 'var(--mat)', 'stroke-width': 2 }));
+    const hit = svg('rect', { x: x(i) - 40, y: T, width: 80, height: H - T - B, fill: 'transparent' });
+    hover(host, tip, hit, `${months[i]}: ${v}%`, x(i), y(v));
+    s.append(hit);
+  });
+  s.append(svg('text', { x: x(5), y: y(86) - 14, 'text-anchor': 'middle', style: 'fill:var(--ink);font-weight:700' }, '86%'));
+})();
+
+(function () {
+  const host = document.getElementById('time');
+  const { s, y, tip } = frame(host, 10, [0, 5, 10], ' h');
+  s.setAttribute('aria-label', 'Median time to proof fell from 9.5 to 4.1 hours');
+  const bw = 36;
+  hours.forEach((v, i) => {
+    const top = y(v), base = y(0);
+    const bar = svg('path', { d: `M${x(i) - bw / 2},${base} V${top + 4} q0,-4 4,-4 h${bw - 8} q4,0 4,4 V${base} Z`, fill: 'var(--series-1)' });
+    hover(host, tip, bar, `${months[i]}: ${v} hours`, x(i), top);
+    s.append(bar);
+  });
+  s.append(svg('text', { x: x(5), y: y(4.1) - 8, 'text-anchor': 'middle', style: 'fill:var(--ink);font-weight:700' }, '4.1 h'));
+})();
+
+(function () {
+  const host = document.getElementById('approvals');
+  const { s, y, tip } = frame(host, 30, [0, 10, 20, 30], '');
+  s.setAttribute('aria-label', 'Approvals in the browser grew to 22 a month, relayed approvals fell to 4');
+  const bw = 36;
+  months.forEach((m, i) => {
+    const base = y(0), mid = y(person[i]), top = y(person[i] + agent[i]);
+    if (person[i]) {
+      const a = svg('rect', { x: x(i) - bw / 2, y: mid, width: bw, height: base - mid, fill: 'var(--series-1)' });
+      hover(host, tip, a, `${m}: ${person[i]} by a person in the browser`, x(i), mid);
+      s.append(a);
+    }
+    const gap = person[i] ? 2 : 0;
+    const b = svg('path', { d: `M${x(i) - bw / 2},${mid - gap} V${top + 4} q0,-4 4,-4 h${bw - 8} q4,0 4,4 V${mid - gap} Z`, fill: 'var(--series-2)' });
+    hover(host, tip, b, `${m}: ${agent[i]} relayed by an agent`, x(i), top);
+    s.append(b);
+  });
+})();
+
+(function () {
+  const body = document.getElementById('durations');
+  durations.forEach(([name, p50, p95, series]) => {
+    const max = Math.max(...series), min = Math.min(...series);
+    const pts = series.map((v, i) => `${4 + i * 20.4},${24 - (max === min ? 10 : (v - min) / (max - min) * 20)}`).join(' ');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${name}</td><td class="num">${p50}</td><td class="num">${p95}</td>` +
+      `<td class="hide-narrow"><svg class="spark" viewBox="0 0 110 28" role="img" aria-label="${name} median over 6 months">` +
+      `<polyline points="${pts}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round"/></svg></td>`;
+    body.append(tr);
+  });
+  const all = document.getElementById('all');
+  months.forEach((m, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${m}</td><td class="num">${pass[i]}%</td><td class="num">${hours[i]}</td><td class="num">${person[i]}</td><td class="num">${agent[i]}</td>`;
+    all.append(tr);
+  });
+})();
+</script>
+</body>
+</html>

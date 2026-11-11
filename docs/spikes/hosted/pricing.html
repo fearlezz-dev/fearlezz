@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fearlezz pricing draft</title>
+<style>/* The light table of the local look report, carried to the hosted pages: pictures on mats,
+   magenta only for changed pictures, green and red only for proof. */
+:root {
+  --surface:#eef0f3; --mat:#ffffff; --ink:#14171c; --quiet:#5b6270; --rule:#d5d9df;
+  --signal:#c8106f; --pass:#17703c; --fail:#b42318; --wait:#9a5205; --focus:#1f5fd1;
+  --series-1:#2a78d6; --series-2:#eb6834; --tint:#f6f7f9;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface:#15181d; --mat:#0c0e11; --ink:#eceef2; --quiet:#a0a7b3; --rule:#2c313a;
+    --signal:#ff5aab; --pass:#4cc27a; --fail:#ff7468; --wait:#f0a63a; --focus:#7aa7ff;
+    --series-1:#3987e5; --series-2:#d95926; --tint:#1b1f25;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--surface); color: var(--ink);
+  font: 18px/1.6 "Atkinson Hyperlegible", "Verdana", system-ui, sans-serif; }
+main { max-width: 1080px; margin: 0 auto; padding: 28px 16px 96px; }
+a { color: var(--focus); }
+a:focus-visible, button:focus-visible, summary:focus-visible, textarea:focus-visible,
+input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+code { font: 15px/1.4 ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; }
+
+.bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; justify-content: space-between;
+  padding-bottom: 18px; border-bottom: 1px solid var(--rule); margin-bottom: 36px; font-size: 16px; }
+.bar .repo { font-weight: 700; }
+.bar .who { color: var(--quiet); }
+
+h1 { font-size: 36px; line-height: 1.15; margin: 0 0 10px; letter-spacing: -0.01em; }
+h2 { font-size: 25px; line-height: 1.25; margin: 0 0 6px; }
+h3 { font-size: 19px; margin: 22px 0 8px; }
+p { margin: 0 0 12px; max-width: 68ch; }
+.quiet { color: var(--quiet); }
+.small { font-size: 15px; }
+
+section { padding: 34px 0; border-top: 1px solid var(--rule); }
+section.first { border-top: 0; padding-top: 0; }
+.lede { font-size: 19px; color: var(--quiet); margin-bottom: 18px; }
+
+.verdict { display: flex; gap: 18px; align-items: flex-start; padding: 22px 22px;
+  background: var(--mat); border-radius: 10px; border-left: 8px solid var(--wait); margin: 20px 0 8px; }
+.verdict.pass { border-left-color: var(--pass); }
+.verdict.fail { border-left-color: var(--fail); }
+.verdict .word { font-size: 28px; font-weight: 700; line-height: 1.2; margin: 0 0 6px; }
+.verdict p { margin: 0 0 6px; }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 28px;
+  margin: 22px 0 0; padding: 0; }
+.facts div { margin: 0; }
+.facts dt { font-size: 15px; color: var(--quiet); }
+.facts dd { margin: 0; font-weight: 700; }
+
+table { width: 100%; border-collapse: collapse; background: var(--mat); border-radius: 10px;
+  overflow: hidden; font-size: 17px; }
+th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 15px; color: var(--quiet); font-weight: 400; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.state { font-weight: 700; white-space: nowrap; }
+.state.pass { color: var(--pass); } .state.fail { color: var(--fail); }
+.state.wait { color: var(--wait); } .state.changed { color: var(--signal); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px;
+  background: currentColor; vertical-align: 1px; }
+@media (max-width: 640px) {
+  .hide-narrow { display: none; }
+  th, td { padding: 10px 10px; }
+  h1 { font-size: 29px; }
+}
+
+details { background: var(--mat); border-radius: 10px; padding: 0 18px; margin: 12px 0; }
+details > summary { cursor: pointer; padding: 14px 0; font-weight: 700; }
+details[open] > summary { border-bottom: 1px solid var(--rule); margin-bottom: 12px; }
+details > :last-child { margin-bottom: 16px; }
+
+.button { font: inherit; font-size: 17px; font-weight: 700; border-radius: 8px; padding: 11px 18px;
+  cursor: pointer; border: 2px solid var(--ink); background: var(--ink); color: var(--surface); }
+.button.plain { background: transparent; color: var(--ink); border-color: var(--rule); }
+.button[disabled] { opacity: .45; cursor: not-allowed; }
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 640px) { .pair { grid-template-columns: 1fr; } }
+.pair figure { margin: 0; }
+.pair figcaption { font-size: 15px; color: var(--quiet); margin: 0 0 6px; }
+.mat { background: var(--mat); padding: 10px; border-radius: 8px; }
+.mat svg { display: block; width: 100%; height: auto; }
+
+.item { padding: 26px 0; border-top: 1px dashed var(--rule); }
+.item:first-of-type { border-top: 0; }
+.item-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
+.item-head h3 { margin: 0; }
+
+.strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 640px) { .strip { grid-template-columns: repeat(2, 1fr); } }
+.strip figure { margin: 0; }
+.strip figcaption { font-size: 14px; color: var(--quiet); }
+
+.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+.steps li { background: var(--mat); border-radius: 10px; padding: 14px 18px; display: grid;
+  grid-template-columns: 34px 1fr; gap: 12px; align-items: start; }
+.steps .n { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--quiet);
+  display: grid; place-items: center; font-weight: 700; font-size: 15px; }
+.steps p { margin: 0; }
+
+.quote { border-left: 4px solid var(--ink); padding: 4px 0 4px 14px; margin: 8px 0; font-size: 19px; }
+
+.plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 22px; }
+.plan { background: var(--mat); border-radius: 12px; padding: 22px; display: flex; flex-direction: column; gap: 10px;
+  border: 2px solid transparent; }
+.plan.pick { border-color: var(--ink); }
+.plan h2 { font-size: 23px; margin: 0; }
+.price { font-size: 34px; font-weight: 700; line-height: 1.1; }
+.price small { font-size: 16px; font-weight: 400; color: var(--quiet); }
+.plan ul { margin: 4px 0 0; padding-left: 20px; }
+.plan li { margin: 4px 0; }
+.plan .button { margin-top: auto; text-align: center; text-decoration: none; }
+.badge { font-size: 14px; font-weight: 700; }
+.draft { background: var(--tint); border: 2px dashed var(--wait); border-radius: 10px; padding: 12px 16px; margin-bottom: 26px; }
+td.y { color: var(--pass); font-weight: 700; }
+td.n { color: var(--quiet); }
+</style>
+</head>
+<body>
+<main>
+  <div class="draft"><strong>Draft.</strong> Prices and limits are proposals for discussion, not offers.</div>
+
+  <section class="first">
+    <h1>Fearlezz is free. Sharing proof is paid.</h1>
+    <p class="lede">Everything that runs on your machine and in CI stays open source. Pay for links, approvals in the browser and trends.</p>
+    <p><strong>Agents are never seats.</strong> You pay for the people who approve.</p>
+
+    <div class="plans">
+      <div class="plan">
+        <h2>Open core</h2>
+        <div class="price">$0 <small>forever</small></div>
+        <ul>
+          <li>The CLI, checks and journals</li>
+          <li>Pictures and films compared locally</li>
+          <li>CI status comment and check page</li>
+          <li>The upload format, to host it yourself</li>
+        </ul>
+        <a class="button plain" href="#">Install</a>
+      </div>
+      <div class="plan">
+        <h2>Public</h2>
+        <div class="price">$0 <small>public repositories</small></div>
+        <ul>
+          <li>Public proof links</li>
+          <li>Approve pictures in the browser</li>
+          <li>Pictures kept 30 days</li>
+          <li>Trends for 90 days</li>
+        </ul>
+        <a class="button plain" href="#">Connect a repository</a>
+      </div>
+      <div class="plan pick">
+        <span class="badge">Recommended</span>
+        <h2>Team</h2>
+        <div class="price">$12 <small>per approver, per month</small></div>
+        <ul>
+          <li>Private repositories</li>
+          <li>Private and unlisted links</li>
+          <li>Signed approvals CI checks</li>
+          <li>Pictures kept 1 year</li>
+          <li>Trends for 2 years</li>
+        </ul>
+        <a class="button" href="#">Start 30 days free</a>
+      </div>
+      <div class="plan">
+        <h2>Business</h2>
+        <div class="price">$30 <small>per approver, per month</small></div>
+        <ul>
+          <li>Everything in Team</li>
+          <li>Approve weakened proof on its own page</li>
+          <li>Single sign on and audit export</li>
+          <li>Pictures kept 3 years</li>
+          <li>Host the paid part yourself</li>
+        </ul>
+        <a class="button plain" href="#">Talk to us</a>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>How we count</h2>
+    <p class="lede">One number: people who approved something this month.</p>
+    <ol class="steps">
+      <li><span class="n">1</span><p><strong>An approver</strong> is a person who approved pictures or a weakening in the browser this month.</p></li>
+      <li><span class="n">2</span><p><strong>Free:</strong> agents, committers, viewers, CI runs, tests and pictures.</p></li>
+      <li><span class="n">3</span><p><strong>Never paused.</strong> Going over storage keeps CI green. We write to you; nothing stops.</p></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Plans side by side</h2>
+    <table>
+      <thead><tr><th>What</th><th>Public</th><th>Team</th><th class="hide-narrow">Business</th></tr></thead>
+      <tbody>
+        <tr><td>Repositories</td><td>Public</td><td>Any</td><td class="hide-narrow">Any</td></tr>
+        <tr><td>Link visibility</td><td>Public</td><td>Private, unlisted, public</td><td class="hide-narrow">Same, plus sign in only</td></tr>
+        <tr><td>Approve in the browser</td><td class="y">Yes</td><td class="y">Yes</td><td class="y hide-narrow">Yes</td></tr>
+        <tr><td>CI checks signed approvals</td><td class="y">Yes</td><td class="y">Yes</td><td class="y hide-narrow">Yes</td></tr>
+        <tr><td>Approve weakened proof</td><td class="n">No</td><td class="n">No</td><td class="y hide-narrow">Yes</td></tr>
+        <tr><td>Pictures and films kept</td><td>30 days</td><td>1 year</td><td class="hide-narrow">3 years</td></tr>
+        <tr><td>Trends</td><td>90 days</td><td>2 years</td><td class="hide-narrow">Forever</td></tr>
+        <tr><td>Storage included</td><td>5 GB</td><td>50 GB</td><td class="hide-narrow">500 GB</td></tr>
+        <tr><td>Single sign on</td><td class="n">No</td><td class="n">No</td><td class="y hide-narrow">Yes</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Questions</h2>
+    <details>
+      <summary>Does the free CLI ever call home?</summary>
+      <p>No. Only <code>fearlezz run --ci --publish</code> uploads, and only when you add it.</p>
+    </details>
+    <details>
+      <summary>What if we stop paying?</summary>
+      <p>Proof keeps working. Links turn read only, then expire with retention.</p>
+      <p>Download every bundle and approval as JSON first. They are yours.</p>
+    </details>
+    <details>
+      <summary>Why not charge per picture, like other tools?</summary>
+      <p>Per picture bills punish good coverage. Films would cost 25 times more.</p>
+      <p>We want you to record more, not less.</p>
+    </details>
+    <details>
+      <summary>Is open source free?</summary>
+      <p>Yes. Public repositories get the Public plan. Ask for Team for free if you need private links.</p>
+    </details>
+  </section>
+
+  <section>
+    <details>
+      <summary>For the team: how this compares (November 2026)</summary>
+      <table>
+        <thead><tr><th>Tool</th><th>Entry paid</th><th>Counts</th></tr></thead>
+        <tbody>
+          <tr><td>Chromatic</td><td>$179 a month</td><td>35k snapshots</td></tr>
+          <tr><td>Argos</td><td>$100 a month</td><td>35k screenshots</td></tr>
+          <tr><td>Happo</td><td>$149 a month</td><td>50k snapshots</td></tr>
+          <tr><td>Cypress Cloud</td><td>$67 a month</td><td>120k results a year</td></tr>
+          <tr><td>Codecov</td><td>$12 per user</td><td>PR authors</td></tr>
+          <tr><td>Buildkite Test Engine</td><td>$30 per user</td><td>plus executions</td></tr>
+          <tr><td>Fearlezz Team, 5 approvers</td><td>$60 a month</td><td>approvers only</td></tr>
+        </tbody>
+      </table>
+    </details>
+  </section>
+</main>
+</body>
+</html>
