@@ -81,13 +81,18 @@ pub(crate) fn execute(
         findings = verdict.counted;
         findings_elsewhere = verdict.elsewhere;
     }
+    let mut cases = Vec::new();
     let tests = check.tests.as_ref().map(|reader| {
-        reader
-            .count(&[&log, &stdout_path], &dir, at.root, started)
-            .unwrap_or_else(|why| {
+        match reader.count(&[&log, &stdout_path], &dir, at.root, started) {
+            Ok((n, found)) => {
+                cases = found;
+                n
+            }
+            Err(why) => {
                 proof_errors.push(why);
                 0
-            })
+            }
+        }
     });
     if tests == Some(0) {
         passed = false;
@@ -113,6 +118,7 @@ pub(crate) fn execute(
         findings,
         findings_elsewhere,
         tests,
+        cases,
         dir,
         log,
     };
