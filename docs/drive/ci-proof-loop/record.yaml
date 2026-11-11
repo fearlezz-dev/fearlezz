@@ -12,12 +12,13 @@ pieces:
         state: trying
         evidence: [scratchpad repro.sh, cases 3, 7, 8, 9, 12]
   - id: local-to-ci
-    status: figuring-out
-    open: How the goal and claims reach CI.
+    status: done
+    open: "Settled by removing claims: CI proves what it runs, and nothing the agent says."
     tries:
       - id: committed-declarations
         what: The goal and claims are committed with the change; CI proves them again by running the bound checks.
-        state: trying
+        state: dropped
+        why: "The developer: proof is in the pudding, not in the claim. Claims are loose, cost work, and prove nothing a check does not."
       - id: ci-only
         what: CI judges only what it runs and never learns the claims.
         state: trying
@@ -45,12 +46,18 @@ pieces:
         state: trying
 
 decided:
-  - id: claims-committed
-    what: "How claims reach CI: a committed file per change, written by fearlezz say."
-    why: Reviewers read it in the diff, and CI proves each claim again by running its check.
+  - id: remove-claims
+    what: "Remove goals and claims everywhere (Everywhere, recommended): say start, say claim, say link, the work file, claims in CI and in ready."
+    why: "Proof is in the pudding and not in the claim. It should come from the UI or another real way to show it."
+  - id: pr-status
+    what: "CI shows the status on the pull request as a short bot comment, replaced each run, plus a check page only CI can write. The developer reads neither agent output nor CI logs."
+  - id: approvals-free-and-paid
+    what: "Free: the admin bypass, fewer guarantees. Paid: a separate approval page with much more detail, behind its own sign in, which CI checks."
+  - id: test-counts-generic
+    what: "Test counts must work for every language piece, done more generically and flexibly."
 
   - id: hooks-firm-at-the-door
-    what: "Hooks are firm at the door: push needs a goal and a claim, a non-draft pull request needs ready, end of turn blocks once."
+    what: "Hooks are firm at the door: a non-draft pull request needs ready, a merge past the required checks is for a person, end of turn blocks once. (Push needed a goal and claim until claims were removed.)"
   - id: weakening-red-admin-bypass
     what: "A change that weakens its own proof is red and names the weakening; a person with admin rights merges past it after reading."
   - id: hooks-all-agents
@@ -72,9 +79,8 @@ slices:
     tests: [crates/fearlezz/tests/ci.rs]
     status: done
   - id: claims-reach-ci
-    tests: [crates/fearlezz/tests/ci.rs work file tests, crates/fearlezz/tests/core.rs say_writes_*, ready_needs_the_work_file_*]
-    status: done
-    note: the file is .fearlezz/work/<journal>.toml and stays after merging
+    status: removed
+    note: replaced by remove-claims
   - id: agent-hooks
     tests: [crates/fearlezz/tests/hooks.rs]
     status: done
@@ -96,4 +102,16 @@ slices:
     status: done
     note: "a change to the config alone ran no check, so settings drift, changed rules and stricter commands went unproven; now every check is needed"
 
-next: Show the config change fix for review; the proof gate design is built.
+  - id: remove-claims
+    tests: [crates/fearlezz/tests/core.rs ready_needs_only_fresh_proof_*, a_journal_from_before_claims_*, say_has_no_claims_anymore, crates/fearlezz/tests/ci.rs a_code_change_needs_no_goal_or_claims, crates/fearlezz/tests/hooks.rs merging_past_ci_*]
+    status: done
+  - id: pr-status
+    status: next
+    note: "a short bot comment replaced each run, and a check run page; written by CI, out of the agent's reach; the CI messages are redesigned for it"
+  - id: test-counts-every-piece
+    status: next
+  - id: paid-approval-page
+    status: roadmap
+    note: "ee/: approve weakenings on a page with its own sign in; CI checks the signed approval"
+
+next: Build the PR status block, then test counts for every piece.

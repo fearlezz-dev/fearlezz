@@ -151,7 +151,6 @@ fn every_command_ends_with_a_next_line() {
         vec![],
         vec!["--all"],
         vec!["say", "note", "hi"],
-        vec!["say", "claim", "it works"],
         vec!["run", "--stage", "working", "--no-run"],
         vec!["--since", "1h"],
         vec!["setup", "sync"],
@@ -349,92 +348,17 @@ fn committed_change() -> Repo {
     repo
 }
 
-fn start(repo: &Repo) {
-    repo.fz(&["say", "start", "--kind", "feature", "--goal", "the goal"]);
-}
-
 #[test]
-fn ready_needs_a_goal() {
+fn ready_needs_only_fresh_proof_of_a_committed_change() {
     let repo = committed_change();
-    repo.fz(&["say", "claim", "works", "--check", "tests"]);
-    let out = repo.fz(FINAL);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(out.last_line().contains("say start"), "{}", out.stdout);
-
-    repo.fz(&["say", "start", "--kind", "feature"]);
-    let no_goal = repo.fz(FINAL);
-    assert!(!no_goal.ok, "{}", no_goal.stdout);
-    assert!(no_goal.last_line().contains("--goal"), "{}", no_goal.stdout);
-
-    start(&repo);
-    repo.commit("the work file");
     let out = repo.fz(FINAL);
     assert!(out.ok, "{}", out.stdout);
     assert_eq!(out.last_line(), READY);
 }
 
 #[test]
-fn ready_needs_a_claim() {
-    let repo = committed_change();
-    start(&repo);
-    let out = repo.fz(FINAL);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(out.last_line().contains("say claim"), "{}", out.stdout);
-}
-
-#[test]
-fn say_writes_the_goal_and_claims_into_the_work_file() {
-    let repo = committed_change();
-    start(&repo);
-    let out = repo.fz(&["say", "claim", "works", "--check", "tests"]);
-    assert!(
-        out.stdout.contains("wrote .fearlezz/work/feat/x.toml"),
-        "{}",
-        out.stdout
-    );
-    let text = std::fs::read_to_string(repo.path(".fearlezz/work/feat/x.toml")).unwrap();
-    for part in [
-        "kind = \"feature\"",
-        "goal = \"the goal\"",
-        "[claim.c1]",
-        "text = \"works\"",
-        "check = \"tests\"",
-    ] {
-        assert!(text.contains(part), "{part} in {text}");
-    }
-}
-
-#[test]
-fn ready_needs_the_work_file_as_the_journal_has_it() {
-    let repo = committed_change();
-    start(&repo);
-    repo.fz(&["say", "claim", "works", "--check", "tests"]);
-    repo.commit("the work file");
-    assert_eq!(repo.fz(FINAL).last_line(), READY);
-
-    repo.remove(".fearlezz/work/feat/x.toml");
-    let out = repo.fz(&["run"]);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(
-        out.last_line().contains("fearlezz setup sync"),
-        "{}",
-        out.stdout
-    );
-
-    let sync = repo.fz(&["setup", "sync"]);
-    assert!(
-        sync.stdout.contains("wrote .fearlezz/work/feat/x.toml"),
-        "{}",
-        sync.stdout
-    );
-    assert_eq!(repo.fz(&[]).last_line(), READY);
-}
-
-#[test]
 fn ready_needs_everything_committed() {
     let repo = committed_change();
-    start(&repo);
-    repo.fz(&["say", "claim", "works", "--check", "tests"]);
     repo.write("src/lib.rs", "fn c() {}\n");
     let out = repo.fz(FINAL);
     assert!(!out.ok, "{}", out.stdout);
@@ -446,39 +370,36 @@ fn ready_needs_everything_committed() {
 }
 
 #[test]
-fn a_claim_without_a_check_fails_the_final_run() {
+fn a_journal_from_before_claims_were_removed_still_reads() {
     let repo = committed_change();
-    start(&repo);
-    repo.fz(&["say", "claim", "no check named"]);
+    repo.fz(&["say", "note", "first"]);
+    let events = repo.path(".git/fearlezz/journals/feat%2Fx/events.jsonl");
+    let mut text = std::fs::read_to_string(&events).unwrap();
+    for line in [
+        r#"{"at":"2026-01-01T00:00:00Z","type":"started","kind":"bug","goal":"the goal"}"#,
+        r#"{"at":"2026-01-01T00:00:00Z","type":"claim","id":"c1","text":"works","check":null}"#,
+        r#"{"at":"2026-01-01T00:00:00Z","type":"link","claim":"c1","check":"tests"}"#,
+    ] {
+        text.push_str(line);
+        text.push('\n');
+    }
+    std::fs::write(&events, text).unwrap();
     let out = repo.fz(FINAL);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(out.last_line().contains("say link"), "{}", out.stdout);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+    assert_eq!(out.last_line(), READY);
 }
 
 #[test]
-fn a_bug_never_seen_red_fails_the_final_run() {
+fn say_has_no_claims_anymore() {
     let repo = committed_change();
-    repo.fz(&["say", "start", "--kind", "bug", "--goal", "the goal"]);
-    repo.fz(&["say", "claim", "fixed", "--check", "tests"]);
-    let out = repo.fz(FINAL);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(out.last_line().contains("failing"), "{}", out.stdout);
-}
-
-#[test]
-fn a_claim_counts_at_the_final_stage_of_a_single_stage_project() {
-    let repo = Repo::new(
-        "[stages]\norder = [\"only\"]\n\n[check.a]\nrun = \"true\"\nstage = \"only\"\ninputs = [\"src/**\"]\n",
-        &[("src/a", "1\n")],
-    );
-    repo.branch("feat/x");
-    repo.write("src/a", "2\n");
-    repo.commit("change");
-    start(&repo);
-    repo.fz(&["say", "claim", "no check named"]);
-    let out = repo.fz(&["run"]);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(out.last_line().contains("say link"), "{}", out.stdout);
+    for args in [
+        vec!["say", "start", "--kind", "feature"],
+        vec!["say", "claim", "works"],
+        vec!["say", "link", "c1", "tests"],
+    ] {
+        assert!(!repo.fz(&args).ok, "{args:?}");
+    }
 }
 
 #[test]
@@ -491,7 +412,7 @@ fn only_a_final_run_of_the_whole_work_answers_for_it() {
     assert!(named.ok, "{}", named.stdout);
 }
 
-// Stages and claims
+// Stages
 
 #[test]
 fn the_final_stage_runs_every_check_fresh_once() {
@@ -512,48 +433,6 @@ fn the_final_stage_runs_every_check_fresh_once() {
         2,
         "a fresh merge result is reused"
     );
-}
-
-#[test]
-fn a_claim_is_proven_only_by_a_green_run_on_the_current_tree() {
-    let repo = repo();
-    repo.fz(&["say", "start", "--kind", "feature"]);
-    repo.fz(&["say", "claim", "lib has b", "--check", "tests"]);
-    repo.write("src/lib.rs", "fn b() {}\n");
-    let plan = repo.fz(&["--plan"]);
-    assert!(plan.stdout.contains("unproven"), "{}", plan.stdout);
-
-    repo.fz(&["run", "tests"]);
-    let plan = repo.fz(&["--plan"]);
-    assert!(plan.stdout.contains("proven"), "{}", plan.stdout);
-    assert!(!plan.stdout.contains("unproven"), "{}", plan.stdout);
-
-    repo.write("docs/readme.md", "changed\n");
-    let plan = repo.fz(&["--plan"]);
-    assert!(
-        plan.stdout.contains("unproven"),
-        "tree changed: {}",
-        plan.stdout
-    );
-}
-
-#[test]
-fn a_bug_claim_needs_red_then_green() {
-    let repo = repo();
-    repo.fz(&["say", "start", "--kind", "bug"]);
-    repo.fz(&["say", "claim", "no broken file", "--check", "tests"]);
-    repo.write("src/lib.rs", "fn b() {}\n");
-    repo.fz(&["run", "tests"]);
-    let plan = repo.fz(&["--plan"]);
-    assert!(plan.stdout.contains("needs red first"), "{}", plan.stdout);
-
-    repo.write("src/broken", "x");
-    repo.fz(&["run", "tests"]);
-    repo.remove("src/broken");
-    repo.fz(&["run", "tests"]);
-    let plan = repo.fz(&["--plan"]);
-    assert!(plan.stdout.contains("proven"), "{}", plan.stdout);
-    assert!(!plan.stdout.contains("needs red first"), "{}", plan.stdout);
 }
 
 #[test]
@@ -767,7 +646,7 @@ fn fearlezz_alone_says_where_the_work_stands_and_teaches_the_first_step() {
     assert!(out.ok, "{}", out.stderr);
     assert!(
         out.last_line()
-            .starts_with("next: say what this work is: fearlezz say start"),
+            .starts_with("next: make a change; fearlezz --plan shows the proof it will need"),
         "{}",
         out.stdout
     );

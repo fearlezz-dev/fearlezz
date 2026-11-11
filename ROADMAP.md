@@ -15,7 +15,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 - **The agent uses it too.** It is not only a report for the developer. The agent reaches for it while working ("how does this look again?", "what did I need?").
 - **Three intake points.** `fearlezz` (see), `fearlezz run` and `fearlezz say`, plus `fearlezz setup`. Everything else is discovered through `next:` and `fix:` lines.
 - **Layers.** Turn on, tune, combine, own check, piece in the repo, piece from someone's repo, new kind of proof. Each layer is built from the one below, so new capabilities should be new layers, not new systems.
-- **Proof comes from three sources:** what the edits touch, the kind of change, and the claims. The agent may only add to it.
+- **Proof is what can be seen, not what is said.** Checks that ran, their results, pictures and films. What the agent says about its own work never counts as proof.
 - **All proof groups matter:** honest, does what was asked, did not break anything, tests are real, built well, safe. Not every project needs all of them.
 - **Local first.** Journals and results live on the developer's machine. The final stage proves everything fresh once.
 - **CI trusts only what it saw.** Local proof is the agent's word, so it never counts as proof in CI. CI proves the commit itself, and "ready to merge" is never said about work that has not been proven.
@@ -25,7 +25,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 | Capability | Notes |
 | --- | --- |
-| Claims, checks, stages | Red then green for bugs; a claim needs a green run on the current tree |
+| Checks, stages | A check counts only for the inputs it ran on; the final stage runs everything fresh |
 | Results by input hash | Shared across worktrees, pruned after 30 days |
 | Journals | One per piece of work, append only |
 | Command line | See, run, say, setup |
@@ -45,8 +45,8 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Capability | Missing |
 | --- | --- |
 | Overview of the work | A static page and `fearlezz --all` exist; nothing live for runs of hours or days |
-| Local and CI together | "Ready to merge" and the final exit code are honest. `fearlezz run --ci` proves a commit with no journal, runs every check on the base branch, and holds a change to the base branch's config as its floor; `main` requires the check. The goal and claims are committed in a work file per change, and CI proves each claim again. Agent hooks (Claude Code, Codex, Cursor) refuse a push without claims and a pull request before ready, block stopping once, and say a check's command run by hand is not proof. The rest of the proof gate is under Next |
-| Tests are real | Red then green only; no mutation or coverage proof |
+| Local and CI together | "Ready to merge" and the final exit code are honest. `fearlezz run --ci` proves a commit with no journal, runs every check on the base branch, and holds a change to the base branch's config as its floor; `main` requires the check. Agent hooks (Claude Code, Codex, Cursor) refuse a pull request before ready and a merge past the required checks, block stopping once, and say a check's command run by hand is not proof. The rest of the proof gate is under Next |
+| Tests are real | Zero tests fails; no red before green, mutation or coverage proof |
 | Extension layers | Pieces work; a new kind of proof and a library layer do not exist yet |
 
 ## Not built
@@ -70,7 +70,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 1. Finish the proof gate, so unproven work cannot look proven (design: `docs/drive/ci-proof-loop/record.yaml`):
    - Test counts read only cargo output and JUnit; other runners need a reader.
-   - Claims in CI cannot show red before green for a bug, or that a check really tests its claim; both stay the agent's word until "tests are real". Work files stay in the repository after merging.
+   - A bug fix cannot show red before green yet. CI could run the change's new tests on the base commit and show they fail there.
    - The Codex and Cursor hooks follow their docs but have not run in those agents yet. Hooks replace a project's own hooks for the same events in those files.
 2. Adopt Fearlezz in a first real project outside this repository, which then tests the gate for real.
 3. Pick up the list above one piece at a time, each in its own thread.

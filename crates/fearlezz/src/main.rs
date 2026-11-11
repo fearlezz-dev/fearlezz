@@ -19,7 +19,6 @@ mod run;
 mod settings;
 mod state;
 mod store;
-mod work;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -31,8 +30,8 @@ use jiff::Timestamp;
 
 use config::Config;
 use git::Git;
-use journal::{Event, Journal, Kind};
-use state::{CheckState, ClaimState, View, Worktree};
+use journal::{Event, Journal};
+use state::{CheckState, View, Worktree};
 use store::{Outcome, Store};
 
 #[derive(Parser)]
@@ -95,7 +94,7 @@ enum Cmd {
         #[arg(long, conflicts_with_all = ["checks", "stage"])]
         ci: bool,
     },
-    /// Tell: record what only you know, such as the goal, a claim, or a question.
+    /// Tell: record what only you know, such as a note, a question, or an approval.
     Say {
         #[command(subcommand)]
         what: Say,
@@ -109,21 +108,6 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum Say {
-    /// Start the journal for this branch with the kind of change.
-    Start {
-        #[arg(long, value_enum)]
-        kind: Kind,
-        #[arg(long)]
-        goal: Option<String>,
-    },
-    /// Add a claim the change must prove, optionally with the check that proves it.
-    Claim {
-        text: String,
-        #[arg(long)]
-        check: Option<String>,
-    },
-    /// Link a claim to the check that proves it.
-    Link { claim: String, check: String },
     /// Leave a one line note for whoever catches up later.
     Note { text: String },
     /// Ask the developer something and wait for them.
@@ -343,11 +327,6 @@ fn hook_answer(event: hooks::Event, input: &hooks::Input) -> Result<hooks::Answe
     let view = ctx.view(&journal)?;
     let work = hooks::Work {
         name: journal.name.clone(),
-        declared: match (view.goal.is_some(), view.claims.is_empty()) {
-            (false, _) => hooks::Declared::Nothing,
-            (true, true) => hooks::Declared::Goal,
-            (true, false) => hooks::Declared::GoalAndClaims,
-        },
         ready: view.next == state::READY,
         waiting: view.waiting.is_some(),
         needs_proof: wt.changed.iter().any(|p| ctx.config.needs_proof(p)),
@@ -357,73 +336,8 @@ fn hook_answer(event: hooks::Event, input: &hooks::Input) -> Result<hooks::Answe
     Ok(hooks::judge(&ctx.config, &work, event, input))
 }
 
-/// Writes the work file after the journal declared something, and says so.
-fn wrote_work_file(ctx: &Ctx, journal: &Journal) -> Result<()> {
-    if let Some(path) = work::write(&ctx.git.root, journal)? {
-        println!("wrote {path}");
-    }
-    Ok(())
-}
-
 fn say(ctx: &Ctx, what: Say) -> Result<bool> {
     match what {
-        Say::Start { kind, goal } => {
-            let mut j = ctx.journal()?;
-            j.append(ctx.now, Event::Started { kind, goal })?;
-            wrote_work_file(ctx, &j)?;
-            let v = ctx.view(&j)?;
-            println!(
-                "journal {}: kind {}, stage {}",
-                j.name,
-                kind_name(Some(kind)),
-                ctx.stage_name(&v)
-            );
-            println!("next: {}", v.next);
-        }
-        Say::Claim { text, check } => {
-            if let Some(c) = &check {
-                ctx.config.check(c)?;
-            }
-            let mut j = ctx.journal()?;
-            let n = j
-                .entries
-                .iter()
-                .filter(|e| matches!(e.event, Event::Claim { .. }))
-                .count();
-            let id = format!("c{}", n + 1);
-            j.append(
-                ctx.now,
-                Event::Claim {
-                    id: id.clone(),
-                    text: text.clone(),
-                    check,
-                },
-            )?;
-            println!("claim {id}: {text}");
-            wrote_work_file(ctx, &j)?;
-            println!("next: {}", ctx.view(&j)?.next);
-        }
-        Say::Link { claim, check } => {
-            ctx.config.check(&check)?;
-            let mut j = ctx.journal()?;
-            let known = j
-                .entries
-                .iter()
-                .any(|e| matches!(&e.event, Event::Claim { id, .. } if *id == claim));
-            if !known {
-                bail!("no claim \"{claim}\" in journal {}", j.name);
-            }
-            j.append(
-                ctx.now,
-                Event::Link {
-                    claim: claim.clone(),
-                    check: check.clone(),
-                },
-            )?;
-            println!("{claim} is proven by {check}");
-            wrote_work_file(ctx, &j)?;
-            println!("next: {}", ctx.view(&j)?.next);
-        }
         Say::Approve { check, said } => {
             let said = said.trim().to_string();
             if said.is_empty() {
@@ -544,8 +458,7 @@ fn setup(what: Setup) -> Result<bool> {
             let ctx = prepared()?;
             let ctx = &ctx;
             {
-                let mut written = ctx.config.settings.sync(&ctx.git.root)?;
-                written.extend(work::write(&ctx.git.root, &ctx.journal()?)?);
+                let written = ctx.config.settings.sync(&ctx.git.root)?;
                 if written.is_empty() {
                     println!("settings already in sync");
                 }
@@ -685,12 +598,7 @@ fn plan(ctx: &Ctx) -> Result<()> {
     let j = ctx.journal()?;
     let v = ctx.view(&j)?;
     let stages = &ctx.config.stages;
-    println!(
-        "plan {}  kind {}  stage {}",
-        v.name,
-        kind_name(v.kind),
-        ctx.stage_name(&v)
-    );
+    println!("plan {}  stage {}", v.name, ctx.stage_name(&v));
     let mut any = false;
     for stage in stages.all() {
         let here: Vec<String> = v
@@ -708,9 +616,6 @@ fn plan(ctx: &Ctx) -> Result<()> {
     }
     if !any {
         println!("  nothing touched yet");
-    }
-    for c in &v.claims {
-        println!("  claim {} {}: {}", c.id, claim_label(c.state), c.text);
     }
     println!("next: {}", v.next);
     Ok(())
@@ -743,25 +648,6 @@ fn targets<'a>(
         .iter()
         .filter(|c| due.contains(&c.id.as_str()))
         .collect())
-}
-
-/// What the work files of the change claim, with the checks they name added to `targets`:
-/// proving a commit proves its claims, whether or not the change needs those checks.
-fn declared<'a>(
-    ctx: &'a Ctx,
-    wt: &Worktree,
-    targets: &mut Vec<&'a config::Check>,
-) -> Result<work::Declared> {
-    let needs_claims = wt.changed.iter().any(|p| ctx.config.needs_proof(p));
-    let declared = work::Declared::in_change(&wt.git.root, &wt.changed, needs_claims)?;
-    for id in declared.checks() {
-        if let Ok(c) = ctx.config.check(&id)
-            && !targets.iter().any(|t| t.id == c.id)
-        {
-            targets.push(c);
-        }
-    }
-    Ok(declared)
 }
 
 fn print_failure(f: &store::RunResult) {
@@ -896,11 +782,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
     let stage = stages.name(before.stage).to_string();
     let final_stage = stages.name(stages.last()).to_string();
     let in_memory = j.is_in_memory();
-    let mut targets = targets(ctx, &before, &wt, ids, in_memory)?;
-    let declared = in_memory
-        .then(|| declared(ctx, &wt, &mut targets))
-        .transpose()?;
-    let (mut ran, mut passed_ids) = (BTreeSet::new(), BTreeSet::new());
+    let targets = targets(ctx, &before, &wt, ids, in_memory)?;
     // A full run at the final stage answers for the whole work, and for what the base
     // branch requires, not only for its checks.
     let floor = if ids.is_empty() && stage == final_stage {
@@ -908,19 +790,10 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
     } else {
         floor::Floor::default()
     };
-    let judge = |ran: &BTreeSet<String>, passed: &BTreeSet<String>| {
-        let (mut lines, claims_hold) = declared
-            .as_ref()
-            .map_or((Vec::new(), true), |d| d.judge(ran, passed));
-        lines.extend(floor.lines());
-        (lines, claims_hold)
-    };
+    let lines = floor.lines();
     let answers_for_work = !in_memory && ids.is_empty() && stage == final_stage;
     let settled = |view: &View| {
-        floor.holds()
-            && (!answers_for_work
-                || view.next == state::READY
-                || (view.checks.is_empty() && view.claims.is_empty()))
+        floor.holds() && (!answers_for_work || view.next == state::READY || view.checks.is_empty())
     };
     let next_line = |view: &View| {
         if in_memory {
@@ -936,13 +809,12 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
         .transpose()?;
     if targets.is_empty() {
         println!("nothing to run in {stage}");
-        let (lines, claims_hold) = judge(&ran, &passed_ids);
         for line in &lines {
             println!("{line}");
         }
         report.map_or(Ok(()), |r| r.finish(&lines))?;
         println!("next: {}", next_line(&before));
-        return Ok(settled(&before) && claims_hold);
+        return Ok(settled(&before));
     }
 
     let clock = std::time::Instant::now();
@@ -1021,10 +893,6 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
         if let Some(r) = report.as_mut() {
             r.ran(check, &result);
         }
-        ran.insert(check.id.clone());
-        if result.outcome == Outcome::Passed {
-            passed_ids.insert(check.id.clone());
-        }
         match result.outcome {
             Outcome::Passed => {
                 passed += 1;
@@ -1054,7 +922,6 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
         failures.len(),
         clock.elapsed().as_secs_f64()
     );
-    let (lines, claims_hold) = judge(&ran, &passed_ids);
     for line in &lines {
         println!("{line}");
     }
@@ -1068,7 +935,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool) -> Result<
         println!("services stopped: all proof is in");
     }
     println!("next: {}", next_line(&after));
-    Ok(failures.is_empty() && settled(&after) && claims_hold)
+    Ok(failures.is_empty() && settled(&after))
 }
 
 /// Compares the stills and films of green checks with the base commit, one line per check.
@@ -1113,9 +980,8 @@ fn look_at_media(ctx: &Ctx, green: &[(&config::Check, store::RunResult)], stage:
 
 fn print_status(ctx: &Ctx, v: &View) {
     println!(
-        "{}  {}  stage {}  [{}]",
+        "{}  stage {}  [{}]",
         v.name,
-        kind_name(v.kind),
         ctx.stage_name(v),
         v.group.label()
     );
@@ -1138,12 +1004,6 @@ fn print_status(ctx: &Ctx, v: &View) {
     }
     if let Some(reason) = &v.went_back {
         println!("went back to {}: {reason}", ctx.stage_name(v));
-    }
-    for c in v.claims.iter().take(3) {
-        println!("  {} {}  {}", c.id, claim_label(c.state), c.text);
-    }
-    if v.claims.len() > 3 {
-        println!("  and {} more claims", v.claims.len() - 3);
     }
     if !v.checks.is_empty() {
         let list: Vec<String> = v
@@ -1204,11 +1064,7 @@ fn since(ctx: &Ctx, when: &str) -> Result<()> {
                     Some(r) => println!("  stage {to}: {r}"),
                     None => println!("  stage {to}"),
                 },
-                Event::Claim { id, text, .. } => println!("  claim {id}: {text}"),
-                Event::Started { kind, .. } => {
-                    println!("  started, kind {}", kind_name(Some(*kind)));
-                }
-                Event::Link { .. } => {}
+                Event::Retired => {}
                 Event::Approve { check, said, .. } => println!("  approved {check}: \"{said}\""),
                 Event::Ran { outcome, .. } => {
                     runs += 1;
@@ -1255,9 +1111,9 @@ pub(crate) fn panic_text(panic: &(dyn std::any::Any + Send)) -> &str {
 /// Deletes results nothing reads again; see [`store::Store::prune`]. A failure only warns:
 /// the run itself is done.
 fn prune_store(ctx: &Ctx) {
-    let named = || -> Result<std::collections::BTreeSet<(String, String)>> {
+    let named = || -> Result<BTreeSet<(String, String)>> {
         let since = ctx.now.as_second() - store::KEEP_DAYS * 24 * 3600;
-        let mut named = std::collections::BTreeSet::new();
+        let mut named = BTreeSet::new();
         for journal in Journal::all(&ctx.git.common)? {
             if journal
                 .entries
@@ -1267,7 +1123,7 @@ fn prune_store(ctx: &Ctx) {
                 continue;
             }
             // Only the latest run of each check is read.
-            let mut seen = std::collections::BTreeSet::new();
+            let mut seen = BTreeSet::new();
             for e in journal.entries.iter().rev() {
                 if let Event::Ran {
                     check, key, result, ..
@@ -1296,16 +1152,6 @@ pub fn ago(now: Timestamp, then: Timestamp) -> String {
     }
 }
 
-/// The word for a kind of work, as status shows it.
-pub fn kind_name(kind: Option<Kind>) -> &'static str {
-    match kind {
-        Some(Kind::Bug) => "bug",
-        Some(Kind::Feature) => "feature",
-        Some(Kind::Refactor) => "refactor",
-        Some(Kind::Other) | None => "other",
-    }
-}
-
 /// The word for a check's state, as status shows it.
 pub fn state_label(state: &CheckState) -> &'static str {
     match state {
@@ -1315,15 +1161,5 @@ pub fn state_label(state: &CheckState) -> &'static str {
         CheckState::Stale(_) => "stale",
         CheckState::NeedsFresh => "needs a fresh run",
         CheckState::Never => "never run",
-    }
-}
-
-/// The word for a claim's state, as status shows it.
-pub fn claim_label(state: ClaimState) -> &'static str {
-    match state {
-        ClaimState::NoProof => "no proof",
-        ClaimState::Unproven => "unproven",
-        ClaimState::NeedsRedFirst => "needs red first",
-        ClaimState::Proven => "proven",
     }
 }

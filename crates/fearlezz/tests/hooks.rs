@@ -1,7 +1,7 @@
 //! Agent hooks: `fearlezz setup sync` writes them into each agent's own settings, and
 //! `fearlezz setup hook <agent> <event>` answers them, so an agent finds out it skipped the
 //! proof while it works: at the start of a session, after running a check's command by hand,
-//! before pushing or opening a pull request, and when it wants to stop.
+//! before opening or merging a pull request, and when it wants to stop.
 
 // Clippy applies its test allowances (unwrap, expect, panic) only to cfg(test) code.
 #![cfg(test)]
@@ -30,7 +30,7 @@ fn repo(config: &str) -> Repo {
     Repo::with_skill(config, &[("src/lib.rs", "fn a() {}\n")])
 }
 
-/// A branch whose code changed, with nothing declared yet.
+/// A branch whose code changed, with nothing proven yet.
 fn changed() -> Repo {
     let repo = repo(&format!(
         "{CONFIG}\n[settings.hooks]\nagents = [\"claude\"]\n"
@@ -39,12 +39,6 @@ fn changed() -> Repo {
     repo.write("src/lib.rs", "fn b() {}\n");
     repo.commit("change");
     repo
-}
-
-fn declare(repo: &Repo) {
-    repo.fz(&["say", "start", "--kind", "feature", "--goal", "the goal"]);
-    repo.fz(&["say", "claim", "works", "--check", "tests"]);
-    repo.commit("the work file");
 }
 
 fn shell(command: &str) -> String {
@@ -175,24 +169,14 @@ fn a_session_starts_with_where_the_work_stands() {
         "SessionStart"
     );
     assert!(context.contains("next:"), "{context}");
-    assert!(context.contains("say start"), "{context}");
+    assert!(context.contains("fearlezz run"), "{context}");
 }
 
-// Before a push or a pull request
+// Before a pull request is opened or merged
 
 #[test]
-fn a_push_without_a_goal_and_claim_is_refused() {
+fn a_push_passes_since_ci_proves_it() {
     let repo = changed();
-    let answer = hook(
-        &repo,
-        "claude",
-        "before-shell",
-        &shell("git push -u origin feat/x"),
-    );
-    assert!(denied(&answer), "{answer}");
-    assert!(reason(&answer).contains("say start"), "{answer}");
-
-    declare(&repo);
     let answer = hook(
         &repo,
         "claude",
@@ -203,21 +187,38 @@ fn a_push_without_a_goal_and_claim_is_refused() {
 }
 
 #[test]
-fn a_push_hidden_in_a_longer_command_is_seen() {
+fn a_command_hidden_in_a_longer_line_is_seen() {
     let repo = changed();
     let answer = hook(
         &repo,
         "claude",
         "before-shell",
-        &shell("cargo fmt && git -C . push origin feat/x"),
+        &shell("cargo fmt && gh pr create --fill"),
     );
     assert!(denied(&answer), "{answer}");
 }
 
 #[test]
+fn merging_past_ci_is_left_to_a_person() {
+    let repo = changed();
+    repo.fz(&["run", "--stage", "merge", "--reason", "done"]);
+    for command in ["gh pr merge 2 --admin --squash", "gh pr merge --admin"] {
+        let answer = hook(&repo, "claude", "before-shell", &shell(command));
+        assert!(denied(&answer), "{command}: {answer}");
+        assert!(reason(&answer).contains("person"), "{answer}");
+    }
+    let plain = hook(
+        &repo,
+        "claude",
+        "before-shell",
+        &shell("gh pr merge 2 --squash"),
+    );
+    assert!(plain.is_null(), "{plain}");
+}
+
+#[test]
 fn a_pull_request_needs_ready_unless_it_is_a_draft() {
     let repo = changed();
-    declare(&repo);
     let answer = hook(
         &repo,
         "claude",
@@ -261,7 +262,7 @@ fn nothing_to_prove_means_nothing_to_refuse() {
         &repo,
         "claude",
         "before-shell",
-        &shell("git push origin main"),
+        &shell("gh pr create --fill"),
     );
     assert!(answer.is_null(), "{answer}");
 }
@@ -312,7 +313,6 @@ fn waiting_for_the_developer_lets_the_agent_stop() {
 #[test]
 fn proven_work_lets_the_agent_stop() {
     let repo = changed();
-    declare(&repo);
     repo.fz(&["run", "--stage", "merge", "--reason", "done"]);
     let answer = hook(&repo, "claude", "stop", "{\"stop_hook_active\": false}");
     assert!(answer.is_null(), "{answer}");
@@ -323,7 +323,12 @@ fn proven_work_lets_the_agent_stop() {
 #[test]
 fn codex_answers_as_claude_code_does() {
     let repo = changed();
-    let answer = hook(&repo, "codex", "before-shell", &shell("git push"));
+    let answer = hook(
+        &repo,
+        "codex",
+        "before-shell",
+        &shell("gh pr create --fill"),
+    );
     assert!(denied(&answer), "{answer}");
 }
 
@@ -334,14 +339,11 @@ fn cursor_gets_its_own_answers() {
         &repo,
         "cursor",
         "before-shell",
-        &serde_json::json!({ "command": "git push" }).to_string(),
+        &serde_json::json!({ "command": "gh pr create --fill" }).to_string(),
     );
     assert_eq!(deny["permission"], "deny", "{deny}");
     assert!(
-        deny["agent_message"]
-            .as_str()
-            .unwrap()
-            .contains("say start"),
+        deny["agent_message"].as_str().unwrap().contains("--draft"),
         "{deny}"
     );
 
@@ -377,7 +379,7 @@ fn the_hook_reads_the_project_from_its_input() {
     let repo = changed();
     let input = serde_json::json!({
         "cwd": repo.root.to_str().unwrap(),
-        "tool_input": { "command": "git push" },
+        "tool_input": { "command": "gh pr create --fill" },
     });
     let answer = hook(&repo, "claude", "before-shell", &input.to_string());
     assert!(denied(&answer), "{answer}");
