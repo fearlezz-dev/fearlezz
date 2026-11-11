@@ -13,6 +13,7 @@ mod lints;
 mod look;
 mod media;
 mod overview;
+mod page;
 mod presets;
 mod red;
 mod report;

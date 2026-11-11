@@ -572,6 +572,13 @@ fn overview_writes_one_page_with_every_journal() {
     assert!(html.contains("feat/x") && html.contains("feat/waiting"));
     assert!(html.contains("Needs you"));
     assert!(html.contains("Pick a variant"));
+    // The same house style as the look report: nothing fetched, motion that can be calmed,
+    // and borders all the way round or not at all.
+    assert!(!html.contains("http://") && !html.contains("https://"));
+    assert!(html.contains("prefers-reduced-motion"));
+    for side in ["border-left", "border-right", "border-top", "border-bottom"] {
+        assert!(!html.contains(side), "{side}");
+    }
 }
 
 #[test]
