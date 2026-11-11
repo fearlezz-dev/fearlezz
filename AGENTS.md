@@ -34,7 +34,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 ## Releases
 
 - release-please opens the release PR from commits on `main`; merging it tags `vX.Y.Z` and builds the binaries (`.github/workflows/release.yml`).
-- Only conventional commits count: a change that should release starts with `fix:` or `feat:` (`feat!:` for a breaking one). Plain sentence commits are fine but cause no release; `main` takes squash merges, so the pull request title is the commit.
+- Only conventional commits count: a change that should release starts with `fix:` or `feat:` (`feat!:` for a breaking one). Plain sentence commits are fine but cause no release; with a squash merge the pull request title is the commit.
 
 ## Free and paid
 
