@@ -124,6 +124,51 @@ prefer_const_constructors = true
 }
 
 #[test]
+fn a_missing_settings_file_is_named_as_missing() {
+    let config = "[settings.claude.permissions]\nallow = [\"Bash(ls)\"]\n";
+    let repo = Repo::new(config, &[("src/a.txt", "a\n")]);
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    let out = repo.fz(&["run", "settings"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains(".claude/settings.json is missing; the settings in fearlezz.toml write it"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("fix: fearlezz setup sync"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        !out.stdout.contains("not files from the repository root"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn rust_lints_without_a_cargo_manifest_are_a_finding_not_an_error() {
+    let config = "[lints.clippy]\nunwrap_used = \"gate\"\n";
+    let repo = Repo::new(config, &[("src/a.txt", "a\n")]);
+    let sync = repo.fz(&["setup", "sync"]);
+    assert!(sync.ok, "{}\n{}", sync.stdout, sync.stderr);
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    let out = repo.fz(&["run", "settings"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+    assert!(
+        out.stdout
+            .contains("no Cargo.toml to write the [lints.clippy] and [lints.rustc] rules into"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn agent_permissions_merge_into_the_existing_settings() {
     let config = r#"
 [settings.claude.permissions]
