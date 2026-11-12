@@ -241,7 +241,10 @@ fn the_status_comment_names_each_blocker_and_what_to_do() {
     assert!(text.contains("| what | why | what to do |"), "{text}");
     assert!(text.contains("| check `tests` failed |"), "{text}");
     assert!(text.contains("| `README.md` has no proof |"), "{text}");
-    assert!(text.contains("add it to a check's inputs"), "{text}");
+    assert!(
+        text.contains("add it to a check's inputs and proves"),
+        "{text}"
+    );
     assert!(text.contains("| check `e2e` is weaker |"), "{text}");
     assert!(text.contains("it is gone"), "{text}");
 }
@@ -309,6 +312,14 @@ fn a_file_a_check_reads_but_does_not_prove_is_unproven() {
     assert!(!out.ok, "{}", out.stdout);
     assert!(
         out.stdout.contains("unproven src/gen/out.rs"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains(
+            "fix: add it to a check's inputs and proves (proves is its inputs unless set), or \
+             declare it in no_proof"
+        ),
         "{}",
         out.stdout
     );

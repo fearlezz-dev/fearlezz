@@ -81,7 +81,8 @@ impl Floor {
             what: format!("`{path}` has no proof"),
             why: format!("no check proves it and {base} does not declare it in no_proof"),
             fix: format!(
-                "add it to a check's inputs, or declare it in no_proof in {} on {base} first",
+                "add it to a check's inputs and proves (proves is its inputs unless set), or \
+                 declare it in no_proof in {} on {base} first",
                 config::FILE
             ),
         });
@@ -109,7 +110,8 @@ impl Floor {
         }
         if !self.unproven.is_empty() {
             lines.push(format!(
-                "  fix: add it to a check's inputs, or declare it in no_proof in {} on the base \
+                "  fix: add it to a check's inputs and proves (proves is its inputs unless set), or \
+                 declare it in no_proof in {} on the base \
                  branch first",
                 config::FILE
             ));
