@@ -27,7 +27,6 @@ mod state;
 mod store;
 
 use std::collections::{BTreeSet, HashMap};
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -107,15 +106,10 @@ enum Cmd {
         /// pull requests lose their pictures.
         #[arg(long, conflicts_with_all = ["checks", "stage"])]
         ci: bool,
-        /// With --ci: also write the short status for the pull request to this file.
+        /// With --ci: also write the status comment (Markdown) to this file, for a CI other
+        /// than GitHub Actions to post on its merge request.
         #[arg(long, value_name = "PATH", requires = "ci")]
         comment: Option<PathBuf>,
-        /// With --ci: copy the before and after of each changed picture into this folder.
-        #[arg(long, value_name = "DIR", requires = "ci")]
-        pictures: Option<PathBuf>,
-        /// The URL the --pictures folder is served at, to show the pictures in the status.
-        #[arg(long, value_name = "URL", requires = "pictures")]
-        pictures_url: Option<String>,
     },
     /// Tell: record what only you know, such as a note, a question, or an approval.
     Say {
@@ -166,10 +160,6 @@ enum Setup {
         #[arg(value_enum)]
         event: hooks::Event,
     },
-    /// The tools Fearlezz itself needs for this project's checks, one per line: ffmpeg when a
-    /// check records pictures. For CI scripts.
-    #[command(hide = true)]
-    Needs,
     /// Stop the services this checkout runs, or with --all every checkout's.
     Down {
         #[arg(long)]
@@ -310,11 +300,7 @@ fn prepared() -> Result<Ctx> {
 /// Proves this commit for CI. On GitHub Actions it does what the event asks: a pull request's
 /// proof also pushes its changed pictures, writes its status comment and sets its status; a
 /// comment, a closed pull request or the schedule need no checkout.
-fn ci_run(
-    comment: Option<PathBuf>,
-    pictures: Option<PathBuf>,
-    pictures_url: Option<String>,
-) -> Result<bool> {
+fn ci_run(comment: Option<PathBuf>) -> Result<bool> {
     let actions = action::Actions::detect()?;
     if let Some(gh) = &actions {
         let task = gh.task();
@@ -341,18 +327,16 @@ fn ci_run(
         }
     }
     let pull = actions.as_ref().and_then(action::Actions::pull);
-    let pictures = pictures.or_else(|| {
-        actions.as_ref()?;
+    // The action keeps this folder as the run's `fearlezz-pictures` artifact.
+    let pictures = actions.as_ref().and_then(|_| {
         std::env::var_os("RUNNER_TEMP").map(|t| PathBuf::from(t).join("fearlezz-pictures"))
     });
-    let pictures_url = pictures_url.or_else(|| pull.as_ref()?.url.clone());
     let mut journal = Journal::in_memory("ci");
     let to = ctx.config.stages.name(ctx.config.stages.last()).to_string();
     journal.append(ctx.now, Event::Stage { to, reason: None })?;
     let out = CiOut {
         comment,
         pictures,
-        pictures_url,
         pull,
     };
     run_checks(&ctx, journal, &[], true, out)
@@ -373,11 +357,9 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
             no_run,
             ci,
             comment,
-            pictures,
-            pictures_url,
         } => {
             if ci {
-                return ci_run(comment, pictures, pictures_url);
+                return ci_run(comment);
             }
             let ctx = prepared()?;
             if let Some(name) = stage {
@@ -490,8 +472,8 @@ fn say(ctx: &Ctx, what: Say) -> Result<bool> {
     Ok(true)
 }
 
-/// Records the latest approval of `check` given on the pull request for the commit checked
-/// out here. CI checked that a person with write access gave it, in a reply only CI writes.
+/// Records the approval given on the pull request for the commit checked out here, by the
+/// rule CI uses too (`github::approval`).
 fn approve_from_github(ctx: &Ctx, check: &str) -> Result<()> {
     let config = ctx.config.check(check)?;
     let mut wt = ctx.worktree()?;
@@ -502,25 +484,7 @@ fn approve_from_github(ctx: &Ctx, check: &str) -> Result<()> {
         );
     }
     let head = ctx.git.head()?;
-    let approvals = github::approvals(&ctx.git.root)?;
-    let mine: Vec<&github::Approval> = approvals
-        .iter()
-        .filter(|a| a.checks.iter().any(|c| c == check))
-        .collect();
-    let Some(approval) = mine.iter().rev().find(|a| a.head == head) else {
-        match mine.last() {
-            Some(a) => bail!(
-                "the latest approval of {check} on the pull request is for commit {}, not {}: \
-                 push, wait for the proof, and ask the developer to approve the pictures again",
-                a.head.chars().take(7).collect::<String>(),
-                head.chars().take(7).collect::<String>()
-            ),
-            None => bail!(
-                "nobody approved {check} on the pull request yet: the developer comments \
-                 `/fearlezz approve <their words>` there"
-            ),
-        }
-    };
+    let approval = github::approval_of_commit(&ctx.git.root, &head)?;
     let key = wt.inputs(config)?.key;
     let mut j = ctx.journal()?;
     j.append(
@@ -530,7 +494,7 @@ fn approve_from_github(ctx: &Ctx, check: &str) -> Result<()> {
             key,
             said: approval.said.clone(),
             by: Some(approval.by.clone()),
-            url: Some(approval.url.clone()),
+            url: Some(approval.url),
         },
     )?;
     println!(
@@ -636,11 +600,6 @@ fn setup(what: Setup) -> Result<bool> {
             });
             if let Some(out) = hooks::render(agent, event, answer) {
                 println!("{out}");
-            }
-        }
-        Setup::Needs => {
-            if needs_ffmpeg(&ctx()?.config) {
-                println!("ffmpeg");
             }
         }
         Setup::Down { all } => {
@@ -869,11 +828,11 @@ struct CommitReport {
     /// The full commit people know: the pull request's head, or HEAD.
     head: String,
     base: String,
-    rows: Vec<Row>,
+    rows: Vec<github::Row>,
     /// Where the short status and the changed pictures go, when asked.
     out: CiOut,
-    /// Checks whose changed pictures wait for a person.
-    waits: Vec<github::Waits>,
+    /// Looks whose changed pictures wait for a person.
+    waits: Vec<look::Look>,
     /// What running the change's tests on the base commit showed, one line per check.
     notes: Vec<String>,
     /// Fixes whose tests do not fail on the base commit.
@@ -883,25 +842,13 @@ struct CommitReport {
 /// What proving a commit writes for CI besides its output, when asked.
 #[derive(Default)]
 struct CiOut {
-    /// The short status for the pull request.
+    /// A file for the status comment, for a CI other than GitHub Actions.
     comment: Option<PathBuf>,
-    /// A folder for the before and after of each changed picture.
+    /// On GitHub Actions: a folder for the before and after of each changed picture, kept as
+    /// the run's artifact.
     pictures: Option<PathBuf>,
-    /// Where CI serves that folder, so the status shows the pictures.
-    pictures_url: Option<String>,
     /// The pull request on GitHub the proof reports to.
     pull: Option<action::Pull>,
-}
-
-/// One check in the report.
-struct Row {
-    id: String,
-    outcome: &'static str,
-    /// How many tests ran, for a check that counts them.
-    tests: Option<u64>,
-    secs: f64,
-    /// The first line of the command, marked when there is more.
-    run: String,
 }
 
 /// A field of the pull request GitHub Actions runs for, from its event file.
@@ -970,7 +917,7 @@ impl CommitReport {
             None => String::new(),
         };
         println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
-        self.rows.push(Row {
+        self.rows.push(github::Row {
             id: check.id.clone(),
             outcome: word,
             tests: result.tests,
@@ -980,7 +927,7 @@ impl CommitReport {
     }
 
     /// Writes the check page into the job summary GitHub Actions names, when it names one,
-    /// and the status for the pull request, when asked.
+    /// and the status comment to the file and the pull request, when asked.
     fn finish(
         self,
         floor: &floor::Floor,
@@ -999,197 +946,47 @@ impl CommitReport {
         if let Some(dir) = &self.out.pictures {
             github::copy_pictures(&self.waits, dir)?;
         }
+        let run_url = match (
+            std::env::var("GITHUB_SERVER_URL"),
+            std::env::var("GITHUB_REPOSITORY"),
+            std::env::var("GITHUB_RUN_ID"),
+        ) {
+            (Ok(server), Ok(repo), Ok(run)) => Some(format!("{server}/{repo}/actions/runs/{run}")),
+            _ => None,
+        };
+        let proof = github::Proof {
+            commit: &self.commit,
+            head: &self.head,
+            rows: &self.rows,
+            items: &items,
+            notes: &self.notes,
+            waits: &self.waits,
+            pictures_url: self.out.pull.as_ref().and_then(|p| p.url.as_deref()),
+            artifact: self.out.pictures.is_some(),
+            run_url,
+        };
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-            let page = self.page(&items, failures)?;
+            let page = proof.page(failures)?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(Path::new(&path))?
                 .write_all(page.as_bytes())?;
         }
+        let comment = proof.comment()?;
         if let Some(path) = &self.out.comment {
-            std::fs::write(path, self.status(&items)?)
+            std::fs::write(path, comment.render())
                 .with_context(|| format!("writing {}", path.display()))?;
         }
         if let Some(pull) = &self.out.pull {
-            let checks: Vec<String> = self.waits.iter().map(|w| w.look.check.clone()).collect();
-            pull.report(&self.status(&items)?, &checks, self.out.pictures.as_deref());
+            pull.report(
+                &comment,
+                &proof.waiting_checks(),
+                self.out.pictures.as_deref(),
+            );
         }
         Ok(())
     }
-
-    /// The headline: proven or not, with the commit and how many checks passed. It never says
-    /// proven while changed pictures wait for a person.
-    fn headline(&self, items: &[floor::Item]) -> String {
-        let checks: Vec<String> = self
-            .waits
-            .iter()
-            .map(|w| format!("`{}`", w.look.check))
-            .collect();
-        let (word, waiting) = match (items.is_empty(), checks.is_empty()) {
-            (true, true) => ("Proven", String::new()),
-            (true, false) => (
-                "Pictures wait",
-                format!(
-                    "; the changed pictures of {} wait for a person",
-                    checks.join(", ")
-                ),
-            ),
-            (false, _) => ("Not proven", String::new()),
-        };
-        format!("{}{waiting}", self.counted(word))
-    }
-
-    fn counted(&self, word: &str) -> String {
-        let passed = self.rows.iter().filter(|r| r.outcome == "passed").count();
-        format!(
-            "**{word}**: commit {}, {passed} of {} checks passed",
-            self.commit,
-            self.rows.len()
-        )
-    }
-
-    /// The hidden line an approval by comment checks: the head, what it covers, and the
-    /// headline once approved.
-    fn waiting(&self, items: &[floor::Item]) -> Result<String> {
-        let word = if items.is_empty() {
-            "Proven"
-        } else {
-            "Not proven"
-        };
-        github::hidden(
-            github::WAITING_MARKER,
-            &github::Waiting {
-                head: self.head.clone(),
-                fingerprint: github::fingerprint(&self.waits),
-                checks: self.waits.iter().map(|w| w.look.check.clone()).collect(),
-                approved: format!(
-                    "{}; @{{by}} approved the changed pictures",
-                    self.counted(word)
-                ),
-            },
-        )
-    }
-
-    fn pictures(&self, text: &mut String) -> std::fmt::Result {
-        github::section(
-            text,
-            &self.waits,
-            &github::Shown {
-                url: self.out.pictures_url.as_deref(),
-                artifact: self.out.pictures.is_some(),
-            },
-        )
-    }
-
-    /// The short status for the pull request: the headline, what blocks it, the pictures to
-    /// look at, the checks folded away, and a link to the check page.
-    fn status(&self, items: &[floor::Item]) -> Result<String> {
-        let mut text = String::new();
-        writeln!(
-            text,
-            "{}\n### Fearlezz\n\n{}\n",
-            github::COMMENT_MARKER,
-            self.headline(items)
-        )?;
-        blockers(&mut text, items)?;
-        self.notes(&mut text)?;
-        self.pictures(&mut text)?;
-        if !self.rows.is_empty() {
-            writeln!(
-                text,
-                "<details><summary>{} checks</summary>\n",
-                self.rows.len()
-            )?;
-            self.table(&mut text)?;
-            writeln!(text, "\n</details>\n")?;
-        }
-        if let (Ok(server), Ok(repo), Ok(run)) = (
-            std::env::var("GITHUB_SERVER_URL"),
-            std::env::var("GITHUB_REPOSITORY"),
-            std::env::var("GITHUB_RUN_ID"),
-        ) {
-            writeln!(
-                text,
-                "[The check page]({server}/{repo}/actions/runs/{run}) has each check's output."
-            )?;
-        }
-        if !self.waits.is_empty() {
-            writeln!(text, "{}", self.waiting(items)?)?;
-        }
-        Ok(text)
-    }
-
-    /// The check page: the headline, what blocks it, every check, and the end of each failing
-    /// output.
-    fn page(
-        &self,
-        items: &[floor::Item],
-        failures: &[store::RunResult],
-    ) -> Result<String, std::fmt::Error> {
-        let mut text = String::new();
-        writeln!(text, "### Fearlezz\n\n{}\n", self.headline(items))?;
-        blockers(&mut text, items)?;
-        self.notes(&mut text)?;
-        self.pictures(&mut text)?;
-        self.table(&mut text)?;
-        if self.rows.is_empty() {
-            writeln!(text, "\nNo check reads what this commit changed.")?;
-        }
-        for f in failures {
-            writeln!(
-                text,
-                "\n<details><summary>The end of what {} printed</summary>\n\n```",
-                f.check
-            )?;
-            for line in run::tail(&f.log, 40) {
-                writeln!(text, "{}", line.replace("```", "'''"))?;
-            }
-            writeln!(text, "```\n\n</details>")?;
-        }
-        Ok(text)
-    }
-
-    fn notes(&self, text: &mut String) -> std::fmt::Result {
-        for note in &self.notes {
-            writeln!(text, "{note}\n")?;
-        }
-        Ok(())
-    }
-
-    fn table(&self, text: &mut String) -> std::fmt::Result {
-        writeln!(text, "| check | result | tests | time | command |")?;
-        writeln!(text, "| --- | --- | --- | --- | --- |")?;
-        for row in &self.rows {
-            let run = row.run.replace('|', "\\|");
-            let tests = row.tests.map(|n| n.to_string()).unwrap_or_default();
-            writeln!(
-                text,
-                "| {} | {} | {tests} | {:.1} s | `{run}` |",
-                row.id, row.outcome, row.secs
-            )?;
-        }
-        Ok(())
-    }
-}
-
-/// The table of what keeps the commit from being proven, if anything does.
-fn blockers(text: &mut String, items: &[floor::Item]) -> std::fmt::Result {
-    if items.is_empty() {
-        return Ok(());
-    }
-    writeln!(text, "| what | why | what to do |\n| --- | --- | --- |")?;
-    let cell = |s: &str| s.replace('|', "\\|").replace('\n', " ");
-    for item in items {
-        writeln!(
-            text,
-            "| {} | {} | {} |",
-            cell(&item.what),
-            cell(&item.why),
-            cell(&item.fix)
-        )?;
-    }
-    writeln!(text)
 }
 
 /// A failed check as a blocker, for a reader who sees neither the agent nor the logs.
@@ -1658,7 +1455,7 @@ fn look_at_media(
     ctx: &Ctx,
     green: &[(&config::Check, store::RunResult)],
     stage: &str,
-) -> Vec<github::Waits> {
+) -> Vec<look::Look> {
     let mut waits = Vec::new();
     // Opened once, on the first check with pictures.
     let mut base: Option<Result<Option<look::Base>>> = None;
@@ -1701,10 +1498,7 @@ fn look_at_media(
                 }
                 println!("  report: {}", l.report.display());
                 if l.to_look_at() > 0 {
-                    waits.push(github::Waits {
-                        look: l,
-                        key: result.key.clone(),
-                    });
+                    waits.push(l);
                 }
             }
             Err(e) => println!("look {} failed: {e:#}", check.id),

@@ -5,6 +5,7 @@
 
 mod common;
 
+use common::github::{Comment, FakeGitHub, PERSON_TOKEN, Status};
 use common::{Repo, runs};
 
 const RECORD: &str = r#"set -e
@@ -232,73 +233,54 @@ fn there_is_nothing_to_approve_without_changed_pictures() {
 
 // Approvals given on the pull request
 
-/// Stands in for the GitHub CLI: pull request 7 of the current branch, whose comments are the
-/// JSON in `.runs/comments.json`, filtered with the real jq as `gh --jq` would.
-const FAKE_GH: &str = r#"#!/bin/sh
-case "$1 $2" in
-  "pr view") echo 7 ;;
-  "api repos/{owner}/{repo}/issues/7/comments")
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = --jq ]; then jq -c "$2" "$GH_COMMENTS"; exit; fi
-      shift
-    done
-    cat "$GH_COMMENTS" ;;
-  *) echo "unexpected gh $*" >&2; exit 1 ;;
-esac
-"#;
-
-/// The comments on the pull request: one approval by `author` (of `kind`, `Bot` or `User`) for
-/// `head`, covering `screens`.
-fn comments(head: &str, author: &str, kind: &str) -> String {
-    let hidden = serde_json::json!({
-        "head": head,
-        "fingerprint": "f00d",
-        "checks": ["screens"],
-        "by": "lead",
-        "said": "ship it",
+/// Pull request 7 on the fake GitHub at `head`, with a `/fearlezz approve ship it` comment by
+/// `lead`, who has write access, and the `fearlezz/pictures` status on `status_on` set by
+/// `creator` (login and type) to success, linked to that comment.
+fn approved(head: &str, status_on: &str, creator: (&str, &str)) -> (FakeGitHub, Comment) {
+    let gh = FakeGitHub::start();
+    let mut state = gh.state();
+    state.pulls.insert(7, (head.into(), "open".into()));
+    state.permissions.insert("lead".into(), "write".into());
+    let comment = state.add_comment(7, "lead", "User", "/fearlezz approve ship it");
+    state.statuses.push(Status {
+        sha: status_on.into(),
+        state: "success".into(),
+        context: "fearlezz/pictures".into(),
+        description: "approved by lead".into(),
+        target: comment.url(),
+        creator: creator.0.into(),
+        creator_kind: creator.1.into(),
     });
-    serde_json::json!([
-        { "user": { "login": "lead", "type": "User" }, "body": "/fearlezz approve ship it",
-          "html_url": "https://github.com/o/r/pull/7#issuecomment-1" },
-        { "user": { "login": author, "type": kind },
-          "body": format!("@lead approved the pictures.\n<!-- fearlezz-approved {hidden} -->"),
-          "html_url": "https://github.com/o/r/pull/7#issuecomment-2" },
-    ])
-    .to_string()
+    drop(state);
+    (gh, comment)
 }
 
-/// Runs `fearlezz` with the fake GitHub CLI answering for `comments`.
-fn with_gh(repo: &Repo, counter: &str, comments: &str, args: &[&str]) -> common::Output {
-    repo.write(".runs/bin/gh", FAKE_GH);
-    let gh = repo.path(".runs/bin/gh");
-    let mut perms = std::fs::metadata(&gh).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-    std::fs::set_permissions(&gh, perms).unwrap();
-    repo.write(".runs/comments.json", comments);
-    let path = format!(
-        "{}:{}",
-        repo.path(".runs/bin").display(),
-        std::env::var("PATH").unwrap()
-    );
-    let file = repo.path(".runs/comments.json");
+const ACTIONS: (&str, &str) = ("github-actions[bot]", "Bot");
+
+/// Runs `fearlezz` on the developer's machine, with their token, against the fake GitHub.
+fn with_gh(repo: &Repo, counter: &str, gh: &FakeGitHub, args: &[&str]) -> common::Output {
     repo.fz_env(
         args,
         &[
             ("COUNTER", counter),
-            ("PATH", &path),
-            ("GH_COMMENTS", file.to_str().unwrap()),
+            ("GITHUB_API_URL", &gh.url),
+            ("GITHUB_TOKEN", PERSON_TOKEN),
         ],
     )
 }
 
-/// The work run and committed, so its head is what the pull request shows.
+/// The work run and committed, so its head is what the pull request shows, with the
+/// repository on GitHub as its `origin`.
 fn committed() -> (Repo, String, String) {
     let (repo, counter) = repo();
     ran(&repo, &counter, &["run"]);
     repo.commit("the work");
+    repo.git(&["remote", "add", "origin", "git@github.com:owner/repo.git"]);
     let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
     (repo, counter, head)
 }
+
+const APPROVE: [&str; 4] = ["say", "approve", "screens", "--github"];
 
 #[test]
 fn the_next_line_names_approving_on_the_pull_request() {
@@ -316,12 +298,8 @@ fn the_next_line_names_approving_on_the_pull_request() {
 #[test]
 fn an_approval_on_the_pull_request_counts_with_who_gave_it() {
     let (repo, counter, head) = committed();
-    let out = with_gh(
-        &repo,
-        &counter,
-        &comments(&head, "github-actions[bot]", "Bot"),
-        &["say", "approve", "screens", "--github"],
-    );
+    let (gh, _) = approved(&head, &head, ACTIONS);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
         out.stdout
@@ -348,31 +326,69 @@ fn an_approval_on_the_pull_request_counts_with_who_gave_it() {
 }
 
 #[test]
+fn an_approval_set_by_an_app_token_counts() {
+    let (repo, counter, head) = committed();
+    let (gh, _) = approved(&head, &head, ("proof-app[bot]", "Bot"));
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+}
+
+#[test]
 fn an_approval_for_another_commit_does_not_count() {
     let (repo, counter, _) = committed();
     let other = "0".repeat(40);
-    let out = with_gh(
-        &repo,
-        &counter,
-        &comments(&other, "github-actions[bot]", "Bot"),
-        &["say", "approve", "screens", "--github"],
-    );
+    let (gh, _) = approved(&other, &other, ACTIONS);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
     assert!(!out.ok, "{}", out.stdout);
-    assert!(out.stderr.contains("0000000"), "{}", out.stderr);
     assert!(out.stderr.contains("push"), "{}", out.stderr);
 }
 
 #[test]
-fn an_approval_line_a_person_wrote_does_not_count() {
+fn an_approval_line_another_bot_wrote_does_not_count() {
     let (repo, counter, head) = committed();
-    let out = with_gh(
-        &repo,
-        &counter,
-        &comments(&head, "lead", "User"),
-        &["say", "approve", "screens", "--github"],
+    let gh = FakeGitHub::start();
+    gh.state().pulls.insert(7, (head.clone(), "open".into()));
+    let hidden = serde_json::json!({
+        "head": head, "checks": ["screens"], "by": "lead", "said": "ship it",
+    });
+    gh.state().add_comment(
+        7,
+        "helper[bot]",
+        "Bot",
+        &format!("@lead approved the pictures.\n<!-- fearlezz-approved {hidden} -->"),
     );
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
     assert!(!out.ok, "{}", out.stdout);
     assert!(out.stderr.contains("/fearlezz approve"), "{}", out.stderr);
+}
+
+#[test]
+fn a_status_a_persons_account_set_does_not_count() {
+    let (repo, counter, head) = committed();
+    let (gh, _) = approved(&head, &head, ("dev", "User"));
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("/fearlezz approve"), "{}", out.stderr);
+}
+
+#[test]
+fn a_deleted_approval_does_not_count() {
+    let (repo, counter, head) = committed();
+    let (gh, comment) = approved(&head, &head, ACTIONS);
+    gh.state().comments.retain(|c| c.id != comment.id);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("deleted"), "{}", out.stderr);
+}
+
+#[test]
+fn an_approval_by_someone_without_write_access_does_not_count() {
+    let (repo, counter, head) = committed();
+    let (gh, _) = approved(&head, &head, ACTIONS);
+    gh.state().permissions.insert("lead".into(), "read".into());
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("write access"), "{}", out.stderr);
 }
 
 #[test]
@@ -380,12 +396,8 @@ fn approving_on_the_pull_request_needs_the_work_committed() {
     let (repo, counter) = repo();
     ran(&repo, &counter, &["run"]);
     let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
-    let out = with_gh(
-        &repo,
-        &counter,
-        &comments(&head, "github-actions[bot]", "Bot"),
-        &["say", "approve", "screens", "--github"],
-    );
+    let (gh, _) = approved(&head, &head, ACTIONS);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
     assert!(!out.ok, "{}", out.stdout);
     assert!(out.stderr.contains("commit"), "{}", out.stderr);
 }
