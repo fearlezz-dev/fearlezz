@@ -241,10 +241,8 @@ fn record_weakenings(b: &crate::record::Spec, h: &crate::record::Spec) -> Vec<St
         )),
         _ => {}
     }
-    let wait = |s: &crate::record::Spec| {
-        s.wait
-            .unwrap_or(crate::record::DEFAULT_WAIT.as_secs_f64())
-    };
+    let wait =
+        |s: &crate::record::Spec| s.wait.unwrap_or(crate::record::DEFAULT_WAIT.as_secs_f64());
     if wait(h) > wait(b) {
         found.push(format!(
             "it waits longer for its window ({} s, now {} s)",

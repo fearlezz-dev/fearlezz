@@ -81,9 +81,9 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 - **Sync never removes a rule a piece dropped.** Biome's `linter.rules` keeps stale keys and the `settings` check calls it in sync.
 - **Monorepos.** `setup init` and the language pieces look only at the repository root.
-- **macOS is not covered by CI.** It is only proven on the developer's machine, and so is recording app windows (hosted runners cannot grant Screen Recording).
+- **Recording app windows is proven only on the developer's machine.** CI runs the proof on macOS too, but hosted runners cannot grant Screen Recording.
 - **Linux only code is not proven locally.** The local proof runs on macOS, so code behind `cfg(not(target_os = "macos"))` is first linted in CI.
-- **CI pictures never ran on GitHub's runners.** The action and the approval workflow ran under act with real API calls to a private scratch repository; no other project uses them yet.
+- **CI pictures never ran on GitHub's runners.** The binary's GitHub flow is tested against a fake GitHub API, and the earlier script version ran under act with real API calls to a private scratch repository; no other project uses them yet.
 - **Red before green costs are measured for Rust and Go only.** What running the base commit costs for TypeScript, Python, Kotlin and Flutter projects is not known.
 - **A flaky test.** One test in `core` has failed twice on CI and not locally; its name is still unknown. Failed checks now show 12 lines, so the next failure should name it.
 - **About 85 lint flags** in the code, mostly possible panics from indexing, numeric casts in the recorder and long functions (`run_checks`). They do not block.
