@@ -150,6 +150,13 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
         match (&b.findings, &h.findings) {
             (Some(_), None) => say("it no longer reports findings".into()),
             (Some(bf), Some(hf)) => {
+                if bf.read != hf.read {
+                    say(format!(
+                        "its findings are read another way ({}, now {})",
+                        bf.read.name(),
+                        hf.read.name()
+                    ));
+                }
                 for tool in bf.tools.iter().filter(|t| !hf.tools.contains(t)) {
                     say(format!(
                         "its findings no longer get the levels of [lints.{}]",
@@ -162,8 +169,8 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
             }
             (None, _) => {}
         }
-        if b.record.is_some() && h.record.is_none() {
-            say("it no longer records its app's window".into());
+        for how in b.pictures.weakenings(&h.pictures) {
+            say(how);
         }
         if b.tests.is_some() && h.tests.is_none() {
             say("it no longer counts its tests".into());
@@ -172,18 +179,6 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
         // could hide a fix whose tests do not fail there. Naming them the first time is fine.
         if !b.test_files.is_empty() && h.test_files != b.test_files {
             say("it names other test files".into());
-        }
-        let flaky: Vec<String> = h
-            .flaky
-            .iter()
-            .filter(|p| !b.flaky.contains(p))
-            .map(|p| format!("+{p}"))
-            .collect();
-        if !flaky.is_empty() {
-            say(format!(
-                "it calls more pictures flaky ({})",
-                flaky.join(", ")
-            ));
         }
         let env: Vec<String> = h
             .env

@@ -109,6 +109,30 @@ fn a_record_names_a_still_or_a_film() {
 }
 
 #[test]
+fn recording_less_weakens_the_proof() {
+    let repo = repo();
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{}\n[settings.skill]\nagents = []\n\n[settings.hooks]\nagents = []\n",
+            CONFIG.replace(
+                "record = { film = \"home\", seconds = 2 }",
+                "record = { still = \"home\", seconds = 1 }"
+            )
+        ),
+    );
+    repo.commit("change");
+    let out = repo.fz_env(&["run", "--ci"], &[OFF]);
+    assert!(!out.ok, "{}", out.stdout);
+    for how in [
+        "it no longer records the film home",
+        "it records for less time (2 s, now 1 s)",
+    ] {
+        assert!(out.stdout.contains(how), "{how}: {}", out.stdout);
+    }
+}
+
+#[test]
 fn dropping_the_record_of_a_check_weakens_the_proof() {
     let repo = repo();
     repo.write(

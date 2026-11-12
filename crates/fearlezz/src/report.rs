@@ -653,9 +653,11 @@ fn render(dir: &Path, look: &Look) -> Result<String> {
     if look.no_before.is_some() {
         html.push_str("<span class=\"word new\">No before</span>");
     }
+    // A note is something to know before approving, so its details start open.
     write!(
         html,
-        "<details class=\"about\"><summary>Base</summary><p>{}</p></details></div>",
+        "<details class=\"about\"{}><summary>Base</summary><p>{}</p>",
+        if look.note.is_some() { " open" } else { "" },
         esc(&match &look.no_before {
             Some(why) => format!("There is no before: {why}. Every picture counts as new."),
             None => format!(
@@ -664,6 +666,14 @@ fn render(dir: &Path, look: &Look) -> Result<String> {
             ),
         })
     )?;
+    if let Some(note) = &look.note {
+        let mut note = esc(note);
+        if let Some(first) = note.get_mut(..1) {
+            first.make_ascii_uppercase();
+        }
+        write!(html, "<p class=\"note\">{note}.</p>")?;
+    }
+    html.push_str("</details></div>");
     counts(&mut html, look)?;
     group_bar(&mut html, look)?;
     html.push_str("</header><div id=\"list\">");

@@ -358,16 +358,9 @@ fn ci_run(
     run_checks(&ctx, journal, &[], true, out)
 }
 
-/// Whether a check records pictures, which needs ffmpeg: it names them by a glob or a `record`
-/// table, or by convention runs in the look stage and lists them in `proof.jsonl`.
+/// Whether a check takes pictures, which needs ffmpeg.
 fn needs_ffmpeg(config: &Config) -> bool {
-    let stages = &config.stages;
-    config.checks.iter().any(|c| {
-        c.stills.is_some()
-            || c.films.is_some()
-            || c.record.is_some()
-            || stages.name(c.stage) == "look"
-    })
+    config.checks.iter().any(|c| config.takes_pictures(c))
 }
 
 fn dispatch(cmd: Cmd) -> Result<bool> {
@@ -1351,7 +1344,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         // fails with the one time fix. Neither is stored, so it is not called unstable once
         // recording works.
         if reuse.is_none()
-            && check.record.is_some()
+            && check.pictures.record.is_some()
             && let Some(u) = record::unavailable()
         {
             if let Some(r) = report.as_mut() {
@@ -1642,7 +1635,9 @@ fn look_at_media(
     // Opened once, on the first check with pictures.
     let mut base: Option<Result<Option<look::Base>>> = None;
     for (check, result) in green {
-        if !look::has_media(result) {
+        // A check that takes pictures is compared even without any, so all gone shows.
+        let has_media = look::has_media(result);
+        if !has_media && !ctx.config.takes_pictures(check) {
             continue;
         }
         let base = base.get_or_insert_with(|| look::Base::open(&ctx.git, &ctx.config));
@@ -1656,6 +1651,9 @@ fn look_at_media(
         };
         // Without a before every picture is new; a failed look never ends the run.
         let outcome = outcome.or_else(|e| {
+            if !has_media {
+                return Err(e);
+            }
             look::without_before(check, result, &ctx.git.common, &format!("{e:#}"))
                 .map(look::LookOutcome::Done)
         });
