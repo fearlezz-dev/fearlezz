@@ -30,12 +30,12 @@ pub(crate) fn start_film(_window: &Window, _path: &Path, _frame: &Frame) -> Resu
     bail!(NOT_HERE)
 }
 
-impl Film {
-    pub(crate) fn ended(&mut self) -> bool {
+impl super::Filming for Film {
+    fn ended(&mut self) -> bool {
         false
     }
 
-    pub(crate) fn stop(self) -> Result<()> {
+    fn stop(self) -> Result<()> {
         bail!(NOT_HERE)
     }
 }

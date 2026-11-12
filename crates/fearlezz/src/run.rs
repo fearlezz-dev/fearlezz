@@ -174,12 +174,22 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut log = out;
+    // The windows open before the command starts are never recorded.
+    let mut recorder = match crate::record::Recorder::new(crate::record::System::default(), record)
+    {
+        Ok(r) => r,
+        Err(e) => {
+            use std::io::Write as _;
+            writeln!(log, "record: {e:#}")?;
+            return Ok((false, None));
+        }
+    };
     let mut child = cmd
         .spawn()
         .with_context(|| format!("starting check {}", check.id))?;
     // A recorder that panics must still stop the app the command started.
     let recorded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::record::during(&mut child, record, dir, &mut log)
+        recorder.during(&mut child, dir, &mut log)
     }))
     .unwrap_or_else(|panic| {
         Err(anyhow::anyhow!(
@@ -196,11 +206,11 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
             return Ok((false, None));
         }
     };
-    Ok(match recorded.status {
-        // Stopped by Fearlezz after `seconds`: the app ran until then, which is the point.
-        None => (recorded.recorded, None),
-        Some(status) => (status.success() && recorded.recorded, status.code()),
-    })
+    let code = match &recorded.ended {
+        crate::record::Ended::Exited(status) => status.code(),
+        crate::record::Ended::AfterSeconds | crate::record::Ended::WaitedTooLong => None,
+    };
+    Ok((recorded.passed(), code))
 }
 
 /// A port nothing listens on right now, for a server the check starts itself (such as

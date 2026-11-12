@@ -213,7 +213,7 @@ impl Pictures {
 }
 
 /// How the recording `h` records less than `b`: a still or film gone or renamed, another
-/// window, less time, or more cut from the top.
+/// window, less time, longer to wait for its window, or more cut from the top.
 fn record_weakenings(b: &crate::record::Spec, h: &crate::record::Spec) -> Vec<String> {
     let mut found = Vec::new();
     for (kind, was, now) in [("still", &b.still, &h.still), ("film", &b.film, &h.film)] {
@@ -240,6 +240,17 @@ fn record_weakenings(b: &crate::record::Spec, h: &crate::record::Spec) -> Vec<St
             "it records for less time (until its command ends, now {now} s)"
         )),
         _ => {}
+    }
+    let wait = |s: &crate::record::Spec| {
+        s.wait
+            .unwrap_or(crate::record::DEFAULT_WAIT.as_secs_f64())
+    };
+    if wait(h) > wait(b) {
+        found.push(format!(
+            "it waits longer for its window ({} s, now {} s)",
+            wait(b),
+            wait(h)
+        ));
     }
     if h.crop_top > b.crop_top {
         found.push(format!(

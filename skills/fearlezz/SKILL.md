@@ -50,7 +50,7 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 - On a pull request, CI shows the changed pictures and the developer approves them there with `/fearlezz approve <their words>`. That comment is theirs to write, never yours (a hook refuses it). Once they did, with the work committed and pushed, `fearlezz say approve <check> --github` records their approval in the journal.
 - `fearlezz setup compare BEFORE AFTER` compares any two stills or films directly, for quick tries while exploring.
 - While building a UI, look at it often: `fearlezz --still <window>` (macOS) takes a still of a running app's window, named by pid, bundle id, app name or part of its title, and prints the PNG's path. Read the picture and critique it. It is for you, not proof.
-- For a Flutter app, `use = ["flutter-look"]`: widget tests in `look_test/` call `still(tester, "home")` on a widget wrapped in `lookable(...)` (helpers written by `fearlezz setup sync`), headless and fast; `flutter-film` films the macOS app while `integration_test/` drives it, at the final stage.
+- For a Flutter app, `use = ["flutter-look"]`: widget tests in `look_test/` call `still(tester, "home")` on a widget wrapped in `lookable(...)` (helpers written by `fearlezz setup sync`), headless and fast; `flutter-film` films the macOS app while `integration_test/app_test.dart` drives it, at the final stage.
 
 ## Recording an app's window
 
@@ -58,15 +58,16 @@ A check with `record` films or stills the window of the app its command starts (
 
 ```toml
 [check.app-look]
-run = "swift run LookDemo"        # or xcodebuild test, flutter test integration_test -d macos
+run = "swift run LookDemo"        # or xcodebuild test, flutter test integration_test/app_test.dart -d macos
 stage = "look"
 inputs = ["Sources/**", "Package.swift"]
 record = { still = "home", film = "home", seconds = 3 }
 # window = "com.example.app"     the app when the command does not start it itself (open, launchd)
+# wait = 300                     most seconds without a window to record (the default)
 # crop_top = 28                  leave out the title bar (off by default; some apps have none)
 ```
 
-The still is taken once the window is up; the film runs until the command ends, or for `seconds`, after which Fearlezz stops the command and the check counts as passed. Where nothing can record, the check does not run: locally it fails with the one time fix; in CI it is listed as not run and does not block, since looks of app windows are proven on a developer's machine.
+Only a window that appears after the command starts is recorded, never one already open, so quit the app before a run that names `window`. The still is taken once the window is up; the film runs until the command ends, or for `seconds`, after which Fearlezz stops the command and the check counts as passed. A run that goes `wait` seconds without a window (none appeared, or it closed while the command kept running) is stopped and fails. A run records its first window only: `flutter test integration_test -d macos` starts the app once per file, so film one entry file. Where nothing can record, the check does not run: locally it fails with the one time fix; in CI it is listed as not run and does not block, since looks of app windows are proven on a developer's machine.
 
 ## Seeing the work
 

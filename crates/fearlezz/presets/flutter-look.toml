@@ -6,9 +6,10 @@
 # `lookable(...)`). Text renders a little differently per OS; a look only ever compares runs
 # on the same machine.
 #
-# flutter-film: integration tests in integration_test/ drive the macOS app while Fearlezz films
-# its window from outside (macOS with Screen Recording). The app needs the integration_test
-# dev dependency. Turn it off with `[check.flutter-film] off = true` for an app without them.
+# flutter-film: integration_test/app_test.dart drives the macOS app while Fearlezz films its
+# window from outside (macOS with Screen Recording). A run records its first window only and
+# `flutter test` starts the app once per file, so it films this one entry file; put every flow
+# to film in it. The app needs the integration_test dev dependency. Turn it off with `[check.flutter-film] off = true` for an app without them.
 
 [check.flutter-look]
 run = "flutter test look_test"
@@ -17,7 +18,7 @@ tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests
 inputs = ["lib/**", "look_test/**", "assets/**", "fonts/**", "pubspec.yaml", "pubspec.lock"]
 
 [check.flutter-film]
-run = "flutter test integration_test -d macos"
+run = "flutter test integration_test/app_test.dart -d macos"
 stage = "merge"
 tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
 inputs = ["lib/**", "integration_test/**", "macos/**", "assets/**", "fonts/**", "pubspec.yaml", "pubspec.lock"]

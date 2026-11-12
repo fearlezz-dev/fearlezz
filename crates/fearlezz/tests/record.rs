@@ -117,7 +117,7 @@ fn recording_less_weakens_the_proof() {
             "{}\n[settings.skill]\nagents = []\n\n[settings.hooks]\nagents = []\n",
             CONFIG.replace(
                 "record = { film = \"home\", seconds = 2 }",
-                "record = { still = \"home\", seconds = 1 }"
+                "record = { still = \"home\", seconds = 1, wait = 600 }"
             )
         ),
     );
@@ -127,9 +127,25 @@ fn recording_less_weakens_the_proof() {
     for how in [
         "it no longer records the film home",
         "it records for less time (2 s, now 1 s)",
+        "it waits longer for its window (300 s, now 600 s)",
     ] {
         assert!(out.stdout.contains(how), "{how}: {}", out.stdout);
     }
+}
+
+#[test]
+fn an_empty_window_name_is_refused_since_it_would_match_any_window() {
+    let repo = Repo::new(
+        "[check.look]\nrun = \"true\"\nstage = \"look\"\nrecord = { film = \"app\", window = \" \" }\n",
+        &[],
+    );
+    let out = repo.fz(&[]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr.contains("record: window names no window"),
+        "{}",
+        out.stderr
+    );
 }
 
 #[test]
