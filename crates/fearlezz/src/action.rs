@@ -188,11 +188,29 @@ impl Actions {
                 && s["creator"]["type"] == "Bot"
                 && s["target_url"] == url.as_str()
         });
+        let taken_back = |short: &str| -> Result<()> {
+            let how = if action == "deleted" {
+                "deleted"
+            } else {
+                "edited so it no longer approves"
+            };
+            self.api.comment(
+                pr,
+                &format!(
+                    "The approval by @{who} was {how}, so it is taken back: the pictures of \
+                     {short} wait for `/fearlezz approve <words>` again."
+                ),
+            )?;
+            println!("took back the approval of pull request {pr} at {short}");
+            Ok(())
+        };
         let (pending, verdict) = match github::settle(&self.api, pr)? {
             Ok(settled) => settled,
             Err(why) => {
                 if asks {
                     self.api.comment(pr, &format!("@{who}, {why}."))?;
+                } else if was {
+                    taken_back(&short(&head))?;
                 }
                 println!("{why}");
                 return Ok(());
@@ -205,21 +223,7 @@ impl Actions {
                     self.reply_approved(pr, &pending, a)?;
                 }
             }
-            Err(_) if was => {
-                let how = if action == "deleted" {
-                    "deleted"
-                } else {
-                    "edited so it no longer approves"
-                };
-                self.api.comment(
-                    pr,
-                    &format!(
-                        "The approval by @{who} was {how}, so it is taken back: the pictures of \
-                         {short} wait for `/fearlezz approve <words>` again."
-                    ),
-                )?;
-                println!("took back the approval of pull request {pr} at {short}");
-            }
+            Err(_) if was => taken_back(&short)?,
             _ if asks => {
                 let why = match self
                     .api
@@ -401,15 +405,7 @@ impl Pull {
             return self.api.status(&self.head, state, &what, None);
         }
         let mut comment = comment.clone();
-        // A run of the same head that shows the same pictures keeps when they were first shown,
-        // so an approval of them still counts; other pictures need a new one.
         let old = self.api.status_comment(self.number)?;
-        if let (Some(new), Some(found)) = (comment.waiting.as_mut(), &old)
-            && let Some(was) = &found.comment.waiting
-            && (&was.head, &was.checks, &was.pictures) == (&new.head, &new.checks, &new.pictures)
-        {
-            new.since = Some(found.since().to_string());
-        }
         if let (Some(dir), false) = (dir, checks.is_empty()) {
             match self.publish(dir) {
                 Ok(()) => println!("pictures on {BRANCH} at pr-{}/{}", self.number, self.run),

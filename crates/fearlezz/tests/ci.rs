@@ -1306,7 +1306,6 @@ fn an_app_token_finds_its_own_comment_and_answers_approvals() {
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
     assert_eq!(status.state, "success");
-    assert!(status_comment(&gh).body.contains("@lead approved"));
 }
 
 #[test]
@@ -1516,7 +1515,6 @@ fn a_rerun_with_the_same_pictures_keeps_the_approval() {
         status.target,
         event["comment"]["html_url"].as_str().unwrap()
     );
-    assert!(status_comment(&gh).body.contains("@lead approved"));
 }
 
 #[test]
@@ -1533,6 +1531,10 @@ fn a_rerun_with_changed_pictures_needs_a_new_approval() {
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
     assert_eq!(status.state, "pending");
+    // Other pictures come in a new comment, so when they were shown is when it was written.
+    let shown = status_comment(&gh);
+    assert_ne!(shown.id, mine.id);
+    assert_eq!(status.target, shown.url());
 }
 
 /// Films `home` in the color `src/color.txt` names. Each recording comes out with other bytes,
@@ -1622,9 +1624,55 @@ fn a_person_with_write_access_approves_the_pictures_by_comment() {
     let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
     assert_eq!(status.state, "success");
     assert_eq!(status.target, asked);
-    let comment = status_comment(&gh);
-    assert!(comment.body.contains("**Proven**"), "{}", comment.body);
-    assert!(comment.body.contains("@lead approved"), "{}", comment.body);
+}
+
+#[test]
+fn settling_an_approval_never_writes_the_status_comment() {
+    let (gh, _repo, _head) = proven_on_actions();
+    let shown = status_comment(&gh);
+    gh.state().permissions.insert("lead".into(), "write".into());
+    let event = comment_event(&gh, "lead", "/fearlezz approve fine");
+    answer(&gh, &event);
+    let id = event["comment"]["id"].as_u64().unwrap();
+    gh.state().comments.retain(|c| c.id != id);
+    let mut deleted = event.clone();
+    deleted["action"] = "deleted".into();
+    answer(&gh, &deleted);
+    let after = status_comment(&gh);
+    assert_eq!((after.id, &after.updated), (shown.id, &shown.updated));
+    assert_eq!(after.body, shown.body);
+}
+
+#[test]
+fn settling_writes_a_waiting_status_whose_description_is_out_of_date() {
+    let (gh, _repo, head) = proven_on_actions();
+    let set = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    gh.state().statuses.push(common::github::Status {
+        description: "changed pictures of older wait for /fearlezz approve".into(),
+        ..set.clone()
+    });
+    // A refused approval settles the status again.
+    answer(
+        &gh,
+        &comment_event(&gh, "stranger", "/fearlezz approve fine"),
+    );
+    let now = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(now.description, set.description);
+}
+
+#[test]
+fn deleting_the_approval_takes_it_back_when_the_status_comment_is_gone() {
+    let (gh, _repo, head) = proven_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    let mut event = comment_event(&gh, "lead", "/fearlezz approve fine");
+    answer(&gh, &event);
+    let shown = status_comment(&gh).id;
+    let id = event["comment"]["id"].as_u64().unwrap();
+    gh.state().comments.retain(|c| c.id != id && c.id != shown);
+    event["action"] = "deleted".into();
+    answer(&gh, &event);
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
 }
 
 #[test]
@@ -1650,7 +1698,6 @@ fn deleting_the_approval_takes_it_back() {
         "{}",
         comment.body
     );
-    assert!(!comment.body.contains("@lead approved"), "{}", comment.body);
 }
 
 #[test]

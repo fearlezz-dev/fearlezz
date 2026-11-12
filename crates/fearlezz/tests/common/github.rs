@@ -363,6 +363,14 @@ impl State {
                 let c = self.comments.iter().find(|c| c.id == id).unwrap().clone();
                 (200, Self::comment_json(&c))
             }
+            ("DELETE", ["issues", "comments", id]) => {
+                let id: u64 = id.parse().unwrap();
+                if !self.comments.iter().any(|c| c.id == id) {
+                    return (404, json!({ "message": "Not Found" }));
+                }
+                self.comments.retain(|c| c.id != id);
+                (204, Value::Null)
+            }
             ("POST", ["statuses", sha]) => {
                 let text = |k: &str| body[k].as_str().unwrap_or_default().to_string();
                 assert!(

@@ -236,9 +236,8 @@ impl Api {
         description: &str,
         target: Option<&str>,
     ) -> Result<()> {
-        // GitHub refuses a longer description.
-        let description: String = description.chars().take(140).collect();
-        let mut body = json!({ "state": state, "context": CONTEXT, "description": description });
+        let mut body =
+            json!({ "state": state, "context": CONTEXT, "description": clip(description) });
         if let Some(target) = target {
             body["target_url"] = target.into();
         }
@@ -257,11 +256,11 @@ impl Api {
             .cloned())
     }
 
-    /// The status comment CI wrote on pull request `pr`: the first comment with the marker
+    /// The status comment CI wrote on pull request `pr`: the newest comment with the marker
     /// written by an app (the workflow's token or an app's). A person's comment never is, so
     /// it works without asking GitHub who the token is, which an app's token cannot.
     pub(crate) fn status_comment(&self, pr: u64) -> Result<Option<Found>> {
-        Ok(self.comments(pr)?.into_iter().find_map(|c| {
+        Ok(self.comments(pr)?.into_iter().rev().find_map(|c| {
             if c["user"]["type"] != "Bot" {
                 return None;
             }
@@ -269,14 +268,17 @@ impl Api {
             Some(Found {
                 id: c["id"].as_u64()?,
                 url: c["html_url"].as_str().unwrap_or_default().to_string(),
-                updated: c["updated_at"].as_str().unwrap_or_default().to_string(),
+                created: c["created_at"].as_str().unwrap_or_default().to_string(),
                 comment,
             })
         }))
     }
 
-    /// Writes the status comment of pull request `pr`, in place of `old`, the one there;
-    /// returns its URL.
+    /// Writes the status comment of pull request `pr`; `old` is the one there. Only the
+    /// proving run writes it. Pictures that wait and differ from what `old` showed come in a
+    /// new comment, so GitHub's time of writing it is when they were first shown and an
+    /// approval written before then never counts for them; otherwise `old` is edited in place
+    /// and keeps that time. Returns its URL.
     pub(crate) fn write_status_comment(
         &self,
         pr: u64,
@@ -284,26 +286,39 @@ impl Api {
         comment: &StatusComment,
     ) -> Result<String> {
         let body = comment.render();
+        let shown = |c: &StatusComment| {
+            c.waiting
+                .as_ref()
+                .map(|w| (w.head.clone(), w.checks.clone(), w.pictures.clone()))
+        };
         let written = match old {
-            Some(found) => self.send(
-                "PATCH",
-                &format!("issues/comments/{}", found.id),
-                &json!({ "body": body }),
-            )?,
-            None => self.comment(pr, &body)?,
+            Some(found) if comment.waiting.is_none() || shown(&found.comment) == shown(comment) => {
+                self.send(
+                    "PATCH",
+                    &format!("issues/comments/{}", found.id),
+                    &json!({ "body": body }),
+                )?
+            }
+            _ => {
+                if let Some(found) = old {
+                    // Gone already is fine: the new comment takes its place either way.
+                    let (code, answer) =
+                        self.call("DELETE", &format!("issues/comments/{}", found.id), None)?;
+                    if !(200..300).contains(&code) && code != 404 {
+                        let why = answer["message"].as_str().unwrap_or_default();
+                        bail!("GitHub answered {code} to deleting the status comment: {why}");
+                    }
+                }
+                self.comment(pr, &body)?
+            }
         };
         Ok(written["html_url"].as_str().unwrap_or_default().to_string())
     }
+}
 
-    /// Rewrites the status comment `id`.
-    pub(crate) fn rewrite(&self, id: u64, comment: &StatusComment) -> Result<()> {
-        self.send(
-            "PATCH",
-            &format!("issues/comments/{id}"),
-            &json!({ "body": comment.render() }),
-        )?;
-        Ok(())
-    }
+/// A status description as GitHub keeps it: it refuses a longer one.
+fn clip(description: &str) -> String {
+    description.chars().take(140).collect()
 }
 
 fn var(name: &str) -> Option<String> {
@@ -457,7 +472,7 @@ impl Pending {
         if let Some(said) = command(comment["body"].as_str().unwrap_or_default()) {
             if let Some(found) = &self.shown {
                 let written = comment["created_at"].as_str().unwrap_or_default();
-                if written <= found.since() {
+                if written <= found.created.as_str() {
                     return Ok(Err(format!(
                         "@{who}, that approval was written before the proof of {short} showed its \
                          pictures: look at them, then approve again."
@@ -506,21 +521,29 @@ impl Pending {
     }
 }
 
-/// Sets `fearlezz/pictures` on the head of pull request `pr`, and the status comment's
-/// headline, to what the approval rule says now: green linked to the approval, or pending. It
-/// reads everything again after each write, so a comment deleted or edited while it ran never
-/// leaves the status green, in whatever order GitHub runs the events. Returns what waits and
-/// the approval, or why nothing waits.
+/// Sets `fearlezz/pictures` on the head of pull request `pr` to what the approval rule says
+/// now: green linked to the approval, or pending. It never writes the status comment, whose
+/// only writer is the proving run. It reads everything again after each write, so a comment
+/// deleted or edited while it ran never leaves the status green, in whatever order GitHub
+/// runs the events; its last attempt writes its verdict too. When nothing that waits can be
+/// read (the status comment gone or broken), a green status an approval set goes back to
+/// pending. Returns what waits and the approval, or why nothing waits.
 pub(crate) fn settle(
     api: &Api,
     pr: u64,
 ) -> Result<Result<(Pending, Result<Approval, String>), String>> {
     const ATTEMPTS: usize = 4;
-    let mut set: Option<(String, String, String)> = None;
-    for attempt in 1..=ATTEMPTS {
+    // What `fearlezz/pictures` of a head says: head, state, description, target.
+    type Set = (String, String, String, String);
+    let mut set: Option<Set> = None;
+    let mut last = None;
+    for _ in 0..ATTEMPTS {
         let pending = match Pending::read(api, pr)? {
             Ok(pending) => pending,
-            Err(why) => return Ok(Err(why)),
+            Err(why) => {
+                withdraw(api, pr, &why)?;
+                return Ok(Err(why));
+            }
         };
         let verdict = pending.approval(api)?;
         let (state, description, target) = match &verdict {
@@ -536,29 +559,57 @@ pub(crate) fn settle(
             ),
         };
         if set.is_none() {
-            set = api.latest_status(&pending.head)?.and_then(|s| {
-                (s["creator"]["type"] == "Bot").then(|| {
-                    let text = |k: &str| s[k].as_str().unwrap_or_default().to_string();
-                    (pending.head.clone(), text("state"), text("target_url"))
-                })
-            });
+            set = bot_status(api, &pending.head)?;
         }
-        if let Some(found) = &pending.shown {
-            let mut shown = found.comment.clone();
-            shown.settle(verdict.as_ref().ok().map(|a| a.by.as_str()), found.since());
-            if shown.render() != found.comment.render() {
-                api.rewrite(found.id, &shown)?;
-            }
-        }
-        let now = (pending.head.clone(), state.to_string(), target.clone());
-        if set.as_ref() == Some(&now) || attempt == ATTEMPTS {
+        let now = (
+            pending.head.clone(),
+            state.to_string(),
+            clip(&description),
+            target.clone(),
+        );
+        if set.as_ref() == Some(&now) {
             return Ok(Ok((pending, verdict)));
         }
         let target = (!target.is_empty()).then_some(target.as_str());
         api.status(&pending.head, state, &description, target)?;
         set = Some(now);
+        last = Some((pending, verdict));
     }
-    unreachable!("the last attempt returns")
+    Ok(Ok(last.expect("every attempt reads or returns")))
+}
+
+/// The latest `fearlezz/pictures` status of `head` if an app set it: head, state,
+/// description, target.
+fn bot_status(api: &Api, head: &str) -> Result<Option<(String, String, String, String)>> {
+    Ok(api.latest_status(head)?.and_then(|s| {
+        (s["creator"]["type"] == "Bot").then(|| {
+            let text = |k: &str| s[k].as_str().unwrap_or_default().to_string();
+            (
+                head.to_string(),
+                text("state"),
+                text("description"),
+                text("target_url"),
+            )
+        })
+    }))
+}
+
+/// Takes back a green `fearlezz/pictures` an approval set on the head of pull request `pr`
+/// when nothing that waits can be read, `why`: what it approved can no longer be told.
+fn withdraw(api: &Api, pr: u64, why: &str) -> Result<()> {
+    let (head, _) = api.head(pr)?;
+    if let Some((_, state, _, target)) = bot_status(api, &head)?
+        && state == "success"
+        && !target.is_empty()
+    {
+        api.status(
+            &head,
+            "pending",
+            &format!("the approval no longer counts: {why}"),
+            None,
+        )?;
+    }
+    Ok(())
 }
 
 /// The approval that counts for check `check` at commit `head`, checked out in `root`, on its
@@ -614,17 +665,9 @@ pub(crate) struct Waiting {
     pub head: String,
     pub checks: Vec<String>,
     /// What the waiting pictures are, so a run of the same head that shows the same pictures
-    /// keeps an approval and one that shows others does not.
+    /// keeps the comment, and with it an approval, and one that shows others writes a new one.
     #[serde(default)]
     pub pictures: String,
-    /// When GitHub first showed these pictures of this head; an approval written before then
-    /// does not count. None: when the comment was last written.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub since: Option<String>,
-    /// The headline while the pictures wait.
-    pub waits: String,
-    /// The headline once a person approves, before who did.
-    pub approved: String,
 }
 
 /// The status comment on a pull request: a fixed title, the headline, the rest of the body,
@@ -641,20 +684,9 @@ pub(crate) struct StatusComment {
 pub(crate) struct Found {
     pub id: u64,
     pub url: String,
-    /// When it was last written, by GitHub's clock.
-    pub updated: String,
+    /// When it was written, by GitHub's clock: when its waiting pictures were first shown.
+    pub created: String,
     pub comment: StatusComment,
-}
-
-impl Found {
-    /// When GitHub first showed the waiting pictures.
-    pub(crate) fn since(&self) -> &str {
-        self.comment
-            .waiting
-            .as_ref()
-            .and_then(|w| w.since.as_deref())
-            .unwrap_or(&self.updated)
-    }
 }
 
 impl StatusComment {
@@ -702,18 +734,6 @@ impl StatusComment {
     /// Adds a paragraph at the end.
     pub(crate) fn note(&mut self, text: &str) {
         self.body.extend(["\n", text, "\n"]);
-    }
-
-    /// Says who approved the waiting pictures, or that they wait, keeping when they were
-    /// first shown, since rewriting the comment moves its time.
-    pub(crate) fn settle(&mut self, by: Option<&str>, since: &str) {
-        if let Some(w) = &mut self.waiting {
-            self.headline = match by {
-                Some(by) => format!("{}; @{by} approved the changed pictures", w.approved),
-                None => w.waits.clone(),
-            };
-            w.since.get_or_insert_with(|| since.to_string());
-        }
     }
 }
 
@@ -803,18 +823,10 @@ impl Proof<'_> {
         if let Some(url) = &self.run_url {
             writeln!(text, "[The check page]({url}) has each check's output.")?;
         }
-        let word = if self.items.is_empty() {
-            "Proven"
-        } else {
-            "Not proven"
-        };
         let waiting = (!self.waits.is_empty()).then(|| Waiting {
             head: self.head.to_string(),
             checks: self.waiting_checks(),
             pictures: pictures_id(self.waits),
-            since: None,
-            waits: self.headline(),
-            approved: self.counted(word),
         });
         Ok(StatusComment {
             headline: self.headline(),
@@ -1126,21 +1138,10 @@ mod tests {
             waiting: Some(Waiting {
                 head: "abc".into(),
                 checks: vec!["ui".into()],
-                pictures: "p".into(),
-                since: None,
-                waits: "**Pictures wait**: x".into(),
-                approved: "**Proven**: <x>".into(),
+                pictures: "p>".into(),
             }),
         };
-        let mut back = StatusComment::parse(&comment.render()).unwrap();
+        let back = StatusComment::parse(&comment.render()).unwrap();
         assert_eq!(back.render(), comment.render());
-        back.settle(Some("lead"), "t1");
-        assert_eq!(
-            back.headline,
-            "**Proven**: <x>; @lead approved the changed pictures"
-        );
-        back.settle(None, "t2");
-        assert_eq!(back.headline, "**Pictures wait**: x");
-        assert_eq!(back.waiting.unwrap().since.as_deref(), Some("t1"));
     }
 }

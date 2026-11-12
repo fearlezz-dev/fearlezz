@@ -407,10 +407,12 @@ fn an_approval_written_before_the_pictures_were_shown_does_not_count() {
     let (repo, counter, head) = committed();
     let (gh, comment) = approved(&head, &head, ACTIONS);
     let mine = gh.state().comments[0].clone();
-    // The proof writes its comment again after the approval, for other pictures.
-    gh.state()
-        .edit_comment(mine.id, &mine.body.replace("\"p\"", "\"q\""));
-    assert!(gh.state().comments[0].updated > comment.created);
+    // The proof shows other pictures after the approval, in a new comment.
+    gh.state().comments.retain(|c| c.id != mine.id);
+    let shown = gh
+        .state()
+        .add_status_comment(7, ACTIONS, &head, &["screens"]);
+    assert!(shown.created > comment.created);
     let out = with_gh(&repo, &counter, &gh, &APPROVE);
     assert!(!out.ok, "{}", out.stdout);
     assert!(out.stderr.contains("before"), "{}", out.stderr);
