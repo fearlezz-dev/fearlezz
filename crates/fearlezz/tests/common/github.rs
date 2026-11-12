@@ -260,10 +260,9 @@ impl State {
         head: &str,
         checks: &[&str],
     ) -> Comment {
-        let waiting = json!({ "head": head, "checks": checks, "pictures": "p",
-                              "waits": "**Pictures wait**", "approved": "**Proven**" });
+        let waiting = json!({ "head": head, "checks": checks, "pictures": "p" });
         let body = format!(
-            "<!-- fearlezz -->\n### Fearlezz\n\n**Pictures wait**\n\n<!-- fearlezz-pictures {waiting} -->\n"
+            "<!-- fearlezz -->\n### Fearlezz\n\n**Pictures need approval**\n\n<!-- fearlezz-pictures {waiting} -->\n"
         );
         self.add_comment(pr, login, kind, &body)
     }

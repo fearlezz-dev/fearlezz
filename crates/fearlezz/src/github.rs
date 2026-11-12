@@ -781,7 +781,9 @@ impl Proof<'_> {
     }
 
     /// Proven or not, with the commit and how many checks passed. It never says proven while
-    /// changed pictures wait for a person.
+    /// changed pictures need a person's approval, and never whether they have it: an approval
+    /// sets the `fearlezz/pictures` status, never the comment, so the comment says only what
+    /// it can keep true.
     pub(crate) fn headline(&self) -> String {
         let checks: Vec<String> = self
             .waits
@@ -791,8 +793,8 @@ impl Proof<'_> {
         match (self.items.is_empty(), checks.is_empty()) {
             (true, true) => self.counted("Proven"),
             (true, false) => format!(
-                "{}; the changed pictures of {} wait for a person",
-                self.counted("Pictures wait"),
+                "{}; the changed pictures of {} need a person's approval",
+                self.counted("Pictures need approval"),
                 checks.join(", ")
             ),
             (false, _) => self.counted("Not proven"),
@@ -988,7 +990,8 @@ impl Proof<'_> {
         writeln!(
             text,
             "To approve them, a person with write access comments `/fearlezz approve <what they \
-             think of them>`. A new push needs a new approval.\n"
+             think of them>`. A new push needs a new approval. The `fearlezz/pictures` status \
+             says whether they are approved.\n"
         )
     }
 }
@@ -1134,7 +1137,7 @@ mod tests {
     #[test]
     fn a_status_comment_reads_back_as_written() {
         let comment = StatusComment {
-            headline: "**Pictures wait**: x".into(),
+            headline: "**Pictures need approval**: x".into(),
             body: "| a | b |\n\nmore\n".into(),
             waiting: Some(Waiting {
                 head: "abc".into(),

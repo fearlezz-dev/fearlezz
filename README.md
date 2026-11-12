@@ -87,7 +87,7 @@ The checkout needs `fetch-depth: 0`: the proof compares the change with its base
 
 On another CI, `fearlezz run --ci --comment status.md` writes the same status comment to a file, for that CI to post on its merge request.
 
-Changed pictures show on the pull request, before and after, from the `fearlezz-pictures` branch (one folder per pull request; in a private repository only people who can read it see them). Changed pictures do not fail the proof: they set the `fearlezz/pictures` status to pending, and the comment says they wait.
+Changed pictures show on the pull request, before and after, from the `fearlezz-pictures` branch (one folder per pull request; in a private repository only people who can read it see them). Changed pictures do not fail the proof: they set the `fearlezz/pictures` status to pending, and the comment says they need a person's approval. Whether they have it is the status alone: an approval sets the status and a reply, never the comment.
 
 To make merging wait for a person, require the `fearlezz/pictures` status next to the proof check, with **GitHub Actions as its expected source** (a ruleset's required status checks can name one). Without that source, anyone who can write to the repository could set the status by hand.
 

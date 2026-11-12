@@ -1027,7 +1027,14 @@ fn changed_pictures_wait_for_a_person_without_failing_the_proof() {
     let repo = screens_branch("blue");
     let (out, text) = ci_with_comment(&repo);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    assert!(text.contains("**Pictures wait**"), "{text}");
+    // The comment shows what needs approval; whether it was given lives in the status, which
+    // settling an approval sets without writing the comment.
+    assert!(text.contains("**Pictures need approval**"), "{text}");
+    assert!(!text.contains("wait for a person"), "{text}");
+    assert!(
+        text.contains("The `fearlezz/pictures` status says whether they are approved."),
+        "{text}"
+    );
     let shown: Vec<&str> = text.lines().filter(|l| !l.starts_with("<!--")).collect();
     assert!(!shown.iter().any(|l| l.contains("Proven")), "{text}");
     assert!(text.contains("`/fearlezz approve "), "{text}");
@@ -1233,7 +1240,7 @@ fn on_a_pull_request_ci_publishes_the_pictures_comments_and_waits() {
     );
     let comment = status_comment(&gh);
     assert!(
-        comment.body.contains("**Pictures wait**"),
+        comment.body.contains("**Pictures need approval**"),
         "{}",
         comment.body
     );
@@ -1495,7 +1502,9 @@ fn editing_the_approval_so_it_no_longer_approves_takes_it_back() {
     let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
     assert_eq!(status.state, "pending");
     assert!(
-        status_comment(&gh).body.contains("**Pictures wait**"),
+        status_comment(&gh)
+            .body
+            .contains("**Pictures need approval**"),
         "{}",
         status_comment(&gh).body
     );
@@ -1756,7 +1765,7 @@ fn deleting_the_approval_takes_it_back() {
     assert_eq!(status.state, "pending");
     let comment = status_comment(&gh);
     assert!(
-        comment.body.contains("**Pictures wait**"),
+        comment.body.contains("**Pictures need approval**"),
         "{}",
         comment.body
     );
