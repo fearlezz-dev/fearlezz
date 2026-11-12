@@ -59,6 +59,8 @@ pieces:
         evidence: [spike/virtual-display display.rs click test]
 
 decided:
+  - id: reliable-under-load
+    what: "Assume that very often my system is very loaded. Everything needs to be very reliable, because if it's not, everything is going to conflict too much with each other."
   - id: fast-watch
     what: "Fast watch for all": CGWindowList every 10 ms finds new windows for every recording; ScreenCaptureKit only captures.
   - id: opt-in-env
@@ -102,7 +104,7 @@ slices:
 
 open:
   - id: film-failures
-    ask: "Films fail machine wide with 'failure to process first sample buffer' after a number of recordings (also on c2afcb3 and with off screen off); restarting replayd fixed it once, then it came back after about 5 films. Investigate as its own problem?"
+    ask: "Reproduced on main (998ceb8) too: after 27 good films during a load spike every film fails until replayd restarts. Existing problem, now in ROADMAP Known problems. Investigate as its own drive?"
   - id: saved-frames
     ask: An app that saves its window position may reopen in the parked corner next time; move it back before the command ends?
   - id: agents-exceptions
@@ -110,4 +112,4 @@ open:
   - id: aerospace-no-ax-focus
     ask: With AeroSpace on and Accessibility off, focus give back is unproven (needs Accessibility turned off for the agent's app).
 
-next: "Check in: machine load (load average about 100) makes timings unreliable now; under that load AeroSpace picked up the native demo window too late (2 s) three times." 
+next: "Full proof, then check in: AeroSpace pick up now waits up to 10 s (6 of 6 parked at load 20); film failure is an existing problem." 

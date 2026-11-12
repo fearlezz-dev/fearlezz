@@ -31,22 +31,32 @@ const WORKSPACE: &str = "fearlezz";
 const UNDO: Duration = Duration::from_millis(150);
 
 /// How long AeroSpace gets to pick up a new window: it learns of windows on its own
-/// schedule, after the window server lists them, and refuses ids it does not know yet.
-const PICK_UP: Duration = Duration::from_secs(2);
+/// schedule, after the window server lists them, and refuses ids it does not know yet. On a
+/// loaded machine that took over 2 s, so it gets long enough to end parked.
+const PICK_UP: Duration = Duration::from_secs(10);
 
 /// Parks `window` and says how.
 pub(crate) fn park(window: &WindowInfo) -> Result<String> {
     if aerospace(&["list-workspaces", "--focused"]).is_ok() {
         let id = window.id.to_string();
         let since = Instant::now();
-        while !aerospace(&["list-windows", "--all", "--format", "%{window-id}"])?
-            .lines()
-            .any(|l| l.trim() == id)
+        let pid = window.pid.to_string();
+        while !aerospace(&[
+            "list-windows",
+            "--monitor",
+            "all",
+            "--pid",
+            &pid,
+            "--format",
+            "%{window-id}",
+        ])?
+        .lines()
+        .any(|l| l.trim() == id)
         {
             if since.elapsed() >= PICK_UP {
                 bail!("AeroSpace did not pick up the window in {PICK_UP:?}");
             }
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(Duration::from_millis(50));
         }
         aerospace(&["layout", "floating", "--window-id", &id])?;
         aerospace(&["move-node-to-workspace", "--window-id", &id, WORKSPACE])?;
