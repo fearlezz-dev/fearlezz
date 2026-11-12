@@ -8,6 +8,8 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - Enter the toolchain with `devenv shell`. `check` builds Fearlezz and proves the commit with `fearlezz run --ci`, the same command CI runs. It is not the proof of a piece of work; only the journal is.
 - Fearlezz proves its own changes: follow `skills/fearlezz/SKILL.md` with the checks in `fearlezz.toml`. Build first (`cargo build`), then use `target/debug/fearlezz`.
 - Behavior is specified by the integration tests in `crates/fearlezz/tests/`, one file per feature, which drive the real binary in real git repositories. Add a failing test to the feature's file before changing behavior.
+- Before opening a pull request, run a fresh review of the whole change and fix what it confirms. A green proof shows the change builds and passes; it does not judge design, security or scope.
+- Spike code never merges. Rebuild what is worth keeping through the loop, with its own tests.
 
 ## Model
 
