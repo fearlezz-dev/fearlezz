@@ -1535,6 +1535,50 @@ fn a_rerun_with_changed_pictures_needs_a_new_approval() {
     assert_eq!(status.state, "pending");
 }
 
+/// Films `home` in the color `src/color.txt` names. Each recording comes out with other bytes,
+/// as a screen recording does, though it shows the same.
+const FILM: &str = r#"set -e
+ffmpeg -v error -nostdin -f lavfi -i "color=c=$(cat src/color.txt):s=64x48:r=10:d=1" -metadata comment="take $$" -pix_fmt yuv420p "$FEARLEZZ_OUT/home.mp4"
+echo '{"kind":"film","file":"home.mp4"}' >> "$FEARLEZZ_OUT/proof.jsonl"
+"#;
+
+#[test]
+fn a_rerun_that_films_the_same_change_keeps_the_approval() {
+    let gh = FakeGitHub::start();
+    let repo = Repo::new(
+        SCREENS,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", FILM),
+            ("src/color.txt", "red"),
+        ],
+    );
+    repo.branch("feat/look");
+    repo.write("src/color.txt", "blue");
+    repo.commit("color");
+    let head = head_of(&repo);
+    gh.state().pulls.insert(7, (head.clone(), "open".into()));
+    let event = pull_request(&head, "owner/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &event, "42");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        status_comment(&gh).body.contains("**home.mp4** changed"),
+        "{}",
+        status_comment(&gh).body
+    );
+    gh.state().permissions.insert("lead".into(), "write".into());
+    let approval = comment_event(&gh, "lead", "/fearlezz approve the blue film is right");
+    answer(&gh, &approval);
+    let out = on_actions(&gh, &repo.root, "pull_request", &event, "43");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "success", "{}", out.stdout);
+    assert_eq!(
+        status.target,
+        approval["comment"]["html_url"].as_str().unwrap()
+    );
+}
+
 // Approvals by comment
 
 /// The event of a comment on pull request 7 by `login`.

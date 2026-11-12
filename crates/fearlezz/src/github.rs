@@ -1040,8 +1040,11 @@ pub(crate) fn copy_pictures(waits: &[Look], dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// What the pictures that wait are: each check, and the name, change and bytes of each
-/// picture that blocks.
+/// What the pictures that wait are: each check, and the name and change of each picture that
+/// blocks, with the bytes of a still. A film's bytes are not: two recordings of the same film
+/// differ by frame timing, so a rerun of the same head that films the same change keeps an
+/// approval, while one whose film the look no longer calls changed, or a changed still, does
+/// not.
 fn pictures_id(waits: &[Look]) -> String {
     use sha2::{Digest as _, Sha256};
     let mut hash = Sha256::new();
@@ -1054,6 +1057,9 @@ fn pictures_id(waits: &[Look]) -> String {
             .filter(|i| i.change != Change::Same && !i.flaky)
         {
             hash.update(format!("{}\0{}\0", item.name, item.change.label()));
+            if item.kind == "film" {
+                continue;
+            }
             for rel in [&item.before, &item.after] {
                 let bytes = rel
                     .as_ref()
