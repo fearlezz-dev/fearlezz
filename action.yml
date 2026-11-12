@@ -49,7 +49,9 @@ runs:
           echo "$FEARLEZZ_INSTALL_DIR" >> "$GITHUB_PATH"
           PATH="$FEARLEZZ_INSTALL_DIR:$PATH"
         fi
-        if ! fearlezz run --help | grep -q "GitHub Actions"; then
+        # Captured, not piped: grep -q would close the pipe early and kill fearlezz with SIGPIPE.
+        help=$(fearlezz run --help)
+        if [[ "$help" != *"GitHub Actions"* ]]; then
           echo "::error::$(fearlezz --version) is too old for this action. Set version: to a newer release, or take the action at the tag of the release you install (fearlezz-dev/fearlezz@vX.Y.Z)."
           exit 1
         fi
