@@ -768,48 +768,60 @@ fn narrows_to(base: &[String], head: &[String]) -> bool {
     let runs: Vec<&[String]> = base
         .chunk_by(|a, b| a.starts_with('!') == b.starts_with('!'))
         .collect();
-    // A run this long is never written; compare it as written rather than search it.
-    if runs.iter().any(|r| r.len() >= 64) {
-        return base == head;
-    }
-    let mut failed = std::collections::HashSet::new();
-    narrows_from(&runs, head, (0, 0, 0), &mut failed)
+    let narrowing = Narrowing { runs: &runs, head };
+    let start = vec![false; runs.first().map_or(0, |r| r.len())];
+    narrowing.from(0, 0, 0, start, &mut std::collections::HashSet::new())
 }
 
-/// Whether `head[j..]` comes from the runs from `r` on, with the members of run `r` in `taken`
-/// already matched.
-fn narrows_from(
-    runs: &[&[String]],
-    head: &[String],
-    (r, taken, j): (usize, u64, usize),
-    failed: &mut std::collections::HashSet<(usize, u64, usize)>,
-) -> bool {
-    let Some(run) = runs.get(r) else {
-        return head
-            .get(j..)
-            .unwrap_or_default()
-            .iter()
-            .all(|p| p.starts_with('!'));
-    };
-    if failed.contains(&(r, taken, j)) {
-        return false;
+struct Narrowing<'a> {
+    runs: &'a [&'a [String]],
+    head: &'a [String],
+}
+
+impl Narrowing<'_> {
+    /// Whether `head[j..]` comes from the runs from `r` on, run `r` entered at `head[entry]`
+    /// with its members in `taken` matched since. A head glob equal to a member not yet matched
+    /// is matched at once: putting in a `!` glob or dropping a positive one is allowed anyway,
+    /// so matching later never does better. The search then branches only on leaving a run,
+    /// and `taken` follows from `(r, entry, j)`, which is what `failed` remembers.
+    fn from(
+        &self,
+        r: usize,
+        entry: usize,
+        j: usize,
+        mut taken: Vec<bool>,
+        failed: &mut std::collections::HashSet<(usize, usize, usize)>,
+    ) -> bool {
+        let rest = self.head.get(j..).unwrap_or_default();
+        let Some(run) = self.runs.get(r) else {
+            return rest.iter().all(|p| p.starts_with('!'));
+        };
+        if failed.contains(&(r, entry, j)) {
+            return false;
+        }
+        let negated = run.first().is_some_and(|p| p.starts_with('!'));
+        let h = rest.first();
+        let same = h.and_then(|h| run.iter().zip(&taken).position(|(p, done)| !done && p == h));
+        let ok = if let Some(i) = same {
+            if let Some(t) = taken.get_mut(i) {
+                *t = true;
+            }
+            self.from(r, entry, j + 1, taken, failed)
+        } else {
+            // Positive globs left in a run may be dropped; `!` globs may not.
+            let leave = (!negated || taken.iter().all(|t| *t)) && {
+                let next = vec![false; self.runs.get(r + 1).map_or(0, |r| r.len())];
+                self.from(r + 1, j, j, next, failed)
+            };
+            leave
+                || (h.is_some_and(|h| h.starts_with('!'))
+                    && self.from(r, entry, j + 1, taken, failed))
+        };
+        if !ok {
+            failed.insert((r, entry, j));
+        }
+        ok
     }
-    let negated = run.first().is_some_and(|p| p.starts_with('!'));
-    let all = (1u64 << run.len()) - 1;
-    // Positive globs left in a run may be dropped; `!` globs may not.
-    let ok = ((!negated || taken == all) && narrows_from(runs, head, (r + 1, 0, j), failed))
-        || head.get(j).is_some_and(|h| {
-            (h.starts_with('!') && narrows_from(runs, head, (r, taken, j + 1), failed))
-                || run.iter().enumerate().any(|(i, p)| {
-                    taken & (1 << i) == 0
-                        && p == h
-                        && narrows_from(runs, head, (r, taken | (1 << i), j + 1), failed)
-                })
-        });
-    if !ok {
-        failed.insert((r, taken, j));
-    }
-    ok
 }
 
 fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<Globs> {
@@ -900,6 +912,23 @@ mod tests {
                 panic!("{name}: {e:#}");
             }
         }
+    }
+
+    #[test]
+    fn a_long_run_of_negations_is_compared_quickly() {
+        let mut base = vec!["src/**".to_string()];
+        base.extend((0..40).map(|i| format!("!src/x{i}/**")));
+        let globs = |list: &[String]| super::globs(list).unwrap();
+        let started = std::time::Instant::now();
+        let dropped = &base[..base.len() - 1];
+        assert_eq!(
+            globs(dropped).widenings(&globs(&base)),
+            [Widening::Dropped("!src/x39/**".into())]
+        );
+        let mut reversed = base.clone();
+        reversed[1..].reverse();
+        assert!(globs(&reversed).widenings(&globs(&base)).is_empty());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]
