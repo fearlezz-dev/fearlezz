@@ -16,9 +16,6 @@ use crate::run;
 use crate::state::Worktree;
 use crate::store::{Outcome, RunResult, Store};
 
-/// File in a run's folder naming the folder of its latest look.
-const LOOK_POINTER: &str = "look.path";
-
 /// The journal name base runs are recorded under.
 pub(crate) const BASE_JOURNAL: &str = "(base)";
 
@@ -112,11 +109,15 @@ impl Look {
             .count()
     }
 
-    /// The latest look saved for a run, if any.
-    pub(crate) fn of(result: &RunResult) -> Option<Look> {
-        let dir = fs::read_to_string(result.dir.join(LOOK_POINTER)).ok()?;
-        let text = fs::read_to_string(Path::new(dir.trim()).join("look.json")).ok()?;
+    /// The look saved in the folder `dir`, if any.
+    pub(crate) fn at(dir: &Path) -> Option<Look> {
+        let text = fs::read_to_string(dir.join("look.json")).ok()?;
         serde_json::from_str(&text).ok()
+    }
+
+    /// The folder it is saved in.
+    pub(crate) fn dir(&self) -> &Path {
+        self.report.parent().unwrap_or(&self.report)
     }
 }
 
@@ -135,18 +136,10 @@ pub(crate) struct Base {
     pub wt: Worktree,
     prepared: bool,
     /// Keeps other commands from removing the worktree while this one uses it.
-    _hold: std::fs::File,
+    _hold: fs::File,
 }
 
 impl Base {
-    /// None when the base branch does not exist.
-    pub(crate) fn open(git: &Git, config: &Config) -> Result<Option<Base>> {
-        let Some(commit) = git.merge_base(&config.base) else {
-            return Ok(None);
-        };
-        Base::at(git, config, commit, "").map(Some)
-    }
-
     /// The base commit in a checkout of its own, told apart from others by `name`. Every
     /// run on a base commit goes through here, so where base checkouts live is decided once.
     pub(crate) fn at(git: &Git, config: &Config, commit: String, name: &str) -> Result<Base> {
@@ -289,7 +282,11 @@ pub(crate) fn look(
 ) -> Result<LookOutcome> {
     let inputs = base.wt.inputs(check)?;
     if inputs.key == result.key {
-        return Ok(LookOutcome::SameInputs);
+        return Ok(if has_media(result) {
+            LookOutcome::SameInputs
+        } else {
+            LookOutcome::NoMedia
+        });
     }
     let before = match store.for_key(&inputs.key).pop() {
         Some(r) => r,
@@ -323,7 +320,6 @@ pub(crate) fn look(
     } else {
         build(check, Some(&before), result, &base.commit, None, note, &dir)?
     };
-    point(result, &dir)?;
     Ok(LookOutcome::Done(look))
 }
 
@@ -336,7 +332,7 @@ pub(crate) fn without_before(
     reason: &str,
 ) -> Result<Look> {
     let dir = look_dir(common, check, "", &result.id);
-    let look = build(
+    build(
         check,
         None,
         result,
@@ -344,9 +340,7 @@ pub(crate) fn without_before(
         Some(reason.to_string()),
         None,
         &dir,
-    )?;
-    point(result, &dir)?;
-    Ok(look)
+    )
 }
 
 /// One folder per pair of runs and the pictures called flaky, with a short name people can
@@ -358,15 +352,6 @@ fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf 
         .join("fearlezz")
         .join("looks")
         .join(format!("{}-{}", check.id, &pair[..10]))
-}
-
-/// Records the look as the run's latest.
-fn point(result: &RunResult, dir: &Path) -> Result<()> {
-    fs::write(
-        result.dir.join(LOOK_POINTER),
-        dir.to_string_lossy().as_bytes(),
-    )?;
-    Ok(())
 }
 
 /// Runs a check on the base checkout: prepared like any checkout, with its own services

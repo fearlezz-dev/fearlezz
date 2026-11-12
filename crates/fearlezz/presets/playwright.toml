@@ -11,15 +11,17 @@
 #   ...(process.env.FEARLEZZ_OUT && {
 #     snapshotPathTemplate: `${process.env.FEARLEZZ_OUT}/stills/{projectName}/{arg}{ext}`,
 #     outputDir: `${process.env.FEARLEZZ_OUT}/films`,   // videos, with use: { video: "on" }
+#     reporter: [["line"], ["junit", { outputFile: `${process.env.FEARLEZZ_OUT}/junit.xml` }]],
 #   }),
 #   expect: { toHaveScreenshot: { stylePath: "e2e/stills.css" } },   // [data-volatile] { visibility: hidden }
 #
-# A still is then named `<project>/<name>`, such as `mobile/home` for
+# The junit reporter is how Fearlezz counts the tests that ran, so the run stays a plain
+# command. A still is then named `<project>/<name>`, such as `mobile/home` for
 # `await expect(page).toHaveScreenshot("home.png")` in the mobile project. toHaveScreenshot
 # already stops animations, hides the caret and waits until two captures match.
 
 [check.playwright]
-run = "PLAYWRIGHT_JUNIT_OUTPUT_FILE=\"$FEARLEZZ_OUT/junit.xml\" playwright test --update-snapshots=all --reporter=line,junit"
+run = "playwright test --update-snapshots=all"
 stage = "look"
 tests = "junit"
 stills = "stills/**/*.png"

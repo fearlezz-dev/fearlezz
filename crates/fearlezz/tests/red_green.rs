@@ -134,6 +134,28 @@ fn the_pull_request_title_decides_whether_it_is_a_fix() {
 }
 
 #[test]
+fn in_ci_a_feature_title_wins_over_a_fix_commit() {
+    let repo = repo();
+    change(&repo, PASSES_ANYWAY, "fix: review comments");
+    let event = repo.path(".runs/event.json");
+    std::fs::write(
+        &event,
+        r#"{"pull_request": {"title": "feat: a second value"}}"#,
+    )
+    .unwrap();
+    let out = repo.fz_env(
+        &["run", "--ci"],
+        &[("GITHUB_EVENT_PATH", event.to_str().unwrap())],
+    );
+    assert!(out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("not red before green tests"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn changing_which_files_are_tests_weakens_the_proof() {
     let repo = repo();
     repo.write(
@@ -380,6 +402,51 @@ fn after_a_blocked_final_run_fearlezz_and_the_hooks_never_say_ready() {
         "{\"stop_hook_active\": false}",
     );
     assert!(stop.stdout.contains("\"block\""), "{}", stop.stdout);
+}
+
+#[test]
+fn a_rebase_onto_a_new_base_needs_red_before_green_again() {
+    let repo = repo();
+    change(&repo, SHOWS_IT, "fix: the value is two");
+    let out = repo.fz(FINAL);
+    assert_eq!(
+        out.last_line(),
+        "next: all proof is in: ready to merge",
+        "{}",
+        out.stdout
+    );
+    // The base branch moves on without touching what the check reads.
+    repo.git(&["switch", "-q", "main"]);
+    repo.write("README", "\n");
+    repo.commit("Add a readme");
+    repo.git(&["switch", "-q", "change"]);
+    repo.git(&["rebase", "-q", "main"]);
+    let status = repo.fz(&[]);
+    assert!(
+        status.last_line().starts_with("next: fearlezz run"),
+        "{}",
+        status.stdout
+    );
+    let stop = repo.fz_input(
+        &["setup", "hook", "claude", "stop"],
+        "{\"stop_hook_active\": false}",
+    );
+    assert!(stop.stdout.contains("\"block\""), "{}", stop.stdout);
+    let again = repo.fz(&["run"]);
+    assert!(again.ok, "{}\n{}", again.stdout, again.stderr);
+    assert!(
+        again
+            .stdout
+            .contains("red before green tests: tests/new.sh fails on the base commit"),
+        "{}",
+        again.stdout
+    );
+    assert_eq!(
+        again.last_line(),
+        "next: all proof is in: ready to merge",
+        "{}",
+        again.stdout
+    );
 }
 
 // The language pieces

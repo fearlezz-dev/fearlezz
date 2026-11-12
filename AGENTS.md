@@ -16,7 +16,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `config.rs`: `fearlezz.toml`, stages and checks.
 - `init.rs`: `fearlezz setup init`, the starter `fearlezz.toml` from the languages at a repository's root.
 - `git.rs`: the facts read from git (root, common dir, changed files, tree id, worktrees).
-- `store.rs`: results keyed by inputs hash, shared by every worktree.
+- `store.rs`: results keyed by inputs hash, shared by every worktree, and what each passing run showed against a base commit (its look and red before green).
 - `journal.rs`: the append-only events of one piece of work.
 - `state.rs`: everything shown, derived from journal, store and worktree. Nothing derived is stored.
 - `presets.rs`: `use`, pulling pieces of config in by name, path or pinned repository and merging them; built in pieces live in `crates/fearlezz/presets/`.

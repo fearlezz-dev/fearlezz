@@ -7,7 +7,6 @@ use anyhow::Result;
 
 use crate::config::{self, Builtin, Config, Env, Ports};
 use crate::findings::Scope;
-use crate::git::Git;
 use crate::presets;
 use crate::state::Worktree;
 
@@ -29,20 +28,16 @@ pub(crate) struct Item {
 }
 
 impl Floor {
-    /// Compares the change's config with the base branch's. Without a base branch, or with
-    /// no config on it, there is no floor and the change's own `no_proof` counts.
-    pub(crate) fn read(git: &Git, head: &Config, wt: &Worktree) -> Result<Floor> {
-        let base = match git.merge_base(&head.base) {
-            Some(commit) => {
-                let (base, _hold) = git.base_worktree(&commit, "")?;
-                if base.root.join(config::FILE).exists() {
-                    let config = Config::load(&base.root, &git.common)?;
-                    Some((config, presets::config_files(&base.root)?))
-                } else {
-                    None
-                }
-            }
-            None => None,
+    /// Compares the change's config with the one on its base commit. Without a config there,
+    /// there is no floor and the change's own `no_proof` counts.
+    pub(crate) fn read(head: &Config, wt: &Worktree) -> Result<Floor> {
+        let git = &wt.git;
+        let (base, _hold) = git.base_worktree(&wt.base, "")?;
+        let base = if base.root.join(config::FILE).exists() {
+            let config = Config::load(&base.root, &git.common)?;
+            Some((config, presets::config_files(&base.root)?))
+        } else {
+            None
         };
         let mut config_files = presets::config_files(&wt.git.root)?;
         let floor = base.as_ref().map_or(head, |(config, _)| config);

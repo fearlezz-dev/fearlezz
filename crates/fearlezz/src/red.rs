@@ -26,8 +26,6 @@ use crate::store::{Outcome, RunResult, Store};
 
 /// What the check did on the base commit with the change's test files.
 pub(crate) struct Red {
-    /// The base commit it ran on.
-    pub commit: String,
     /// The test files the change added, changed or removed that the check reads.
     pub files: Vec<String>,
     /// The run on the base commit with those files.
@@ -61,7 +59,7 @@ impl Red {
 }
 
 /// The change's test files for `check`: changed paths it reads that are tests.
-fn test_files(check: &Check, wt: &Worktree) -> Vec<String> {
+pub(crate) fn test_files(check: &Check, wt: &Worktree) -> Vec<String> {
     wt.changed
         .iter()
         .filter(|p| check.reads(p) && check.is_test(p))
@@ -73,7 +71,7 @@ fn test_files(check: &Check, wt: &Worktree) -> Vec<String> {
 /// worktree named by their content, so the same test files reuse it and its result. When that
 /// fails, also runs it on the plain base commit (or reuses that run) to tell a broken base
 /// apart. `head` is the check's passing run on the change. None when the change touches none
-/// of its test files, or there is no base branch.
+/// of its test files.
 pub(crate) fn run(
     git: &Git,
     config: &Config,
@@ -87,9 +85,6 @@ pub(crate) fn run(
     if files.is_empty() {
         return Ok(None);
     }
-    let Some(commit) = git.merge_base(&config.base) else {
-        return Ok(None);
-    };
     let mut hash = Sha256::new();
     let mut overlay = Vec::new();
     for path in &files {
@@ -106,7 +101,7 @@ pub(crate) fn run(
     let mut name = hex::encode(hash.finalize());
     name.truncate(10);
     let name = format!("-red-{name}");
-    let mut base = Base::at(git, config, commit.clone(), &name)?;
+    let mut base = Base::at(git, config, wt.base.clone(), &name)?;
     for (path, content) in overlay {
         let to = base.wt.git.root.join(path);
         match content {
@@ -138,26 +133,23 @@ pub(crate) fn run(
                 .iter()
                 .filter(|c| c.failed && passes(head, &c.name)),
         );
-        let plain = match Base::open(git, config)? {
-            Some(mut plain) => Some(on_base(store, check, &mut plain, stage, env)?),
-            None => None,
-        };
+        let mut plain = Base::at(git, config, wt.base.clone(), "")?;
+        let plain = on_base(store, check, &mut plain, stage, env)?;
         let names_tests = matches!(check.tests, Some(Reader::Junit { .. }));
-        match plain.filter(|p| p.outcome == Outcome::Failed) {
-            Some(plain) => {
-                tests.retain(|t| !fails(&plain, t));
-                if tests.is_empty() {
-                    Verdict::BaseFails { log: plain.log }
-                } else {
-                    Verdict::Red { tests }
-                }
+        if plain.outcome == Outcome::Failed {
+            tests.retain(|t| !fails(&plain, t));
+            if tests.is_empty() {
+                Verdict::BaseFails { log: plain.log }
+            } else {
+                Verdict::Red { tests }
             }
-            None if tests.is_empty() && names_tests => Verdict::Unbuilt,
-            None => Verdict::Red { tests },
+        } else if tests.is_empty() && names_tests {
+            Verdict::Unbuilt
+        } else {
+            Verdict::Red { tests }
         }
     };
     Ok(Some(Red {
-        commit,
         files,
         base: result,
         verdict,
@@ -201,15 +193,11 @@ fn fails(run: &RunResult, name: &str) -> bool {
     run.cases.iter().any(|c| c.name == name && c.failed)
 }
 
-/// File in a run's folder holding what red before green found for it.
-const MARK: &str = "red.json";
-
-/// What red before green found for a check's passing run, kept in that run's folder (as its
-/// look is) so the run, `fearlezz` and the hooks all read one verdict.
+/// What red before green found for a check's passing run against one base commit, kept with
+/// its look (see [`crate::store::AgainstBase`]) so the run, `fearlezz` and the hooks all read
+/// one verdict.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Mark {
-    /// The base commit it ran on; a mark for another base says nothing about this one.
-    pub base: String,
     /// Why the change's tests do not show what it does, when they do not.
     pub unshown: Option<Unshown>,
 }
@@ -224,26 +212,6 @@ pub(crate) enum Unshown {
 }
 
 impl Mark {
-    /// The mark of `run`, if red before green ran for it.
-    pub(crate) fn of(run: &RunResult) -> Option<Mark> {
-        let text = fs::read_to_string(run.dir.join(MARK)).ok()?;
-        serde_json::from_str(&text).ok()
-    }
-
-    /// Records it as `run`'s.
-    pub(crate) fn save(&self, run: &RunResult) -> Result<()> {
-        fs::write(run.dir.join(MARK), serde_json::to_vec_pretty(self)?)?;
-        Ok(())
-    }
-
-    /// Forgets the mark of `run`, when red before green has nothing to say about it.
-    pub(crate) fn clear(run: &RunResult) -> Result<()> {
-        match fs::remove_file(run.dir.join(MARK)) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
-            _ => Ok(()),
-        }
-    }
-
     /// What to do when a fix is held by it, or None when it holds nothing.
     pub(crate) fn next(&self, check: &str) -> Option<String> {
         Some(match self.unshown.as_ref()? {
@@ -267,20 +235,20 @@ impl Verdict {
 
 /// What a fix whose tests pass on the base commit does next.
 pub(crate) const NEXT: &str = "change a test so it fails without the fix; when the change fixes \
-                               no bug, neither its title nor its commits start with fix:";
+                               no bug, its pull request title does not start with fix: (nor, \
+                               before there is one, any of its commits)";
 
-/// Whether the change says it fixes a bug: its pull request title (when known) or the subject
-/// of any of its commits since the base commit is a conventional `fix:` commit. Uncommitted
-/// work with no commits of its own is not a fix yet, and a later format or merge commit does
-/// not hide an earlier fix. Locally the title is unknown, so CI can only be stricter.
-pub(crate) fn is_fix_change(git: &Git, config: &Config, title: Option<&str>) -> Result<bool> {
-    if title.is_some_and(is_fix) {
-        return Ok(true);
+/// Whether the change says it fixes a bug. The pull request title decides when it is known
+/// (in CI), since with a squash merge it is the commit: a `feat:` title with an interim
+/// `fix:` commit is no fix. Without a title (locally), any commit since `base`, the base
+/// commit, whose subject is a conventional `fix:` commit makes it one, so a later format or
+/// merge commit does not hide an earlier fix; uncommitted work with no commits of its own is
+/// not a fix yet.
+pub(crate) fn is_fix_change(git: &Git, base: &str) -> Result<bool> {
+    if let Some(title) = crate::pull_request("title") {
+        return Ok(is_fix(&title));
     }
-    let Some(base) = git.merge_base(&config.base) else {
-        return Ok(false);
-    };
-    Ok(git.subjects_since(&base)?.iter().any(|s| is_fix(s)))
+    Ok(git.subjects_since(base)?.iter().any(|s| is_fix(s)))
 }
 
 /// Whether a commit subject or title is a conventional `fix:` commit.
