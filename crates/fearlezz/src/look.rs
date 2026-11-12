@@ -174,14 +174,16 @@ impl Base {
 /// `desktop/home`.
 pub(crate) struct MediaGlob {
     kind: &'static str,
+    /// As written.
+    glob: String,
     matcher: globset::GlobMatcher,
     /// The folders before the first segment with a wildcard, with a trailing slash.
     fixed: String,
 }
 
 impl MediaGlob {
-    pub(crate) fn parse(kind: &'static str, glob: &str) -> Result<MediaGlob> {
-        let glob = glob.strip_prefix("$FEARLEZZ_OUT/").unwrap_or(glob);
+    pub(crate) fn parse(kind: &'static str, written: &str) -> Result<MediaGlob> {
+        let glob = written.strip_prefix("$FEARLEZZ_OUT/").unwrap_or(written);
         let matcher = globset::GlobBuilder::new(glob)
             .literal_separator(true)
             .build()
@@ -200,9 +202,15 @@ impl MediaGlob {
         }
         Ok(MediaGlob {
             kind,
+            glob: written.to_string(),
             matcher,
             fixed,
         })
+    }
+
+    /// The glob as written.
+    pub(crate) fn glob(&self) -> &str {
+        &self.glob
     }
 
     /// The proofs for the files under `out` this glob matches, sorted by path.
@@ -267,8 +275,10 @@ pub(crate) fn has_media(result: &RunResult) -> bool {
     !media_proofs(result).is_empty()
 }
 
-/// Compares the stills and films of `result` with the same check run on the base commit.
-/// Runs the check on the base only when no result exists for its inputs there.
+/// Compares the stills and films of `result`, a run of a check that takes pictures, with the
+/// same check run on the base commit. A run without any is compared too, so pictures the
+/// change removed all show as gone. Runs the check on the base only when no result exists for
+/// its inputs there.
 pub(crate) fn look(
     store: &Store,
     check: &Check,
@@ -277,9 +287,6 @@ pub(crate) fn look(
     stage: &str,
     env: &EnvCtx<'_>,
 ) -> Result<LookOutcome> {
-    if media_proofs(result).is_empty() {
-        return Ok(LookOutcome::NoMedia);
-    }
     let inputs = base.wt.inputs(check)?;
     if inputs.key == result.key {
         return Ok(LookOutcome::SameInputs);
@@ -288,6 +295,9 @@ pub(crate) fn look(
         Some(r) => r,
         None => run_on_base(store, check, &inputs, base, stage, env)?,
     };
+    if !has_media(result) && (before.outcome == Outcome::Failed || !has_media(&before)) {
+        return Ok(LookOutcome::NoMedia);
+    }
     if before.outcome == Outcome::Failed {
         let reason = format!(
             "the check fails on the base commit (log: {})",
@@ -342,7 +352,7 @@ pub(crate) fn without_before(
 /// One folder per pair of runs and the pictures called flaky, with a short name people can
 /// open.
 fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf {
-    let flaky = check.flaky.join("\0");
+    let flaky = check.pictures.flaky.join("\0");
     let pair = hex::encode(Sha256::digest(format!("{before}\0{after}\0{flaky}")));
     common
         .join("fearlezz")
@@ -439,7 +449,7 @@ fn build(
             before: None,
             after: None,
             comparison: None,
-            flaky: check.is_flaky(&a.name),
+            flaky: check.pictures.is_flaky(&a.name),
         };
         let copies = (
             b.map(|(run, b)| copy("before", run, b)).transpose(),
@@ -476,7 +486,7 @@ fn build(
                 before: copied.and_then(Result::ok),
                 after: None,
                 comparison: None,
-                flaky: check.is_flaky(&b.name),
+                flaky: check.pictures.is_flaky(&b.name),
             },
             None,
         ));

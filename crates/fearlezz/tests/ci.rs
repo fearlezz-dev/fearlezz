@@ -436,6 +436,15 @@ fn findings_that_count_only_on_changed_lines_again_are_red() {
 }
 
 #[test]
+fn reading_findings_another_way_is_red() {
+    let out = ci_after(|c| c.replace("read = \"jsonl\"", "read = \"sarif\""));
+    assert_weakens(
+        &out,
+        "weakens lint: its findings are read another way (jsonl, now sarif)",
+    );
+}
+
+#[test]
 fn adding_an_env_variable_is_red() {
     let out = ci_after(|c| c.replace("env = [\"HOME\"]", "env = [\"HOME\", \"SKIP_SLOW\"]"));
     assert_weakens(

@@ -1,17 +1,19 @@
 # Fearlezz proves its own changes with built in pieces: devenv gives every check the
-# toolchain, rust brings fmt, clippy and tests. Each check runs in a clean env inside
-# `devenv shell`: only the base variables and the ones listed under `env` reach it.
+# toolchain, rust brings fmt, clippy and tests, safety scans for leaked credentials. Each check
+# runs in a clean env inside `devenv shell`: only the base variables and the ones listed under
+# `env` reach it.
 
-use = ["devenv", "rust", "agents"]
+use = ["devenv", "rust", "agents", "safety"]
 
 # Prose needs no proof. The workflows, the release config, install.sh and the action manifest are proven
 # by the checks below. The Nix flake is left out on purpose: a change to it is red in CI until a
 # person with admin rights merges past it.
 no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
 
-# The binary embeds the agent skill and the built in pieces, so the tests read them too.
+# The binary embeds the agent skill and the built in pieces, so the tests read them too, with
+# the tool output they read as fixtures.
 [check.tests]
-inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**"]
+inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**"]
 
 [check.actionlint]
 run = "actionlint"

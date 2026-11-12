@@ -488,6 +488,12 @@ fn a_base_that_passed_without_pictures_is_called_suspicious() {
         "{}",
         out.stdout
     );
+    // The person who opens the report sees it too.
+    assert!(
+        report_of(&out).contains("The base run passed without any pictures"),
+        "{}",
+        out.stdout
+    );
 }
 
 /// Films a tool writes into a folder, such as Playwright videos.
@@ -657,6 +663,105 @@ stills = "stills/**/*.png"
             status.stdout
         );
     }
+}
+
+/// The stills check of `stills_can_be_named_by_a_glob_in_the_proof_folder`, with `stills`.
+fn stills_config(stills: &str) -> String {
+    format!(
+        "\n[check.screens]\nrun = \"sh record.sh\"\nstage = \"look\"\ninputs = [\"src/**\", \
+         \"record.sh\"]\n{stills}\n"
+    )
+}
+
+/// A repository whose check writes stills named by `stills/**/*.png`, on a branch.
+fn stills_repo() -> Repo {
+    let repo = Repo::new(
+        &stills_config("stills = \"stills/**/*.png\""),
+        &[("record.sh", WRITE_FILES), ("src/color.txt", "red")],
+    );
+    repo.branch("feat/change");
+    repo
+}
+
+/// `fearlezz.toml` with `stills` as given, as `Repo::new` writes it.
+fn write_config(repo: &Repo, stills: &str) {
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{}\n[settings.skill]\nagents = []\n\n[settings.hooks]\nagents = []\n",
+            stills_config(stills)
+        ),
+    );
+}
+
+#[test]
+fn changing_only_the_stills_glob_runs_the_check_again() {
+    let repo = stills_repo();
+    repo.write("src/color.txt", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let first = repo.fz(&["run"]);
+    assert!(first.ok, "{}\n{}", first.stdout, first.stderr);
+    write_config(&repo, "stills = \"stills/desktop/*.png\"");
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains(", 0 reused"), "{}", out.stdout);
+    let status = repo.fz(&["--check", "screens"]);
+    assert!(
+        !status.stdout.contains("\"id\": \"mobile/home\""),
+        "{}",
+        status.stdout
+    );
+}
+
+#[test]
+fn a_change_that_removes_every_picture_shows_them_gone() {
+    let repo = stills_repo();
+    repo.write("record.sh", "true\n");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("look screens: 2 gone"),
+        "{}",
+        out.stdout
+    );
+    let status = repo.fz(&[]);
+    assert!(
+        status.last_line().starts_with("next: look at screens"),
+        "{}",
+        status.stdout
+    );
+}
+
+#[test]
+fn dropping_the_stills_glob_weakens_the_proof() {
+    let repo = stills_repo();
+    write_config(&repo, "");
+    repo.commit("drop the stills");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("it no longer takes stills by stills/**/*.png"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn narrowing_the_stills_glob_weakens_the_proof() {
+    let repo = stills_repo();
+    write_config(&repo, "stills = \"stills/desktop/*.png\"");
+    repo.commit("fewer stills");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains(
+            "it takes stills by another glob (stills/**/*.png, now stills/desktop/*.png)"
+        ),
+        "{}",
+        out.stdout
+    );
 }
 
 /// The report page a run printed.

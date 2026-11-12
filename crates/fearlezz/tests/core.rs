@@ -582,6 +582,27 @@ fn overview_writes_one_page_with_every_journal() {
 }
 
 #[test]
+fn the_overview_says_each_checks_state_in_words() {
+    let repo = repo();
+    repo.write("src/lib.rs", "fn b() {}\n");
+    assert!(repo.fz(&["run", "tests"]).ok);
+    repo.write("src/lib.rs", "fn c() {}\n");
+    let out = repo.fz(&["--page"]);
+    let path = out
+        .lines()
+        .iter()
+        .find_map(|l| l.strip_prefix("wrote "))
+        .unwrap()
+        .to_string();
+    let html = std::fs::read_to_string(path).unwrap();
+    // Colour alone tells nobody who cannot see it, and a hidden word reaches no screen reader.
+    assert!(!html.contains("<span hidden>"), "{html}");
+    for words in [">stale: src/lib.rs changed<", ">never run<"] {
+        assert!(html.contains(words), "{words}: {html}");
+    }
+}
+
+#[test]
 fn a_detached_head_needs_a_journal_name() {
     let repo = repo();
     repo.git(&["checkout", "-q", "--detach"]);

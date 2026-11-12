@@ -34,6 +34,21 @@ fn feature() -> Repo {
 }
 
 #[test]
+fn reading_findings_another_way_runs_the_check_again() {
+    let repo = feature();
+    repo.write("src/a.txt", &format!("{OLD}five\n"));
+    let first = repo.fz(&["run", "lint"]);
+    assert!(first.ok, "{}\n{}", first.stdout, first.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("findings = \"jsonl\"", "findings = \"sarif\""),
+    );
+    let out = repo.fz(&["run", "lint"]);
+    assert!(!out.stdout.contains("1 reused"), "{}", out.stdout);
+}
+
+#[test]
 fn old_findings_do_not_block_new_work() {
     let repo = feature();
     repo.write("src/a.txt", &format!("{OLD}five\n"));

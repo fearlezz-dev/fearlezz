@@ -66,9 +66,7 @@ pub(crate) fn execute(
     let stdout_path = dir.join("stdout.txt");
 
     let (mut proofs, mut proof_errors) = read_proofs(&dir.join("proof.jsonl"));
-    for glob in check.stills.iter().chain(&check.films) {
-        proofs.extend(glob.proofs(&dir));
-    }
+    proofs.extend(check.pictures.proofs(&dir));
     let mut passed = exit_ok;
     let (mut findings, mut findings_elsewhere) = (Vec::new(), 0);
     if let Some(spec) = &check.findings {
@@ -166,7 +164,7 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
         .env("FEARLEZZ_CHECK", &check.id)
         .env("FEARLEZZ_STAGE", at.stage);
 
-    let Some(record) = &check.record else {
+    let Some(record) = &check.pictures.record else {
         let status = cmd
             .status()
             .with_context(|| format!("starting check {}", check.id))?;

@@ -70,6 +70,17 @@ pub(crate) enum Scope {
 }
 
 impl Reader {
+    /// As written in `findings`.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Reader::Cargo => "cargo",
+            Reader::Sarif => "sarif",
+            Reader::Jsonl => "jsonl",
+            Reader::Dart => "dart",
+            Reader::Eslint => "eslint",
+        }
+    }
+
     /// Whether the check's stdout holds the findings, so it is kept apart from the log.
     pub(crate) fn reads_stdout(self) -> bool {
         matches!(

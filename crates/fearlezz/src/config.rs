@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use crate::findings::{Finding, Level, Reader, Scope};
 use crate::lints::{self, Lints};
+use crate::look::MediaGlob;
 use crate::presets;
 use crate::rules::{self, Rules};
 use crate::settings::Settings;
@@ -108,20 +109,145 @@ pub(crate) struct Check {
     /// commit to show they fail there (red before green).
     pub test_files: Vec<String>,
     test_globs: GlobSet,
-    /// For a check that writes pictures into a folder: which files in it are stills and
-    /// which are films.
-    pub stills: Option<crate::look::MediaGlob>,
-    pub films: Option<crate::look::MediaGlob>,
-    /// Pictures (ids or globs, as written) that are compared and shown but never block or
-    /// wait for approval.
-    pub flaky: Vec<String>,
-    flaky_globs: GlobSet,
-    /// For a check that records an app's window while its command runs.
-    pub record: Option<crate::record::Spec>,
+    /// The stills and films it takes, and which of them are flaky.
+    pub pictures: Pictures,
     /// The environment's shell it runs inside, part of its inputs.
     pub shell: Option<String>,
     /// Work Fearlezz does itself instead of running a command.
     pub builtin: Option<Builtin>,
+}
+
+/// What pictures a check takes, in one place: the check's inputs, the floor and whether a run
+/// needs ffmpeg all read this, so a new picture field is added here once.
+#[derive(Default)]
+pub(crate) struct Pictures {
+    /// For a check that writes pictures into a folder: which files in it are stills and
+    /// which are films.
+    pub stills: Option<MediaGlob>,
+    pub films: Option<MediaGlob>,
+    /// For a check that records an app's window while its command runs.
+    pub record: Option<crate::record::Spec>,
+    /// Pictures (ids or globs, as written) that are compared and shown but never block or
+    /// wait for approval.
+    pub flaky: Vec<String>,
+    flaky_globs: GlobSet,
+}
+
+impl Pictures {
+    /// Whether the check names pictures it takes, by glob or by recording a window. A check
+    /// can also list pictures in `proof.jsonl` without naming them here.
+    pub(crate) fn named(&self) -> bool {
+        self.stills.is_some() || self.films.is_some() || self.record.is_some()
+    }
+
+    /// The proofs for the files under `out` that the globs name.
+    pub(crate) fn proofs(&self, out: &Path) -> Vec<serde_json::Value> {
+        self.stills
+            .iter()
+            .chain(&self.films)
+            .flat_map(|g| g.proofs(out))
+            .collect()
+    }
+
+    /// Whether the picture named `name` is flaky, by `flaky`.
+    pub(crate) fn is_flaky(&self, name: &str) -> bool {
+        self.flaky_globs.is_match(name)
+    }
+
+    /// A stable text of which pictures a run takes, part of the check's inputs. `flaky` is
+    /// not: it decides how pictures are judged, never what a run records.
+    pub(crate) fn fingerprint(&self) -> Option<String> {
+        self.named().then(|| {
+            format!(
+                "{:?}\0{:?}\0{}",
+                self.stills.as_ref().map(MediaGlob::glob),
+                self.films.as_ref().map(MediaGlob::glob),
+                self.record
+                    .as_ref()
+                    .map(crate::record::Spec::fingerprint)
+                    .unwrap_or_default()
+            )
+        })
+    }
+
+    /// How `head` takes fewer pictures than these, the base branch's: a glob gone or changed
+    /// (Fearlezz cannot tell a narrower glob from a wider one), a recording gone or recording
+    /// less, and more pictures called flaky.
+    pub(crate) fn weakenings(&self, head: &Pictures) -> Vec<String> {
+        let mut found = Vec::new();
+        for (kind, b, h) in [
+            ("stills", &self.stills, &head.stills),
+            ("films", &self.films, &head.films),
+        ] {
+            match (
+                b.as_ref().map(MediaGlob::glob),
+                h.as_ref().map(MediaGlob::glob),
+            ) {
+                (Some(b), None) => found.push(format!("it no longer takes {kind} by {b}")),
+                (Some(b), Some(h)) if b != h => {
+                    found.push(format!("it takes {kind} by another glob ({b}, now {h})"));
+                }
+                _ => {}
+            }
+        }
+        if let Some(b) = &self.record {
+            match &head.record {
+                None => found.push("it no longer records its app's window".into()),
+                Some(h) => found.extend(record_weakenings(b, h)),
+            }
+        }
+        let flaky: Vec<String> = head
+            .flaky
+            .iter()
+            .filter(|p| !self.flaky.contains(p))
+            .map(|p| format!("+{p}"))
+            .collect();
+        if !flaky.is_empty() {
+            found.push(format!(
+                "it calls more pictures flaky ({})",
+                flaky.join(", ")
+            ));
+        }
+        found
+    }
+}
+
+/// How the recording `h` records less than `b`: a still or film gone or renamed, another
+/// window, less time, or more cut from the top.
+fn record_weakenings(b: &crate::record::Spec, h: &crate::record::Spec) -> Vec<String> {
+    let mut found = Vec::new();
+    for (kind, was, now) in [("still", &b.still, &h.still), ("film", &b.film, &h.film)] {
+        if let Some(was) = was.as_ref().filter(|w| now.as_ref() != Some(*w)) {
+            found.push(format!("it no longer records the {kind} {was}"));
+        }
+    }
+    if b.window != h.window {
+        let name = |w: &Option<String>| {
+            w.clone()
+                .unwrap_or_else(|| "the app its command starts".into())
+        };
+        found.push(format!(
+            "it records another window ({}, now {})",
+            name(&b.window),
+            name(&h.window)
+        ));
+    }
+    match (b.seconds, h.seconds) {
+        (Some(was), Some(now)) if now < was => {
+            found.push(format!("it records for less time ({was} s, now {now} s)"));
+        }
+        (None, Some(now)) => found.push(format!(
+            "it records for less time (until its command ends, now {now} s)"
+        )),
+        _ => {}
+    }
+    if h.crop_top > b.crop_top {
+        found.push(format!(
+            "it cuts more from the top ({} points, now {})",
+            b.crop_top, h.crop_top
+        ));
+    }
+    found
 }
 
 /// A check Fearlezz runs in process.
@@ -185,10 +311,13 @@ impl FindingsSpec {
         found
     }
 
-    /// Part of the inputs of the check: a changed default is another proof.
-    pub(crate) fn defaults_fingerprint(&self) -> Option<String> {
-        (self.level.is_some() || self.fix.is_some())
-            .then(|| format!("{:?}\0{:?}", self.level, self.fix))
+    /// Part of the inputs of the check: another reader, scope or default is another proof.
+    /// The lint tables are a part of their own.
+    pub(crate) fn fingerprint(&self) -> String {
+        format!(
+            "{:?}\0{:?}\0{:?}\0{:?}",
+            self.read, self.on, self.level, self.fix
+        )
     }
 }
 
@@ -375,25 +504,27 @@ impl Config {
                 test_globs: globs(&c.test_files)
                     .with_context(|| format!("check {id}: test_files"))?,
                 test_files: c.test_files,
-                stills: c
-                    .stills
-                    .as_deref()
-                    .map(|g| crate::look::MediaGlob::parse("still", g))
-                    .transpose()
-                    .with_context(|| format!("check {id}"))?,
-                films: c
-                    .films
-                    .as_deref()
-                    .map(|g| crate::look::MediaGlob::parse("film", g))
-                    .transpose()
-                    .with_context(|| format!("check {id}"))?,
-                flaky_globs: globs(&c.flaky).with_context(|| format!("check {id}: flaky"))?,
-                flaky: c.flaky,
-                record: c
-                    .record
-                    .map(crate::record::Spec::parse)
-                    .transpose()
-                    .with_context(|| format!("check {id}"))?,
+                pictures: Pictures {
+                    stills: c
+                        .stills
+                        .as_deref()
+                        .map(|g| MediaGlob::parse("still", g))
+                        .transpose()
+                        .with_context(|| format!("check {id}"))?,
+                    films: c
+                        .films
+                        .as_deref()
+                        .map(|g| MediaGlob::parse("film", g))
+                        .transpose()
+                        .with_context(|| format!("check {id}"))?,
+                    record: c
+                        .record
+                        .map(crate::record::Spec::parse)
+                        .transpose()
+                        .with_context(|| format!("check {id}"))?,
+                    flaky_globs: globs(&c.flaky).with_context(|| format!("check {id}: flaky"))?,
+                    flaky: c.flaky,
+                },
                 id: id.clone(),
                 run: c.run,
                 stage,
@@ -489,6 +620,13 @@ impl Config {
         !self.needs_no_proof(path) && self.checks.iter().any(|c| c.reads(path))
     }
 
+    /// Whether `check` takes pictures: it names them, or by convention runs in the look stage
+    /// and lists them in `proof.jsonl`. Such a check is compared with the base even when a
+    /// run took none, so pictures that are all gone still show, and it needs ffmpeg.
+    pub(crate) fn takes_pictures(&self, check: &Check) -> bool {
+        check.pictures.named() || self.stages.name(check.stage) == "look"
+    }
+
     pub(crate) fn check(&self, id: &str) -> Result<&Check> {
         self.checks.iter().find(|c| c.id == id).with_context(|| {
             let ids: Vec<&str> = self.checks.iter().map(|c| c.id.as_str()).collect();
@@ -520,11 +658,7 @@ fn builtin_check(id: &str, stages: &Stages, inputs: GlobSet, on: Scope, builtin:
         tests: None,
         test_files: Vec::new(),
         test_globs: GlobSet::empty(),
-        stills: None,
-        films: None,
-        flaky: Vec::new(),
-        flaky_globs: GlobSet::empty(),
-        record: None,
+        pictures: Pictures::default(),
     }
 }
 
@@ -545,11 +679,6 @@ impl Check {
     /// Whether `path` is one of its tests, by `test_files`.
     pub(crate) fn is_test(&self, path: &str) -> bool {
         self.test_globs.is_match(path)
-    }
-
-    /// Whether the picture named `name` is flaky, by `flaky`.
-    pub(crate) fn is_flaky(&self, name: &str) -> bool {
-        self.flaky_globs.is_match(name)
     }
 
     pub(crate) fn needs_services(&self) -> bool {

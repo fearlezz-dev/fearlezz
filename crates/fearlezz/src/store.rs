@@ -117,18 +117,14 @@ impl Hasher {
             let levels = spec.levels.fingerprint(&spec.tools);
             parts.insert("(lints)".into(), sha256(levels.as_bytes()));
         }
-        if let Some(defaults) = check
-            .findings
-            .as_ref()
-            .and_then(|s| s.defaults_fingerprint())
-        {
-            parts.insert("(findings)".into(), sha256(defaults.as_bytes()));
+        if let Some(spec) = &check.findings {
+            parts.insert("(findings)".into(), sha256(spec.fingerprint().as_bytes()));
         }
         if let Some(reader) = &check.tests {
             parts.insert("(tests)".into(), sha256(reader.fingerprint().as_bytes()));
         }
-        if let Some(record) = &check.record {
-            parts.insert("(record)".into(), sha256(record.fingerprint().as_bytes()));
+        if let Some(pictures) = check.pictures.fingerprint() {
+            parts.insert("(pictures)".into(), sha256(pictures.as_bytes()));
         }
         if let Some(shell) = &check.shell {
             parts.insert("(shell)".into(), sha256(shell.as_bytes()));

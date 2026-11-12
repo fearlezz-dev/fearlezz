@@ -360,3 +360,232 @@ fn earlier_stages_do_not_run_the_base_commit() {
     assert!(out.ok, "{}", out.stdout);
     assert!(!out.stdout.contains("red before green"), "{}", out.stdout);
 }
+
+#[test]
+fn after_a_blocked_final_run_fearlezz_and_the_hooks_never_say_ready() {
+    let repo = repo();
+    change(&repo, PASSES_ANYWAY, "fix: the value is two");
+    let out = repo.fz(FINAL);
+    assert!(!out.ok, "{}", out.stdout);
+    let status = repo.fz(&[]);
+    assert!(
+        status
+            .last_line()
+            .starts_with("next: change a test so it fails without the fix"),
+        "{}",
+        status.stdout
+    );
+    let stop = repo.fz_input(
+        &["setup", "hook", "claude", "stop"],
+        "{\"stop_hook_active\": false}",
+    );
+    assert!(stop.stdout.contains("\"block\""), "{}", stop.stdout);
+}
+
+// The language pieces
+
+/// A project on the language piece `piece`, whose test check `check` (its other checks off)
+/// is run by a stand in, changes `code` and adds `test`: red before green runs `test` alone on
+/// the base commit, so the piece's `test_files` name the one and not the other.
+fn piece_names_its_test_files(piece: &str, check: &str, others: &[&str], test: &str, code: &str) {
+    // The stand in fails while a file needs two and none is two; the brackets keep this config
+    // from matching itself. It counts one test, through the piece's own JUnit glob for Kotlin,
+    // whose reader a project cannot swap for another.
+    let (count, tests) = if piece == "kotlin" {
+        (
+            "mkdir -p app/build/test-results/test\necho '<testsuite><testcase \
+             name=\"sum\"/></testsuite>' > app/build/test-results/test/sum.xml",
+            "",
+        )
+    } else {
+        ("echo ran 1", "tests = { count = 'ran (\\d+)' }\n")
+    };
+    let mut config = format!(
+        "use = [\"{piece}\"]\n\n[check.settings]\noff = true\n\n[check.{check}]\nrun = \
+         '''\nif grep -rq 'needs t[w]o' --exclude-dir=.git . && ! grep -rq 'is t[w]o' \
+         --exclude-dir=.git .; then exit 1; fi\n{count}\n'''\n{tests}"
+    );
+    for other in others {
+        config = format!("{config}\n[check.{other}]\noff = true\n");
+    }
+    let repo = Repo::new(&config, &[]);
+    repo.branch("change");
+    repo.write(code, "is two\n");
+    repo.write(test, "needs two\n");
+    repo.commit("feat: two");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    // A JUnit check (Kotlin) says its test does not build there, which counts as failing.
+    assert!(
+        out.stdout
+            .contains(&format!("\nred before green {check}: {test} ")),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn the_rust_piece_names_test_folders_at_any_depth() {
+    piece_names_its_test_files(
+        "rust",
+        "tests",
+        &["fmt", "clippy"],
+        "crates/a/tests/it.rs",
+        "crates/a/src/lib.rs",
+    );
+}
+
+#[test]
+fn the_go_piece_names_its_test_files() {
+    piece_names_its_test_files(
+        "go",
+        "go-test",
+        &["golangci-lint", "gofmt"],
+        "pkg/sum_test.go",
+        "pkg/sum.go",
+    );
+}
+
+#[test]
+fn the_typescript_piece_names_its_test_files() {
+    piece_names_its_test_files(
+        "typescript",
+        "vitest",
+        &["biome-lint", "biome-format", "tsc"],
+        "src/sum.test.ts",
+        "src/sum.ts",
+    );
+}
+
+#[test]
+fn the_python_piece_names_its_test_files() {
+    piece_names_its_test_files(
+        "python",
+        "pytest",
+        &["ruff", "ruff-format"],
+        "tests/test_sum.py",
+        "src/sum.py",
+    );
+}
+
+#[test]
+fn the_kotlin_piece_names_its_test_files() {
+    piece_names_its_test_files(
+        "kotlin",
+        "gradle-test",
+        &["ktlint", "detekt"],
+        "app/src/test/kotlin/SumTest.kt",
+        "app/src/main/kotlin/Sum.kt",
+    );
+}
+
+#[test]
+fn the_flutter_piece_names_its_test_files() {
+    piece_names_its_test_files(
+        "flutter",
+        "flutter-test",
+        &["dart-format", "dart-analyze"],
+        "test/sum_test.dart",
+        "lib/sum.dart",
+    );
+}
+
+// Which change is a fix, locally
+
+#[test]
+fn uncommitted_work_on_a_fix_base_tip_is_not_a_fix() {
+    let repo = repo();
+    repo.git(&["switch", "-q", "main"]);
+    repo.write("src/other", "\n");
+    repo.commit("fix: an earlier fix");
+    repo.git(&["switch", "-q", "change"]);
+    repo.git(&["rebase", "-q", "main"]);
+    repo.write("src/value", "2\n");
+    repo.write("tests/new.sh", PASSES_ANYWAY);
+    let out = repo.fz(FINAL);
+    assert!(
+        out.stdout.contains("not red before green tests"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        !out.stdout.contains("next: change a test so it fails"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_fix_followed_by_a_plain_commit_is_still_a_fix() {
+    let repo = repo();
+    change(&repo, PASSES_ANYWAY, "fix: the value is two");
+    repo.write("src/note", "\n");
+    repo.commit("Format the code");
+    let out = repo.fz(FINAL);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.last_line()
+            .starts_with("next: change a test so it fails without the fix"),
+        "{}",
+        out.stdout
+    );
+}
+
+// When red before green cannot run
+
+/// A repository whose base commit cannot be prepared: `[env] prepare` fails while
+/// `src/broken` exists, and the change removes it.
+fn unpreparable_base(message: &str) -> Repo {
+    let repo = Repo::new(
+        &format!("{CHECKS}\n[env]\nprepare = \"test ! -e src/broken\"\n"),
+        &[
+            (".gitignore", ".runs/\n"),
+            ("src/value", "1\n"),
+            ("src/broken", "\n"),
+            ("tests/old.sh", "test -e src/value\n"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("change");
+    repo.remove("src/broken");
+    change(&repo, SHOWS_IT, message);
+    repo
+}
+
+#[test]
+fn a_fix_whose_red_before_green_cannot_run_is_not_proven() {
+    let repo = unpreparable_base("fix: the value is two");
+    let (out, text) = ci(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("red before green tests did not run:"),
+        "{}",
+        out.stdout
+    );
+    assert!(text.contains("**Not proven**"), "{text}");
+    assert!(text.contains("red before green did not run"), "{text}");
+}
+
+#[test]
+fn a_feature_whose_red_before_green_cannot_run_says_so() {
+    let repo = unpreparable_base("feat: a second value");
+    let (out, text) = ci(&repo);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(text.contains("**Proven**"), "{text}");
+    assert!(text.contains("Red before green did not run"), "{text}");
+}
+
+#[test]
+fn locally_a_fix_whose_red_before_green_cannot_run_is_held() {
+    let repo = unpreparable_base("fix: the value is two");
+    let out = repo.fz(FINAL);
+    assert!(!out.ok, "{}", out.stdout);
+    let status = repo.fz(&[]);
+    assert!(
+        status
+            .last_line()
+            .starts_with("next: red before green tests did not run ("),
+        "{}",
+        status.stdout
+    );
+}
