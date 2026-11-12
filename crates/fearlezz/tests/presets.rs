@@ -71,6 +71,46 @@ run = "echo tuned > \"$FEARLEZZ_OUT/proof.txt\"; echo 'test result: ok. 1 passed
 }
 
 #[test]
+fn a_piece_check_reruns_after_a_change_to_any_file_outside_no_proof() {
+    let config = r#"
+use = ["rust"]
+no_proof = ["*.md"]
+
+[check.tests]
+run = "echo run >> .runs/tests; echo 'test result: ok. 1 passed; 0 failed'"
+"#;
+    let repo = Repo::new(
+        config,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("src/lib.rs", ""),
+            ("data.json", "{}\n"),
+            ("README.md", "readme\n"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/x");
+    repo.write("data.json", "[]\n");
+    let out = repo.fz(&["run", "tests"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(common::runs(&repo.path(".runs/tests")), 1);
+    repo.write("data.json", "[1]\n");
+    repo.fz(&["run", "tests"]);
+    assert_eq!(
+        common::runs(&repo.path(".runs/tests")),
+        2,
+        "data.json is read"
+    );
+    repo.write("README.md", "other\n");
+    repo.fz(&["run", "tests"]);
+    assert_eq!(
+        common::runs(&repo.path(".runs/tests")),
+        2,
+        "README.md needs no proof"
+    );
+}
+
+#[test]
 fn a_local_piece_can_use_pieces_next_to_it() {
     let web = "use = [\"./base.toml\"]\n\n[check.screens]\nrun = \"true\"\nstage = \"look\"\n";
     let base = "[check.lint]\nrun = \"true\"\nstage = \"working\"\n";
@@ -557,4 +597,3 @@ fn flutter_film_runs_its_entry_file_as_a_plain_command() {
     let run = preset["check"]["flutter-film"]["run"].as_str().unwrap();
     assert_eq!(run, "flutter test integration_test/app_test.dart -d macos");
 }
-

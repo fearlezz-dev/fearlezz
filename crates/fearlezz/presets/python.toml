@@ -4,19 +4,16 @@
 [check.ruff]
 run = "ruff check --output-format=sarif ."
 stage = "working"
-inputs = ["**/*.py", "**/*.pyi", ".ruff.toml", "ruff.toml", "pyproject.toml"]
 findings = { read = "sarif", lints = ["ruff"] }
 
 [check.ruff-format]
 run = "ruff format --check ."
 stage = "working"
-inputs = ["**/*.py", "**/*.pyi", ".ruff.toml", "ruff.toml", "pyproject.toml"]
 
 [check.pytest]
 run = "pytest -q --junitxml=\"$FEARLEZZ_OUT/junit.xml\""
 stage = "working"
 tests = "junit"
-inputs = ["**/*.py", "pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py", "uv.lock", "poetry.lock", "requirements*.txt"]
 test_files = ["tests/**", "**/test_*.py", "**/*_test.py", "**/conftest.py"]
 
 # Every rule, decided once on the maintainer's Lint Desk: gate means it must never happen, flag

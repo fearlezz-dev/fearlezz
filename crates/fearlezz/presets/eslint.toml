@@ -6,7 +6,6 @@
 [check.eslint]
 run = "eslint --format json ."
 stage = "working"
-inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "eslint.config.*", "eslint.fearlezz.mjs", "package.json"]
 findings = { read = "eslint", lints = ["eslint"] }
 
 # Every rule, decided once on the maintainer's Lint Desk: gate means it must never happen, flag

@@ -6,10 +6,4 @@
 [check.osv-scanner]
 run = 'osv-scanner scan source --recursive --allow-no-lockfiles --format sarif --output-file "$FEARLEZZ_OUT/findings.sarif" .'
 stage = "working"
-inputs = [
-  "package-lock.json", "**/package-lock.json", "yarn.lock", "**/yarn.lock", "pnpm-lock.yaml", "**/pnpm-lock.yaml",
-  "Cargo.lock", "**/Cargo.lock", "go.mod", "**/go.mod", "poetry.lock", "**/poetry.lock", "uv.lock", "**/uv.lock",
-  "requirements.txt", "**/requirements.txt", "pubspec.lock", "**/pubspec.lock", "gradle.lockfile", "**/gradle.lockfile",
-  "Gemfile.lock", "**/Gemfile.lock", "composer.lock", "**/composer.lock",
-]
 findings = { read = "sarif", level = "flag", fix = "upgrade the dependency to a fixed version, or say why it does not apply" }

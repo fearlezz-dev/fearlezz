@@ -4,20 +4,17 @@
 [check.golangci-lint]
 run = "golangci-lint run --output.sarif.path=stdout --output.text.path=stderr --show-stats=false ./..."
 stage = "working"
-inputs = ["**/*.go", "go.mod", "go.sum", ".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"]
 findings = { read = "sarif", lints = ["golangci"] }
 
 [check.gofmt]
 run = "test -z \"$(gofmt -l .)\" || { gofmt -l .; exit 1; }"
 stage = "working"
-inputs = ["**/*.go"]
 
 # -v prints one "--- PASS" or "--- FAIL" line per test and subtest, which are counted.
 [check.go-test]
 run = "go test -v ./..."
 stage = "working"
 tests = { count = '(?m)^\s*--- (?:PASS|FAIL):' }
-inputs = ["**/*.go", "go.mod", "go.sum"]
 test_files = ["**/*_test.go"]
 
 # Every rule, decided once on the maintainer's Lint Desk: gate means it must never happen, flag

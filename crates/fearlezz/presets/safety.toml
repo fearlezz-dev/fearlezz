@@ -12,5 +12,4 @@
 [check.gitleaks]
 run = "gitleaks dir . --no-banner --redact --exit-code 0 --report-format sarif --report-path -"
 stage = "working"
-inputs = ["**"]
 findings = { read = "sarif", level = "gate", fix = "remove the secret, rotate it because it has been exposed, and read it from the environment or SecretSpec instead" }

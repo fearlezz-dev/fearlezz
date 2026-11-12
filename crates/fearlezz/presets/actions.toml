@@ -8,5 +8,4 @@
 [check.zizmor]
 run = "zizmor --format sarif --offline --no-exit-codes ."
 stage = "working"
-inputs = [".github/workflows/**", ".github/actions/**", "action.yml", "action.yaml", "zizmor.yml", ".github/zizmor.yml"]
 findings = "sarif"

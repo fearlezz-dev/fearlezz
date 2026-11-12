@@ -7,5 +7,4 @@
 [check.trufflehog]
 run = "trufflehog filesystem . --sarif --no-verification --force-skip-binaries --force-skip-archives"
 stage = "working"
-inputs = ["**"]
 findings = { read = "sarif", level = "gate", fix = "remove the secret, rotate it because it has been exposed, and read it from the environment or SecretSpec instead" }

@@ -26,7 +26,6 @@ stage = "look"
 tests = "junit"
 stills = "stills/**/*.png"
 films = "films/**/*.webm"
-inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.html", "**/*.css", "**/*.svg", "public/**", "package.json", "package-lock.json", "bun.lock", "pnpm-lock.yaml", "yarn.lock"]
 
 # The base commit's checkout needs the installed packages and browsers too; Playwright keeps
 # its browsers in a cache outside the repository, so only node_modules is cloned.

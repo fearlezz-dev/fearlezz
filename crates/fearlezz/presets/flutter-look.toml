@@ -9,21 +9,18 @@
 # flutter-film: integration_test/app_test.dart drives the macOS app while Fearlezz films its
 # window from outside (macOS with Screen Recording). A run records its first window only and
 # `flutter test` starts the app once per file, so it films this one entry file; put every flow
-# to film in it. Its inputs cover the helpers in integration_test/ that the entry file imports.
-# The app needs the integration_test dev dependency. Turn it off with
+# to film in it. The app needs the integration_test dev dependency. Turn it off with
 # `[check.flutter-film] off = true` for an app without them.
 
 [check.flutter-look]
 run = "flutter test look_test"
 stage = "look"
 tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
-inputs = ["lib/**", "look_test/**", "assets/**", "fonts/**", "pubspec.yaml", "pubspec.lock"]
 
 [check.flutter-film]
 run = "flutter test integration_test/app_test.dart -d macos"
 stage = "merge"
 tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
-inputs = ["lib/**", "integration_test/**", "!integration_test/**/*_test.dart", "integration_test/app_test.dart", "macos/**", "assets/**", "fonts/**", "pubspec.yaml", "pubspec.lock"]
 record = { film = "app" }
 
 [settings.flutter-look]
