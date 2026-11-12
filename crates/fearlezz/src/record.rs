@@ -193,16 +193,26 @@ impl Spec {
                  starts, or name its bundle id, app name or part of its title"
             );
         }
-        let bad = |x: f64| !x.is_finite() || x < 0.0;
-        let positive = |x: Option<f64>| x.is_some_and(|s| bad(s) || s == 0.0);
-        if positive(spec.seconds) || positive(spec.wait) || bad(spec.crop_top) {
-            bail!("record: seconds and wait must be above zero and crop_top zero or more");
+        for (field, value) in [("seconds", spec.seconds), ("wait", spec.wait)] {
+            // A Duration holds every value that passes, so recording never overflows.
+            if let Some(s) = value
+                && (s <= 0.0 || Duration::try_from_secs_f64(s).is_err())
+            {
+                bail!("record: {field} = {s} must be a number of seconds above zero");
+            }
+        }
+        if !spec.crop_top.is_finite() || spec.crop_top < 0.0 {
+            bail!("record: crop_top must be zero or more");
         }
         Ok(spec)
     }
 
     fn wait(&self) -> Duration {
         self.wait.map_or(DEFAULT_WAIT, Duration::from_secs_f64)
+    }
+
+    fn seconds(&self) -> Option<Duration> {
+        self.seconds.map(Duration::from_secs_f64)
     }
 
     /// What the recorder waits for, for the log.
@@ -429,6 +439,8 @@ const POLL: Duration = Duration::from_millis(100);
 const LIST_EVERY: Duration = Duration::from_secs(1);
 /// How long a window that just appeared gets to draw its first frame.
 const SETTLE: Duration = Duration::from_millis(700);
+/// How many listings in a row may fail after the recording before the run fails.
+const LISTING_TRIES: usize = 3;
 
 /// Records the window of one run of a check's command.
 pub(crate) struct Recorder<'a, S> {
@@ -480,7 +492,8 @@ impl<'a, S: Screen> Recorder<'a, S> {
             .find(|w| w.id == window.id)
             .unwrap_or(window);
         let recording = Instant::now();
-        let deadline = spec.seconds.map(|s| recording + Duration::from_secs_f64(s));
+        // A deadline past what an Instant holds is no deadline.
+        let deadline = spec.seconds().and_then(|s| recording.checked_add(s));
         let frame = spec.frame();
         let mut proofs = Vec::new();
         let mut recorded = true;
@@ -593,7 +606,9 @@ impl<'a, S: Screen> Recorder<'a, S> {
     }
 
     /// Waits for the command to end after the recording: stops it at the `seconds` deadline,
-    /// or once it ran `wait` with neither the recorded window nor a new one open.
+    /// or once it ran `wait` with neither the recorded window nor a later one of the pick
+    /// open. A later window is told once and never recorded. A listing may fail a few times
+    /// in a row (it is a system call with a timeout) before the run fails.
     fn finish(
         &mut self,
         child: &mut Child,
@@ -603,10 +618,11 @@ impl<'a, S: Screen> Recorder<'a, S> {
         log: &mut impl Write,
     ) -> Result<Ended> {
         let wait = self.spec.wait();
-        let mut seen = self.before.clone();
-        seen.insert(recorded);
+        let mut told = self.before.clone();
+        told.insert(recorded);
         let mut window_at = Instant::now();
         let mut listed_at: Option<Instant> = None;
+        let mut failed = 0;
         loop {
             if let Some(status) = child.try_wait()? {
                 return Ok(Ended::Exited(status));
@@ -618,22 +634,40 @@ impl<'a, S: Screen> Recorder<'a, S> {
             }
             if listed_at.is_none_or(|at| at.elapsed() >= LIST_EVERY) {
                 listed_at = Some(Instant::now());
-                let windows = self.screen.windows()?;
-                if windows.iter().any(|w| w.id == recorded) {
-                    window_at = Instant::now();
-                } else if let Some(new) = choose(&windows, &self.pick(root), &seen) {
+                let windows = match self.screen.windows() {
+                    Ok(windows) => {
+                        failed = 0;
+                        windows
+                    }
+                    Err(e) if failed + 1 < LISTING_TRIES => {
+                        failed += 1;
+                        writeln!(
+                            log,
+                            "record: listing the windows failed, trying again: {e:#}"
+                        )?;
+                        std::thread::sleep(POLL);
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                };
+                let pick = self.pick(root);
+                if let Some(new) = choose(&windows, &pick, &told) {
                     writeln!(
                         log,
-                        "record: {} appeared after the recorded window closed; a record keeps \
-                         only the first window of a run",
+                        "record: {} appeared after the recorded window; a record keeps only the \
+                         first window of a run",
                         new.describe()
                     )?;
-                    seen.insert(new.id);
+                    told.insert(new.id);
+                }
+                let open = windows.iter().any(|w| w.id == recorded)
+                    || choose(&windows, &pick, &self.before).is_some();
+                if open {
                     window_at = Instant::now();
                 } else if window_at.elapsed() >= wait {
                     writeln!(
                         log,
-                        "record: the command ran {} s after its window closed without ending; \
+                        "record: the command ran {} s after its windows closed without ending; \
                          stopping it",
                         wait.as_secs_f64()
                     )?;
@@ -728,6 +762,10 @@ mod tests {
         parse("film = \"a\"\nseconds = 0").unwrap_err();
         parse("film = \"a\"\nwait = 0").unwrap_err();
         parse("film = \"a\"\nwindow = \"\"").unwrap_err();
+        // Longer than a Duration holds: a config error, not a panic while recording.
+        let huge = parse("film = \"a\"\nwait = 1e20").unwrap_err();
+        assert!(format!("{huge:#}").contains("wait"), "{huge:#}");
+        parse("film = \"a\"\nseconds = 1e20").unwrap_err();
     }
 
     #[test]
@@ -763,6 +801,9 @@ mod tests {
         start: Instant,
         shown: Vec<Shown>,
         child: i32,
+        /// Listings from this many seconds on fail, `failures` times in a row.
+        fail_from: f64,
+        failures: usize,
     }
 
     struct ScriptFilm {
@@ -787,6 +828,10 @@ mod tests {
 
         fn windows(&mut self) -> Result<Vec<WindowInfo>> {
             let now = self.start.elapsed().as_secs_f64();
+            if now >= self.fail_from && self.failures > 0 {
+                self.failures -= 1;
+                bail!("the listing timed out");
+            }
             Ok(self
                 .shown
                 .iter()
@@ -847,35 +892,47 @@ mod tests {
 
     /// Records `command` with `spec` against a screen that shows `script`, as a check would.
     fn record(spec: &str, script: Vec<Shown>, command: &str) -> Run {
-        let spec = Spec::parse(toml::from_str::<toml::Value>(spec).unwrap()).unwrap();
-        let out = tempfile::tempdir().unwrap();
+        failing(spec, script, command, (f64::INFINITY, 0)).unwrap()
+    }
+
+    /// As [`record`], with `failures` listings in a row failing from `fail_from` seconds on.
+    fn failing(
+        spec: &str,
+        script: Vec<Shown>,
+        command: &str,
+        (fail_from, failures): (f64, usize),
+    ) -> Result<Run> {
+        let spec = Spec::parse(toml::from_str::<toml::Value>(spec)?)?;
+        let out = tempfile::tempdir()?;
         let screen = Script {
             start: Instant::now(),
             shown: script,
             child: 0,
+            fail_from,
+            failures,
         };
-        let mut recorder = Recorder::new(screen, &spec).unwrap();
+        let mut recorder = Recorder::new(screen, &spec)?;
         let mut cmd = std::process::Command::new("sh");
         cmd.arg("-c").arg(command);
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-        let mut child = cmd.spawn().unwrap();
-        recorder.screen.child = i32::try_from(child.id()).unwrap();
+        let mut child = cmd.spawn()?;
+        recorder.screen.child = i32::try_from(child.id())?;
         let clock = Instant::now();
         let mut log = Vec::new();
-        let recorded = recorder.during(&mut child, out.path(), &mut log).unwrap();
+        let recorded = recorder.during(&mut child, out.path(), &mut log);
         let took = clock.elapsed();
-        let left_running = child.try_wait().unwrap().is_none();
+        let left_running = child.try_wait()?.is_none();
         if left_running {
-            stop(&mut child).unwrap();
+            stop(&mut child)?;
         }
-        Run {
-            recorded,
-            log: String::from_utf8(log).unwrap(),
+        Ok(Run {
+            recorded: recorded?,
+            log: String::from_utf8(log)?,
             out,
             took,
             left_running,
-        }
+        })
     }
 
     #[test]
@@ -982,7 +1039,7 @@ mod tests {
         assert!(!run.left_running);
         assert!(run.took < Duration::from_secs(10), "{:?}", run.took);
         assert!(run.out.path().join("home.mp4").exists(), "the film is kept");
-        assert!(run.log.contains("after its window closed"), "{}", run.log);
+        assert!(run.log.contains("after its windows closed"), "{}", run.log);
     }
 
     #[test]
@@ -999,6 +1056,59 @@ mod tests {
             run.log
         );
         assert_eq!(run.proofs().lines().count(), 1);
+    }
+
+    #[test]
+    fn a_second_window_that_stays_open_keeps_the_command_running() {
+        let run = record(
+            "film = \"app\"\nwait = 0.5",
+            vec![shown(7, CHILD, 0.1, 1.2), shown(8, CHILD, 1.6, 60.0)],
+            "sleep 4",
+        );
+        assert!(
+            matches!(run.recorded.ended, Ended::Exited(_)),
+            "{:?}\n{}",
+            run.recorded,
+            run.log
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(
+            run.log
+                .matches("keeps only the first window of a run")
+                .count(),
+            1,
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn a_listing_that_fails_once_after_the_recording_is_told_and_tolerated() {
+        let run = failing(
+            "film = \"app\"",
+            vec![shown(7, CHILD, 0.1, 1.2)],
+            "sleep 3",
+            (1.5, 1),
+        )
+        .unwrap();
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert!(run.log.contains("the listing timed out"), "{}", run.log);
+    }
+
+    #[test]
+    fn listings_that_keep_failing_after_the_recording_fail_the_run() {
+        let err = failing(
+            "film = \"app\"",
+            vec![shown(7, CHILD, 0.1, 1.2)],
+            "sleep 30",
+            (1.5, 100),
+        )
+        .err()
+        .expect("the run fails");
+        assert!(
+            format!("{err:#}").contains("the listing timed out"),
+            "{err:#}"
+        );
     }
 
     #[test]
