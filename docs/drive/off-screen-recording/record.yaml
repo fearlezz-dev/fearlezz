@@ -59,6 +59,8 @@ pieces:
         evidence: [spike/virtual-display display.rs click test]
 
 decided:
+  - id: no-agents-lines
+    what: "None of these": no AGENTS.md lines for loaded machines, env var switches or recorder unit tests.
   - id: reliable-under-load
     what: "Assume that very often my system is very loaded. Everything needs to be very reliable, because if it's not, everything is going to conflict too much with each other."
   - id: fast-watch
@@ -107,9 +109,7 @@ open:
     ask: "Reproduced on main (998ceb8) too: after 27 good films during a load spike every film fails until replayd restarts. Existing problem, now in ROADMAP Known problems. Investigate as its own drive?"
   - id: saved-frames
     ask: An app that saves its window position may reopen in the parked corner next time; move it back before the command ends?
-  - id: agents-exceptions
-    ask: "AGENTS.md: record that per machine switches may be environment variables, and that recorder decisions are unit tested in record.rs since integration tests cannot record."
   - id: aerospace-no-ax-focus
     ask: With AeroSpace on and Accessibility off, focus give back is unproven (needs Accessibility turned off for the agent's app).
 
-next: "Full proof, then check in: AeroSpace pick up now waits up to 10 s (6 of 6 parked at load 20); film failure is an existing problem." 
+next: "Developer reviews the result (full proof 7 of 7 on 89f84cf); then Finish: pull request." 
