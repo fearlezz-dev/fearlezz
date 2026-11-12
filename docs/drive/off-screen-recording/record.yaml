@@ -72,7 +72,6 @@ decided:
   - id: prototype-freedom
     what: "While testing, confuse the stuff as much as you want. While not testing, don't mess it up." The developer's desktop is restored after each try.
 
-open: []
 
 slices:
   - id: review-fixes-and-fast-watch
@@ -101,4 +100,14 @@ slices:
       - "Found: AeroSpace refused a window id it had not picked up yet; parking now waits up to 2 s for AeroSpace to list it"
 
 
-next: Full proof, then check in with the result and the open questions (saved window frames, AGENTS.md exceptions).
+open:
+  - id: film-failures
+    ask: "Films fail machine wide with 'failure to process first sample buffer' after a number of recordings (also on c2afcb3 and with off screen off); restarting replayd fixed it once, then it came back after about 5 films. Investigate as its own problem?"
+  - id: saved-frames
+    ask: An app that saves its window position may reopen in the parked corner next time; move it back before the command ends?
+  - id: agents-exceptions
+    ask: "AGENTS.md: record that per machine switches may be environment variables, and that recorder decisions are unit tested in record.rs since integration tests cannot record."
+  - id: aerospace-no-ax-focus
+    ask: With AeroSpace on and Accessibility off, focus give back is unproven (needs Accessibility turned off for the agent's app).
+
+next: "Check in: machine load (load average about 100) makes timings unreliable now; under that load AeroSpace picked up the native demo window too late (2 s) three times." 

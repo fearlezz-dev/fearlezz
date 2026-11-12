@@ -42,7 +42,7 @@ pub(crate) struct Frame {
     pub crop_top: f64,
 }
 
-/// A window as ScreenCaptureKit lists it.
+/// A window as the window server lists it.
 #[derive(Clone, Debug)]
 pub(crate) struct WindowInfo {
     pub id: u32,
@@ -125,8 +125,8 @@ impl Place {
     }
 }
 
-/// The windows of the machine, as the recorder needs them: ScreenCaptureKit on macOS, a script
-/// in tests. Windows are named by their id from the latest [`Screen::windows`].
+/// The windows of the machine, as the recorder needs them: the window server's list and
+/// ScreenCaptureKit on macOS, a script in tests. Windows are named by their id from the latest [`Screen::windows`].
 pub(crate) trait Screen {
     type Film: Filming;
     /// Every normal window of every app.
@@ -157,8 +157,8 @@ pub(crate) trait Filming {
 #[derive(Default)]
 pub(crate) struct System {
     listed: Vec<WindowInfo>,
-    /// Each pid's bundle id, read once.
-    bundles: std::collections::HashMap<i32, String>,
+    /// Each app's bundle id by pid, read once.
+    apps: std::collections::HashMap<i32, String>,
 }
 
 impl System {
@@ -174,7 +174,7 @@ impl Screen for System {
     type Film = sys::Film;
 
     fn windows(&mut self) -> Result<Vec<WindowInfo>> {
-        self.listed = sys::windows(&mut self.bundles)?;
+        self.listed = sys::windows(&mut self.apps)?;
         Ok(self.listed.clone())
     }
 
@@ -632,7 +632,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
         self.give_back(window, &mut told, log)?;
         match self.screen.park(window.id) {
             Ok(how) => writeln!(log, "record: parked the window off screen {how}")?,
-            Err(e) => writeln!(log, "record: the window stays where it opened: {e:#}")?,
+            Err(e) => writeln!(log, "record: could not park the window off screen: {e:#}")?,
         }
         let until = Instant::now() + SETTLE;
         while Instant::now() < until {
@@ -1184,7 +1184,7 @@ mod tests {
         assert_eq!(run.events, ["film 7"]);
         assert!(
             run.log.contains(
-                "record: the window stays where it opened: Accessibility is off for the terminal"
+                "record: could not park the window off screen: Accessibility is off for the terminal"
             ),
             "{}",
             run.log

@@ -84,8 +84,9 @@ fn wait<T>(rx: &Receiver<Result<T, String>>, what: &str) -> Result<T> {
 
 /// Every normal window of every app, off screen ones included, from the window server:
 /// about 2 ms a listing, against about 70 ms for ScreenCaptureKit, so a new window is found
-/// within a few frames of showing. `bundles` remembers each pid's bundle id.
-pub(crate) fn windows(bundles: &mut HashMap<i32, String>) -> Result<Vec<super::WindowInfo>> {
+/// within a few frames of showing. Only windows of an app count, as ScreenCaptureKit lists
+/// them. `apps` remembers each app's bundle id by pid.
+pub(crate) fn windows(apps: &mut HashMap<i32, String>) -> Result<Vec<super::WindowInfo>> {
     connect();
     let list = CGWindowListCopyWindowInfo(
         CGWindowListOption::OptionAll | CGWindowListOption::ExcludeDesktopElements,
@@ -122,15 +123,22 @@ pub(crate) fn windows(bundles: &mut HashMap<i32, String>) -> Result<Vec<super::W
         let (Ok(id), Ok(pid)) = (u32::try_from(id), i32::try_from(pid)) else {
             continue;
         };
-        let bundle = bundles
-            .entry(pid)
-            .or_insert_with(|| {
-                NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
-                    .and_then(|a| a.bundleIdentifier())
+        // An app that just started may not be one yet, so only an app is remembered.
+        let bundle = match apps.get(&pid) {
+            Some(bundle) => bundle.clone(),
+            None => {
+                let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+                else {
+                    continue;
+                };
+                let bundle = app
+                    .bundleIdentifier()
                     .map(|b| b.to_string())
-                    .unwrap_or_default()
-            })
-            .clone();
+                    .unwrap_or_default();
+                apps.insert(pid, bundle.clone());
+                bundle
+            }
+        };
         out.push(super::WindowInfo {
             id,
             pid,

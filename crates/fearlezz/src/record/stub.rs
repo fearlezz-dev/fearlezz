@@ -17,7 +17,7 @@ pub(crate) fn allowed() -> bool {
 }
 
 pub(crate) fn windows(
-    _bundles: &mut std::collections::HashMap<i32, String>,
+    _apps: &mut std::collections::HashMap<i32, String>,
 ) -> Result<Vec<super::WindowInfo>> {
     bail!(NOT_HERE)
 }

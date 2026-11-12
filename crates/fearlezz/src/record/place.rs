@@ -31,7 +31,7 @@ const WORKSPACE: &str = "fearlezz";
 const UNDO: Duration = Duration::from_millis(150);
 
 /// How long AeroSpace gets to pick up a new window: it learns of windows on its own
-/// schedule, after ScreenCaptureKit lists them, and refuses ids it does not know yet.
+/// schedule, after the window server lists them, and refuses ids it does not know yet.
 const PICK_UP: Duration = Duration::from_secs(2);
 
 /// Parks `window` and says how.
@@ -164,40 +164,24 @@ fn aerospace(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Where to move the window: past a bottom corner of a display with no other display
-/// beyond it, so macOS keeps only a strip on screen. The window's own display goes first.
+/// Where to move the window: past the bottom corner of a display that leaves the least of
+/// it on any display, before macOS pulls a strip of it back on screen.
 fn corner(window: &WindowInfo, displays: &[CGRect]) -> Result<CGPoint> {
-    let centre = (
-        window.x + window.width / 2.0,
-        window.y + window.height / 2.0,
-    );
-    let on = |d: &CGRect, (x, y): (f64, f64)| {
-        x >= d.origin.x
-            && x < d.origin.x + d.size.width
-            && y >= d.origin.y
-            && y < d.origin.y + d.size.height
-    };
-    let mut ordered: Vec<&CGRect> = displays.iter().collect();
-    ordered.sort_by_key(|d| !on(d, centre));
-    for d in ordered {
-        let (left, right) = (d.origin.x, d.origin.x + d.size.width);
-        let bottom = d.origin.y + d.size.height;
-        // Each corner with a point just past it, which no display may cover.
-        let corners = [
-            (CGPoint::new(right, bottom), (right + 1.0, bottom + 1.0)),
-            (
-                CGPoint::new(left - window.width, bottom),
-                (left - 1.0, bottom + 1.0),
-            ),
-        ];
-        if let Some((to, _)) = corners
-            .into_iter()
-            .find(|(_, past)| !displays.iter().any(|other| on(other, *past)))
-        {
-            return Ok(to);
-        }
-    }
-    bail!("every bottom corner of every display has another display beyond it")
+    let size = CGSize::new(window.width, window.height);
+    displays
+        .iter()
+        .flat_map(|d| {
+            let bottom = d.origin.y + d.size.height;
+            [
+                CGPoint::new(d.origin.x + d.size.width, bottom),
+                CGPoint::new(d.origin.x - window.width, bottom),
+            ]
+        })
+        .map(|to| (to, visible(CGRect::new(to, size), displays)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .filter(|(_, shown)| *shown <= MOST_SHOWN)
+        .map(|(to, _)| to)
+        .context("every bottom corner of every display has another display beyond it")
 }
 
 /// The Accessibility element of `window`: the window of its app with the same frame.
