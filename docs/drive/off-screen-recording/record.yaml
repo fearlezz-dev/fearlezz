@@ -74,6 +74,8 @@ decided:
     what: "Don't couple this project to AeroSpace. If people have it, it can automatically help them, or they can configure it a little bit. Not having AeroSpace shouldn't break anything."
   - id: restore-saved-frames
     what: "Restore after run": the window positions an app saved while parked are put back once the command ends.
+  - id: put-back-only-parked
+    what: "Fix only parked": only saved positions that are mostly off their screen are put back, never to a parked value; no stored state, and after a killed run the app opens at its default spot.
   - id: prototype-freedom
     what: "While testing, confuse the stuff as much as you want. While not testing, don't mess it up." The developer's desktop is restored after each try.
 
@@ -124,6 +126,13 @@ slices:
       - "parking is one step of the settle loop, so focus goes back while AeroSpace picks the window up"
       - "6 real runs passed (AeroSpace on and off), focus given back in each; saved position put back in both"
       - "defaults export takes about 10 ms at load 33, so reading before the move adds little to the flash"
+  - id: put-back-only-parked
+    tests:
+      - record::place::tests::a_frame_mostly_off_its_screen_looks_parked
+      - record::place::tests::only_parked_positions_are_put_back_and_never_to_a_parked_value
+    status: done
+    evidence:
+      - "real runs: saved frame while parked was 1472 -907 (Accessibility) and 1511 -907 (AeroSpace); after each run the saved value matched the one from before"
 
 
 open:

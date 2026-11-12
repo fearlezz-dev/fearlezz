@@ -432,21 +432,94 @@ pub(crate) fn saved(bundle: &str) -> Option<Saved> {
     })
 }
 
-/// Writes back what [`saved`] read and removes positions saved since, once the app has
-/// saved its last frame; returns how many it changed.
+/// Puts back the positions that are parked now, once the app has saved its last frame;
+/// returns how many it changed. See [`repairs`] for which and to what.
 pub(crate) fn put_back(saved: &Saved) -> Result<usize> {
     let before = saved
         .frames
         .as_ref()
         .map_err(|e| anyhow!("they could not be read before parking: {e}"))?;
-    let mut changed = 0;
-    for (key, now) in frames(&saved.bundle)? {
-        match before.iter().find(|(k, _)| *k == key) {
-            Some((_, was)) if *was == now => continue,
-            Some((_, was)) => tool("defaults", &["write", &saved.bundle, &key, "-string", was])?,
-            None => tool("defaults", &["delete", &saved.bundle, &key])?,
+    let repairs = repairs(before, &frames(&saved.bundle)?);
+    for (key, was) in &repairs {
+        match was {
+            Some(was) => tool("defaults", &["write", &saved.bundle, key, "-string", was])?,
+            None => tool("defaults", &["delete", &saved.bundle, key])?,
         };
-        changed += 1;
     }
-    Ok(changed)
+    Ok(repairs.len())
+}
+
+/// What to do to each saved position that is parked `now`: write back its value from
+/// `before`, or remove it (`None`) when it had none that was not parked. A position that is
+/// not parked is left alone, whoever saved it: the developer moving the app's windows, or
+/// another recording that put its own back first. A parked value in `before` (from another
+/// recording still running, or one that was killed) is never written back.
+fn repairs(before: &[(String, String)], now: &[(String, String)]) -> Vec<(String, Option<String>)> {
+    now.iter()
+        .filter(|(_, frame)| looks_parked(frame))
+        .map(|(key, _)| {
+            let was = before
+                .iter()
+                .find(|(k, was)| k == key && !looks_parked(was))
+                .map(|(_, was)| was.clone());
+            (key.clone(), was)
+        })
+        .collect()
+}
+
+/// Whether a saved `NSWindow Frame` value ("x y w h" of the window, then of its screen)
+/// puts the window mostly off its screen, as parking does.
+fn looks_parked(frame: &str) -> bool {
+    let n: Vec<f64> = frame
+        .split_whitespace()
+        .map_while(|n| n.parse().ok())
+        .collect();
+    let [x, y, w, h, sx, sy, sw, sh, ..] = n[..] else {
+        return false;
+    };
+    let window = CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
+    let screen = CGRect::new(CGPoint::new(sx, sy), CGSize::new(sw, sh));
+    visible(window, &[screen]) < 0.5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HOME: &str = "19 5 1489 939 0 0 1512 948 ";
+    const MOVED: &str = "300 200 1489 939 0 0 1512 948 ";
+    const PARKED: &str = "1472 -907 1489 939 0 0 1512 948 ";
+
+    fn saved(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_frame_mostly_off_its_screen_looks_parked() {
+        assert!(looks_parked(PARKED));
+        assert!(!looks_parked(HOME));
+        assert!(!looks_parked("not a frame"));
+    }
+
+    #[test]
+    fn only_parked_positions_are_put_back_and_never_to_a_parked_value() {
+        let before = saved(&[("main", HOME), ("mine", HOME), ("other", PARKED)]);
+        let now = saved(&[
+            ("main", PARKED),
+            ("mine", MOVED),
+            ("other", PARKED),
+            ("new", PARKED),
+        ]);
+        assert_eq!(
+            repairs(&before, &now),
+            [
+                ("main".to_string(), Some(HOME.to_string())),
+                ("other".to_string(), None),
+                ("new".to_string(), None),
+            ]
+        );
+    }
 }
