@@ -720,7 +720,11 @@ fn a_change_that_removes_every_picture_shows_them_gone() {
     repo.fz(&["run", "--stage", "look", "--no-run"]);
     let out = repo.fz(&["run"]);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    assert!(out.stdout.contains("look screens: 2 gone"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("look screens: 2 gone"),
+        "{}",
+        out.stdout
+    );
     let status = repo.fz(&[]);
     assert!(
         status.last_line().starts_with("next: look at screens"),

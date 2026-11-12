@@ -179,7 +179,10 @@ impl Pictures {
             ("stills", &self.stills, &head.stills),
             ("films", &self.films, &head.films),
         ] {
-            match (b.as_ref().map(MediaGlob::glob), h.as_ref().map(MediaGlob::glob)) {
+            match (
+                b.as_ref().map(MediaGlob::glob),
+                h.as_ref().map(MediaGlob::glob),
+            ) {
                 (Some(b), None) => found.push(format!("it no longer takes {kind} by {b}")),
                 (Some(b), Some(h)) if b != h => {
                     found.push(format!("it takes {kind} by another glob ({b}, now {h})"));
@@ -519,8 +522,7 @@ impl Config {
                         .map(crate::record::Spec::parse)
                         .transpose()
                         .with_context(|| format!("check {id}"))?,
-                    flaky_globs: globs(&c.flaky)
-                        .with_context(|| format!("check {id}: flaky"))?,
+                    flaky_globs: globs(&c.flaky).with_context(|| format!("check {id}: flaky"))?,
                     flaky: c.flaky,
                 },
                 id: id.clone(),
