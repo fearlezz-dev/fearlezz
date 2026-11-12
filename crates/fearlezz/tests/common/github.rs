@@ -1,15 +1,25 @@
-//! A fake GitHub REST API on a local port: the parts `fearlezz run --ci` uses on GitHub Actions
-//! (comments, statuses, pull requests, collaborators, and the git data API for the pictures
-//! branch), kept in memory so a test can set it up and read back what Fearlezz did.
+//! A fake GitHub API on a local port: the parts Fearlezz uses (comments, statuses, pull
+//! requests, collaborators, the git data API for the pictures branch, and GraphQL's atomic ref
+//! update), kept in memory so a test can set it up and read back what Fearlezz did. Each token
+//! acts as an identity, and a read only token's writes are refused, as on GitHub.
 
 #![allow(dead_code, reason = "each test file uses only some of the helpers")]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
+
+/// The workflow token of a run on this repository.
+pub(crate) const WORKFLOW_TOKEN: &str = "token";
+/// The read only workflow token of a run on a fork's pull request.
+pub(crate) const FORK_TOKEN: &str = "fork-token";
+/// A GitHub App's installation token.
+pub(crate) const APP_TOKEN: &str = "app-token";
+/// A person's token, such as the developer's from `gh auth token`.
+pub(crate) const PERSON_TOKEN: &str = "person-token";
 
 /// A comment on a pull request.
 #[derive(Clone, Debug)]
@@ -30,7 +40,7 @@ impl Comment {
     }
 }
 
-/// A commit status.
+/// A commit status, with the login and account type that set it.
 #[derive(Clone, Debug)]
 pub(crate) struct Status {
     pub sha: String,
@@ -38,12 +48,21 @@ pub(crate) struct Status {
     pub context: String,
     pub description: String,
     pub target: String,
+    pub creator: String,
+    pub creator_kind: String,
+}
+
+/// Who a token acts as, and whether it may write.
+#[derive(Clone, Debug)]
+pub(crate) struct Token {
+    pub login: String,
+    pub kind: String,
+    pub write: bool,
 }
 
 /// An entry of a tree: mode, type, sha.
 type Entry = (String, String, String);
 
-#[derive(Default)]
 pub(crate) struct State {
     pub comments: Vec<Comment>,
     pub statuses: Vec<Status>,
@@ -51,12 +70,57 @@ pub(crate) struct State {
     pub permissions: BTreeMap<String, String>,
     /// Pull requests: head sha and state.
     pub pulls: BTreeMap<u64, (String, String)>,
+    /// Pull requests opened from a fork.
+    pub forks: BTreeSet<u64>,
+    /// Tokens and who they act as.
+    pub tokens: BTreeMap<String, Token>,
+    /// Paths below the repository that answer 500.
+    pub broken: BTreeSet<String>,
+    /// Files another run pushes onto the pictures branch just before the next atomic ref
+    /// update, so that update finds the branch moved.
+    pub race: Option<Vec<(String, String)>>,
     pub refs: BTreeMap<String, String>,
     blobs: BTreeMap<String, Vec<u8>>,
     trees: BTreeMap<String, BTreeMap<String, Entry>>,
     /// Commits: tree and parents.
     pub commits: BTreeMap<String, (String, Vec<String>)>,
     next: u64,
+}
+
+impl Default for State {
+    fn default() -> State {
+        let token = |login: &str, kind: &str, write: bool| Token {
+            login: login.into(),
+            kind: kind.into(),
+            write,
+        };
+        State {
+            comments: Vec::new(),
+            statuses: Vec::new(),
+            permissions: BTreeMap::new(),
+            pulls: BTreeMap::new(),
+            forks: BTreeSet::new(),
+            tokens: BTreeMap::from([
+                (
+                    WORKFLOW_TOKEN.into(),
+                    token("github-actions[bot]", "Bot", true),
+                ),
+                (
+                    FORK_TOKEN.into(),
+                    token("github-actions[bot]", "Bot", false),
+                ),
+                (APP_TOKEN.into(), token("proof-app[bot]", "Bot", true)),
+                (PERSON_TOKEN.into(), token("dev", "User", true)),
+            ]),
+            broken: BTreeSet::new(),
+            race: None,
+            refs: BTreeMap::new(),
+            blobs: BTreeMap::new(),
+            trees: BTreeMap::new(),
+            commits: BTreeMap::new(),
+            next: 0,
+        }
+    }
 }
 
 impl State {
@@ -145,7 +209,8 @@ impl State {
     }
 
     pub(crate) fn add_comment(&mut self, pr: u64, login: &str, kind: &str, body: &str) -> Comment {
-        let id = 1000 + self.comments.len() as u64;
+        let id = 1000 + self.next;
+        self.next += 1;
         let comment = Comment {
             id,
             pr,
@@ -168,27 +233,51 @@ impl State {
 
     fn comment_json(c: &Comment) -> Value {
         json!({ "id": c.id, "body": c.body, "html_url": c.url(),
+                "issue_url": format!("https://api.github.com/repos/owner/repo/issues/{}", c.pr),
                 "user": { "login": c.login, "type": c.kind } })
     }
 
-    /// Answers one request: status code and JSON body.
-    fn answer(&mut self, method: &str, path: &str, body: &Value) -> (u16, Value) {
+    /// Answers one request made with `token`: status code and JSON body.
+    fn answer(&mut self, token: &str, method: &str, path: &str, body: &Value) -> (u16, Value) {
+        let Some(who) = self.tokens.get(token).cloned() else {
+            return (401, json!({ "message": "Bad credentials" }));
+        };
+        if method != "GET" && !who.write {
+            return (
+                403,
+                json!({ "message": "Resource not accessible by integration" }),
+            );
+        }
         let (path, query) = path.split_once('?').unwrap_or((path, ""));
         let page: usize = query
             .split('&')
             .find_map(|p| p.strip_prefix("page="))
             .and_then(|p| p.parse().ok())
             .unwrap_or(1);
-        let Some(rest) = path.strip_prefix("/repos/owner/repo/") else {
-            return match path {
-                // The workflow token cannot read a user.
-                "/user" => (
+        match path {
+            "/graphql" => return self.graphql(body),
+            "/repos/owner/repo" => {
+                return (
+                    200,
+                    json!({ "node_id": "R_repo", "full_name": "owner/repo" }),
+                );
+            }
+            // An installation token cannot read a user.
+            "/user" if who.kind == "Bot" => {
+                return (
                     403,
                     json!({ "message": "Resource not accessible by integration" }),
-                ),
-                _ => (404, json!({ "message": "Not Found" })),
-            };
+                );
+            }
+            "/user" => return (200, json!({ "login": who.login, "type": who.kind })),
+            _ => {}
+        }
+        let Some(rest) = path.strip_prefix("/repos/owner/repo/") else {
+            return (404, json!({ "message": "Not Found" }));
         };
+        if self.broken.contains(rest) {
+            return (500, json!({ "message": "Server Error" }));
+        }
         let parts: Vec<&str> = rest.split('/').collect();
         match (method, parts.as_slice()) {
             ("GET", ["issues", pr, "comments"]) => {
@@ -205,11 +294,18 @@ impl State {
             ("POST", ["issues", pr, "comments"]) => {
                 let c = self.add_comment(
                     pr.parse().unwrap(),
-                    "github-actions[bot]",
-                    "Bot",
+                    &who.login,
+                    &who.kind,
                     body["body"].as_str().unwrap(),
                 );
                 (201, Self::comment_json(&c))
+            }
+            ("GET", ["issues", "comments", id]) => {
+                let id: u64 = id.parse().unwrap();
+                match self.comments.iter().find(|c| c.id == id) {
+                    Some(c) => (200, Self::comment_json(c)),
+                    None => (404, json!({ "message": "Not Found" })),
+                }
             }
             ("PATCH", ["issues", "comments", id]) => {
                 let id: u64 = id.parse().unwrap();
@@ -232,8 +328,41 @@ impl State {
                     context: text("context"),
                     description: text("description"),
                     target: text("target_url"),
+                    creator: who.login.clone(),
+                    creator_kind: who.kind.clone(),
                 });
                 (201, json!({}))
+            }
+            ("GET", ["commits", sha, "statuses"]) => {
+                let all: Vec<Value> = self
+                    .statuses
+                    .iter()
+                    .rev()
+                    .filter(|s| s.sha == *sha)
+                    .map(|s| {
+                        let target = if s.target.is_empty() {
+                            Value::Null
+                        } else {
+                            s.target.clone().into()
+                        };
+                        json!({ "state": s.state, "context": s.context,
+                                "description": s.description, "target_url": target,
+                                "creator": { "login": s.creator, "type": s.creator_kind } })
+                    })
+                    .collect();
+                let page: Vec<Value> = all.into_iter().skip((page - 1) * 100).take(100).collect();
+                (200, Value::Array(page))
+            }
+            ("GET", ["commits", sha, "pulls"]) => {
+                let found: Vec<Value> = self
+                    .pulls
+                    .iter()
+                    .filter(|(_, (head, _))| head == sha)
+                    .map(|(n, (head, state))| {
+                        json!({ "number": n, "state": state, "head": { "sha": head } })
+                    })
+                    .collect();
+                (200, Value::Array(found))
             }
             ("GET", ["collaborators", login, "permission"]) => {
                 let perm = self
@@ -243,10 +372,22 @@ impl State {
                     .unwrap_or_else(|| "none".into());
                 (200, json!({ "permission": perm }))
             }
-            ("GET", ["pulls", pr]) => match self.pulls.get(&pr.parse::<u64>().unwrap()) {
-                Some((head, state)) => (200, json!({ "head": { "sha": head }, "state": state })),
-                None => (404, json!({ "message": "Not Found" })),
-            },
+            ("GET", ["pulls", pr]) => {
+                let n = pr.parse::<u64>().unwrap();
+                let from = if self.forks.contains(&n) {
+                    "someone/repo"
+                } else {
+                    "owner/repo"
+                };
+                match self.pulls.get(&n) {
+                    Some((head, state)) => (
+                        200,
+                        json!({ "head": { "sha": head, "repo": { "full_name": from } },
+                                "state": state }),
+                    ),
+                    None => (404, json!({ "message": "Not Found" })),
+                }
+            }
             ("GET", ["git", "ref", "heads", branch]) => {
                 match self.refs.get(&format!("heads/{branch}")) {
                     Some(sha) => (200, json!({ "object": { "sha": sha } })),
@@ -321,24 +462,76 @@ impl State {
                 let name = format!("heads/{branch}");
                 let new = body["sha"].as_str().unwrap().to_string();
                 let force = body["force"].as_bool().unwrap_or(false);
+                assert!(!force, "a forced ref update can lose another run's push");
                 let Some(old) = self.refs.get(&name).cloned() else {
                     return (422, json!({ "message": "Reference does not exist" }));
                 };
-                if !force && !self.commits[&new].1.contains(&old) {
+                if !self.commits[&new].1.contains(&old) {
                     return (422, json!({ "message": "Update is not a fast forward" }));
                 }
                 self.refs.insert(name, new);
                 (200, json!({}))
-            }
-            ("DELETE", ["git", "refs", "heads", branch]) => {
-                self.refs.remove(&format!("heads/{branch}"));
-                (204, Value::Null)
             }
             _ => (
                 404,
                 json!({ "message": format!("no fake for {method} {path}") }),
             ),
         }
+    }
+
+    /// GraphQL's `updateRefs`: every update applies only while its ref is where `beforeOid`
+    /// says, all of them or none.
+    fn graphql(&mut self, body: &Value) -> (u16, Value) {
+        let query = body["query"].as_str().unwrap_or_default();
+        assert!(
+            query.contains("updateRefs"),
+            "no fake for the query {query}"
+        );
+        let input = &body["variables"]["input"];
+        assert_eq!(input["repositoryId"], "R_repo");
+        if let Some(files) = self.race.take() {
+            let files: Vec<(&str, &str)> = files
+                .iter()
+                .map(|(p, c)| (p.as_str(), c.as_str()))
+                .collect();
+            self.put("fearlezz-pictures", &files);
+        }
+        let zero = "0".repeat(40);
+        let name = |u: &Value| {
+            u["name"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches("refs/")
+                .to_string()
+        };
+        let updates = input["refUpdates"].as_array().unwrap();
+        for u in updates {
+            let before = u["beforeOid"].as_str().unwrap_or_default();
+            let now = self
+                .refs
+                .get(&name(u))
+                .cloned()
+                .unwrap_or_else(|| zero.clone());
+            if before != now {
+                return (
+                    200,
+                    json!({ "data": { "updateRefs": null },
+                            "errors": [{ "message": format!("{} is at {now}, not {before}", name(u)) }] }),
+                );
+            }
+        }
+        for u in updates {
+            let after = u["afterOid"].as_str().unwrap().to_string();
+            if after == zero {
+                self.refs.remove(&name(u));
+            } else {
+                self.refs.insert(name(u), after);
+            }
+        }
+        (
+            200,
+            json!({ "data": { "updateRefs": { "clientMutationId": null } } }),
+        )
     }
 }
 
@@ -378,7 +571,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
     let method = words.next().unwrap_or_default().to_string();
     let path = words.next().unwrap_or_default().to_string();
     let mut length = 0;
-    let mut authorized = false;
+    let mut token = String::new();
     loop {
         let mut header = String::new();
         if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
@@ -389,7 +582,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
             length = n.trim().parse().unwrap_or(0);
         }
         if lower.starts_with("authorization: bearer ") {
-            authorized = true;
+            token = header["authorization: bearer ".len()..].trim().to_string();
         }
     }
     let mut body = vec![0; length];
@@ -397,10 +590,10 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
         return;
     }
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let (code, answer) = if authorized {
-        state.lock().unwrap().answer(&method, &path, &body)
-    } else {
+    let (code, answer) = if token.is_empty() {
         (401, json!({ "message": "Requires authentication" }))
+    } else {
+        state.lock().unwrap().answer(&token, &method, &path, &body)
     };
     let text = if answer.is_null() {
         String::new()

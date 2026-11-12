@@ -206,7 +206,7 @@ pub(crate) fn git_in(dir: &Path, args: &[&str]) -> String {
 }
 
 /// The variables GitHub Actions sets for every step, which tests set only on purpose.
-const ACTIONS_ENV: [&str; 14] = [
+const ACTIONS_ENV: [&str; 15] = [
     "GITHUB_ACTIONS",
     "GITHUB_EVENT_NAME",
     "GITHUB_EVENT_PATH",
@@ -215,6 +215,7 @@ const ACTIONS_ENV: [&str; 14] = [
     "GITHUB_TOKEN",
     "GH_TOKEN",
     "GITHUB_API_URL",
+    "GITHUB_GRAPHQL_URL",
     "GITHUB_REPOSITORY",
     "GITHUB_SERVER_URL",
     "GITHUB_RUN_ID",

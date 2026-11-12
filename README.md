@@ -68,6 +68,10 @@ permissions:
 jobs:
   proof:
     runs-on: ubuntu-latest
+    # A newer push cancels the run of the one before it.
+    concurrency:
+      group: proof-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v5
         with:
@@ -76,9 +80,13 @@ jobs:
       - uses: fearlezz-dev/fearlezz@v0
 ```
 
-The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. The action installs the release of its own tag (`version: v0.2.0` pins one), runs `fearlezz run --ci` and uploads the check logs. Set `devenv: true` when the checks run in a devenv shell. On GitHub Actions with a token (`GITHUB_TOKEN`), `fearlezz run --ci` does what the event asks through GitHub's API, so a workflow can also run it without the action: it keeps one status comment on the pull request, and when a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg into the runner's tool cache.
+The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. The action installs the release of its own tag (`version: v0.2.0` pins one), runs `fearlezz run --ci` and uploads the check logs. Set `devenv: true` when the checks run in a devenv shell. On GitHub Actions with a token (`GITHUB_TOKEN`), `fearlezz run --ci` does what the event asks through GitHub's API, so a workflow can also run it without the action: it keeps one status comment on the pull request, and when a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg into the runner's tool cache. The token is the workflow's or a GitHub App's; Fearlezz never takes a person's comment or status for its own. A run that finishes after a newer push leaves that push's comment and pictures alone.
 
-Changed pictures show on the pull request, before and after, from the `fearlezz-pictures` branch (one folder per pull request; in a private repository only people who can read it see them). A pull request from a fork cannot push there, so its pictures are in the run's `fearlezz-pictures` artifact. Changed pictures do not fail the proof: they set the `fearlezz/pictures` status to pending, and the comment says they wait. Require that status next to the proof check to make merging wait for a person.
+On another CI, `fearlezz run --ci --comment status.md` writes the same status comment to a file, for that CI to post on its merge request.
+
+Changed pictures show on the pull request, before and after, from the `fearlezz-pictures` branch (one folder per pull request; in a private repository only people who can read it see them). Changed pictures do not fail the proof: they set the `fearlezz/pictures` status to pending, and the comment says they wait.
+
+To make merging wait for a person, require the `fearlezz/pictures` status next to the proof check, with **GitHub Actions as its expected source** (a ruleset's required status checks can name one). Without that source, anyone who can write to the repository could set the status by hand.
 
 The second workflow answers approvals and keeps the pictures branch small:
 
@@ -87,7 +95,7 @@ The second workflow answers approvals and keeps the pictures branch small:
 name: pictures
 on:
   issue_comment:
-    types: [created]
+    types: [created, deleted]
   pull_request:
     types: [closed]
   schedule:
@@ -104,9 +112,17 @@ jobs:
       - uses: fearlezz-dev/fearlezz@v0
 ```
 
-A person with write access approves the pictures by commenting `/fearlezz approve <what they think of them>`. When the proof in the status comment is for the pull request's current head, CI sets `fearlezz/pictures` to green, linked to that comment, and replies quoting the words; a new push needs a new approval. Closing a pull request removes its pictures, and the schedule removes those of pull requests closed without it; both squash the branch into one commit. On the developer's machine, `fearlezz say approve <check> --github` records the approval in the journal.
+A person with write access approves the pictures by commenting `/fearlezz approve <what they think of them>`. When the proof in the status comment is for the pull request's current head, CI sets `fearlezz/pictures` to green, linked to that comment, and replies quoting the words; a new push needs a new approval. **Deleting the approval comment takes the approval back**: the status turns pending again. Closing a pull request removes its pictures, and the schedule removes those of pull requests closed without it; both squash the branch into one commit in a single atomic update, so a push in between is never lost.
 
-The approval is only as strong as the identities behind it. Give the agent its own GitHub account or app, so a `/fearlezz approve` from the developer's account is the developer's (the agent hooks refuse to post one), and review changes to `.github/workflows`, since a pull request runs its own version of them.
+On the developer's machine, `fearlezz say approve <check> --github` records the approval in the journal. It reads the pull request with the developer's token (`GITHUB_TOKEN`, or the GitHub CLI's `gh auth token`) and counts an approval by the same rule CI uses: the `fearlezz/pictures` status of the commit checked out is green, set by CI rather than a person's account, and links to a `/fearlezz approve` comment that still exists and was written by a person with write access.
+
+### Pull requests from forks
+
+A fork's run gets a read only token, so it writes nothing to the pull request: its status is on the check page and its changed pictures in the run's `fearlezz-pictures` artifact. A person with write access looks at them and comments `/fearlezz approve <words>`; the pictures workflow runs with the repository's own token and sets `fearlezz/pictures` green on the fork's current head. So a fork's pull request always needs that comment before it can merge, even without changed pictures.
+
+### What the approval guarantees
+
+Fearlezz cannot tell a person from an agent that uses the same GitHub account: an agent signed in as the developer could post `/fearlezz approve` itself. The agent hooks refuse the obvious ways (a `gh`, `curl` or similar command carrying it), but they are a speed bump, not the guarantee. An agent with its own account and no write access (it pushes to a fork) can never approve. Review changes to `.github/workflows` too, since a pull request runs its own version of them.
 
 ## License
 
