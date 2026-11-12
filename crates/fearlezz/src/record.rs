@@ -18,6 +18,18 @@ use serde::Deserialize;
 
 #[cfg(target_os = "macos")]
 pub(crate) mod display;
+/// No virtual display where there is no macOS: the type has no values, so nothing that takes one
+/// can run.
+#[cfg(not(target_os = "macos"))]
+mod display {
+    pub(crate) enum Virtual {}
+
+    impl Virtual {
+        pub(crate) fn close(self) {
+            match self {}
+        }
+    }
+}
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -447,7 +459,10 @@ pub(crate) fn during(
         stopped = child.try_wait()?.is_none();
     }
     append_proofs(out, &proofs)?;
-    drop(display);
+    // The display goes before the command stops, so its windows come back first.
+    if let Some(d) = display {
+        d.close();
+    }
     let status = if stopped && child.try_wait()?.is_none() {
         writeln!(
             log,
@@ -536,12 +551,9 @@ fn open_display(log: &mut impl Write) -> Result<Option<display::Virtual>> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn open_display(_log: &mut impl Write) -> Result<Option<NoDisplay>> {
-    Ok(None)
+fn open_display(_log: &mut impl Write) -> Result<Option<display::Virtual>> {
+    bail!("a virtual display needs macOS")
 }
-
-#[cfg(not(target_os = "macos"))]
-struct NoDisplay;
 
 /// Moves the window onto the virtual display and finds it again there.
 #[cfg(target_os = "macos")]
@@ -570,8 +582,8 @@ fn place(d: &display::Virtual, window: sys::Window, log: &mut impl Write) -> Res
 }
 
 #[cfg(not(target_os = "macos"))]
-fn place(_d: &NoDisplay, window: sys::Window, _log: &mut impl Write) -> Result<sys::Window> {
-    Ok(window)
+fn place(d: &display::Virtual, _window: sys::Window, _log: &mut impl Write) -> Result<sys::Window> {
+    match *d {}
 }
 
 #[cfg(test)]

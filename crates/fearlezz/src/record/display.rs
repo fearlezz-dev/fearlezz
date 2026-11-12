@@ -175,6 +175,11 @@ impl Virtual {
         }
     }
 
+    /// Removes the display: releasing the last reference to it takes it away.
+    pub(crate) fn close(self) {
+        drop(self._display);
+    }
+
     /// Where the display sits in global coordinates, in points.
     pub(crate) fn bounds(&self) -> CGRect {
         objc2_core_graphics::CGDisplayBounds(self.id)
