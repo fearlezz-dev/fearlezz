@@ -406,7 +406,7 @@ fn piece_names_its_test_files(piece: &str, check: &str, others: &[&str], test: &
          --exclude-dir=.git .; then exit 1; fi\n{count}\n'''\n{tests}"
     );
     for other in others {
-        config.push_str(&format!("\n[check.{other}]\noff = true\n"));
+        config = format!("{config}\n[check.{other}]\noff = true\n");
     }
     let repo = Repo::new(&config, &[]);
     repo.branch("change");

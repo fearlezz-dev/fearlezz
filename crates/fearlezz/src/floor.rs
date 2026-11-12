@@ -124,7 +124,8 @@ impl Floor {
 }
 
 /// How `head` proves less than `base`: a check gone, running another command, at a later
-/// stage, reading fewer of `files` or no longer reporting findings, and new `no_proof` globs.
+/// stage, reading fewer of `files`, reporting or reading findings otherwise, taking fewer pictures
+/// (see [`config::Pictures::weakenings`]), and new `no_proof` globs.
 fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, String)> {
     let mut found = Vec::new();
     for b in &base.checks {
