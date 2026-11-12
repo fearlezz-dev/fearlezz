@@ -47,6 +47,8 @@ h3 { margin: 0; font-size: 22px; }
 .checks li.link { padding: 0; background: none; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: currentColor; flex: none; }
 .ok .dot { color: var(--live); } .bad .dot { color: var(--bad); } .stale .dot { color: var(--stale); }
+.todo .dot { color: var(--quiet); }
+.checks .st { color: var(--quiet); }
 .look .dot { color: var(--changed); }
 .more { margin: 14px 0 0; font-size: 15px; }
 .more p, .more ul { margin: 8px 0 0; }
@@ -170,19 +172,18 @@ fn journal_card(
     if !v.checks.is_empty() {
         html.push_str("<ul class=\"checks\" aria-label=\"Checks\">");
         for c in &v.checks {
+            // The state in words as well as colour, so it reads without seeing colour.
             let (class, extra) = match &c.state {
                 CheckState::Ok => ("ok", String::new()),
                 CheckState::Failed | CheckState::Unstable => ("bad", String::new()),
                 CheckState::Stale(why) => ("stale", format!(": {} changed", why.join(", "))),
-                _ => ("stale", String::new()),
+                CheckState::NeedsFresh | CheckState::Never => ("todo", String::new()),
             };
-            let title = format!("{} {}{extra}", c.id, state_label(&c.state));
             write!(
                 html,
-                "<li class=\"{class}\" title=\"{}\"><span class=\"dot\" aria-hidden=\"true\"></span>{}<span hidden>{}</span></li>",
-                esc(&title),
+                "<li class=\"{class}\"><span class=\"dot\" aria-hidden=\"true\"></span>{}<span class=\"st\">{}</span></li>",
                 esc(&c.id),
-                esc(state_label(&c.state))
+                esc(&format!("{}{extra}", state_label(&c.state)))
             )?;
             if let Some(l) = &c.look {
                 write!(
