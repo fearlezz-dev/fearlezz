@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::github::{Comment, FakeGitHub, PERSON_TOKEN, Status};
+use common::github::{Comment, FakeGitHub, PERSON_TOKEN};
 use common::{Repo, runs};
 
 const RECORD: &str = r#"set -e
@@ -233,24 +233,26 @@ fn there_is_nothing_to_approve_without_changed_pictures() {
 
 // Approvals given on the pull request
 
-/// Pull request 7 on the fake GitHub at `head`, with a `/fearlezz approve ship it` comment by
-/// `lead`, who has write access, and the `fearlezz/pictures` status on `status_on` set by
-/// `creator` (login and type) to success, linked to that comment.
-fn approved(head: &str, status_on: &str, creator: (&str, &str)) -> (FakeGitHub, Comment) {
+/// Pull request 7 on the fake GitHub at `head`, whose status comment, written by `creator`
+/// (login and type), says the pictures of `screens` wait at `shown`, and a later `/fearlezz
+/// approve ship it` comment by `lead`, who has write access.
+fn approved(head: &str, shown: &str, creator: (&str, &str)) -> (FakeGitHub, Comment) {
+    approved_waiting(head, shown, creator, &["screens"])
+}
+
+/// `approved` with the pictures of `checks` waiting.
+fn approved_waiting(
+    head: &str,
+    shown: &str,
+    creator: (&str, &str),
+    checks: &[&str],
+) -> (FakeGitHub, Comment) {
     let gh = FakeGitHub::start();
     let mut state = gh.state();
     state.pulls.insert(7, (head.into(), "open".into()));
     state.permissions.insert("lead".into(), "write".into());
+    state.add_status_comment(7, creator, shown, checks);
     let comment = state.add_comment(7, "lead", "User", "/fearlezz approve ship it");
-    state.statuses.push(Status {
-        sha: status_on.into(),
-        state: "success".into(),
-        context: "fearlezz/pictures".into(),
-        description: "approved by lead".into(),
-        target: comment.url(),
-        creator: creator.0.into(),
-        creator_kind: creator.1.into(),
-    });
     drop(state);
     (gh, comment)
 }
@@ -363,7 +365,30 @@ fn an_approval_line_another_bot_wrote_does_not_count() {
 }
 
 #[test]
-fn a_status_a_persons_account_set_does_not_count() {
+fn approving_a_check_whose_pictures_did_not_wait_is_refused() {
+    let (repo, counter, head) = committed();
+    let (gh, _) = approved_waiting(&head, &head, ACTIONS, &["other"]);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("`other`"), "{}", out.stderr);
+}
+
+#[test]
+fn an_approval_written_before_the_pictures_were_shown_does_not_count() {
+    let (repo, counter, head) = committed();
+    let (gh, comment) = approved(&head, &head, ACTIONS);
+    let mine = gh.state().comments[0].clone();
+    // The proof writes its comment again after the approval, for other pictures.
+    gh.state()
+        .edit_comment(mine.id, &mine.body.replace("\"p\"", "\"q\""));
+    assert!(gh.state().comments[0].updated > comment.created);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("before"), "{}", out.stderr);
+}
+
+#[test]
+fn a_status_comment_a_persons_account_wrote_does_not_count() {
     let (repo, counter, head) = committed();
     let (gh, _) = approved(&head, &head, ("dev", "User"));
     let out = with_gh(&repo, &counter, &gh, &APPROVE);

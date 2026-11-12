@@ -196,7 +196,7 @@ impl Api {
     }
 
     /// Every comment on pull request `pr`, oldest first.
-    fn comments(&self, pr: u64) -> Result<Vec<Value>> {
+    pub(crate) fn comments(&self, pr: u64) -> Result<Vec<Value>> {
         let mut all = Vec::new();
         for page in 1.. {
             let got = self.get(&format!("issues/{pr}/comments?per_page=100&page={page}"))?;
@@ -269,16 +269,22 @@ impl Api {
             Some(Found {
                 id: c["id"].as_u64()?,
                 url: c["html_url"].as_str().unwrap_or_default().to_string(),
+                updated: c["updated_at"].as_str().unwrap_or_default().to_string(),
                 comment,
             })
         }))
     }
 
-    /// Writes the status comment of pull request `pr`, in place of the one there; returns its
-    /// URL.
-    pub(crate) fn write_status_comment(&self, pr: u64, comment: &StatusComment) -> Result<String> {
+    /// Writes the status comment of pull request `pr`, in place of `old`, the one there;
+    /// returns its URL.
+    pub(crate) fn write_status_comment(
+        &self,
+        pr: u64,
+        old: Option<&Found>,
+        comment: &StatusComment,
+    ) -> Result<String> {
         let body = comment.render();
-        let written = match self.status_comment(pr)? {
+        let written = match old {
             Some(found) => self.send(
                 "PATCH",
                 &format!("issues/comments/{}", found.id),
@@ -289,12 +295,12 @@ impl Api {
         Ok(written["html_url"].as_str().unwrap_or_default().to_string())
     }
 
-    /// Rewrites a found status comment.
-    pub(crate) fn rewrite(&self, found: &Found) -> Result<()> {
+    /// Rewrites the status comment `id`.
+    pub(crate) fn rewrite(&self, id: u64, comment: &StatusComment) -> Result<()> {
         self.send(
             "PATCH",
-            &format!("issues/comments/{}", found.id),
-            &json!({ "body": found.comment.render() }),
+            &format!("issues/comments/{id}"),
+            &json!({ "body": comment.render() }),
         )?;
         Ok(())
     }
@@ -371,50 +377,197 @@ pub(crate) fn judge(api: &Api, comment: &Value) -> Result<Result<Approval, Strin
     }))
 }
 
-/// The approval that counts for commit `head` of pull request `pr`, by the one rule CI and the
-/// developer's machine share: CI, as an app (the workflow's token or an app's, never a
-/// person's account, which an agent may share), set `fearlezz/pictures` on the head to success
-/// linked to a comment on this pull request, and that comment still exists and approves (see
-/// `judge`). Deleting the comment takes the approval back.
-pub(crate) fn approval(api: &Api, pr: u64, head: &str) -> Result<Approval> {
-    let short: String = head.chars().take(7).collect();
-    let nobody = || {
-        anyhow!(
-            "nobody approved the pictures of {short} on pull request {pr} yet: the developer \
-             comments `/fearlezz approve <their words>` there"
-        )
-    };
-    let status = api.latest_status(head)?.ok_or_else(nobody)?;
-    if status["state"] != "success" || status["creator"]["type"] != "Bot" {
-        return Err(nobody());
-    }
-    let target = status["target_url"].as_str().unwrap_or_default();
-    let Some((_, id)) = target.rsplit_once("#issuecomment-") else {
-        return Err(nobody());
-    };
-    let comment = match api.call("GET", &format!("issues/comments/{id}"), None)? {
-        (200, comment) => comment,
-        (404, _) => bail!(
-            "the approval of {short} on pull request {pr} was deleted: the developer approves \
-             again with `/fearlezz approve <their words>`"
-        ),
-        (code, _) => bail!("GitHub answered {code} to reading the approval comment {id}"),
-    };
-    let on_this = comment["issue_url"]
-        .as_str()
-        .is_some_and(|u| u.ends_with(&format!("/issues/{pr}")));
-    if !on_this {
-        return Err(nobody());
-    }
-    judge(api, &comment)?.map_err(|why| {
-        anyhow!("the approval of {short} on pull request {pr} does not count: {why}")
-    })
+/// What waits for a person on a pull request: the pictures the status comment shows for its
+/// current head, or, for a fork, whose run writes nothing, the head itself.
+pub(crate) struct Pending {
+    pub pr: u64,
+    pub head: String,
+    /// The checks whose changed pictures wait; a fork's approval covers its whole head.
+    pub checks: Vec<String>,
+    pub fork: bool,
+    /// The status comment that shows them; None for a fork.
+    pub shown: Option<Found>,
 }
 
-/// The approval that counts for commit `head`, checked out in `root`, on its open pull request.
-pub(crate) fn approval_of_commit(root: &Path, head: &str) -> Result<Approval> {
+impl Pending {
+    /// What waits on pull request `pr` now, or why nothing does.
+    pub(crate) fn read(api: &Api, pr: u64) -> Result<Result<Pending, String>> {
+        let (head, from) = api.head(pr)?;
+        if from != api.repo {
+            return Ok(Ok(Pending {
+                pr,
+                head,
+                checks: Vec::new(),
+                fork: true,
+                shown: None,
+            }));
+        }
+        let found = api.status_comment(pr)?;
+        let Some(waits) = found.as_ref().and_then(|f| f.comment.waiting.clone()) else {
+            return Ok(Err(format!(
+                "no changed pictures wait for approval on pull request {pr}"
+            )));
+        };
+        if waits.head != head {
+            return Ok(Err(format!(
+                "nothing to approve for {} yet: wait for its proof, then approve again",
+                short(&head)
+            )));
+        }
+        Ok(Ok(Pending {
+            pr,
+            head,
+            checks: waits.checks,
+            fork: false,
+            shown: found,
+        }))
+    }
+
+    /// What an approval covers, as a reply names it.
+    pub(crate) fn what(&self) -> String {
+        if self.fork {
+            return "this fork's head".into();
+        }
+        let checks: Vec<String> = self.checks.iter().map(|c| format!("`{c}`")).collect();
+        format!("the changed pictures of {}", checks.join(", "))
+    }
+
+    /// The `fearlezz/pictures` description while nobody approved.
+    fn waits(&self) -> String {
+        if self.fork {
+            format!(
+                "this fork's head waits for /fearlezz approve {} <words>",
+                short(&self.head)
+            )
+        } else {
+            format!(
+                "changed pictures of {} wait for /fearlezz approve",
+                self.checks.join(", ")
+            )
+        }
+    }
+
+    /// Whether `comment`, as GitHub's API describes it, approves what waits: a `/fearlezz
+    /// approve <words>` by a person with write access (see `judge`), written after the status
+    /// comment showed these pictures of this head, or for a fork naming its head, so a push in
+    /// between never gets the approval of what the person looked at before.
+    pub(crate) fn judge(&self, api: &Api, comment: &Value) -> Result<Result<Approval, String>> {
+        let who = comment["user"]["login"].as_str().unwrap_or_default();
+        let short = short(&self.head);
+        if let Some(said) = command(comment["body"].as_str().unwrap_or_default()) {
+            if let Some(found) = &self.shown {
+                let written = comment["created_at"].as_str().unwrap_or_default();
+                if written <= found.since() {
+                    return Ok(Err(format!(
+                        "@{who}, that approval was written before the proof of {short} showed its \
+                         pictures: look at them, then approve again."
+                    )));
+                }
+            }
+            let named = said.split_whitespace().any(|w| {
+                w.len() >= 7
+                    && w.chars().all(|c| c.is_ascii_hexdigit())
+                    && self.head.starts_with(&w.to_ascii_lowercase())
+            });
+            if self.fork && !named {
+                return Ok(Err(format!(
+                    "@{who}, a fork's pull request is approved by naming the head you looked at: \
+                     `/fearlezz approve {short} <words>`, after looking at the pictures in the \
+                     `fearlezz-pictures` artifact of its run for {short}."
+                )));
+            }
+        }
+        judge(api, comment)
+    }
+
+    /// The newest comment on the pull request that approves what waits, or why the newest
+    /// `/fearlezz approve` does not.
+    pub(crate) fn approval(&self, api: &Api) -> Result<Result<Approval, String>> {
+        let mut why = None;
+        for comment in api.comments(self.pr)?.iter().rev() {
+            if command(comment["body"].as_str().unwrap_or_default()).is_none() {
+                continue;
+            }
+            match self.judge(api, comment)? {
+                Ok(approval) => return Ok(Ok(approval)),
+                Err(e) => {
+                    why.get_or_insert(e);
+                }
+            }
+        }
+        Ok(Err(why.unwrap_or_else(|| {
+            format!(
+                "nobody approved the pictures of {} on pull request {}, or the approval was \
+                 deleted",
+                short(&self.head),
+                self.pr
+            )
+        })))
+    }
+}
+
+/// Sets `fearlezz/pictures` on the head of pull request `pr`, and the status comment's
+/// headline, to what the approval rule says now: green linked to the approval, or pending. It
+/// reads everything again after each write, so a comment deleted or edited while it ran never
+/// leaves the status green, in whatever order GitHub runs the events. Returns what waits and
+/// the approval, or why nothing waits.
+pub(crate) fn settle(
+    api: &Api,
+    pr: u64,
+) -> Result<Result<(Pending, Result<Approval, String>), String>> {
+    const ATTEMPTS: usize = 4;
+    let mut set: Option<(String, String, String)> = None;
+    for attempt in 1..=ATTEMPTS {
+        let pending = match Pending::read(api, pr)? {
+            Ok(pending) => pending,
+            Err(why) => return Ok(Err(why)),
+        };
+        let verdict = pending.approval(api)?;
+        let (state, description, target) = match &verdict {
+            Ok(a) => ("success", format!("approved by {}", a.by), a.url.clone()),
+            Err(_) => (
+                "pending",
+                pending.waits(),
+                pending
+                    .shown
+                    .as_ref()
+                    .map(|f| f.url.clone())
+                    .unwrap_or_default(),
+            ),
+        };
+        if set.is_none() {
+            set = api.latest_status(&pending.head)?.and_then(|s| {
+                (s["creator"]["type"] == "Bot").then(|| {
+                    let text = |k: &str| s[k].as_str().unwrap_or_default().to_string();
+                    (pending.head.clone(), text("state"), text("target_url"))
+                })
+            });
+        }
+        if let Some(found) = &pending.shown {
+            let mut shown = found.comment.clone();
+            shown.settle(verdict.as_ref().ok().map(|a| a.by.as_str()), found.since());
+            if shown.render() != found.comment.render() {
+                api.rewrite(found.id, &shown)?;
+            }
+        }
+        let now = (pending.head.clone(), state.to_string(), target.clone());
+        if set.as_ref() == Some(&now) || attempt == ATTEMPTS {
+            return Ok(Ok((pending, verdict)));
+        }
+        let target = (!target.is_empty()).then_some(target.as_str());
+        api.status(&pending.head, state, &description, target)?;
+        set = Some(now);
+    }
+    unreachable!("the last attempt returns")
+}
+
+/// The approval that counts for check `check` at commit `head`, checked out in `root`, on its
+/// open pull request, by the rule CI settles the status with.
+pub(crate) fn approval_of_commit(root: &Path, head: &str, check: &str) -> Result<Approval> {
     let api = Api::local(root)?;
-    let short: String = head.chars().take(7).collect();
+    let short = short(head);
+    let ask = "ask the developer to approve its pictures there with `/fearlezz approve <their \
+               words>`";
     let pulls = api.get(&format!("commits/{head}/pulls"))?;
     let pr = pulls
         .as_array()
@@ -425,22 +578,49 @@ pub(crate) fn approval_of_commit(root: &Path, head: &str) -> Result<Approval> {
     let Some(pr) = pr else {
         bail!(
             "commit {short} is not the head of an open pull request on {}: push it, wait for its \
-             proof, and ask the developer to approve its pictures there with `/fearlezz approve \
-             <their words>`",
+             proof, and {ask}",
             api.repo
         );
     };
-    approval(&api, pr, head)
+    let pending = Pending::read(&api, pr)?.map_err(|why| anyhow!("{why}; {ask}"))?;
+    if pending.head != head {
+        bail!("pull request {pr} moved on from {short}: pull its head, then run this again");
+    }
+    if !pending.fork && !pending.checks.iter().any(|c| c == check) {
+        let checks: Vec<String> = pending.checks.iter().map(|c| format!("`{c}`")).collect();
+        bail!(
+            "the pictures waiting on pull request {pr} are those of {}, not of `{check}`: an \
+             approval there covers only what the developer looked at",
+            checks.join(", ")
+        );
+    }
+    pending.approval(&api)?.map_err(|why| {
+        anyhow!("the pictures of {short} on pull request {pr} are not approved: {why}; {ask}")
+    })
+}
+
+/// The first seven characters of a commit, as people read it.
+pub(crate) fn short(sha: &str) -> String {
+    sha.chars().take(7).collect()
 }
 
 // The status comment
 
 /// What waits for a person on the pull request, as the status comment's hidden line holds it.
+/// The commit status cannot hold it: its description is short, and an approval replaces it.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Waiting {
     /// The pull request's head commit the proof is for; an approval binds to it.
     pub head: String,
     pub checks: Vec<String>,
+    /// What the waiting pictures are, so a run of the same head that shows the same pictures
+    /// keeps an approval and one that shows others does not.
+    #[serde(default)]
+    pub pictures: String,
+    /// When GitHub first showed these pictures of this head; an approval written before then
+    /// does not count. None: when the comment was last written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
     /// The headline while the pictures wait.
     pub waits: String,
     /// The headline once a person approves, before who did.
@@ -457,10 +637,24 @@ pub(crate) struct StatusComment {
 }
 
 /// A status comment found on a pull request.
+#[derive(Clone)]
 pub(crate) struct Found {
     pub id: u64,
     pub url: String,
+    /// When it was last written, by GitHub's clock.
+    pub updated: String,
     pub comment: StatusComment,
+}
+
+impl Found {
+    /// When GitHub first showed the waiting pictures.
+    pub(crate) fn since(&self) -> &str {
+        self.comment
+            .waiting
+            .as_ref()
+            .and_then(|w| w.since.as_deref())
+            .unwrap_or(&self.updated)
+    }
 }
 
 impl StatusComment {
@@ -510,17 +704,15 @@ impl StatusComment {
         self.body.extend(["\n", text, "\n"]);
     }
 
-    /// Says who approved the waiting pictures.
-    pub(crate) fn approve(&mut self, by: &str) {
-        if let Some(w) = &self.waiting {
-            self.headline = format!("{}; @{by} approved the changed pictures", w.approved);
-        }
-    }
-
-    /// Says the pictures wait again.
-    pub(crate) fn withdraw(&mut self) {
-        if let Some(w) = &self.waiting {
-            self.headline.clone_from(&w.waits);
+    /// Says who approved the waiting pictures, or that they wait, keeping when they were
+    /// first shown, since rewriting the comment moves its time.
+    pub(crate) fn settle(&mut self, by: Option<&str>, since: &str) {
+        if let Some(w) = &mut self.waiting {
+            self.headline = match by {
+                Some(by) => format!("{}; @{by} approved the changed pictures", w.approved),
+                None => w.waits.clone(),
+            };
+            w.since.get_or_insert_with(|| since.to_string());
         }
     }
 }
@@ -619,6 +811,8 @@ impl Proof<'_> {
         let waiting = (!self.waits.is_empty()).then(|| Waiting {
             head: self.head.to_string(),
             checks: self.waiting_checks(),
+            pictures: pictures_id(self.waits),
+            since: None,
             waits: self.headline(),
             approved: self.counted(word),
         });
@@ -846,6 +1040,32 @@ pub(crate) fn copy_pictures(waits: &[Look], dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// What the pictures that wait are: each check, and the name, change and bytes of each
+/// picture that blocks.
+fn pictures_id(waits: &[Look]) -> String {
+    use sha2::{Digest as _, Sha256};
+    let mut hash = Sha256::new();
+    for look in waits {
+        hash.update(format!("{}\0", look.check));
+        let dir = look.report.parent().unwrap_or(Path::new(""));
+        for item in look
+            .items
+            .iter()
+            .filter(|i| i.change != Change::Same && !i.flaky)
+        {
+            hash.update(format!("{}\0{}\0", item.name, item.change.label()));
+            for rel in [&item.before, &item.after] {
+                let bytes = rel
+                    .as_ref()
+                    .and_then(|r| fs::read(dir.join(r)).ok())
+                    .unwrap_or_default();
+                hash.update(Sha256::digest(&bytes));
+            }
+        }
+    }
+    hex::encode(hash.finalize())
+}
+
 /// A path segment as a URL holds it.
 fn encode(path: &str) -> String {
     let mut out = String::new();
@@ -900,18 +1120,21 @@ mod tests {
             waiting: Some(Waiting {
                 head: "abc".into(),
                 checks: vec!["ui".into()],
+                pictures: "p".into(),
+                since: None,
                 waits: "**Pictures wait**: x".into(),
                 approved: "**Proven**: <x>".into(),
             }),
         };
         let mut back = StatusComment::parse(&comment.render()).unwrap();
         assert_eq!(back.render(), comment.render());
-        back.approve("lead");
+        back.settle(Some("lead"), "t1");
         assert_eq!(
             back.headline,
             "**Proven**: <x>; @lead approved the changed pictures"
         );
-        back.withdraw();
+        back.settle(None, "t2");
         assert_eq!(back.headline, "**Pictures wait**: x");
+        assert_eq!(back.waiting.unwrap().since.as_deref(), Some("t1"));
     }
 }

@@ -95,7 +95,7 @@ The second workflow answers approvals and keeps the pictures branch small:
 name: pictures
 on:
   issue_comment:
-    types: [created, deleted]
+    types: [created, edited, deleted]
   pull_request:
     types: [closed]
   schedule:
@@ -106,19 +106,22 @@ permissions:
   statuses: write
 jobs:
   pictures:
-    if: github.event_name != 'issue_comment' || startsWith(github.event.comment.body, '/fearlezz approve')
+    if: >-
+      github.event_name != 'issue_comment'
+      || startsWith(github.event.comment.body, '/fearlezz approve')
+      || startsWith(github.event.changes.body.from, '/fearlezz approve')
     runs-on: ubuntu-latest
     steps:
       - uses: fearlezz-dev/fearlezz@v0
 ```
 
-A person with write access approves the pictures by commenting `/fearlezz approve <what they think of them>`. When the proof in the status comment is for the pull request's current head, CI sets `fearlezz/pictures` to green, linked to that comment, and replies quoting the words; a new push needs a new approval. **Deleting the approval comment takes the approval back**: the status turns pending again. Closing a pull request removes its pictures, and the schedule removes those of pull requests closed without it; both squash the branch into one commit in a single atomic update, so a push in between is never lost.
+A person with write access approves the pictures by commenting `/fearlezz approve <what they think of them>`. The approval covers what the status comment showed when it was written: the checks it names, at the pull request's current head. A comment written before the proof of the current head showed its pictures does not count, so a push between looking and approving needs a new approval. Whenever such a comment is written, edited or deleted, CI reads the pull request again and applies one rule: `fearlezz/pictures` is green, linked to the newest comment that approves, or pending when none does; it reads everything again after setting the status, so events that arrive late or out of order settle the same way. It replies quoting the words. **Deleting the approval comment, or editing it so it no longer approves, takes the approval back.** A new run of the same head keeps the approval when it shows the same pictures, and waits again when they came out different. Closing a pull request removes its pictures, and the schedule removes those of pull requests closed without it; both squash the branch into one commit in a single atomic update, so a push in between is never lost.
 
-On the developer's machine, `fearlezz say approve <check> --github` records the approval in the journal. It reads the pull request with the developer's token (`GITHUB_TOKEN`, or the GitHub CLI's `gh auth token`) and counts an approval by the same rule CI uses: the `fearlezz/pictures` status of the commit checked out is green, set by CI rather than a person's account, and links to a `/fearlezz approve` comment that still exists and was written by a person with write access.
+On the developer's machine, `fearlezz say approve <check> --github` records the approval in the journal. It reads the pull request with the developer's token (`GITHUB_TOKEN`, or the GitHub CLI's `gh auth token`) and counts an approval by the same rule CI uses: the status comment, written by CI rather than a person's account, shows the pictures of `<check>` waiting at the commit checked out, and a `/fearlezz approve` comment written after it showed them still exists and was written by a person with write access. A check whose pictures did not wait is refused, since nobody looked at them.
 
 ### Pull requests from forks
 
-A fork's run gets a read only token, so it writes nothing to the pull request: its status is on the check page and its changed pictures in the run's `fearlezz-pictures` artifact. A person with write access looks at them and comments `/fearlezz approve <words>`; the pictures workflow runs with the repository's own token and sets `fearlezz/pictures` green on the fork's current head. So a fork's pull request always needs that comment before it can merge, even without changed pictures.
+A fork's run gets a read only token, so it writes nothing to the pull request: its status is on the check page and its changed pictures in the run's `fearlezz-pictures` artifact. A person with write access looks at them and comments `/fearlezz approve <head> <words>`, naming the head commit of the run they looked at (its first seven characters are enough); the pictures workflow runs with the repository's own token and sets `fearlezz/pictures` green on that head only while it is the fork's current head, so a push after looking needs a new approval. A fork's approval covers every check of that head. So a fork's pull request always needs that comment before it can merge, even without changed pictures.
 
 ### What the approval guarantees
 

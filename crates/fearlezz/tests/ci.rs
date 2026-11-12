@@ -887,8 +887,8 @@ fn changed_pictures_wait_for_a_person_without_failing_the_proof() {
     assert_eq!(w["head"], head.trim(), "{text}");
     assert_eq!(w["checks"], serde_json::json!(["screens"]), "{text}");
     assert!(
-        w.get("fingerprint").is_none(),
-        "approvals bind to the head: {text}"
+        w["pictures"].as_str().is_some_and(|p| !p.is_empty()),
+        "a run of the same head knows whether its pictures changed: {text}"
     );
 }
 
@@ -1249,9 +1249,13 @@ fn a_maintainer_approves_a_forks_head_by_comment() {
     gh.state().pulls.insert(7, (head.clone(), "open".into()));
     gh.state().forks.insert(7);
     gh.state().permissions.insert("lead".into(), "write".into());
-    let event = comment_event(&gh, "lead", "/fearlezz approve checked the artifact");
+    let event = comment_event(
+        &gh,
+        "lead",
+        "/fearlezz approve ccccccc checked the artifact",
+    );
     let reply = answer(&gh, &event);
-    assert!(reply.contains("> checked the artifact"), "{reply}");
+    assert!(reply.contains("> ccccccc checked the artifact"), "{reply}");
     assert!(reply.contains("ccccccc"), "{reply}");
     let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
     assert_eq!(status.state, "success");
@@ -1274,6 +1278,151 @@ fn closing_a_forks_pull_request_with_a_read_only_token_succeeds() {
     assert_eq!(gh.state().refs, before);
 }
 
+#[test]
+fn a_forks_approval_names_the_head_the_person_looked_at() {
+    let gh = FakeGitHub::start();
+    let head = "c".repeat(40);
+    gh.state().pulls.insert(7, (head.clone(), "open".into()));
+    gh.state().forks.insert(7);
+    gh.state().permissions.insert("lead".into(), "write".into());
+    let reply = answer(
+        &gh,
+        &comment_event(&gh, "lead", "/fearlezz approve looks right"),
+    );
+    assert!(reply.contains("/fearlezz approve ccccccc"), "{reply}");
+    assert_eq!(
+        gh.state().status(&head, "fearlezz/pictures").unwrap().state,
+        "pending"
+    );
+    // The fork pushes a new head before the run answers an approval of the old one.
+    let event = comment_event(&gh, "lead", "/fearlezz approve ccccccc looks right");
+    let newer = "d".repeat(40);
+    gh.state().pulls.insert(7, (newer.clone(), "open".into()));
+    let reply = answer(&gh, &event);
+    assert!(reply.contains("/fearlezz approve ddddddd"), "{reply}");
+    assert_eq!(
+        gh.state()
+            .status(&newer, "fearlezz/pictures")
+            .unwrap()
+            .state,
+        "pending"
+    );
+}
+
+#[test]
+fn an_approval_written_before_a_newer_proof_does_not_count() {
+    let (gh, repo, _) = proven_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    // The person looks at the pictures of the first head and approves; before the run answers,
+    // a push and its proof show other pictures.
+    let event = comment_event(&gh, "lead", "/fearlezz approve the blue home is right");
+    repo.write("src/color.txt", "green");
+    repo.commit("green");
+    let newer = head_of(&repo);
+    gh.state().pulls.insert(7, (newer.clone(), "open".into()));
+    let out = on_actions(
+        &gh,
+        &repo.root,
+        "pull_request",
+        &pull_request(&newer, "owner/repo"),
+        "43",
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let reply = answer(&gh, &event);
+    assert!(reply.contains("before"), "{reply}");
+    let status = gh.state().status(&newer, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
+#[test]
+fn editing_the_approval_so_it_no_longer_approves_takes_it_back() {
+    let (gh, _repo, head) = proven_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    let event = comment_event(&gh, "lead", "/fearlezz approve fine");
+    answer(&gh, &event);
+    let id = event["comment"]["id"].as_u64().unwrap();
+    gh.state().edit_comment(id, "wait, not yet");
+    let reply = answer(&gh, &edited(&event, "wait, not yet"));
+    assert!(reply.contains("taken back"), "{reply}");
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
+    assert!(
+        status_comment(&gh).body.contains("**Pictures wait**"),
+        "{}",
+        status_comment(&gh).body
+    );
+}
+
+#[test]
+fn a_delete_answered_before_its_approval_leaves_the_pictures_waiting() {
+    let (gh, _repo, head) = proven_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    let created = comment_event(&gh, "lead", "/fearlezz approve fine");
+    let id = created["comment"]["id"].as_u64().unwrap();
+    gh.state().comments.retain(|c| c.id != id);
+    let mut deleted = created.clone();
+    deleted["action"] = "deleted".into();
+    answer(&gh, &deleted);
+    answer(&gh, &created);
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
+    assert!(
+        !gh.state()
+            .comments
+            .iter()
+            .any(|c| c.body.starts_with("@lead approved")),
+        "{:?}",
+        gh.state().comments
+    );
+}
+
+#[test]
+fn an_approval_deleted_while_its_run_sets_the_status_leaves_the_pictures_waiting() {
+    let (gh, _repo, head) = proven_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    let created = comment_event(&gh, "lead", "/fearlezz approve fine");
+    gh.state().delete_on_status = created["comment"]["id"].as_u64();
+    let empty = tempfile::tempdir().unwrap();
+    let out = on_actions(&gh, empty.path(), "issue_comment", &created, "50");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
+#[test]
+fn a_rerun_with_the_same_pictures_keeps_the_approval() {
+    let (gh, repo, head) = proven_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    let event = comment_event(&gh, "lead", "/fearlezz approve fine");
+    answer(&gh, &event);
+    let again = pull_request(&head, "owner/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &again, "43");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "success");
+    assert_eq!(
+        status.target,
+        event["comment"]["html_url"].as_str().unwrap()
+    );
+    assert!(status_comment(&gh).body.contains("@lead approved"));
+}
+
+#[test]
+fn a_rerun_with_changed_pictures_needs_a_new_approval() {
+    let (gh, repo, head) = proven_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    answer(&gh, &comment_event(&gh, "lead", "/fearlezz approve fine"));
+    // Pictures that came out different on the same head, as a recording that is not stable.
+    let mine = status_comment(&gh);
+    let body = mine.body.replace("\"pictures\":\"", "\"pictures\":\"other");
+    gh.state().edit_comment(mine.id, &body);
+    let again = pull_request(&head, "owner/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &again, "43");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
 // Approvals by comment
 
 /// The event of a comment on pull request 7 by `login`.
@@ -1286,6 +1435,15 @@ fn comment_event(gh: &FakeGitHub, login: &str, body: &str) -> serde_json::Value 
                      "user": { "login": login, "type": "User" } },
         "repository": { "full_name": "owner/repo" },
     })
+}
+
+/// The event of the comment of `event` edited to `body`.
+fn edited(event: &serde_json::Value, body: &str) -> serde_json::Value {
+    let mut event = event.clone();
+    event["action"] = "edited".into();
+    event["changes"] = serde_json::json!({ "body": { "from": event["comment"]["body"] } });
+    event["comment"]["body"] = body.into();
+    event
 }
 
 /// Answers a comment in a folder with no checkout, as the pictures workflow runs, and returns

@@ -29,6 +29,9 @@ pub(crate) struct Comment {
     pub login: String,
     pub kind: String,
     pub body: String,
+    /// When it was written and last edited, by the fake's clock.
+    pub created: String,
+    pub updated: String,
 }
 
 impl Comment {
@@ -79,6 +82,9 @@ pub(crate) struct State {
     /// Files another run pushes onto the pictures branch just before the next atomic ref
     /// update, so that update finds the branch moved.
     pub race: Option<Vec<(String, String)>>,
+    /// A comment deleted just after the next status is set, as a person deleting an approval
+    /// while its run is still going.
+    pub delete_on_status: Option<u64>,
     pub refs: BTreeMap<String, String>,
     blobs: BTreeMap<String, Vec<u8>>,
     trees: BTreeMap<String, BTreeMap<String, Entry>>,
@@ -114,6 +120,7 @@ impl Default for State {
             ]),
             broken: BTreeSet::new(),
             race: None,
+            delete_on_status: None,
             refs: BTreeMap::new(),
             blobs: BTreeMap::new(),
             trees: BTreeMap::new(),
@@ -208,18 +215,57 @@ impl State {
         self.refs.insert(format!("heads/{branch}"), commit);
     }
 
+    /// The time now, one second later than the last time asked.
+    pub(crate) fn tick(&mut self) -> String {
+        self.next += 1;
+        let s = self.next;
+        format!(
+            "2026-01-01T{:02}:{:02}:{:02}Z",
+            s / 3600,
+            s / 60 % 60,
+            s % 60
+        )
+    }
+
     pub(crate) fn add_comment(&mut self, pr: u64, login: &str, kind: &str, body: &str) -> Comment {
         let id = 1000 + self.next;
-        self.next += 1;
+        let now = self.tick();
         let comment = Comment {
             id,
             pr,
             login: login.into(),
             kind: kind.into(),
             body: body.into(),
+            created: now.clone(),
+            updated: now,
         };
         self.comments.push(comment.clone());
         comment
+    }
+
+    /// Edits a comment's body, as its author does.
+    pub(crate) fn edit_comment(&mut self, id: u64, body: &str) {
+        let now = self.tick();
+        let c = self.comments.iter_mut().find(|c| c.id == id).unwrap();
+        c.body = body.into();
+        c.updated = now;
+    }
+
+    /// The status comment CI writes, by `login` of `kind`, saying the pictures of `checks` wait
+    /// at `head`.
+    pub(crate) fn add_status_comment(
+        &mut self,
+        pr: u64,
+        (login, kind): (&str, &str),
+        head: &str,
+        checks: &[&str],
+    ) -> Comment {
+        let waiting = json!({ "head": head, "checks": checks, "pictures": "p",
+                              "waits": "**Pictures wait**", "approved": "**Proven**" });
+        let body = format!(
+            "<!-- fearlezz -->\n### Fearlezz\n\n**Pictures wait**\n\n<!-- fearlezz-pictures {waiting} -->\n"
+        );
+        self.add_comment(pr, login, kind, &body)
     }
 
     /// The latest status of a commit for a context.
@@ -233,6 +279,7 @@ impl State {
 
     fn comment_json(c: &Comment) -> Value {
         json!({ "id": c.id, "body": c.body, "html_url": c.url(),
+                "created_at": c.created, "updated_at": c.updated,
                 "issue_url": format!("https://api.github.com/repos/owner/repo/issues/{}", c.pr),
                 "user": { "login": c.login, "type": c.kind } })
     }
@@ -309,11 +356,11 @@ impl State {
             }
             ("PATCH", ["issues", "comments", id]) => {
                 let id: u64 = id.parse().unwrap();
-                let Some(c) = self.comments.iter_mut().find(|c| c.id == id) else {
+                if !self.comments.iter().any(|c| c.id == id) {
                     return (404, json!({}));
-                };
-                c.body = body["body"].as_str().unwrap().to_string();
-                let c = c.clone();
+                }
+                self.edit_comment(id, body["body"].as_str().unwrap());
+                let c = self.comments.iter().find(|c| c.id == id).unwrap().clone();
                 (200, Self::comment_json(&c))
             }
             ("POST", ["statuses", sha]) => {
@@ -331,6 +378,9 @@ impl State {
                     creator: who.login.clone(),
                     creator_kind: who.kind.clone(),
                 });
+                if let Some(id) = self.delete_on_status.take() {
+                    self.comments.retain(|c| c.id != id);
+                }
                 (201, json!({}))
             }
             ("GET", ["commits", sha, "statuses"]) => {
