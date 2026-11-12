@@ -120,7 +120,7 @@ impl Floor {
 
 /// How `head` proves less than `base`: a check gone, running another command, at a later
 /// stage, reading fewer of `files`, reporting or reading findings otherwise, taking fewer pictures
-/// (see [`config::Pictures::weakenings`]), and new `no_proof` globs.
+/// (see [`config::Pictures::weakenings`]), and new `no_proof` globs or dropped negations.
 fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, String)> {
     let mut found = Vec::new();
     for b in &base.checks {
@@ -209,10 +209,20 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
     found.extend(base.settings.weakenings(&head.settings));
     found.extend(env_weakenings(&base.env, &head.env));
     for glob in head.no_proof.iter().filter(|g| !base.no_proof.contains(g)) {
-        found.push((
-            "no_proof".into(),
-            format!("it newly says {glob} needs no proof"),
-        ));
+        if !glob.starts_with('!') {
+            found.push((
+                "no_proof".into(),
+                format!("it newly says {glob} needs no proof"),
+            ));
+        }
+    }
+    for glob in base.no_proof.iter().filter(|g| !head.no_proof.contains(g)) {
+        if let Some(taken) = glob.strip_prefix('!') {
+            found.push((
+                "no_proof".into(),
+                format!("it no longer takes {taken} back from needing no proof"),
+            ));
+        }
     }
     found
 }

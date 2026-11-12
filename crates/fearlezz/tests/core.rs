@@ -229,6 +229,46 @@ fn unchanged_inputs_reuse_the_earlier_result() {
 }
 
 #[test]
+fn a_negated_input_leaves_what_it_matches_out_until_a_later_input_takes_it_back() {
+    let config = r#"
+[check.tests]
+run = "echo run >> .runs/tests"
+stage = "working"
+inputs = ["src/**", "!src/gen/**", "src/gen/keep.rs"]
+"#;
+    let repo = Repo::new(
+        config,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("src/lib.rs", "fn a() {}\n"),
+            ("src/gen/out.rs", "fn g() {}\n"),
+            ("src/gen/keep.rs", "fn k() {}\n"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/x");
+    repo.write("src/lib.rs", "fn b() {}\n");
+    repo.fz(&["run", "tests"]);
+    assert_eq!(runs(&repo.path(".runs/tests")), 1);
+
+    repo.write("src/gen/out.rs", "fn h() {}\n");
+    repo.fz(&["run", "tests"]);
+    assert_eq!(
+        runs(&repo.path(".runs/tests")),
+        1,
+        "src/gen/out.rs is negated, so not an input"
+    );
+
+    repo.write("src/gen/keep.rs", "fn l() {}\n");
+    repo.fz(&["run", "tests"]);
+    assert_eq!(
+        runs(&repo.path(".runs/tests")),
+        2,
+        "the later src/gen/keep.rs takes it back"
+    );
+}
+
+#[test]
 fn reuse_survives_a_commit() {
     let repo = repo();
     repo.fz(&["run", "--stage", "working", "--no-run"]);

@@ -712,6 +712,57 @@ fn a_file_the_base_declares_as_needing_no_proof_is_fine() {
 }
 
 #[test]
+fn a_file_a_negated_input_leaves_out_is_unproven() {
+    let checks = CHECKS.replace(
+        r#"inputs = ["src/**"]"#,
+        r#"inputs = ["src/**", "!src/gen/**"]"#,
+    );
+    let repo = Repo::new(
+        &format!("{NO_PROOF}{checks}"),
+        &[
+            (".gitignore", ".runs/\n"),
+            ("src/lib.rs", "fn a() {}\n"),
+            ("src/gen/out.rs", "fn g() {}\n"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/x");
+    repo.write("src/gen/out.rs", "fn h() {}\n");
+    repo.commit("generated");
+    let out = ci(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("unproven src/gen/out.rs"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn dropping_a_negation_from_no_proof_weakens_it_and_adding_one_does_not() {
+    let narrowed = "no_proof = [\"docs/**\", \"!docs/api/**\"]\n";
+    let repo = repo_with(&format!("{narrowed}{CHECKS}"));
+    repo.branch("feat/x");
+    repo.write("fearlezz.toml", &full(&format!("{NO_PROOF}{CHECKS}")));
+    repo.commit("drop the negation");
+    let out = ci(&repo);
+    assert!(
+        out.stdout.contains(
+            "weakens no_proof: it no longer takes docs/api/** back from needing no proof"
+        ),
+        "{}",
+        out.stdout
+    );
+
+    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
+    repo.branch("feat/x");
+    repo.write("fearlezz.toml", &full(&format!("{narrowed}{CHECKS}")));
+    repo.commit("add a negation");
+    let out = ci(&repo);
+    assert!(!out.stdout.contains("weakens no_proof"), "{}", out.stdout);
+}
+
+#[test]
 fn the_change_cannot_declare_its_own_files_as_needing_no_proof() {
     let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
     repo.branch("feat/x");

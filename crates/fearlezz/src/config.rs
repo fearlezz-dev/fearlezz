@@ -30,7 +30,7 @@ pub(crate) struct Config {
     /// Globs of files that need no proof, such as prose. A change cannot add to them for
     /// itself: CI reads them from the base branch.
     pub no_proof: Vec<String>,
-    no_proof_globs: GlobSet,
+    no_proof_globs: Globs,
 }
 
 /// What makes a checkout usable and runs its services. Every part is optional; a project
@@ -95,7 +95,7 @@ pub(crate) struct Check {
     pub id: String,
     pub run: String,
     pub stage: Stage,
-    inputs: GlobSet,
+    inputs: Globs,
     /// Environment variables the check may see. Their values are part of its inputs.
     pub env: Vec<String>,
     pub needs: Vec<Need>,
@@ -108,7 +108,7 @@ pub(crate) struct Check {
     /// Which of its inputs are tests, as written: CI runs the change's test files on the base
     /// commit to show they fail there (red before green).
     pub test_files: Vec<String>,
-    test_globs: GlobSet,
+    test_globs: Globs,
     /// The stills and films it takes, and which of them are flaky.
     pub pictures: Pictures,
     /// The environment's shell it runs inside, part of its inputs.
@@ -130,7 +130,7 @@ pub(crate) struct Pictures {
     /// Pictures (ids or globs, as written) that are compared and shown but never block or
     /// wait for approval.
     pub flaky: Vec<String>,
-    flaky_globs: GlobSet,
+    flaky_globs: Globs,
 }
 
 impl Pictures {
@@ -638,7 +638,7 @@ impl Config {
 }
 
 /// A check Fearlezz runs itself at the working stage, its findings judged in `on`.
-fn builtin_check(id: &str, stages: &Stages, inputs: GlobSet, on: Scope, builtin: Builtin) -> Check {
+fn builtin_check(id: &str, stages: &Stages, inputs: Globs, on: Scope, builtin: Builtin) -> Check {
     Check {
         id: id.into(),
         run: format!("(fearlezz {id})"),
@@ -659,18 +659,46 @@ fn builtin_check(id: &str, stages: &Stages, inputs: GlobSet, on: Scope, builtin:
         builtin: Some(builtin),
         tests: None,
         test_files: Vec::new(),
-        test_globs: GlobSet::empty(),
+        test_globs: Globs::default(),
         pictures: Pictures::default(),
     }
 }
 
-/// `*` stays inside one path segment; `**` crosses segments.
-fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<GlobSet> {
-    let mut set = GlobSetBuilder::new();
-    for p in patterns {
-        set.add(GlobBuilder::new(p).literal_separator(true).build()?);
+/// Paths by a list of globs. `*` stays inside one path segment; `**` crosses segments. A
+/// glob with a leading `!` takes back what earlier globs matched, and a later glob can match
+/// it again: the last glob that matches a path decides, as in `.gitignore`.
+#[derive(Debug, Default)]
+pub(crate) struct Globs {
+    set: GlobSet,
+    /// Per glob, in order: whether it starts with `!`.
+    negated: Vec<bool>,
+}
+
+impl Globs {
+    pub(crate) fn is_match(&self, path: &str) -> bool {
+        self.set
+            .matches(path)
+            .into_iter()
+            .max()
+            .and_then(|last| self.negated.get(last))
+            .is_some_and(|negated| !negated)
     }
-    Ok(set.build()?)
+}
+
+fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<Globs> {
+    let mut set = GlobSetBuilder::new();
+    let mut negated = Vec::new();
+    for p in patterns {
+        let (glob, not) = p
+            .strip_prefix('!')
+            .map_or((p.as_str(), false), |g| (g, true));
+        set.add(GlobBuilder::new(glob).literal_separator(true).build()?);
+        negated.push(not);
+    }
+    Ok(Globs {
+        set: set.build()?,
+        negated,
+    })
 }
 
 impl Check {
