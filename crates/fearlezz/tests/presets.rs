@@ -27,6 +27,22 @@ fn a_built_in_piece_brings_its_checks() {
 }
 
 #[test]
+fn the_flutter_piece_never_asks_for_the_types_it_forbids() {
+    // omit_local_variable_types forbids the local types these two would ask for.
+    let repo = Repo::new("use = [\"flutter\"]\n", &[]);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    let options = std::fs::read_to_string(repo.path("analysis_options.yaml")).unwrap();
+    for rule in [
+        "specify_nonobvious_local_variable_types: false",
+        "specify_nonobvious_property_types: false",
+        "omit_local_variable_types: true",
+    ] {
+        assert!(options.contains(rule), "{rule}: {options}");
+    }
+}
+
+#[test]
 fn the_project_tunes_a_field_and_turns_a_check_off() {
     let config = r#"
 use = ["rust"]
@@ -368,7 +384,7 @@ fn update_stays_in_the_major_and_says_when_a_bigger_one_is_out() {
 
 /// The documented fake GitHub token from secret scanners' own test data. The AWS example key
 /// is allowlisted by the scanner, so it cannot stand in here.
-const FAKE_TOKEN: &str = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+const FAKE_TOKEN: &str = "ghp_16C7e42F292c6912E7710c838347Ae178B4a"; // gitleaks:allow
 
 /// A repository with a leak already committed, so a scanner has something old to ignore and
 /// the test can add a new leak next to it.
@@ -454,6 +470,35 @@ fn trufflehog_is_a_scanner_to_pick_instead() {
 fn scanners_combine_because_checks_are_named_for_their_tools() {
     let repo = Repo::new("use = [\"safety\", \"trufflehog\", \"osv-scanner\"]\n", &[]);
     assert_eq!(checks(&repo), "gitleaks, osv-scanner, trufflehog");
+}
+
+/// What osv-scanner 2.7.0 wrote for a Cargo.lock holding the vulnerable `time` 0.1.43, with
+/// the scanned folder written as ROOT. It names the lockfile by an absolute file URI and no
+/// line.
+const OSV_SARIF: &str = include_str!("fixtures/osv-scanner.sarif");
+
+#[test]
+fn the_osv_scanner_piece_reads_what_osv_scanner_writes() {
+    // The real scanner needs osv.dev; its report, from this checkout, stands in for it.
+    let config = "use = [\"osv-scanner\"]\n\n[check.osv-scanner]\nrun = 'sed \"s|ROOT|$(pwd \
+                  -P)|g\" osv.sarif > \"$FEARLEZZ_OUT/findings.sarif\"'\n";
+    let repo = Repo::new(
+        config,
+        &[("osv.sarif", OSV_SARIF), ("Cargo.lock", "version = 3\n")],
+    );
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo.write("Cargo.lock", "version = 3\n\n# time 0.1.43\n");
+    let out = repo.fz(&["run", "osv-scanner"]);
+    // A vulnerable dependency is a flag: it may have no fix yet.
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.lines()
+            .iter()
+            .any(|l| l.contains("flag Cargo.lock") && l.contains("CVE-2020-26235")),
+        "{}",
+        out.stdout
+    );
 }
 
 #[test]
