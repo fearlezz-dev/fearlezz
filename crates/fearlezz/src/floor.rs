@@ -52,7 +52,7 @@ impl Floor {
             .changed
             .iter()
             .filter(|p| !config_files.contains(p))
-            .filter(|p| !head.checks.iter().any(|c| c.reads(p)))
+            .filter(|p| !head.checks.iter().any(|c| c.proves(p)))
             .filter(|p| !floor.needs_no_proof(p))
             .cloned()
             .collect();
@@ -79,7 +79,7 @@ impl Floor {
         });
         let unproven = self.unproven.iter().map(|path| Item {
             what: format!("`{path}` has no proof"),
-            why: format!("no check reads it and {base} does not declare it in no_proof"),
+            why: format!("no check proves it and {base} does not declare it in no_proof"),
             fix: format!(
                 "add it to a check's inputs, or declare it in no_proof in {} on {base} first",
                 config::FILE
@@ -103,7 +103,7 @@ impl Floor {
         }
         for path in &self.unproven {
             lines.push(format!(
-                "unproven {path}: no check reads it and the base branch does not declare it in \
+                "unproven {path}: no check proves it and the base branch does not declare it in \
                  no_proof"
             ));
         }
@@ -141,6 +141,17 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
             say(match lost.len() {
                 1 => format!("it no longer reads {first}"),
                 n => format!("it no longer reads {first} and {} more files", n - 1),
+            });
+        }
+        // Reading a file it no longer proves is named once, as reading.
+        let unproven: Vec<&String> = files
+            .iter()
+            .filter(|f| b.proves(f) && h.reads(f) && !h.proves(f))
+            .collect();
+        if let Some(first) = unproven.first() {
+            say(match unproven.len() {
+                1 => format!("it no longer proves {first}"),
+                n => format!("it no longer proves {first} and {} more files", n - 1),
             });
         }
         match (&b.findings, &h.findings) {

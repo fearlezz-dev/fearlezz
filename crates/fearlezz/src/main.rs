@@ -246,7 +246,9 @@ impl Ctx {
     }
 
     fn worktree(&self) -> Result<Worktree> {
-        Worktree::read(self.git.clone(), &self.config)
+        let wt = Worktree::read(self.git.clone(), &self.config)?;
+        self.config.check_proves(&wt.files)?;
+        Ok(wt)
     }
 
     fn view(&self, journal: &Journal) -> Result<View> {

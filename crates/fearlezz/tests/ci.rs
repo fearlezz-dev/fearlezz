@@ -291,6 +291,77 @@ fn narrowing_the_inputs_is_red_and_named() {
 }
 
 #[test]
+fn a_file_a_check_reads_but_does_not_prove_is_unproven() {
+    let checks = CHECKS
+        .replace(
+            "inputs = [\"src/**\"]\n\n[check.e2e]",
+            "inputs = [\"src/**\"]\nproves = [\"src/**\", \"!src/gen/**\"]\n\n[check.e2e]",
+        )
+        .replace(
+            "stage = \"merge\"\ninputs = [\"src/**\"]",
+            "stage = \"merge\"\ninputs = [\"src/**\"]\nproves = [\"src/lib.rs\"]",
+        );
+    let repo = repo_with(&format!("{NO_PROOF}{checks}"));
+    repo.branch("feat/x");
+    repo.write("src/gen/out.rs", "fn g() {}\n");
+    repo.commit("generated");
+    let out = ci(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("unproven src/gen/out.rs"),
+        "{}",
+        out.stdout
+    );
+    // It still reads the file, so the file still reruns it.
+    assert!(out.stdout.contains("passed tests"), "{}", out.stdout);
+}
+
+#[test]
+fn a_check_cannot_prove_what_it_does_not_read() {
+    let checks = CHECKS.replace(
+        "inputs = [\"src/**\"]\n\n[check.e2e]",
+        "inputs = [\"src/**\", \"!src/gen/**\"]\nproves = [\"src/**\"]\n\n[check.e2e]",
+    );
+    let repo = repo_with(&format!("{NO_PROOF}{checks}"));
+    repo.write("src/gen/out.rs", "fn g() {}\n");
+    let out = repo.fz(&[]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stderr.contains(
+            "check tests: proves covers files its inputs do not read, such as src/gen/out.rs"
+        ),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn narrowing_what_a_check_proves_is_red_and_widening_is_fine() {
+    let narrowed = CHECKS.replace(
+        "inputs = [\"src/**\"]\n\n[check.e2e]",
+        "inputs = [\"src/**\"]\nproves = [\"src/other/**\"]\n\n[check.e2e]",
+    );
+    let repo = branch_with_change();
+    with_checks(&repo, &narrowed);
+    let out = ci(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("weakens tests: it no longer proves src/lib.rs"),
+        "{}",
+        out.stdout
+    );
+
+    let repo = repo_with(&format!("{NO_PROOF}{narrowed}"));
+    repo.branch("feat/x");
+    repo.write("src/lib.rs", "fn b() {}\n");
+    repo.write("fearlezz.toml", &full(&format!("{NO_PROOF}{CHECKS}")));
+    repo.commit("widen");
+    let out = ci(&repo);
+    assert!(!out.stdout.contains("weakens"), "{}", out.stdout);
+}
+
+#[test]
 fn changing_the_command_is_red_and_named() {
     let repo = branch_with_change();
     with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));

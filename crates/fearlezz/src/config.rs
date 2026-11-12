@@ -94,7 +94,11 @@ pub(crate) struct Check {
     pub id: String,
     pub run: String,
     pub stage: Stage,
+    /// What it reads: a change to any of them runs it again.
     inputs: Globs,
+    /// What of its inputs a pass proves, for the floor; None: all of them. A formatter reads
+    /// test files, yet proves none that nothing runs.
+    proves: Option<Globs>,
     /// Environment variables the check may see. Their values are part of its inputs.
     pub env: Vec<String>,
     pub needs: Vec<Need>,
@@ -371,6 +375,7 @@ struct RawCheck {
     stage: String,
     #[serde(default)]
     inputs: Vec<String>,
+    proves: Option<Vec<String>>,
     #[serde(default)]
     env: Vec<String>,
     #[serde(default)]
@@ -489,14 +494,19 @@ impl Config {
             if needs_services && services.is_none() {
                 bail!("check {id} needs services, but [env] has no up command to start them");
             }
+            // Inside a shell, the environment's own files shape every result.
+            let shell_inputs = || env.shell.iter().flat_map(|_| &env.inputs);
+            let inputs = globs(c.inputs.iter().chain(shell_inputs()))
+                .with_context(|| format!("check {id}: inputs"))?;
+            let proves = c
+                .proves
+                .as_ref()
+                .map(|p| globs(p.iter().chain(shell_inputs())))
+                .transpose()
+                .with_context(|| format!("check {id}: proves"))?;
             checks.push(Check {
-                // Inside a shell, the environment's own files shape every result.
-                inputs: globs(
-                    c.inputs
-                        .iter()
-                        .chain(env.shell.iter().flat_map(|_| &env.inputs)),
-                )
-                .with_context(|| format!("check {id}: inputs"))?,
+                inputs,
+                proves,
                 shell: env.shell.clone(),
                 builtin: None,
                 tests: c
@@ -612,6 +622,23 @@ impl Config {
         })
     }
 
+    /// Refuses a check whose `proves` covers one of `files` (the worktree's) that its inputs do
+    /// not: a check proves only what it reads. A file added later is never proven by it either.
+    pub(crate) fn check_proves(&self, files: &[String]) -> Result<()> {
+        for c in &self.checks {
+            let Some(proves) = &c.proves else { continue };
+            if let Some(f) = files.iter().find(|f| proves.is_match(f) && !c.reads(f)) {
+                bail!(
+                    "check {}: proves covers files its inputs do not read, such as {f}: a check \
+                     proves only what it reads, so narrow proves (a ! glob takes files back out) \
+                     or add the file to its inputs",
+                    c.id
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn needs_no_proof(&self, path: &str) -> bool {
         self.no_proof.is_match(path)
     }
@@ -644,6 +671,7 @@ fn builtin_check(id: &str, stages: &Stages, inputs: Globs, on: Scope, builtin: B
         run: format!("(fearlezz {id})"),
         stage: stages.find("working").unwrap_or(stages.first()),
         inputs,
+        proves: None,
         env: Vec::new(),
         needs: Vec::new(),
         services: None,
@@ -801,6 +829,11 @@ fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<Globs> {
 impl Check {
     pub(crate) fn reads(&self, path: &str) -> bool {
         self.inputs.is_match(path)
+    }
+
+    /// Whether a pass proves `path` for the floor: it reads it, and `proves` covers it.
+    pub(crate) fn proves(&self, path: &str) -> bool {
+        self.reads(path) && self.proves.as_ref().is_none_or(|p| p.is_match(path))
     }
 
     /// Whether `path` is one of its tests, by `test_files`.
