@@ -177,7 +177,9 @@ fn journal_card(
                 CheckState::Ok => ("ok", String::new()),
                 CheckState::Failed | CheckState::Unstable => ("bad", String::new()),
                 CheckState::Stale(why) => ("stale", format!(": {} changed", why.join(", "))),
-                CheckState::NeedsFresh | CheckState::Never => ("todo", String::new()),
+                CheckState::NeedsFresh | CheckState::Uncompared | CheckState::Never => {
+                    ("todo", String::new())
+                }
             };
             write!(
                 html,

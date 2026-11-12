@@ -154,18 +154,14 @@ impl Pictures {
         self.flaky_globs.is_match(name)
     }
 
-    /// A stable text of which pictures a run takes, part of the check's inputs. `flaky` is
-    /// not: it decides how pictures are judged, never what a run records.
-    pub(crate) fn fingerprint(&self) -> Option<String> {
+    /// Which pictures a run takes, part of the check's inputs. `flaky` is not: it decides how
+    /// pictures are judged, never what a run records.
+    pub(crate) fn taken(&self) -> Option<impl fmt::Debug + '_> {
         self.named().then(|| {
-            format!(
-                "{:?}\0{:?}\0{}",
+            (
                 self.stills.as_ref().map(MediaGlob::glob),
                 self.films.as_ref().map(MediaGlob::glob),
-                self.record
-                    .as_ref()
-                    .map(crate::record::Spec::fingerprint)
-                    .unwrap_or_default()
+                self.record.as_ref().map(crate::record::Spec::fingerprint),
             )
         })
     }
@@ -322,11 +318,8 @@ impl FindingsSpec {
 
     /// Part of the inputs of the check: another reader, scope or default is another proof.
     /// The lint tables are a part of their own.
-    pub(crate) fn fingerprint(&self) -> String {
-        format!(
-            "{:?}\0{:?}\0{:?}\0{:?}",
-            self.read, self.on, self.level, self.fix
-        )
+    pub(crate) fn judged(&self) -> impl fmt::Debug + '_ {
+        (&self.read, self.on, self.level, &self.fix)
     }
 }
 

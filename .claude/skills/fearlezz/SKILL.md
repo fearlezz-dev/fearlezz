@@ -212,7 +212,7 @@ Only reports written by the run count, so an old report never passes for a new r
 - `not red before green <check>`: it passes there too, naming the change's tests that passed on both.
 - `the base already fails`: it fails there without the change's test files too, so failing there shows nothing.
 
-The change is a fix when the pull request title (in CI) or any of its commits since the base starts with `fix:`; uncommitted work with no commits of its own is not one yet. Then tests that pass on the base commit do not show the fix, and a check that cannot run there decides nothing: the final stage's run fails, `fearlezz` does not say ready, and the commit is not proven. Change a test so it fails without the fix.
+The change is a fix when its pull request title starts with `fix:`; in CI the title decides, so a `feat:` title with an interim `fix:` commit is no fix. Locally, where no title is known, any of its commits since the base starting with `fix:` makes it one; uncommitted work with no commits of its own is not one yet. Then tests that pass on the base commit do not show the fix, and a check that cannot run there decides nothing: the final stage's run fails, `fearlezz` does not say ready, and the commit is not proven. Change a test so it fails without the fix. The verdict holds for one base commit: after a rebase, `fearlezz` asks for a run before it says ready again, and the same goes for the look.
 
 ```toml
 [check.tests]

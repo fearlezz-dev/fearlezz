@@ -590,7 +590,8 @@ set -e
 echo "$*" >> "$FEARLEZZ_OUT/args"
 mkdir -p "$FEARLEZZ_OUT/stills/desktop"
 ffmpeg -v error -nostdin -f lavfi -i "color=c=$(cat src/color.css):s=64x48" -frames:v 1 "$FEARLEZZ_OUT/stills/desktop/home.png"
-echo '<testsuites><testsuite tests="1"><testcase name="home"/></testsuite></testsuites>' > "$PLAYWRIGHT_JUNIT_OUTPUT_FILE"
+# The junit reporter's outputFile, as the piece's playwright.config lines set it.
+echo '<testsuites><testsuite tests="1"><testcase name="home"/></testsuite></testsuites>' > "$FEARLEZZ_OUT/junit.xml"
 "#;
 
 #[test]
@@ -623,6 +624,17 @@ fn the_playwright_piece_compares_the_stills_playwright_writes() {
     );
     let status = repo.fz(&["--check", "playwright"]);
     assert!(status.stdout.contains("\"tests\": 1"), "{}", status.stdout);
+    // A plain tool command: the reporters live in playwright.config, not in shell syntax.
+    let result: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+    let args = result["dir"]
+        .as_str()
+        .map(|dir| std::fs::read_to_string(std::path::Path::new(dir).join("args")).unwrap());
+    assert_eq!(
+        args.as_deref(),
+        Some("test --update-snapshots=all\n"),
+        "{}",
+        status.stdout
+    );
     assert!(
         status.stdout.contains("\"id\": \"desktop/home\""),
         "{}",
@@ -742,6 +754,70 @@ fn a_change_that_removes_every_picture_shows_them_gone() {
         status.last_line().starts_with("next: look at screens"),
         "{}",
         status.stdout
+    );
+}
+
+#[test]
+fn a_check_without_pictures_whose_base_cannot_run_says_nothing_of_a_look() {
+    let repo = Repo::new(
+        &format!(
+            "{}\n[env]\nprepare = \"test ! -e src/broken\"\n",
+            stills_config("stills = \"stills/**/*.png\"")
+        ),
+        &[
+            ("record.sh", "true\n"),
+            ("src/color.txt", "red"),
+            ("src/broken", "\n"),
+        ],
+    );
+    repo.branch("feat/change");
+    repo.remove("src/broken");
+    repo.write("src/color.txt", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("look screens"), "{}", out.stdout);
+}
+
+#[test]
+fn a_check_without_pictures_on_the_same_inputs_as_the_base_says_nothing_of_a_look() {
+    let repo = Repo::new(
+        &stills_config("stills = \"stills/**/*.png\""),
+        &[("record.sh", "true\n"), ("src/color.txt", "red")],
+    );
+    repo.branch("feat/change");
+    repo.write("notes.txt", "\n");
+    let out = repo.fz(&["run", "screens"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("look screens"), "{}", out.stdout);
+}
+
+#[test]
+fn a_rebase_onto_a_new_base_compares_the_pictures_again() {
+    let repo = stills_repo();
+    repo.write("src/color.txt", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let first = repo.fz(&["run"]);
+    assert!(first.ok, "{}\n{}", first.stdout, first.stderr);
+    repo.commit("feat: blue");
+    // The base branch moves on without touching what the check reads.
+    repo.git(&["switch", "-q", "main"]);
+    repo.write("README", "\n");
+    repo.commit("Add a readme");
+    repo.git(&["switch", "-q", "feat/change"]);
+    repo.git(&["rebase", "-q", "main"]);
+    let status = repo.fz(&[]);
+    assert!(
+        status.last_line().starts_with("next: fearlezz run"),
+        "{}",
+        status.stdout
+    );
+    let again = repo.fz(&["run"]);
+    assert!(again.ok, "{}\n{}", again.stdout, again.stderr);
+    assert!(
+        again.stdout.contains("look screens: 1 changed"),
+        "{}",
+        again.stdout
     );
 }
 

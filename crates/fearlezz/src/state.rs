@@ -14,6 +14,9 @@ use crate::store::{Hasher, Inputs, Outcome, Store};
 /// The worktree a journal's branch is checked out in, as it is right now.
 pub(crate) struct Worktree {
     pub git: Git,
+    /// The base commit: where the branch left the base branch. Everything compared with the
+    /// base (changed files, the floor, the look, red before green) is compared with this one.
+    pub base: String,
     pub changed: BTreeSet<String>,
     /// The changed lines, for checks that report findings.
     pub lines: crate::findings::Changed,
@@ -25,9 +28,11 @@ pub(crate) struct Worktree {
 
 impl Worktree {
     pub(crate) fn read(git: Git, config: &Config) -> Result<Worktree> {
+        let base = git.base_commit(&config.base)?;
         Ok(Worktree {
-            changed: git.changed(&config.base)?,
-            lines: git.changed_lines(&config.base)?,
+            changed: git.changed(&base)?,
+            lines: git.changed_lines(&base)?,
+            base,
             files: git.files()?,
             tree: git.tree()?,
             committed: git.committed()?,
@@ -58,6 +63,9 @@ pub enum CheckState {
     Stale(Vec<String>),
     /// Passed, but the final stage wants a fresh run of its own.
     NeedsFresh,
+    /// Passed, but not yet compared with the base commit the work stands on now (its
+    /// pictures, or red before green for a fix at the final stage).
+    Uncompared,
     Never,
 }
 
@@ -73,7 +81,7 @@ pub(crate) struct CheckView {
     pub approved: Option<Approved>,
     /// The findings in scope of its latest run on these inputs.
     pub findings: Vec<crate::findings::Finding>,
-    /// What red before green found for its passing run on these inputs.
+    /// What red before green found for its passing run on these inputs, against this base.
     pub red: Option<crate::red::Mark>,
 }
 
@@ -218,8 +226,10 @@ pub(crate) fn view(
         committed = wt.committed;
         // Only the final stage answers for what the base branch requires.
         if stage == final_stage && !wt.changed.is_empty() {
-            floor_fails = !crate::floor::Floor::read(&wt.git, config, wt)?.holds();
+            floor_fails = !crate::floor::Floor::read(config, wt)?.holds();
         }
+        // Asked once, and only when a check's red before green is in question.
+        let mut fix: Option<bool> = None;
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
         // The config shapes every check, though none reads it, so changing it needs them all.
         let config_files = crate::presets::config_files(&wt.git.root)?;
@@ -235,8 +245,10 @@ pub(crate) fn view(
                 .as_ref()
                 .filter(|ran| ran.key == inputs.key && ran.outcome == Outcome::Passed)
                 .and_then(|ran| store.get(ran.key, ran.result));
-            let look = passed.as_ref().and_then(crate::look::Look::of);
-            let red = passed.as_ref().and_then(crate::red::Mark::of);
+            let compared = match &passed {
+                Some(run) => compared(config, wt, check, run, stage == final_stage, &mut fix)?,
+                None => Compared::default(),
+            };
             let findings = latest
                 .as_ref()
                 .filter(|ran| ran.key == inputs.key)
@@ -256,6 +268,8 @@ pub(crate) fn view(
                         .is_some_and(|r| r.made_at_final(&journal.name, stages.name(final_stage)));
                     if stage == final_stage && !fresh {
                         CheckState::NeedsFresh
+                    } else if needed && compared.missing {
+                        CheckState::Uncompared
                     } else {
                         CheckState::Ok
                     }
@@ -270,14 +284,14 @@ pub(crate) fn view(
                 stage: check.stage,
                 needed,
                 state,
-                look,
+                look: compared.look,
                 approved,
                 findings,
-                red,
+                red: compared.red,
             });
         }
         if stage == final_stage {
-            red_next = red_hold(config, wt, &checks)?;
+            red_next = red_hold(wt, &checks)?;
         }
     } else {
         for check in &config.checks {
@@ -384,23 +398,60 @@ fn changed_parts(store: &Store, ran: Ran<'_>, now: &Inputs) -> Vec<String> {
     changed
 }
 
+/// How a passing run compares with the base commit the work stands on now.
+#[derive(Default)]
+struct Compared {
+    look: Option<crate::look::Look>,
+    red: Option<crate::red::Mark>,
+    /// A comparison it needs is missing: its pictures, or red before green for a fix at the
+    /// final stage.
+    missing: bool,
+}
+
+/// How `run`, a passing run of `check`, compares with the base commit of `wt`. `fix` caches
+/// whether the change is a fix, asked only when red before green is in question.
+fn compared(
+    config: &Config,
+    wt: &Worktree,
+    check: &crate::config::Check,
+    run: &crate::store::RunResult,
+    at_final: bool,
+    fix: &mut Option<bool>,
+) -> Result<Compared> {
+    let against = crate::store::AgainstBase::of(run, &wt.base).unwrap_or_default();
+    let look = match &against.look {
+        Some(crate::store::Looked::At(dir)) => crate::look::Look::at(dir),
+        _ => None,
+    };
+    let wants_look = crate::look::has_media(run) || config.takes_pictures(check);
+    let wants_red = at_final
+        && against.red.is_none()
+        && !crate::red::test_files(check, wt).is_empty()
+        && match *fix {
+            Some(fix) => fix,
+            None => *fix.insert(crate::red::is_fix_change(&wt.git, &wt.base)?),
+        };
+    Ok(Compared {
+        look,
+        missing: (wants_look && against.look.is_none()) || wants_red,
+        red: against.red,
+    })
+}
+
 /// What holds a fix at the final stage: a check whose run on these inputs red before green
-/// marked, for this base commit, as not showing the fix. None when the change is no fix.
-fn red_hold(config: &Config, wt: &Worktree, checks: &[CheckView]) -> Result<Option<String>> {
+/// marked, against this base commit, as not showing the fix. None when the change is no fix.
+/// A check not yet compared with this base is [`CheckState::Uncompared`], so it needs a run.
+fn red_hold(wt: &Worktree, checks: &[CheckView]) -> Result<Option<String>> {
     let held: Vec<(&str, &crate::red::Mark)> = checks
         .iter()
         .filter(|c| c.state == CheckState::Ok)
         .filter_map(|c| Some((c.id.as_str(), c.red.as_ref()?)))
         .filter(|(_, mark)| mark.unshown.is_some())
         .collect();
-    if held.is_empty() || !crate::red::is_fix_change(&wt.git, config, None)? {
+    if held.is_empty() || !crate::red::is_fix_change(&wt.git, &wt.base)? {
         return Ok(None);
     }
-    let base = wt.git.merge_base(&config.base).unwrap_or_default();
-    Ok(held
-        .into_iter()
-        .filter(|(_, mark)| mark.base == base)
-        .find_map(|(id, mark)| mark.next(id)))
+    Ok(held.into_iter().find_map(|(id, mark)| mark.next(id)))
 }
 
 /// What the agent should do next, as one line. Order: the developer, the agent skill, failures,

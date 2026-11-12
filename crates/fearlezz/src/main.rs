@@ -852,7 +852,7 @@ struct CiOut {
 }
 
 /// A field of the pull request GitHub Actions runs for, from its event file.
-fn pull_request(pointer: &str) -> Option<String> {
+pub(crate) fn pull_request(pointer: &str) -> Option<String> {
     let path = std::env::var_os("GITHUB_EVENT_PATH")?;
     let event: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
     event
@@ -1057,7 +1057,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
     // A full run at the final stage answers for the whole work, and for what the base
     // branch requires, not only for its checks.
     let floor = if ids.is_empty() && stage == final_stage {
-        floor::Floor::read(&ctx.git, &ctx.config, &wt)?
+        floor::Floor::read(&ctx.config, &wt)?
     } else {
         floor::Floor::default()
     };
@@ -1236,7 +1236,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
     for (_, r) in &green {
         print_findings(r);
     }
-    let waits = look_at_media(ctx, &green, &stage);
+    let waits = look_at_media(ctx, &wt, &green, &stage)?;
     if let Some(r) = report.as_mut() {
         r.waits = waits;
     }
@@ -1304,7 +1304,7 @@ fn red_before_green(
     stage: &str,
     mut report: Option<&mut CommitReport>,
 ) -> Result<bool> {
-    let fix = red::is_fix_change(&ctx.git, &ctx.config, pull_request("title").as_deref())?;
+    let fix = red::is_fix_change(&wt.git, &wt.base)?;
     let mut blocks = false;
     for (check, head) in green {
         let ran = red::run(
@@ -1317,21 +1317,16 @@ fn red_before_green(
             &ctx.env(),
         );
         let id = &check.id;
+        let mark = |unshown: Option<red::Unshown>| {
+            store::AgainstBase::update(head, &wt.base, |a| a.red = Some(red::Mark { unshown }))
+        };
         let red = match ran {
             Ok(Some(red)) => red,
-            Ok(None) => {
-                red::Mark::clear(head)?;
-                continue;
-            }
+            Ok(None) => continue,
             Err(e) => {
                 let why = format!("{e:#}");
                 println!("red before green {id} did not run: {why}");
-                let base = ctx.git.merge_base(&ctx.config.base).unwrap_or_default();
-                red::Mark {
-                    base,
-                    unshown: Some(red::Unshown::DidNotRun(why.clone())),
-                }
-                .save(head)?;
+                mark(Some(red::Unshown::DidNotRun(why.clone())))?;
                 let fix_line = "make the check run on the base commit";
                 if let Some(r) = report.as_mut() {
                     r.notes.push(format!(
@@ -1355,11 +1350,7 @@ fn red_before_green(
                 continue;
             }
         };
-        red::Mark {
-            base: red.commit.clone(),
-            unshown: red.verdict.unshown(),
-        }
-        .save(head)?;
+        mark(red.verdict.unshown())?;
         let (what, fails, passes) = red.subject();
         let one = red.files.len() == 1;
         let mut note = |text: String| {
@@ -1449,39 +1440,48 @@ fn red_before_green(
     Ok(blocks)
 }
 
-/// Compares the stills and films of green checks with the base commit, one line per check.
-/// Returns each look with pictures to look at.
+/// Compares the stills and films of green checks with the base commit, one line per check,
+/// and records each comparison against it. Returns each look with pictures to look at.
 fn look_at_media(
     ctx: &Ctx,
+    wt: &Worktree,
     green: &[(&config::Check, store::RunResult)],
     stage: &str,
-) -> Vec<look::Look> {
+) -> Result<Vec<look::Look>> {
     let mut waits = Vec::new();
     // Opened once, on the first check with pictures.
-    let mut base: Option<Result<Option<look::Base>>> = None;
+    let mut base: Option<Result<look::Base>> = None;
     for (check, result) in green {
         // A check that takes pictures is compared even without any, so all gone shows.
         let has_media = look::has_media(result);
         if !has_media && !ctx.config.takes_pictures(check) {
             continue;
         }
-        let base = base.get_or_insert_with(|| look::Base::open(&ctx.git, &ctx.config));
+        let base =
+            base.get_or_insert_with(|| look::Base::at(&ctx.git, &ctx.config, wt.base.clone(), ""));
         let outcome = match base {
-            Ok(Some(base)) => look::look(&ctx.store, check, result, base, stage, &ctx.env()),
-            Ok(None) => Err(anyhow::anyhow!(
-                "there is no base branch \"{}\" to compare with",
-                ctx.config.base
-            )),
+            Ok(base) => look::look(&ctx.store, check, result, base, stage, &ctx.env()),
             Err(e) => Err(anyhow::anyhow!("the base checkout failed: {e:#}")),
         };
-        // Without a before every picture is new; a failed look never ends the run.
+        // Without a before every picture is new; a failed look never ends the run. A run
+        // without pictures whose base cannot be compared has nothing to show.
         let outcome = outcome.or_else(|e| {
             if !has_media {
-                return Err(e);
+                return Ok(look::LookOutcome::NoMedia);
             }
             look::without_before(check, result, &ctx.git.common, &format!("{e:#}"))
                 .map(look::LookOutcome::Done)
         });
+        let looked = match &outcome {
+            Ok(look::LookOutcome::NoMedia | look::LookOutcome::SameInputs) => {
+                Some(store::Looked::Nothing)
+            }
+            Ok(look::LookOutcome::Done(l)) => Some(store::Looked::At(l.dir().to_path_buf())),
+            Err(_) => None,
+        };
+        if let Some(looked) = looked {
+            store::AgainstBase::update(result, &wt.base, |a| a.look = Some(looked))?;
+        }
         match outcome {
             Ok(look::LookOutcome::NoMedia) => {}
             Ok(look::LookOutcome::SameInputs) => println!(
@@ -1504,7 +1504,7 @@ fn look_at_media(
             Err(e) => println!("look {} failed: {e:#}", check.id),
         }
     }
-    waits
+    Ok(waits)
 }
 
 fn print_status(ctx: &Ctx, v: &View) {
@@ -1698,6 +1698,7 @@ pub fn state_label(state: &CheckState) -> &'static str {
         CheckState::Unstable => "unstable",
         CheckState::Stale(_) => "stale",
         CheckState::NeedsFresh => "needs a fresh run",
+        CheckState::Uncompared => "not compared with this base commit yet",
         CheckState::Never => "never run",
     }
 }

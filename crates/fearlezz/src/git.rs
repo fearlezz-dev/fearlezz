@@ -63,12 +63,11 @@ impl Git {
         Ok(files)
     }
 
-    /// Paths that differ from where this branch left `base`, including uncommitted, new and
-    /// deleted files. On `base` itself, only uncommitted changes count.
-    pub(crate) fn changed(&self, base: &str) -> Result<BTreeSet<String>> {
-        let from = self.base_or_err(base)?;
+    /// Paths that differ from `from`, the base commit, including uncommitted, new and deleted
+    /// files. On the base branch itself, only uncommitted changes count.
+    pub(crate) fn changed(&self, from: &str) -> Result<BTreeSet<String>> {
         let mut paths: BTreeSet<String> = BTreeSet::new();
-        let diff = self.git(&["diff", "--name-only", "--no-renames", "-z", &from])?;
+        let diff = self.git(&["diff", "--name-only", "--no-renames", "-z", from])?;
         let new = self.git(&["ls-files", "-z", "--others", "--exclude-standard"])?;
         for p in diff.split('\0').chain(new.split('\0')) {
             if !p.is_empty() {
@@ -78,9 +77,8 @@ impl Git {
         Ok(paths)
     }
 
-    /// The lines that differ from where this branch left `base`, for judging findings.
-    pub(crate) fn changed_lines(&self, base: &str) -> Result<crate::findings::Changed> {
-        let from = self.base_or_err(base)?;
+    /// The lines that differ from `from`, the base commit, for judging findings.
+    pub(crate) fn changed_lines(&self, from: &str) -> Result<crate::findings::Changed> {
         // Fixed prefixes: the developer's diff settings (noprefix, mnemonicPrefix) must not
         // change how paths are read.
         let diff = self.git(&[
@@ -93,7 +91,7 @@ impl Git {
             "--no-ext-diff",
             "--src-prefix=a/",
             "--dst-prefix=b/",
-            &from,
+            from,
         ])?;
         let new: Vec<String> = self
             .git(&["ls-files", "-z", "--others", "--exclude-standard"])?
@@ -101,13 +99,13 @@ impl Git {
             .filter(|p| !p.is_empty())
             .map(String::from)
             .collect();
-        let all = self.changed(base)?;
+        let all = self.changed(from)?;
         Ok(crate::findings::Changed::from_diff(&diff, &new, &all))
     }
 
-    /// The commit this branch left `base` at, or an error saying the base is missing:
-    /// guessing would make every change look untouched.
-    fn base_or_err(&self, base: &str) -> Result<String> {
+    /// The base commit: where this branch left the base branch `base`, or an error saying the
+    /// base branch is missing, since guessing would make every change look untouched.
+    pub(crate) fn base_commit(&self, base: &str) -> Result<String> {
         self.merge_base(base).with_context(|| {
             format!(
                 "the base branch {base} is not here (neither {base} nor origin/{base}); fetch \
@@ -195,7 +193,7 @@ impl Git {
 impl Git {
     /// Where this branch left `base`, if `base` exists here, locally or as `origin/<base>`
     /// (a CI checkout often has only the remote branch).
-    pub(crate) fn merge_base(&self, base: &str) -> Option<String> {
+    fn merge_base(&self, base: &str) -> Option<String> {
         [base.to_string(), format!("origin/{base}")]
             .iter()
             .find_map(|b| self.git(&["merge-base", "HEAD", b]).ok())
