@@ -13,12 +13,23 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 /// Where a check's test runner says how many tests ran.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) enum Reader {
     /// The test cases, not skipped, in the JUnit reports matching the glob that this run wrote.
     Junit { glob: String, matcher: GlobMatcher },
     /// The tests a pattern finds in the output: the numbers it captures, or one per match.
     Count(Regex),
+}
+
+/// Only what was written, since this is part of a check's key: the compiled matcher's form
+/// changes with the glob library.
+impl std::fmt::Debug for Reader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Reader::Junit { glob, .. } => f.debug_tuple("Junit").field(glob).finish(),
+            Reader::Count(re) => f.debug_tuple("Count").field(&re.as_str()).finish(),
+        }
+    }
 }
 
 /// Where a runner's report goes when the check names none.
@@ -272,6 +283,12 @@ fn attr(attrs: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::Reader;
+
+    #[test]
+    fn a_reader_as_part_of_a_key_is_what_was_written() {
+        let junit = Reader::parse(&toml::Value::String("junit".into())).unwrap();
+        assert_eq!(format!("{junit:?}"), r#"Junit("$FEARLEZZ_OUT/junit.xml")"#);
+    }
 
     #[test]
     fn a_pattern_sums_the_numbers_it_captures() {
