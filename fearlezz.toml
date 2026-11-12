@@ -11,9 +11,9 @@ use = ["devenv", "rust", "agents", "safety"]
 no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
 
 # The binary embeds the agent skill and the built in pieces, so the tests read them too, with
-# the tool output they read as fixtures.
+# the tool output they read as fixtures, and the proof workflow they check in both places.
 [check.tests]
-inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**"]
+inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**", "README.md", ".github/workflows/proof.yml"]
 
 [check.actionlint]
 run = "actionlint"

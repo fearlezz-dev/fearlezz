@@ -1787,6 +1787,23 @@ fn pushed(repo: &Repo) -> common::Output {
     on_actions(&gh, &repo.root, "push", &event, "80")
 }
 
+/// In CI the pull request title decides whether a change is a fix, so the proof runs again
+/// when the title changes.
+#[test]
+fn the_proof_workflows_run_again_when_the_title_changes() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let types = "pull_request:\n    types: [opened, synchronize, reopened, edited]";
+    let own = std::fs::read_to_string(root.join(".github/workflows/proof.yml")).unwrap();
+    assert!(own.contains(&format!("  {types}")), "{own}");
+    let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
+    let shown = readme
+        .split("# .github/workflows/proof.yml")
+        .nth(1)
+        .and_then(|rest| rest.split("```").next())
+        .unwrap();
+    assert!(shown.contains(&format!("  {types}")), "{shown}");
+}
+
 #[test]
 fn checks_that_record_pictures_get_ffmpeg_on_the_runner() {
     for field in [

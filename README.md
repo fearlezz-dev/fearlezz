@@ -59,6 +59,7 @@ Two workflows. The first proves every pull request and push:
 name: proof
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 permissions:
@@ -80,7 +81,7 @@ jobs:
       - uses: fearlezz-dev/fearlezz@v0
 ```
 
-The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. The action installs the release of its own tag (`version: v0.2.0` pins one), runs `fearlezz run --ci` and uploads the check logs. Set `devenv: true` when the checks run in a devenv shell. On GitHub Actions with a token (`GITHUB_TOKEN`), `fearlezz run --ci` does what the event asks through GitHub's API, so a workflow can also run it without the action: it keeps one status comment on the pull request, and when a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg into the runner's tool cache. The token is the workflow's or a GitHub App's; Fearlezz never takes a person's comment or status for its own. A run that finishes after a newer push leaves that push's comment and pictures alone.
+The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. `edited` runs the proof again when the title changes, since a title starting with `fix:` makes the change a fix that needs red before green. The action installs the release of its own tag (`version: v0.2.0` pins one), runs `fearlezz run --ci` and uploads the check logs. Set `devenv: true` when the checks run in a devenv shell. On GitHub Actions with a token (`GITHUB_TOKEN`), `fearlezz run --ci` does what the event asks through GitHub's API, so a workflow can also run it without the action: it keeps one status comment on the pull request, and when a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg into the runner's tool cache. The token is the workflow's or a GitHub App's; Fearlezz never takes a person's comment or status for its own. A run that finishes after a newer push leaves that push's comment and pictures alone.
 
 On another CI, `fearlezz run --ci --comment status.md` writes the same status comment to a file, for that CI to post on its merge request.
 

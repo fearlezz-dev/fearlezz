@@ -1,7 +1,9 @@
 name: proof
 
 on:
+  # In CI the title decides whether a change is a fix, so a new title is proven again.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   # The release workflow starts it on the release pull request, which the workflow token opens.
