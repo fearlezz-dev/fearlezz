@@ -47,13 +47,14 @@ fn init_uses_the_pieces_of_the_languages_it_finds() {
         ("go.mod", "module app\n"),
         ("settings.gradle.kts", "rootProject.name = \"app\"\n"),
         ("pubspec.yaml", "name: app\n"),
+        (".github/workflows/ci.yml", "on: push\njobs: {}\n"),
     ]);
     let out = repo.fz(&["setup", "init"]);
     assert!(out.ok, "{}{}", out.stdout, out.stderr);
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
     assert!(
         config.contains(
-            r#"use = ["devenv", "rust", "typescript", "python", "go", "kotlin", "flutter"]"#
+            r#"use = ["devenv", "rust", "typescript", "python", "go", "kotlin", "flutter", "actions", "safety"]"#
         ),
         "{config}"
     );
@@ -103,7 +104,8 @@ fn init_without_a_known_language_writes_a_check_to_fill_in() {
     assert!(out.ok, "{}{}", out.stdout, out.stderr);
     assert!(out.stdout.contains("no language"), "{}", out.stdout);
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
-    assert!(!config.contains("use ="), "{config}");
+    // Every project is scanned for leaked secrets, language or not.
+    assert!(config.contains(r#"use = ["safety"]"#), "{config}");
     assert!(config.contains("# [check.tests]"), "{config}");
     assert!(repo.fz(&["--plan"]).ok);
 }
@@ -123,4 +125,14 @@ fn init_never_overwrites_a_config() {
         std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap(),
         before
     );
+}
+
+#[test]
+fn init_brings_safety_without_workflows_or_a_language() {
+    let repo = project(&[("README.md", "# app\n")]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(config.contains(r#"use = ["safety"]"#), "{config}");
+    assert!(!config.contains("actions"), "{config}");
 }

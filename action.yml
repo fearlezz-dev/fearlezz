@@ -1,18 +1,25 @@
 name: Fearlezz proof
-description: Prove a change with the checks in fearlezz.toml and show the status on the pull request.
+description: Prove a change with the checks in fearlezz.toml, and show the status and changed pictures on the pull request.
 
+# Installs Fearlezz and runs `fearlezz run --ci`, which does what the event asks: a pull request
+# or push is proven, a `/fearlezz approve` comment written, edited or deleted settles the
+# approval, and a closed pull request or the schedule cleans up the pictures branch.
 inputs:
   version:
-    description: Release tag of Fearlezz to install (for example v0.2.0). The default is the latest release.
+    description: >-
+      Fearlezz to install: a release tag (for example v0.2.0), `latest` (the release of the
+      action's own tag when it is taken at one, otherwise the newest), or `installed` (the one
+      already on PATH).
     default: latest
   devenv:
     description: Install Nix and devenv first, for projects whose checks run in a devenv shell.
     default: "false"
-  comment:
-    description: Post or replace one status comment on the pull request.
-    default: "true"
   token:
-    description: Token that writes the pull request comment.
+    description: >-
+      Token that writes the comment, the pictures status and the pictures branch: the
+      workflow's token or a GitHub App's. A personal token writes as a person, and Fearlezz
+      never takes a person's comment or status for its own. Empty proves without writing to
+      GitHub.
     default: ${{ github.token }}
 
 runs:
@@ -31,39 +38,45 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
         FEARLEZZ_INSTALL_DIR: ${{ runner.temp }}/fearlezz-bin
       run: |
-        if [ "$VERSION" != latest ]; then export FEARLEZZ_VERSION="$VERSION"; fi
-        sh "$GITHUB_ACTION_PATH/install.sh"
-        echo "$FEARLEZZ_INSTALL_DIR" >> "$GITHUB_PATH"
-    - name: Prove this commit with Fearlezz
-      shell: bash
-      run: fearlezz run --ci --comment "$RUNNER_TEMP/fearlezz.md"
-    # One comment per pull request, replaced on every run. A fork's token may not comment;
-    # the check stays.
-    - name: Show the status on the pull request
-      if: always() && inputs.comment == 'true' && github.event_name == 'pull_request'
+        # The action taken at a release tag installs that release, so the two always fit.
+        if [ "$VERSION" = latest ] && [[ "$ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then VERSION=$ACTION_REF; fi
+        if [ "$VERSION" != installed ]; then
+          if [ "$VERSION" != latest ]; then export FEARLEZZ_VERSION=$VERSION; fi
+          sh "$GITHUB_ACTION_PATH/install.sh"
+          echo "$FEARLEZZ_INSTALL_DIR" >> "$GITHUB_PATH"
+          PATH="$FEARLEZZ_INSTALL_DIR:$PATH"
+        fi
+        # Captured, not piped: grep -q would close the pipe early and kill fearlezz with SIGPIPE.
+        help=$(fearlezz run --help)
+        if [[ "$help" != *"GitHub Actions"* ]]; then
+          echo "::error::$(fearlezz --version) is too old for this action. Set version: to a newer release, or take the action at the tag of the release you install (fearlezz-dev/fearlezz@vX.Y.Z)."
+          exit 1
+        fi
+    # The ffmpeg Fearlezz installs when a check records pictures.
+    - uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/fearlezz-ffmpeg
+        key: fearlezz-ffmpeg-b6.1.1-${{ runner.os }}-${{ runner.arch }}
+    - name: Fearlezz
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.token }}
-        PR: ${{ github.event.pull_request.number }}
-      run: |
-        file="$RUNNER_TEMP/fearlezz.md"
-        [ -s "$file" ] || exit 0
-        comments="repos/$GITHUB_REPOSITORY/issues/$PR/comments"
-        {
-          id=$(gh api "$comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- fearlezz -->"))) | .id' | head -n 1)
-          if [ -n "$id" ]; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$file" > /dev/null
-          else
-            gh api "$comments" -F body=@"$file" > /dev/null
-          fi
-        } || echo "could not write the pull request comment"
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: fearlezz run --ci
+    - name: Keep the changed pictures
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fearlezz-pictures
+        path: ${{ runner.temp }}/fearlezz-pictures
+        if-no-files-found: ignore
     - name: Keep the output of every check
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: proof-logs
+        name: proof-logs-${{ github.job }}
         path: .git/fearlezz/results/**/output.log
         include-hidden-files: true
         if-no-files-found: ignore

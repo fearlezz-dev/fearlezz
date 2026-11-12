@@ -1,0 +1,10 @@
+# Secret scanning with trufflehog. Use it instead of the `safety` piece, or beside it. A leaked
+# key on a line this change touched is a gate. Its SARIF names the detector and the line, never
+# the secret. Detection only (`--no-verification`): checks never call a service with a found key.
+#
+# To let a known fake value through, write `trufflehog:ignore` on its line.
+
+[check.trufflehog]
+run = "trufflehog filesystem . --sarif --no-verification --force-skip-binaries --force-skip-archives"
+stage = "working"
+findings = { read = "sarif", level = "gate", fix = "remove the secret, rotate it because it has been exposed, and read it from the environment or SecretSpec instead" }

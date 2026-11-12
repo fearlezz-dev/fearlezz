@@ -1,0 +1,9 @@
+# Dependency vulnerabilities with osv-scanner, which reads the lockfiles and asks osv.dev
+# (so it needs the network). A vulnerable dependency is a flag, not a gate: it may have no fix
+# yet. The report names the lockfile but no line, so a finding counts when the change touched
+# that lockfile.
+
+[check.osv-scanner]
+run = 'osv-scanner scan source --recursive --allow-no-lockfiles --format sarif --output-file "$FEARLEZZ_OUT/findings.sarif" .'
+stage = "working"
+findings = { read = "sarif", level = "flag", fix = "upgrade the dependency to a fixed version, or say why it does not apply" }

@@ -5,6 +5,7 @@
 
 mod common;
 
+use common::github::{Comment, FakeGitHub, PERSON_TOKEN};
 use common::{Repo, runs};
 
 const RECORD: &str = r#"set -e
@@ -82,6 +83,35 @@ fn the_base_run_and_the_comparison_are_reused() {
         again.stdout
     );
     assert_eq!(runs(std::path::Path::new(&counter)), 2);
+}
+
+#[test]
+fn a_broken_look_needs_a_new_comparison_instead_of_reading_ok() {
+    let (repo, counter) = repo();
+    let out = repo.fz_env(&["run"], &[("COUNTER", &counter)]);
+    let report = out
+        .lines()
+        .iter()
+        .find_map(|l| l.trim().strip_prefix("report: "))
+        .map(std::path::PathBuf::from)
+        .expect("a report line");
+    // A look written in part, as a crash while writing it leaves it.
+    let look = report.parent().unwrap().join("look.json");
+    std::fs::write(&look, "{\"check\":").unwrap();
+    let status = repo.fz_env(&[], &[("COUNTER", &counter)]);
+    assert!(
+        status
+            .stdout
+            .contains("not compared with this base commit yet"),
+        "{}",
+        status.stdout
+    );
+    let again = repo.fz_env(&["run"], &[("COUNTER", &counter)]);
+    assert!(
+        again.stdout.contains("look screens: 1 changed"),
+        "{}",
+        again.stdout
+    );
 }
 
 #[test]
@@ -230,6 +260,204 @@ fn there_is_nothing_to_approve_without_changed_pictures() {
     assert!(out.stderr.contains("nothing to approve"), "{}", out.stderr);
 }
 
+// Approvals given on the pull request
+
+/// Pull request 7 on the fake GitHub at `head`, whose status comment, written by `creator`
+/// (login and type), says the pictures of `screens` wait at `shown`, and a later `/fearlezz
+/// approve ship it` comment by `lead`, who has write access.
+fn approved(head: &str, shown: &str, creator: (&str, &str)) -> (FakeGitHub, Comment) {
+    approved_waiting(head, shown, creator, &["screens"])
+}
+
+/// `approved` with the pictures of `checks` waiting.
+fn approved_waiting(
+    head: &str,
+    shown: &str,
+    creator: (&str, &str),
+    checks: &[&str],
+) -> (FakeGitHub, Comment) {
+    let gh = FakeGitHub::start();
+    let mut state = gh.state();
+    state.pulls.insert(7, (head.into(), "open".into()));
+    state.permissions.insert("lead".into(), "write".into());
+    state.add_status_comment(7, creator, shown, checks);
+    let comment = state.add_comment(7, "lead", "User", "/fearlezz approve ship it");
+    drop(state);
+    (gh, comment)
+}
+
+const ACTIONS: (&str, &str) = ("github-actions[bot]", "Bot");
+
+/// Runs `fearlezz` on the developer's machine, with their token, against the fake GitHub.
+fn with_gh(repo: &Repo, counter: &str, gh: &FakeGitHub, args: &[&str]) -> common::Output {
+    repo.fz_env(
+        args,
+        &[
+            ("COUNTER", counter),
+            ("GITHUB_API_URL", &gh.url),
+            ("GITHUB_TOKEN", PERSON_TOKEN),
+        ],
+    )
+}
+
+/// The work run and committed, so its head is what the pull request shows, with the
+/// repository on GitHub as its `origin`.
+fn committed() -> (Repo, String, String) {
+    let (repo, counter) = repo();
+    ran(&repo, &counter, &["run"]);
+    repo.commit("the work");
+    repo.git(&["remote", "add", "origin", "git@github.com:owner/repo.git"]);
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    (repo, counter, head)
+}
+
+const APPROVE: [&str; 4] = ["say", "approve", "screens", "--github"];
+
+#[test]
+fn the_next_line_names_approving_on_the_pull_request() {
+    let (repo, counter, _) = committed();
+    let status = ran(&repo, &counter, &[]);
+    assert!(
+        status
+            .last_line()
+            .contains("fearlezz say approve screens --github"),
+        "{}",
+        status.stdout
+    );
+}
+
+#[test]
+fn an_approval_on_the_pull_request_counts_with_who_gave_it() {
+    let (repo, counter, head) = committed();
+    let (gh, _) = approved(&head, &head, ACTIONS);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("approved screens on GitHub by @lead (\"ship it\")"),
+        "{}",
+        out.stdout
+    );
+    let status = ran(&repo, &counter, &[]);
+    assert!(
+        status
+            .stdout
+            .contains("approved on GitHub by @lead (\"ship it\")"),
+        "{}",
+        status.stdout
+    );
+    ran(&repo, &counter, &["run", "--stage", "merge", "--no-run"]);
+    let out = ran(&repo, &counter, &["run"]);
+    assert_eq!(
+        out.last_line(),
+        "next: all proof is in: ready to merge",
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn an_approval_set_by_an_app_token_counts() {
+    let (repo, counter, head) = committed();
+    let (gh, _) = approved(&head, &head, ("proof-app[bot]", "Bot"));
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+}
+
+#[test]
+fn an_approval_for_another_commit_does_not_count() {
+    let (repo, counter, _) = committed();
+    let other = "0".repeat(40);
+    let (gh, _) = approved(&other, &other, ACTIONS);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("push"), "{}", out.stderr);
+}
+
+#[test]
+fn an_approval_line_another_bot_wrote_does_not_count() {
+    let (repo, counter, head) = committed();
+    let gh = FakeGitHub::start();
+    gh.state().pulls.insert(7, (head.clone(), "open".into()));
+    let hidden = serde_json::json!({
+        "head": head, "checks": ["screens"], "by": "lead", "said": "ship it",
+    });
+    gh.state().add_comment(
+        7,
+        "helper[bot]",
+        "Bot",
+        &format!("@lead approved the pictures.\n<!-- fearlezz-approved {hidden} -->"),
+    );
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("/fearlezz approve"), "{}", out.stderr);
+}
+
+#[test]
+fn approving_a_check_whose_pictures_did_not_wait_is_refused() {
+    let (repo, counter, head) = committed();
+    let (gh, _) = approved_waiting(&head, &head, ACTIONS, &["other"]);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("`other`"), "{}", out.stderr);
+}
+
+#[test]
+fn an_approval_written_before_the_pictures_were_shown_does_not_count() {
+    let (repo, counter, head) = committed();
+    let (gh, comment) = approved(&head, &head, ACTIONS);
+    let mine = gh.state().comments[0].clone();
+    // The proof shows other pictures after the approval, in a new comment.
+    gh.state().comments.retain(|c| c.id != mine.id);
+    let shown = gh
+        .state()
+        .add_status_comment(7, ACTIONS, &head, &["screens"]);
+    assert!(shown.created > comment.created);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("before"), "{}", out.stderr);
+}
+
+#[test]
+fn a_status_comment_a_persons_account_wrote_does_not_count() {
+    let (repo, counter, head) = committed();
+    let (gh, _) = approved(&head, &head, ("dev", "User"));
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("/fearlezz approve"), "{}", out.stderr);
+}
+
+#[test]
+fn a_deleted_approval_does_not_count() {
+    let (repo, counter, head) = committed();
+    let (gh, comment) = approved(&head, &head, ACTIONS);
+    gh.state().comments.retain(|c| c.id != comment.id);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("deleted"), "{}", out.stderr);
+}
+
+#[test]
+fn an_approval_by_someone_without_write_access_does_not_count() {
+    let (repo, counter, head) = committed();
+    let (gh, _) = approved(&head, &head, ACTIONS);
+    gh.state().permissions.insert("lead".into(), "read".into());
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("write access"), "{}", out.stderr);
+}
+
+#[test]
+fn approving_on_the_pull_request_needs_the_work_committed() {
+    let (repo, counter) = repo();
+    ran(&repo, &counter, &["run"]);
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    let (gh, _) = approved(&head, &head, ACTIONS);
+    let out = with_gh(&repo, &counter, &gh, &APPROVE);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("commit"), "{}", out.stderr);
+}
+
 #[test]
 fn a_base_another_command_uses_is_not_removed() {
     let (repo, counter) = repo();
@@ -249,7 +477,8 @@ fn a_base_another_command_uses_is_not_removed() {
     };
     run(&repo);
     let first = base(&repo);
-    let held = repo.path(&format!(".git/fearlezz/base-holds/{first}"));
+    let bases = repo.bases();
+    let held = bases.join("holds").join(&first);
     let hold = std::fs::File::open(&held).unwrap();
     hold.lock_shared().unwrap();
 
@@ -258,7 +487,7 @@ fn a_base_another_command_uses_is_not_removed() {
         advance(&repo, n);
         run(&repo);
     }
-    let dir = repo.path(&format!(".git/fearlezz/base/{first}"));
+    let dir = bases.join("checkouts").join(&first);
     assert!(dir.exists(), "a held base was removed");
 
     drop(hold);
@@ -268,4 +497,520 @@ fn a_base_another_command_uses_is_not_removed() {
         !dir.exists(),
         "a base nobody holds stays after three newer ones"
     );
+}
+
+#[test]
+fn the_base_checkout_lives_outside_the_repository() {
+    // Tools refuse files below `.git` (Vite's dev server answers 403 there), so a base
+    // checkout there would take no pictures.
+    let (repo, counter) = repo();
+    repo.write(
+        "record.sh",
+        &format!("case \"$PWD\" in */.git/*) exit 9;; esac\n{RECORD}"),
+    );
+    repo.commit("guard");
+    repo.git(&["checkout", "--quiet", "main"]);
+    repo.write(
+        "record.sh",
+        &format!("case \"$PWD\" in */.git/*) exit 9;; esac\n{RECORD}"),
+    );
+    repo.commit("guard");
+    repo.git(&["checkout", "--quiet", "feat/blue"]);
+    repo.git(&["merge", "--quiet", "--no-edit", "main"]);
+    let out = repo.fz_env(&["run"], &[("COUNTER", &counter)]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("look screens: 1 changed, 1 new, 1 same"),
+        "{}",
+        out.stdout
+    );
+    let checkouts: Vec<_> = std::fs::read_dir(repo.bases().join("checkouts"))
+        .unwrap()
+        .collect();
+    assert_eq!(checkouts.len(), 1, "one base checkout in the user cache");
+    assert!(!repo.path(".git/fearlezz/base").exists());
+}
+
+#[test]
+fn a_base_that_passed_without_pictures_is_called_suspicious() {
+    let repo = Repo::new(
+        CONFIG,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", "echo run >> \"$COUNTER\"\n"),
+            ("src/color.txt", "red"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    let counter = repo.path(".runs/screens").to_string_lossy().to_string();
+    repo.branch("feat/record");
+    repo.write("record.sh", RECORD);
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz_env(&["run"], &[("COUNTER", &counter)]);
+    assert!(out.ok, "{}", out.stderr);
+    assert!(out.stdout.contains("look screens: 2 new"), "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("the base run passed without any pictures"),
+        "{}",
+        out.stdout
+    );
+    // The person who opens the report sees it too.
+    assert!(
+        report_of(&out).contains("The base run passed without any pictures"),
+        "{}",
+        out.stdout
+    );
+}
+
+/// Films a tool writes into a folder, such as Playwright videos.
+const WRITE_FILMS: &str = r#"set -e
+mkdir -p "$FEARLEZZ_OUT/films/home"
+ffmpeg -v error -nostdin -f lavfi -i "color=c=white:s=64x48:r=10:d=1" -vf "drawbox=x=$(cat src/x.txt):y=10:w=20:h=20:color=blue:t=fill" "$FEARLEZZ_OUT/films/home/video.gif"
+"#;
+
+#[test]
+fn films_can_be_named_by_a_glob_in_the_proof_folder() {
+    let repo = Repo::new(
+        r#"
+[check.screens]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+films = "films/**/*.gif"
+"#,
+        &[("record.sh", WRITE_FILMS), ("src/x.txt", "5")],
+    );
+    repo.branch("feat/move");
+    repo.write("src/x.txt", "35");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("look screens: 1 changed"),
+        "{}",
+        out.stdout
+    );
+    let status = repo.fz(&["--check", "screens"]);
+    assert!(
+        status.stdout.contains("\"id\": \"home/video\"")
+            && status.stdout.contains("\"kind\": \"film\""),
+        "{}",
+        status.stdout
+    );
+}
+
+#[test]
+fn flaky_pictures_are_shown_but_never_wait_for_approval() {
+    let repo = Repo::new(
+        &format!("{CONFIG}flaky = [\"home.png\"]\n"),
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", RECORD),
+            ("src/color.txt", "red"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    let counter = repo.path(".runs/screens").to_string_lossy().to_string();
+    repo.branch("feat/blue");
+    repo.write("src/color.txt", "blue");
+    repo.commit("blue");
+    ran(&repo, &counter, &["run", "--stage", "merge", "--no-run"]);
+    let out = ran(&repo, &counter, &["run"]);
+    assert!(
+        out.stdout.contains("look screens: 1 same, 1 flaky"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(
+        out.last_line(),
+        "next: all proof is in: ready to merge",
+        "{}",
+        out.stdout
+    );
+    let report = out
+        .lines()
+        .iter()
+        .find_map(|l| l.trim().strip_prefix("report: "))
+        .map(std::path::PathBuf::from)
+        .expect("a report line");
+    let html = std::fs::read_to_string(report).unwrap();
+    assert!(html.contains("Flaky"), "the report says which are flaky");
+}
+
+/// Stands in for Playwright: `toHaveScreenshot` writes each still under the snapshot path the
+/// project's config points into `$FEARLEZZ_OUT`, and the JUnit reporter counts the tests.
+const FAKE_PLAYWRIGHT: &str = r#"#!/bin/sh
+set -e
+echo "$*" >> "$FEARLEZZ_OUT/args"
+mkdir -p "$FEARLEZZ_OUT/stills/desktop"
+ffmpeg -v error -nostdin -f lavfi -i "color=c=$(cat src/color.css):s=64x48" -frames:v 1 "$FEARLEZZ_OUT/stills/desktop/home.png"
+# The junit reporter's outputFile, as the piece's playwright.config lines set it.
+echo '<testsuites><testsuite tests="1"><testcase name="home"/></testsuite></testsuites>' > "$FEARLEZZ_OUT/junit.xml"
+"#;
+
+#[test]
+fn the_playwright_piece_compares_the_stills_playwright_writes() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let repo = Repo::new(
+        "use = [\"playwright\"]\n",
+        &[
+            (".gitignore", "node_modules/\n"),
+            ("src/color.css", "red"),
+            ("package-lock.json", "{}"),
+        ],
+    );
+    // Installed in the main checkout only, as npm does; the piece clones it into the base.
+    repo.write("node_modules/.bin/playwright", FAKE_PLAYWRIGHT);
+    std::fs::set_permissions(
+        repo.path("node_modules/.bin/playwright"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    repo.branch("feat/blue");
+    repo.write("src/color.css", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("look playwright: 1 changed"),
+        "{}",
+        out.stdout
+    );
+    let status = repo.fz(&["--check", "playwright"]);
+    assert!(status.stdout.contains("\"tests\": 1"), "{}", status.stdout);
+    // A plain tool command: the reporters live in playwright.config, not in shell syntax.
+    let result: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+    let args = result["dir"]
+        .as_str()
+        .map(|dir| std::fs::read_to_string(std::path::Path::new(dir).join("args")).unwrap());
+    assert_eq!(
+        args.as_deref(),
+        Some("test --update-snapshots=all\n"),
+        "{}",
+        status.stdout
+    );
+    assert!(
+        status.stdout.contains("\"id\": \"desktop/home\""),
+        "{}",
+        status.stdout
+    );
+}
+
+/// A tool that writes its pictures into a folder (Playwright's `toHaveScreenshot` with its
+/// snapshot path in `$FEARLEZZ_OUT`) needs no `proof.jsonl`: `stills` names them by glob.
+const WRITE_FILES: &str = r#"set -e
+still() {
+  mkdir -p "$(dirname "$FEARLEZZ_OUT/stills/$1")"
+  ffmpeg -v error -nostdin -f lavfi -i "color=c=$2:s=64x48" -frames:v 1 "$FEARLEZZ_OUT/stills/$1.png"
+}
+still desktop/home "$(cat src/color.txt)"
+still mobile/home white
+if [ -e src/extra ]; then still desktop/extra green; fi
+"#;
+
+#[test]
+fn stills_can_be_named_by_a_glob_in_the_proof_folder() {
+    let repo = Repo::new(
+        r#"
+[check.screens]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+stills = "stills/**/*.png"
+"#,
+        &[("record.sh", WRITE_FILES), ("src/color.txt", "red")],
+    );
+    repo.branch("feat/blue");
+    repo.write("src/color.txt", "blue");
+    repo.write("src/extra", "");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("look screens: 1 changed, 1 new, 1 same"),
+        "{}",
+        out.stdout
+    );
+    let status = repo.fz(&["--check", "screens"]);
+    // Named by the path below the glob's fixed part, without the extension.
+    for id in ["desktop/home", "mobile/home", "desktop/extra"] {
+        assert!(
+            status.stdout.contains(&format!("\"id\": \"{id}\"")),
+            "{id}: {}",
+            status.stdout
+        );
+    }
+}
+
+/// The stills check of `stills_can_be_named_by_a_glob_in_the_proof_folder`, with `stills`.
+fn stills_config(stills: &str) -> String {
+    format!(
+        "\n[check.screens]\nrun = \"sh record.sh\"\nstage = \"look\"\ninputs = [\"src/**\", \
+         \"record.sh\"]\n{stills}\n"
+    )
+}
+
+/// A repository whose check writes stills named by `stills/**/*.png`, on a branch.
+fn stills_repo() -> Repo {
+    let repo = Repo::new(
+        &stills_config("stills = \"stills/**/*.png\""),
+        &[("record.sh", WRITE_FILES), ("src/color.txt", "red")],
+    );
+    repo.branch("feat/change");
+    repo
+}
+
+/// `fearlezz.toml` with `stills` as given, as `Repo::new` writes it.
+fn write_config(repo: &Repo, stills: &str) {
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{}\n[settings.skill]\nagents = []\n\n[settings.hooks]\nagents = []\n",
+            stills_config(stills)
+        ),
+    );
+}
+
+#[test]
+fn changing_only_the_stills_glob_runs_the_check_again() {
+    let repo = stills_repo();
+    repo.write("src/color.txt", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let first = repo.fz(&["run"]);
+    assert!(first.ok, "{}\n{}", first.stdout, first.stderr);
+    write_config(&repo, "stills = \"stills/desktop/*.png\"");
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains(", 0 reused"), "{}", out.stdout);
+    let status = repo.fz(&["--check", "screens"]);
+    assert!(
+        !status.stdout.contains("\"id\": \"mobile/home\""),
+        "{}",
+        status.stdout
+    );
+}
+
+#[test]
+fn a_change_that_removes_every_picture_shows_them_gone() {
+    let repo = stills_repo();
+    repo.write("record.sh", "true\n");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("look screens: 2 gone"),
+        "{}",
+        out.stdout
+    );
+    let status = repo.fz(&[]);
+    assert!(
+        status.last_line().starts_with("next: look at screens"),
+        "{}",
+        status.stdout
+    );
+}
+
+#[test]
+fn a_check_without_pictures_whose_base_cannot_run_says_nothing_of_a_look() {
+    let repo = Repo::new(
+        &format!(
+            "{}\n[env]\nprepare = \"test ! -e src/broken\"\n",
+            stills_config("stills = \"stills/**/*.png\"")
+        ),
+        &[
+            ("record.sh", "true\n"),
+            ("src/color.txt", "red"),
+            ("src/broken", "\n"),
+        ],
+    );
+    repo.branch("feat/change");
+    repo.remove("src/broken");
+    repo.write("src/color.txt", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("look screens"), "{}", out.stdout);
+}
+
+#[test]
+fn a_check_without_pictures_on_the_same_inputs_as_the_base_says_nothing_of_a_look() {
+    let repo = Repo::new(
+        &stills_config("stills = \"stills/**/*.png\""),
+        &[("record.sh", "true\n"), ("src/color.txt", "red")],
+    );
+    repo.branch("feat/change");
+    repo.write("notes.txt", "\n");
+    let out = repo.fz(&["run", "screens"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("look screens"), "{}", out.stdout);
+}
+
+#[test]
+fn a_rebase_onto_a_new_base_compares_the_pictures_again() {
+    let repo = stills_repo();
+    repo.write("src/color.txt", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let first = repo.fz(&["run"]);
+    assert!(first.ok, "{}\n{}", first.stdout, first.stderr);
+    repo.commit("feat: blue");
+    // The base branch moves on without touching what the check reads.
+    repo.git(&["switch", "-q", "main"]);
+    repo.write("README", "\n");
+    repo.commit("Add a readme");
+    repo.git(&["switch", "-q", "feat/change"]);
+    repo.git(&["rebase", "-q", "main"]);
+    let status = repo.fz(&[]);
+    assert!(
+        status.last_line().starts_with("next: fearlezz run"),
+        "{}",
+        status.stdout
+    );
+    let again = repo.fz(&["run"]);
+    assert!(again.ok, "{}\n{}", again.stdout, again.stderr);
+    assert!(
+        again.stdout.contains("look screens: 1 changed"),
+        "{}",
+        again.stdout
+    );
+}
+
+#[test]
+fn dropping_the_stills_glob_weakens_the_proof() {
+    let repo = stills_repo();
+    write_config(&repo, "");
+    repo.commit("drop the stills");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("it no longer takes stills by stills/**/*.png"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn narrowing_the_stills_glob_weakens_the_proof() {
+    let repo = stills_repo();
+    write_config(&repo, "stills = \"stills/desktop/*.png\"");
+    repo.commit("fewer stills");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains(
+            "it takes stills by another glob (stills/**/*.png, now stills/desktop/*.png)"
+        ),
+        "{}",
+        out.stdout
+    );
+}
+
+/// The report page a run printed.
+fn report_of(out: &common::Output) -> String {
+    let path = out
+        .lines()
+        .iter()
+        .find_map(|l| l.trim().strip_prefix("report: "))
+        .map(std::path::PathBuf::from)
+        .expect("a report line");
+    std::fs::read_to_string(path).unwrap()
+}
+
+#[test]
+fn the_report_is_one_page_to_review_and_approve_from() {
+    let (repo, counter) = repo();
+    let html = report_of(&ran(&repo, &counter, &["run"]));
+    // Counts that filter, one per kind of change there is.
+    for kind in ["changed", "new", "same"] {
+        assert!(
+            html.contains(&format!("data-filter=\"{kind}\"")),
+            "{kind}: {html}"
+        );
+    }
+    assert!(html.contains("data-name=\"home.png\" data-change=\"changed\""));
+    // Ways to compare a before with its after.
+    for mode in ["side", "slider", "onion", "diff", "blink"] {
+        assert!(html.contains(&format!("data-mode=\"{mode}\"")), "{mode}");
+    }
+    // A decision per picture, and approval built from the developer's words.
+    for word in ["Looks right", "Not right", "Flaky"] {
+        assert!(html.contains(word), "{word}");
+    }
+    assert!(html.contains("fearlezz say approve screens --said"));
+}
+
+#[test]
+fn the_report_needs_nothing_from_the_network_and_keeps_to_the_house_style() {
+    let (repo, counter) = repo();
+    let html = report_of(&ran(&repo, &counter, &["run"]));
+    assert!(!html.contains("http://") && !html.contains("https://"));
+    assert!(html.contains("prefers-reduced-motion"));
+    assert!(html.contains("prefers-color-scheme: dark"));
+    // Borders go all the way round or not at all.
+    for side in ["border-left", "border-right", "border-top", "border-bottom"] {
+        assert!(!html.contains(side), "{side}");
+    }
+}
+
+#[test]
+fn the_report_groups_by_the_parts_of_a_picture_name() {
+    let repo = Repo::new(
+        r#"
+[check.screens]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+stills = "stills/**/*.png"
+"#,
+        &[("record.sh", WRITE_FILES), ("src/color.txt", "red")],
+    );
+    repo.branch("feat/blue");
+    repo.write("src/color.txt", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let html = report_of(&repo.fz(&["run"]));
+    assert!(html.contains("data-group=\"viewport\""), "{html}");
+    assert!(html.contains("data-viewport=\"desktop\""), "{html}");
+    assert!(html.contains("data-viewport=\"mobile\""), "{html}");
+}
+
+/// A film of a box that appears after a second, at a place the source names.
+const RECORD_FILM: &str = r#"set -e
+ffmpeg -v error -nostdin -f lavfi -i "color=c=white:s=160x120:r=10:d=2" \
+  -vf "drawbox=x=$(cat src/x.txt):y=30:w=50:h=40:color=blue:t=fill:enable='gte(t,1)'" \
+  -pix_fmt yuv420p "$FEARLEZZ_OUT/flow.mp4"
+echo '{"kind":"film","file":"flow.mp4"}' >> "$FEARLEZZ_OUT/proof.jsonl"
+"#;
+
+#[test]
+fn a_changed_film_plays_both_sides_on_one_clock_with_lanes_of_where_they_differ() {
+    let repo = Repo::new(
+        r#"
+[check.flow]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+"#,
+        &[("record.sh", RECORD_FILM), ("src/x.txt", "20")],
+    );
+    repo.branch("feat/move");
+    repo.write("src/x.txt", "90");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(
+        out.stdout.contains("look flow: 1 changed"),
+        "{}",
+        out.stdout
+    );
+    let html = report_of(&out);
+    assert!(html.contains("class=\"film\""), "{html}");
+    assert_eq!(html.matches("<video").count(), 2, "{html}");
+    assert!(html.contains("class=\"lane before\""), "{html}");
+    assert!(
+        html.contains("class=\"diff\""),
+        "a differing stretch: {html}"
+    );
+    assert!(html.contains("data-seek="), "a jump to the change: {html}");
 }

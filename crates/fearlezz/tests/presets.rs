@@ -27,6 +27,22 @@ fn a_built_in_piece_brings_its_checks() {
 }
 
 #[test]
+fn the_flutter_piece_never_asks_for_the_types_it_forbids() {
+    // omit_local_variable_types forbids the local types these two would ask for.
+    let repo = Repo::new("use = [\"flutter\"]\n", &[]);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    let options = std::fs::read_to_string(repo.path("analysis_options.yaml")).unwrap();
+    for rule in [
+        "specify_nonobvious_local_variable_types: false",
+        "specify_nonobvious_property_types: false",
+        "omit_local_variable_types: true",
+    ] {
+        assert!(options.contains(rule), "{rule}: {options}");
+    }
+}
+
+#[test]
 fn the_project_tunes_a_field_and_turns_a_check_off() {
     let config = r#"
 use = ["rust"]
@@ -44,13 +60,53 @@ run = "echo tuned > \"$FEARLEZZ_OUT/proof.txt\"; echo 'test result: ok. 1 passed
     repo.fz(&["run", "--stage", "working", "--no-run"]);
     let out = repo.fz(&["run", "tests"]);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    // The piece's inputs still apply: the tuned check ran because a .rs file changed.
+    // The tuned command ran, not the piece's.
     let result: serde_json::Value =
         serde_json::from_str(&repo.fz(&["--check", "tests"]).stdout).unwrap();
     let dir = std::path::Path::new(result["dir"].as_str().unwrap());
     assert_eq!(
         std::fs::read_to_string(dir.join("proof.txt")).unwrap(),
         "tuned\n"
+    );
+}
+
+#[test]
+fn a_piece_check_reruns_after_a_change_to_any_file_outside_no_proof() {
+    let config = r#"
+use = ["rust"]
+no_proof = ["*.md"]
+
+[check.tests]
+run = "echo run >> .runs/tests; echo 'test result: ok. 1 passed; 0 failed'"
+"#;
+    let repo = Repo::new(
+        config,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("src/lib.rs", ""),
+            ("data.json", "{}\n"),
+            ("README.md", "readme\n"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/x");
+    repo.write("data.json", "[]\n");
+    let out = repo.fz(&["run", "tests"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(common::runs(&repo.path(".runs/tests")), 1);
+    repo.write("data.json", "[1]\n");
+    repo.fz(&["run", "tests"]);
+    assert_eq!(
+        common::runs(&repo.path(".runs/tests")),
+        2,
+        "data.json is read"
+    );
+    repo.write("README.md", "other\n");
+    repo.fz(&["run", "tests"]);
+    assert_eq!(
+        common::runs(&repo.path(".runs/tests")),
+        2,
+        "README.md needs no proof"
     );
 }
 
@@ -86,7 +142,7 @@ fn an_unknown_piece_says_what_exists() {
     assert!(!out.ok);
     assert!(
         out.stderr.contains(
-            "built in are agents, devenv, eslint, flutter, go, kotlin, python, rust, typescript"
+            "built in are actions, agents, betterleaks, devenv, eslint, flutter, flutter-look, go, kotlin, osv-scanner, playwright, python, rust, safety, trufflehog, typescript"
         ),
         "{}",
         out.stderr
@@ -364,4 +420,180 @@ fn update_stays_in_the_major_and_says_when_a_bigger_one_is_out() {
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
     assert!(config.contains("@v1.5\""), "{config}");
     assert!(repo.fz(&["setup", "update"]).stdout.contains("v3.1 is out"));
+}
+
+/// The documented fake GitHub token from secret scanners' own test data. The AWS example key
+/// is allowlisted by the scanner, so it cannot stand in here.
+const FAKE_TOKEN: &str = "ghp_16C7e42F292c6912E7710c838347Ae178B4a"; // gitleaks:allow
+
+/// A repository with a leak already committed, so a scanner has something old to ignore and
+/// the test can add a new leak next to it.
+fn leaky(piece: &str) -> Repo {
+    let repo = Repo::new(
+        &format!("use = [\"{piece}\"]\n"),
+        &[(
+            "src/old.rs",
+            &format!("const T: &str = \"{FAKE_TOKEN}\";\n"),
+        )],
+    );
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo
+}
+
+/// No file the checks stored (results, logs, reports) holds `secret`.
+fn assert_nothing_stored_holds(repo: &Repo, secret: &str) {
+    let mut stack = vec![repo.path(".git/fearlezz")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                assert!(
+                    !text.contains(secret),
+                    "{} holds the secret",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+/// Every secret scanner piece judges the same way: a leak that was already committed does not
+/// block new work, the same leak on a line this change adds does, and the secret itself is
+/// never printed or kept.
+fn gates_a_leak_on_a_changed_line(piece: &str, check: &str, rule: &str) {
+    let repo = leaky(piece);
+    assert_eq!(checks(&repo), check);
+
+    repo.write("src/new.rs", "fn main() {}\n");
+    let out = repo.fz(&["run", check]);
+    assert!(out.ok, "{piece}: {}\n{}", out.stdout, out.stderr);
+
+    repo.write(
+        "src/new.rs",
+        &format!("fn main() {{}}\nconst T: &str = \"{FAKE_TOKEN}\";\n"),
+    );
+    let out = repo.fz(&["run", check]);
+    assert!(!out.ok, "{piece}: {}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("src/new.rs:2"), "{}", out.stdout);
+    assert!(out.stdout.contains(rule), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("fix: remove the secret"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains(FAKE_TOKEN), "{}", out.stdout);
+    assert_nothing_stored_holds(&repo, FAKE_TOKEN);
+}
+
+#[test]
+fn the_safety_piece_gates_a_secret_on_a_changed_line_and_never_prints_it() {
+    gates_a_leak_on_a_changed_line("safety", "gitleaks", "github-pat");
+}
+
+#[test]
+fn betterleaks_is_a_scanner_to_pick_instead() {
+    gates_a_leak_on_a_changed_line("betterleaks", "betterleaks", "github-pat");
+}
+
+#[test]
+fn trufflehog_is_a_scanner_to_pick_instead() {
+    gates_a_leak_on_a_changed_line("trufflehog", "trufflehog", "Github");
+}
+
+#[test]
+fn scanners_combine_because_checks_are_named_for_their_tools() {
+    let repo = Repo::new("use = [\"safety\", \"trufflehog\", \"osv-scanner\"]\n", &[]);
+    assert_eq!(checks(&repo), "gitleaks, osv-scanner, trufflehog");
+}
+
+/// What osv-scanner 2.7.0 wrote for a Cargo.lock holding the vulnerable `time` 0.1.43, with
+/// the scanned folder written as ROOT. It names the lockfile by an absolute file URI and no
+/// line.
+const OSV_SARIF: &str = include_str!("fixtures/osv-scanner.sarif");
+
+#[test]
+fn the_osv_scanner_piece_reads_what_osv_scanner_writes() {
+    // The real scanner needs osv.dev; its report, from this checkout, stands in for it.
+    let config = "use = [\"osv-scanner\"]\n\n[check.osv-scanner]\nrun = 'sed \"s|ROOT|$(pwd \
+                  -P)|g\" osv.sarif > \"$FEARLEZZ_OUT/findings.sarif\"'\n";
+    let repo = Repo::new(
+        config,
+        &[("osv.sarif", OSV_SARIF), ("Cargo.lock", "version = 3\n")],
+    );
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo.write("Cargo.lock", "version = 3\n\n# time 0.1.43\n");
+    let out = repo.fz(&["run", "osv-scanner"]);
+    // A vulnerable dependency is a flag: it may have no fix yet.
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.lines()
+            .iter()
+            .any(|l| l.contains("flag Cargo.lock") && l.contains("CVE-2020-26235")),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_missing_scanner_is_named_with_how_to_install_it() {
+    let repo = leaky("safety");
+    repo.write("src/new.rs", "fn main() {}\n");
+    let out = repo.fz_env(&["run", "gitleaks"], &[("PATH", "/usr/bin:/bin")]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("gitleaks was not found"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("pkgs.gitleaks"), "{}", out.stdout);
+}
+
+/// A workflow with a template injection on line 8.
+const WORKFLOW: &str = "name: ci\non: push\npermissions: {}\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ github.event.head_commit.message }}\n";
+
+#[test]
+fn the_actions_piece_gates_what_zizmor_calls_an_error_on_a_changed_line() {
+    let repo = Repo::new(
+        "use = [\"actions\"]\n",
+        &[(".github/workflows/old.yml", WORKFLOW)],
+    );
+    assert_eq!(checks(&repo), "zizmor");
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+
+    // The old workflow is as bad, but this change did not touch it.
+    repo.write(
+        ".github/workflows/new.yml",
+        "name: ok\non: push\npermissions: {}\njobs: {}\n",
+    );
+    let out = repo.fz(&["run", "zizmor"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+
+    repo.write(".github/workflows/new.yml", WORKFLOW);
+    let out = repo.fz(&["run", "zizmor"]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains(".github/workflows/new.yml:8"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("zizmor/template-injection"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn flutter_film_runs_its_entry_file_as_a_plain_command() {
+    let preset: toml::Value = toml::from_str(include_str!("../presets/flutter-look.toml")).unwrap();
+    let run = preset["check"]["flutter-film"]["run"].as_str().unwrap();
+    assert_eq!(run, "flutter test integration_test/app_test.dart -d macos");
 }

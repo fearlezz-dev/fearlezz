@@ -74,7 +74,7 @@ struct Example {
 }
 
 /// Globs as written (for the fingerprint) and compiled.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 struct Patterns {
     text: Vec<String>,
     set: GlobSet,
@@ -443,6 +443,14 @@ impl Kind {
     }
 }
 
+/// Only the globs as written, since the fingerprint is part of the check's key: the compiled
+/// set's form changes with the glob library.
+impl std::fmt::Debug for Patterns {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(&self.text).finish()
+    }
+}
+
 impl Patterns {
     fn new(text: Vec<String>) -> Result<Patterns> {
         let mut set = GlobSetBuilder::new();
@@ -608,6 +616,12 @@ fn ast_grep(root: &Path, docs: &[String], stdin: Option<&str>) -> Result<Vec<Mat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn globs_join_the_fingerprint_as_written() {
+        let p = Patterns::new(vec!["src/**".to_string()]).unwrap();
+        assert_eq!(format!("{p:?}"), r#"["src/**"]"#);
+    }
 
     #[test]
     fn styles_accept_their_own_names_only() {

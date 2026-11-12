@@ -36,11 +36,17 @@ pub(crate) enum Event {
     Wait {
         question: String,
     },
-    /// The developer agreed with the changed pictures of a check, for these inputs.
+    /// The developer agreed with the changed pictures of a check, for these inputs. `by` and
+    /// `url` name the person and the reply when they approved on the pull request, as CI
+    /// checked; without them it is what the agent reports the developer said.
     Approve {
         check: String,
         key: String,
         said: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
     },
     Note {
         text: String,

@@ -9,7 +9,7 @@
     components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" ];
   };
 
-  packages = [ pkgs.git pkgs.ffmpeg pkgs.ast-grep pkgs.actionlint pkgs.shellcheck pkgs.jq pkgs.yq-go ];
+  packages = [ pkgs.git pkgs.ffmpeg pkgs.ast-grep pkgs.actionlint pkgs.shellcheck pkgs.jq pkgs.yq-go pkgs.gitleaks pkgs.trufflehog pkgs.betterleaks pkgs.osv-scanner pkgs.zizmor ];
 
   scripts = {
     format = {
@@ -17,7 +17,7 @@
       exec = ''cd "$DEVENV_ROOT" && cargo fmt --all'';
     };
     check = {
-      description = "Prove this commit with every check the change needs, fresh, as CI does";
+      description = "Prove this commit with every check, fresh, as CI does";
       exec = ''
         set -euo pipefail
         cd "$DEVENV_ROOT"

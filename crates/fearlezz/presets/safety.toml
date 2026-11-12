@@ -1,0 +1,15 @@
+# Safety: a credential must never reach the repository.
+#
+# gitleaks scans the working tree and Fearlezz keeps only the findings on lines this change
+# touched, so a secret committed long ago never blocks new work. Every match is a gate: a
+# leaked key is not a style question. gitleaks reports SARIF without levels, so the check
+# gives them. `--redact` keeps the secret out of the report, so it is never printed or stored.
+#
+# To let a known fake value through, write `gitleaks:allow` on its line, or list the finding's
+# fingerprint in `.gitleaksignore`. Do not turn the check off. To scan with another tool,
+# `use` the `trufflehog` or `betterleaks` piece and turn this check off.
+
+[check.gitleaks]
+run = "gitleaks dir . --no-banner --redact --exit-code 0 --report-format sarif --report-path -"
+stage = "working"
+findings = { read = "sarif", level = "gate", fix = "remove the secret, rotate it because it has been exposed, and read it from the environment or SecretSpec instead" }

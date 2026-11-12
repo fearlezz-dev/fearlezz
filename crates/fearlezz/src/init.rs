@@ -30,21 +30,31 @@ const MARKERS: &[(&str, &[&str])] = &[
         ],
     ),
     ("flutter", &["pubspec.yaml"]),
+    // A folder, not a file: zizmor audits the workflows GitHub runs.
+    ("actions", &[".github/workflows"]),
 ];
+
+/// The piece every project gets, whatever it is written in: a leaked credential is never
+/// acceptable. Last in the starter, after the pieces that give the others their toolchain.
+const SAFETY: &str = "safety";
 
 /// Prose needs no proof. Written from the first commit on, so the base branch already has it
 /// when the first change to docs alone comes.
 const NO_PROOF: &str = r#"no_proof = ["*.md", "docs/**"]"#;
 
-/// A piece `init` used and the file at the root that showed it.
+/// A piece `init` used and the file at the root that showed it, none for a piece every
+/// project gets.
 pub(crate) struct Found {
     pub piece: &'static str,
-    pub file: &'static str,
+    pub file: Option<&'static str>,
 }
 
 impl std::fmt::Display for Found {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.piece, self.file)
+        match self.file {
+            Some(file) => write!(f, "{} ({file})", self.piece),
+            None => write!(f, "{} (every project)", self.piece),
+        }
     }
 }
 
@@ -61,9 +71,16 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
     let found: Vec<Found> = MARKERS
         .iter()
         .filter_map(|(piece, files)| {
-            let file = files.iter().find(|f| root.join(f).is_file())?;
-            Some(Found { piece, file })
+            let file = files.iter().find(|f| root.join(f).exists())?;
+            Some(Found {
+                piece,
+                file: Some(file),
+            })
         })
+        .chain([Found {
+            piece: SAFETY,
+            file: None,
+        }])
         .collect();
     std::fs::write(&path, starter(&found)?)
         .with_context(|| format!("writing {}", path.display()))?;
@@ -72,27 +89,26 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
 
 fn starter(found: &[Found]) -> Result<String, std::fmt::Error> {
     let mut text = String::from(
-        "# The proof this project's changes need. `fearlezz --plan` shows which checks a change\n\
-         # needs; the agent skill (`fearlezz setup sync` writes it) explains the rest.\n\n",
+        "# The proof this project's changes need. `fearlezz --plan` shows where each check stands;\n\
+         # the agent skill (`fearlezz setup sync` writes it) explains the rest.\n\n",
     );
-    if found.is_empty() {
+    if found.iter().all(|p| p.file.is_none()) {
         text.push_str(
-            "# No language was found. Declare each check: a command that exits 0 on success, and\n\
-             # every file it reads.\n\
+            "# No language was found. Declare each check: a command that exits 0 on success.\n\
              # [check.tests]\n\
              # run = \"make test\"\n\
-             # stage = \"working\"\n\
-             # inputs = [\"src/**\", \"Makefile\"]\n\n",
+             # stage = \"working\"\n\n",
         );
-    } else {
-        let names: Vec<String> = found.iter().map(|p| format!("\"{}\"", p.piece)).collect();
-        writeln!(
-            text,
-            "# Built in pieces; override any field below, or drop a check with `off = true`.\n\
-             use = [{}]\n",
-            names.join(", ")
-        )?;
     }
+    let names: Vec<String> = found.iter().map(|p| format!("\"{}\"", p.piece)).collect();
+    writeln!(
+        text,
+        "# Built in pieces; override any field below, or drop a check with `off = true`.\n\
+         # `safety` scans for leaked secrets with gitleaks; pick `trufflehog` or `betterleaks`\n\
+         # instead, or add `osv-scanner` for vulnerable dependencies.\n\
+         use = [{}]\n",
+        names.join(", ")
+    )?;
     writeln!(text, "{NO_PROOF}")?;
     Ok(text)
 }

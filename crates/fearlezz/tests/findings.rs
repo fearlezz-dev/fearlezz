@@ -34,6 +34,21 @@ fn feature() -> Repo {
 }
 
 #[test]
+fn reading_findings_another_way_runs_the_check_again() {
+    let repo = feature();
+    repo.write("src/a.txt", &format!("{OLD}five\n"));
+    let first = repo.fz(&["run", "lint"]);
+    assert!(first.ok, "{}\n{}", first.stdout, first.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("findings = \"jsonl\"", "findings = \"sarif\""),
+    );
+    let out = repo.fz(&["run", "lint"]);
+    assert!(!out.stdout.contains("1 reused"), "{}", out.stdout);
+}
+
+#[test]
 fn old_findings_do_not_block_new_work() {
     let repo = feature();
     repo.write("src/a.txt", &format!("{OLD}five\n"));
@@ -200,4 +215,66 @@ fn a_finding_named_from_another_folder_blocks_instead_of_hiding() {
         "{}",
         out.stdout
     );
+}
+
+/// A scanner that reports SARIF with no level and no line: one result on `a.lock`, as a
+/// dependency scanner reports a lockfile.
+fn scanner(findings: &str) -> String {
+    format!(
+        r#"
+[check.scan]
+run = '''
+printf '{{"runs":[{{"results":[{{"ruleId":"CVE-1","message":{{"text":"a.lock is vulnerable"}},"locations":[{{"physicalLocation":{{"artifactLocation":{{"uri":"a.lock"}}}}}}]}}]}}]}}'
+'''
+stage = "working"
+inputs = ["*.lock"]
+findings = {findings}
+"#
+    )
+}
+
+#[test]
+fn a_check_can_set_the_level_and_fix_of_findings_the_tool_gave_none() {
+    let repo = Repo::new(
+        &scanner(r#"{ read = "sarif", level = "gate", fix = "upgrade it" }"#),
+        &[("a.lock", "1\n")],
+    );
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo.write("a.lock", "2\n");
+    let out = repo.fz(&["run", "scan"]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("gate a.lock  CVE-1  a.lock is vulnerable"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("fix: upgrade it"), "{}", out.stdout);
+}
+
+#[test]
+fn a_finding_without_a_line_counts_when_the_change_touched_its_file() {
+    let repo = Repo::new(
+        &scanner(r#"{ read = "sarif", level = "flag" }"#),
+        &[("a.lock", "1\n"), ("b.lock", "1\n")],
+    );
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+
+    // The change touched b.lock alone, so a.lock's finding is not this change's.
+    repo.write("b.lock", "2\n");
+    let out = repo.fz(&["run", "scan"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("(1 more on lines this change did not touch)"),
+        "{}",
+        out.stdout
+    );
+
+    repo.write("a.lock", "2\n");
+    let out = repo.fz(&["run", "scan"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("flag a.lock  CVE-1"), "{}", out.stdout);
 }

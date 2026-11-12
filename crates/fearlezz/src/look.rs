@@ -16,9 +16,6 @@ use crate::run;
 use crate::state::Worktree;
 use crate::store::{Outcome, RunResult, Store};
 
-/// File in a run's folder naming the folder of its latest look.
-const LOOK_POINTER: &str = "look.path";
-
 /// The journal name base runs are recorded under.
 pub(crate) const BASE_JOURNAL: &str = "(base)";
 
@@ -56,6 +53,10 @@ pub(crate) struct Item {
     pub before: Option<String>,
     pub after: Option<String>,
     pub comparison: Option<Comparison>,
+    /// Named by the check's `flaky`: compared and shown, but never blocks or waits for
+    /// approval.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flaky: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,14 +68,23 @@ pub(crate) struct Look {
     /// failed). Then every picture counts as new and needs approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_before: Option<String>,
+    /// Something about the comparison a person should know, such as a base run that passed
+    /// without taking any pictures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     pub items: Vec<Item>,
     pub report: PathBuf,
 }
 
 impl Look {
-    /// For example `1 changed, 2 same, 1 new`.
+    /// For example `1 changed, 2 same, 1 new, 1 flaky`. Flaky pictures count apart.
     pub(crate) fn counts(&self) -> String {
-        let mut changes: Vec<Change> = self.items.iter().map(|i| i.change).collect();
+        let mut changes: Vec<Change> = self
+            .items
+            .iter()
+            .filter(|i| !i.flaky)
+            .map(|i| i.change)
+            .collect();
         changes.sort();
         let mut parts: Vec<String> = Vec::new();
         for c in changes.iter().copied() {
@@ -84,22 +94,30 @@ impl Look {
                 parts.push(part);
             }
         }
+        let flaky = self.items.iter().filter(|i| i.flaky).count();
+        if flaky > 0 {
+            parts.push(format!("{flaky} flaky"));
+        }
         parts.join(", ")
     }
 
-    /// Items a person should look at: anything but same.
+    /// Items a person should look at: anything but same, and never a flaky one.
     pub(crate) fn to_look_at(&self) -> usize {
         self.items
             .iter()
-            .filter(|i| i.change != Change::Same)
+            .filter(|i| i.change != Change::Same && !i.flaky)
             .count()
     }
 
-    /// The latest look saved for a run, if any.
-    pub(crate) fn of(result: &RunResult) -> Option<Look> {
-        let dir = fs::read_to_string(result.dir.join(LOOK_POINTER)).ok()?;
-        let text = fs::read_to_string(Path::new(dir.trim()).join("look.json")).ok()?;
+    /// The look saved in the folder `dir`, if any.
+    pub(crate) fn at(dir: &Path) -> Option<Look> {
+        let text = fs::read_to_string(dir.join("look.json")).ok()?;
         serde_json::from_str(&text).ok()
+    }
+
+    /// The folder it is saved in.
+    pub(crate) fn dir(&self) -> &Path {
+        self.report.parent().unwrap_or(&self.report)
     }
 }
 
@@ -112,29 +130,111 @@ pub(crate) enum LookOutcome {
     Done(Look),
 }
 
-/// The base commit, checked out in a hidden worktree.
+/// The base commit, checked out in the per user cache (see [`Git::bases_dir`]).
 pub(crate) struct Base {
     pub commit: String,
     pub wt: Worktree,
     prepared: bool,
     /// Keeps other commands from removing the worktree while this one uses it.
-    _hold: std::fs::File,
+    _hold: fs::File,
 }
 
 impl Base {
-    /// None when the base branch does not exist.
-    pub(crate) fn open(git: &Git, config: &Config) -> Result<Option<Base>> {
-        let Some(commit) = git.merge_base(&config.base) else {
-            return Ok(None);
-        };
-        let (base, hold) = git.base_worktree(&commit)?;
+    /// The base commit in a checkout of its own, told apart from others by `name`. Every
+    /// run on a base commit goes through here, so where base checkouts live is decided once.
+    pub(crate) fn at(git: &Git, config: &Config, commit: String, name: &str) -> Result<Base> {
+        let (base, hold) = git.base_worktree(&commit, name)?;
         let wt = Worktree::read(base, config)?;
-        Ok(Some(Base {
+        Ok(Base {
             commit,
             wt,
             prepared: false,
             _hold: hold,
-        }))
+        })
+    }
+
+    /// Reads the worktree again after its files changed.
+    pub(crate) fn reread(&mut self, config: &Config) -> Result<()> {
+        self.wt = Worktree::read(self.wt.git.clone(), config)?;
+        Ok(())
+    }
+}
+
+/// `stills = "<glob>"` or `films = "<glob>"`: every file the check wrote under
+/// `$FEARLEZZ_OUT` matching the glob is a still (or film), for tools that write pictures into a
+/// folder and no `proof.jsonl`. Each is named by its path below the glob's fixed folders,
+/// without the extension: `stills/desktop/home.png` matched by `stills/**/*.png` is
+/// `desktop/home`.
+pub(crate) struct MediaGlob {
+    kind: &'static str,
+    /// As written.
+    glob: String,
+    matcher: globset::GlobMatcher,
+    /// The folders before the first segment with a wildcard, with a trailing slash.
+    fixed: String,
+}
+
+impl MediaGlob {
+    pub(crate) fn parse(kind: &'static str, written: &str) -> Result<MediaGlob> {
+        let glob = written.strip_prefix("$FEARLEZZ_OUT/").unwrap_or(written);
+        let matcher = globset::GlobBuilder::new(glob)
+            .literal_separator(true)
+            .build()
+            .map_err(|e| anyhow::anyhow!("{kind}s \"{glob}\": {e}"))?
+            .compile_matcher();
+        // The file name segment is never a folder, so only the ones before it count.
+        let folders = glob.rsplit_once('/').map_or("", |(dirs, _)| dirs);
+        let mut fixed = String::new();
+        for segment in folders
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .take_while(|s| !s.contains(['*', '?', '[', '{']))
+        {
+            fixed.push_str(segment);
+            fixed.push('/');
+        }
+        Ok(MediaGlob {
+            kind,
+            glob: written.to_string(),
+            matcher,
+            fixed,
+        })
+    }
+
+    /// The glob as written.
+    pub(crate) fn glob(&self) -> &str {
+        &self.glob
+    }
+
+    /// The proofs for the files under `out` this glob matches, sorted by path.
+    pub(crate) fn proofs(&self, out: &Path) -> Vec<serde_json::Value> {
+        let mut files = Vec::new();
+        walk(out, out, &mut files);
+        files.sort();
+        files
+            .into_iter()
+            .filter(|rel| self.matcher.is_match(rel))
+            .map(|rel| {
+                let below = rel.strip_prefix(&self.fixed).unwrap_or(&rel);
+                let id = below.rsplit_once('.').map_or(below, |(stem, _)| stem);
+                serde_json::json!({ "kind": self.kind, "file": rel, "id": id })
+            })
+            .collect()
+    }
+}
+
+/// Every file below `dir`, as a path relative to `base` with forward slashes.
+fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk(base, &path, out);
+        } else if let Ok(rel) = path.strip_prefix(base) {
+            out.push(rel.to_string_lossy().replace('\\', "/"));
+        }
     }
 }
 
@@ -168,8 +268,10 @@ pub(crate) fn has_media(result: &RunResult) -> bool {
     !media_proofs(result).is_empty()
 }
 
-/// Compares the stills and films of `result` with the same check run on the base commit.
-/// Runs the check on the base only when no result exists for its inputs there.
+/// Compares the stills and films of `result`, a run of a check that takes pictures, with the
+/// same check run on the base commit. A run without any is compared too, so pictures the
+/// change removed all show as gone. Runs the check on the base only when no result exists for
+/// its inputs there.
 pub(crate) fn look(
     store: &Store,
     check: &Check,
@@ -178,17 +280,21 @@ pub(crate) fn look(
     stage: &str,
     env: &EnvCtx<'_>,
 ) -> Result<LookOutcome> {
-    if media_proofs(result).is_empty() {
-        return Ok(LookOutcome::NoMedia);
-    }
     let inputs = base.wt.inputs(check)?;
     if inputs.key == result.key {
-        return Ok(LookOutcome::SameInputs);
+        return Ok(if has_media(result) {
+            LookOutcome::SameInputs
+        } else {
+            LookOutcome::NoMedia
+        });
     }
     let before = match store.for_key(&inputs.key).pop() {
         Some(r) => r,
         None => run_on_base(store, check, &inputs, base, stage, env)?,
     };
+    if !has_media(result) && (before.outcome == Outcome::Failed || !has_media(&before)) {
+        return Ok(LookOutcome::NoMedia);
+    }
     if before.outcome == Outcome::Failed {
         let reason = format!(
             "the check fails on the base commit (log: {})",
@@ -197,14 +303,23 @@ pub(crate) fn look(
         return without_before(check, result, &base.wt.git.common, &reason).map(LookOutcome::Done);
     }
     let dir = look_dir(&base.wt.git.common, check, &before.id, &result.id);
-    let look = match fs::read_to_string(dir.join("look.json"))
+    let saved: Option<Look> = fs::read_to_string(dir.join("look.json"))
         .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-    {
-        Some(look) => look,
-        None => build(check, Some(&before), result, &base.commit, None, &dir)?,
+        .and_then(|text| serde_json::from_str(&text).ok());
+    // A base run that passes without any picture usually means it could not reach what it
+    // records, or the recording is new in this change.
+    let note = (!has_media(&before)).then(|| {
+        format!(
+            "the base run passed without any pictures; when the recording is not new in this \
+             change, read its log: {}",
+            before.log.display()
+        )
+    });
+    let look = if let Some(look) = saved {
+        look
+    } else {
+        build(check, Some(&before), result, &base.commit, None, note, &dir)?
     };
-    point(result, &dir)?;
     Ok(LookOutcome::Done(look))
 }
 
@@ -217,32 +332,31 @@ pub(crate) fn without_before(
     reason: &str,
 ) -> Result<Look> {
     let dir = look_dir(common, check, "", &result.id);
-    let look = build(check, None, result, "", Some(reason.to_string()), &dir)?;
-    point(result, &dir)?;
-    Ok(look)
+    build(
+        check,
+        None,
+        result,
+        "",
+        Some(reason.to_string()),
+        None,
+        &dir,
+    )
 }
 
-/// One folder per pair of runs, with a short name people can open.
+/// One folder per pair of runs and the pictures called flaky, with a short name people can
+/// open.
 fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf {
-    let pair = hex::encode(Sha256::digest(format!("{before}\0{after}")));
+    let flaky = check.pictures.flaky.patterns().join("\0");
+    let pair = hex::encode(Sha256::digest(format!("{before}\0{after}\0{flaky}")));
     common
         .join("fearlezz")
         .join("looks")
         .join(format!("{}-{}", check.id, &pair[..10]))
 }
 
-/// Records the look as the run's latest.
-fn point(result: &RunResult, dir: &Path) -> Result<()> {
-    fs::write(
-        result.dir.join(LOOK_POINTER),
-        dir.to_string_lossy().as_bytes(),
-    )?;
-    Ok(())
-}
-
 /// Runs a check on the base checkout: prepared like any checkout, with its own services
 /// for this one run.
-fn run_on_base(
+pub(crate) fn run_on_base(
     store: &Store,
     check: &Check,
     inputs: &crate::store::Inputs,
@@ -292,6 +406,7 @@ fn build(
     after: &RunResult,
     base_commit: &str,
     no_before: Option<String>,
+    note: Option<String>,
     dir: &Path,
 ) -> Result<Look> {
     let media_dir = dir.join("media");
@@ -319,6 +434,7 @@ fn build(
             before: None,
             after: None,
             comparison: None,
+            flaky: check.pictures.is_flaky(&a.name),
         };
         let copies = (
             b.map(|(run, b)| copy("before", run, b)).transpose(),
@@ -355,6 +471,7 @@ fn build(
                 before: copied.and_then(Result::ok),
                 after: None,
                 comparison: None,
+                flaky: check.pictures.is_flaky(&b.name),
             },
             None,
         ));
@@ -373,10 +490,8 @@ fn build(
                     s.spawn(move || {
                         let mut item = item.clone();
                         if let Some((b, a)) = pair {
-                            let compared = media::decode(b).and_then(|fb| {
-                                let fa = media::decode(a)?;
-                                media::compare(&fb, &fa)
-                            });
+                            let compared = media::decode_both(b, a)
+                                .and_then(|(fb, fa)| media::compare(&fb, &fa));
                             match compared {
                                 Ok(c) => {
                                     item.change = match c.verdict {
@@ -418,10 +533,14 @@ fn build(
         base_commit: base_commit.to_string(),
         base_result: before.map(|b| b.id.clone()).unwrap_or_default(),
         no_before,
+        note,
         items,
         report: dir.join("index.html"),
     };
     crate::report::write(dir, &mut look)?;
-    fs::write(dir.join("look.json"), serde_json::to_string_pretty(&look)?)?;
+    // Whole or not at all: a reader never sees a look written in part.
+    let part = dir.join("look.json.part");
+    fs::write(&part, serde_json::to_string_pretty(&look)?)?;
+    fs::rename(&part, dir.join("look.json"))?;
     Ok(look)
 }

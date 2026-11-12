@@ -1,25 +1,25 @@
 # Fearlezz proves its own changes with built in pieces: devenv gives every check the
-# toolchain, rust brings fmt, clippy and tests. Each check runs in a clean env inside
-# `devenv shell`: only the base variables and the ones listed under `env` reach it.
+# toolchain, rust brings fmt, clippy and tests, safety scans for leaked credentials. Each check
+# runs in a clean env inside `devenv shell`: only the base variables and the ones listed under
+# `env` reach it.
 
-use = ["devenv", "rust", "agents"]
+use = ["devenv", "rust", "agents", "safety"]
 
-# Prose needs no proof. The workflows, the release config, install.sh and the action are proven
-# by the checks below. The Nix flake is left out on purpose: a change to it is red in CI until a
-# person with admin rights merges past it.
+# Prose needs no proof: an edit to it alone reruns no check.
 no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
 
-# The binary embeds the agent skill and the built in pieces, so the tests read them too.
+# Checks without inputs are keyed on every file outside no_proof. The tests keep inputs, as a
+# speed hint: an edit to a workflow or install.sh would otherwise rerun the slowest check. They
+# read the embedded agent skill and pieces, the fixtures, the proof workflow and README.md,
+# which no_proof leaves out of the default key.
 [check.tests]
-inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**"]
+inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**", "README.md", ".github/workflows/proof.yml"]
 
 [check.actionlint]
 run = "actionlint"
 stage = "working"
-inputs = [".github/workflows/**"]
 
 # action.yml is metadata, not a workflow, so it is parsed here instead.
 [check.packaging]
 run = "jq empty release-please-config.json .release-please-manifest.json && yq '.' action.yml > /dev/null && shellcheck install.sh"
 stage = "working"
-inputs = ["release-please-config.json", ".release-please-manifest.json", "action.yml", "install.sh"]

@@ -14,6 +14,9 @@ use crate::store::{Hasher, Inputs, Outcome, Store};
 /// The worktree a journal's branch is checked out in, as it is right now.
 pub(crate) struct Worktree {
     pub git: Git,
+    /// The base commit: where the branch left the base branch. Everything compared with the
+    /// base (changed files, the floor, the look, red before green) is compared with this one.
+    pub base: String,
     pub changed: BTreeSet<String>,
     /// The changed lines, for checks that report findings.
     pub lines: crate::findings::Changed,
@@ -25,9 +28,11 @@ pub(crate) struct Worktree {
 
 impl Worktree {
     pub(crate) fn read(git: Git, config: &Config) -> Result<Worktree> {
+        let base = git.base_commit(&config.base)?;
         Ok(Worktree {
-            changed: git.changed(&config.base)?,
-            lines: git.changed_lines(&config.base)?,
+            changed: git.changed(&base)?,
+            lines: git.changed_lines(&base)?,
+            base,
             files: git.files()?,
             tree: git.tree()?,
             committed: git.committed()?,
@@ -58,21 +63,43 @@ pub enum CheckState {
     Stale(Vec<String>),
     /// Passed, but the final stage wants a fresh run of its own.
     NeedsFresh,
+    /// Passed, but not yet compared with the base commit the work stands on now (its
+    /// pictures, or red before green for a fix at the final stage).
+    Uncompared,
     Never,
 }
 
 pub(crate) struct CheckView {
     pub id: String,
     pub stage: Stage,
-    /// The change touched one of its inputs.
-    pub needed: bool,
     pub state: CheckState,
     /// How its stills and films compare with the base, for a passing run.
     pub look: Option<crate::look::Look>,
-    /// What the developer said when approving its pictures as they are now.
-    pub approved: Option<String>,
+    /// The approval of its pictures as they are now.
+    pub approved: Option<Approved>,
     /// The findings in scope of its latest run on these inputs.
     pub findings: Vec<crate::findings::Finding>,
+    /// What red before green found for its passing run on these inputs, against this base.
+    pub red: Option<crate::red::Mark>,
+}
+
+/// An approval of a check's changed pictures.
+#[derive(Clone, Debug)]
+pub(crate) struct Approved {
+    /// The developer's words.
+    pub said: String,
+    /// Who approved on the pull request, as CI checked; none when the agent reported it.
+    pub by: Option<String>,
+}
+
+impl Approved {
+    /// For example `approved on GitHub by @lead ("ship it")`.
+    pub(crate) fn label(&self) -> String {
+        match &self.by {
+            Some(by) => format!("approved on GitHub by @{by} (\"{}\")", self.said),
+            None => format!("approved (\"{}\")", self.said),
+        }
+    }
 }
 
 impl CheckView {
@@ -145,7 +172,7 @@ pub(crate) fn view(
     let mut went_back = None;
     let mut waiting = None;
     let mut last_note = None;
-    let mut approvals: std::collections::BTreeMap<String, (String, String)> =
+    let mut approvals: std::collections::BTreeMap<String, (String, Approved)> =
         std::collections::BTreeMap::default();
     for entry in &journal.entries {
         match &entry.event {
@@ -157,8 +184,26 @@ pub(crate) fn view(
                 waiting = None;
             }
             Event::Ran { .. } => waiting = None,
-            Event::Approve { check, key, said } => {
-                approvals.insert(check.clone(), (key.clone(), said.clone()));
+            Event::Approve {
+                check,
+                key,
+                said,
+                by,
+                ..
+            } => {
+                let approved = Approved {
+                    said: said.clone(),
+                    by: by.clone(),
+                };
+                // The agent's report of what the developer said never replaces an approval
+                // a person gave on the pull request for the same inputs.
+                let weaker = by.is_none()
+                    && approvals
+                        .get(check)
+                        .is_some_and(|(k, a)| k == key && a.by.is_some());
+                if !weaker {
+                    approvals.insert(check.clone(), (key.clone(), approved));
+                }
                 waiting = None;
             }
             Event::Wait { question } => waiting = Some(question.clone()),
@@ -174,28 +219,31 @@ pub(crate) fn view(
     let mut skill_out_of_date = false;
     let mut committed = true;
     let mut floor_fails = false;
+    let mut red_next = None;
     if let Some(wt) = worktree {
         committed = wt.committed;
         // Only the final stage answers for what the base branch requires.
         if stage == final_stage && !wt.changed.is_empty() {
-            floor_fails = !crate::floor::Floor::read(&wt.git, config, wt)?.holds();
+            floor_fails = !crate::floor::Floor::read(config, wt)?.holds();
         }
+        // Asked once, and only when a check's red before green is in question.
+        let mut fix: Option<bool> = None;
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
-        // The config shapes every check, though none reads it, so changing it needs them all.
-        let config_files = crate::presets::config_files(&wt.git.root)?;
-        let config_changed = wt.changed.iter().any(|p| config_files.contains(p));
         for check in &config.checks {
-            let needed = config_changed || wt.changed.iter().any(|p| check.reads(p));
             let latest = latest_ran(journal, &check.id);
-            if !needed && latest.is_none() {
+            // Any change needs every check; its inputs only say whether a pass still holds.
+            if wt.changed.is_empty() && latest.is_none() {
                 continue;
             }
             let inputs = wt.inputs(check)?;
-            let look = latest
+            let passed = latest
                 .as_ref()
                 .filter(|ran| ran.key == inputs.key && ran.outcome == Outcome::Passed)
-                .and_then(|ran| store.get(ran.key, ran.result))
-                .and_then(|r| crate::look::Look::of(&r));
+                .and_then(|ran| store.get(ran.key, ran.result));
+            let compared = match &passed {
+                Some(run) => compared(config, wt, check, run, stage == final_stage, &mut fix)?,
+                None => Compared::default(),
+            };
             let findings = latest
                 .as_ref()
                 .filter(|ran| ran.key == inputs.key)
@@ -215,6 +263,8 @@ pub(crate) fn view(
                         .is_some_and(|r| r.made_at_final(&journal.name, stages.name(final_stage)));
                     if stage == final_stage && !fresh {
                         CheckState::NeedsFresh
+                    } else if compared.missing {
+                        CheckState::Uncompared
                     } else {
                         CheckState::Ok
                     }
@@ -223,16 +273,19 @@ pub(crate) fn view(
             let approved = approvals
                 .get(&check.id)
                 .filter(|(key, _)| *key == inputs.key)
-                .map(|(_, said)| said.clone());
+                .map(|(_, approved)| approved.clone());
             checks.push(CheckView {
                 id: check.id.clone(),
                 stage: check.stage,
-                needed,
                 state,
-                look,
+                look: compared.look,
                 approved,
                 findings,
+                red: compared.red,
             });
+        }
+        if stage == final_stage {
+            red_next = red_hold(wt, &checks)?;
         }
     } else {
         for check in &config.checks {
@@ -240,7 +293,6 @@ pub(crate) fn view(
                 checks.push(CheckView {
                     id: check.id.clone(),
                     stage: check.stage,
-                    needed: true,
                     state: match ran.outcome {
                         Outcome::Passed => CheckState::Ok,
                         Outcome::Failed => CheckState::Failed,
@@ -248,6 +300,7 @@ pub(crate) fn view(
                     look: None,
                     approved: None,
                     findings: Vec::new(),
+                    red: None,
                 });
             }
         }
@@ -281,7 +334,13 @@ pub(crate) fn view(
     } else {
         Group::Idle
     };
-    view.next = next(config, &view, skill_out_of_date, floor_fails);
+    view.next = next(
+        config,
+        &view,
+        skill_out_of_date,
+        floor_fails,
+        red_next.as_deref(),
+    );
     view.now = now_line(config, &view);
     Ok(view)
 }
@@ -332,9 +391,78 @@ fn changed_parts(store: &Store, ran: Ran<'_>, now: &Inputs) -> Vec<String> {
     changed
 }
 
+/// How a passing run compares with the base commit the work stands on now.
+#[derive(Default)]
+struct Compared {
+    look: Option<crate::look::Look>,
+    red: Option<crate::red::Mark>,
+    /// A comparison it needs is missing: its pictures, or red before green for a fix at the
+    /// final stage.
+    missing: bool,
+}
+
+/// How `run`, a passing run of `check`, compares with the base commit of `wt`. `fix` caches
+/// whether the change is a fix, asked only when red before green is in question.
+fn compared(
+    config: &Config,
+    wt: &Worktree,
+    check: &crate::config::Check,
+    run: &crate::store::RunResult,
+    at_final: bool,
+    fix: &mut Option<bool>,
+) -> Result<Compared> {
+    let against = crate::store::AgainstBase::of(run, &wt.base).unwrap_or_default();
+    let look = match &against.look {
+        Some(crate::store::Looked::At(dir)) => crate::look::Look::at(dir),
+        _ => None,
+    };
+    let look_missing = match &against.look {
+        None => true,
+        Some(crate::store::Looked::At(_)) => look.is_none(),
+        Some(crate::store::Looked::Nothing) => false,
+    };
+    let wants_look = crate::look::has_media(run) || config.takes_pictures(check);
+    let wants_red = at_final
+        && against.red.is_none()
+        && !crate::red::test_files(check, wt).is_empty()
+        && match *fix {
+            Some(fix) => fix,
+            None => *fix.insert(crate::red::is_fix_change(&wt.git, &wt.base)?),
+        };
+    Ok(Compared {
+        look,
+        // A look recorded but gone or unreadable is missing, so the next run makes it again
+        // rather than the check reading ok with nothing to approve.
+        missing: (wants_look && look_missing) || wants_red,
+        red: against.red,
+    })
+}
+
+/// What holds a fix at the final stage: a check whose run on these inputs red before green
+/// marked, against this base commit, as not showing the fix. None when the change is no fix.
+/// A check not yet compared with this base is [`CheckState::Uncompared`], so it needs a run.
+fn red_hold(wt: &Worktree, checks: &[CheckView]) -> Result<Option<String>> {
+    let held: Vec<(&str, &crate::red::Mark)> = checks
+        .iter()
+        .filter(|c| c.state == CheckState::Ok)
+        .filter_map(|c| Some((c.id.as_str(), c.red.as_ref()?)))
+        .filter(|(_, mark)| mark.unshown.is_some())
+        .collect();
+    if held.is_empty() || !crate::red::is_fix_change(&wt.git, &wt.base)? {
+        return Ok(None);
+    }
+    Ok(held.into_iter().find_map(|(id, mark)| mark.next(id)))
+}
+
 /// What the agent should do next, as one line. Order: the developer, the agent skill, failures,
-/// needed runs, moving on.
-fn next(config: &Config, v: &View, skill_out_of_date: bool, floor_fails: bool) -> String {
+/// needed runs, what the base branch requires, moving on.
+fn next(
+    config: &Config,
+    v: &View,
+    skill_out_of_date: bool,
+    floor_fails: bool,
+    red: Option<&str>,
+) -> String {
     let stages = &config.stages;
     if let Some(q) = &v.waiting {
         return format!("waiting for the developer: {q}");
@@ -344,11 +472,7 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool, floor_fails: bool) -
                 commit it"
             .into();
     }
-    let due: Vec<&CheckView> = v
-        .checks
-        .iter()
-        .filter(|c| c.needed && c.stage <= v.stage)
-        .collect();
+    let due: Vec<&CheckView> = v.checks.iter().filter(|c| c.stage <= v.stage).collect();
     if let Some(c) = due
         .iter()
         .find(|c| matches!(c.state, CheckState::Failed | CheckState::Unstable))
@@ -388,12 +512,16 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool, floor_fails: bool) -
         .and_then(|c| c.look.as_ref())
     {
         return format!(
-            "look at {} ({}): {}; when the developer agrees: fearlezz say approve {} --said \"<their words>\"",
+            "look at {0} ({1}): {2}; when the developer agrees: fearlezz say approve {0} --said \
+             \"<their words>\", or once they approved on the pull request: fearlezz say approve \
+             {0} --github",
             l.check,
             l.counts(),
             l.report.display(),
-            l.check
         );
+    }
+    if let Some(line) = red {
+        return line.to_string();
     }
     match stages.after(v.stage) {
         Some(s) => format!("when ready: fearlezz run --stage {}", stages.name(s)),

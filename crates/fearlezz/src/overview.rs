@@ -6,40 +6,62 @@ use jiff::Timestamp;
 
 use crate::config::Config;
 use crate::journal::{Event, Journal};
+use crate::page::esc;
 use crate::state::{CheckState, Group, View};
 use crate::{ago, state_label};
 
 const STYLE: &str = "
-:root { --bg:#f6f7f9; --card:#fff; --fg:#1b2230; --muted:#5d6675; --line:#dfe3ea;
-  --you:#7a4fd6; --bad:#c8402f; --ok:#2e8b57; --stale:#b7791f; color-scheme: light dark; }
-@media (prefers-color-scheme: dark) { :root { --bg:#12161d; --card:#1a1f28; --fg:#e8ebf0;
-  --muted:#9aa3b2; --line:#2b323e; --you:#b49bff; --bad:#ff8a7a; --ok:#6fcf97; --stale:#e0b25a; } }
-* { box-sizing: border-box; }
-body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui, sans-serif; }
-main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
-h1 { font-size: 26px; margin: 0 0 4px; }
-h2 { font-size: 18px; margin: 32px 0 10px; color: var(--muted); }
-.built { color: var(--muted); font-size: 14px; }
-section { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--line);
-  border-radius: 10px; padding: 16px 18px; margin-bottom: 12px; }
-section.needs-you { border-left-color: var(--you); }
-section.failing { border-left-color: var(--bad); }
-section.active { border-left-color: var(--ok); }
-h3 { margin: 0; font-size: 19px; }
-.meta { color: var(--muted); font-size: 14px; margin: 2px 0 10px; }
-.now { font-size: 17px; margin: 0 0 12px; }
-.stages { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
-.stages span { font-size: 13px; padding: 2px 10px; border-radius: 99px; border: 1px solid var(--line); }
-.stages .done { color: var(--muted); }
-.stages .cur { border: 2px solid var(--fg); font-weight: 600; }
-ul { margin: 6px 0 10px; padding-left: 20px; }
-li { margin: 2px 0; }
-.ok { color: var(--ok); } .bad { color: var(--bad); } .stale { color: var(--stale); }
-details { margin-top: 8px; font-size: 14px; }
-summary { cursor: pointer; color: var(--muted); }
+:root { --you:#7a4fd6; --bad:#c8402f; --live:#1d7a4a; --stale:#9a5300; }
+@media (prefers-color-scheme: dark) { :root { --you:#b49bff; --bad:#ff8a7a; --live:#4fd08a; --stale:#f5a524; } }
+main { max-width: 900px; margin: 0 auto; padding: 36px 16px 80px; }
+.top { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; margin: 0 0 12px; }
+h1 { font-size: clamp(32px, 6vw, 44px); margin: 0; }
+.tally { display: flex; flex-wrap: wrap; gap: 8px; }
+.tally a { display: inline-flex; align-items: baseline; gap: 8px; padding: 6px 14px; border-radius: 12px;
+  background: var(--mat); box-shadow: var(--shadow); color: var(--ink); text-decoration: none;
+  transition: transform .2s var(--ease); }
+.tally a:hover { transform: translateY(-2px); }
+.tally b { font-size: 22px; }
+.about { margin-left: auto; font-size: 15px; }
+.about p { margin: 6px 0 0; color: var(--quiet); }
+h2 { display: flex; align-items: center; gap: 10px; font-size: 21px; margin: 36px 0 12px; scroll-margin-top: 16px; }
+h2 .n { font-size: 15px; color: var(--quiet); background: var(--sunk); border-radius: 999px; padding: 0 10px; }
+.needs-you { color: var(--you); } .failing { color: var(--bad); } .active { color: var(--live); } .idle { color: var(--quiet); }
+.card { background: var(--mat); color: var(--ink); border-radius: 18px; padding: 20px 22px; margin: 0 0 14px;
+  box-shadow: var(--shadow); transition: box-shadow .3s var(--ease); }
+.card.needs-you { box-shadow: 0 0 0 2px var(--you), var(--shadow); }
+.card.failing { box-shadow: 0 0 0 2px var(--bad), var(--shadow); }
+.head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 8px; }
+h3 { margin: 0; font-size: 22px; }
+.age { margin-left: auto; color: var(--quiet); font-size: 15px; white-space: nowrap; }
+.now { font-size: 18px; margin: 0 0 14px; }
+.track { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 0; margin: 0 0 14px; }
+.track li { font-size: 14px; padding: 2px 12px; border-radius: 999px; border: 1.5px solid var(--line); color: var(--quiet); }
+.track .done { background: var(--sunk); border-color: var(--sunk); }
+.track .cur { background: var(--ink); border-color: var(--ink); color: var(--mat); font-weight: 700; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 0; margin: 0; }
+.checks li, .checks a { display: inline-flex; align-items: center; gap: 7px; font-size: 15px; padding: 3px 12px;
+  border-radius: 10px; background: var(--sunk); color: var(--ink); text-decoration: none; }
+.checks a { transition: transform .2s var(--ease); box-shadow: 0 0 0 1.5px var(--changed) inset; }
+.checks a:hover { transform: translateY(-1px); }
+.checks li.link { padding: 0; background: none; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: currentColor; flex: none; }
+.ok .dot { color: var(--live); } .bad .dot { color: var(--bad); } .stale .dot { color: var(--stale); }
+.todo .dot { color: var(--quiet); }
+.checks .st { color: var(--quiet); }
+.look .dot { color: var(--changed); }
+.more { margin: 14px 0 0; font-size: 15px; }
+.more p, .more ul { margin: 8px 0 0; }
 .tl { list-style: none; padding: 0; }
-.tl time { color: var(--muted); display: inline-block; min-width: 90px; }
+.tl li { margin: 3px 0; }
+.tl time { color: var(--quiet); display: inline-block; min-width: 90px; }
+@media (max-width: 600px) { .about { margin-left: 0; flex-basis: 100%; } .card { padding: 16px; } }
 ";
+
+/// The cards rise in one after another.
+const SCRIPT: &str = "riseIn(document.querySelectorAll('.card'));";
+
+const GROUPS: [Group; 4] = [Group::NeedsYou, Group::Failing, Group::Active, Group::Idle];
 
 pub(crate) fn render(
     config: &Config,
@@ -49,22 +71,52 @@ pub(crate) fn render(
     let mut html = String::new();
     write!(
         html,
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Fearlezz overview</title><style>{STYLE}</style></head><body><main><h1>Fearlezz</h1><p class=\"built\">{} journals, built {}</p>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Fearlezz overview</title><style>{}{STYLE}</style></head><body><main><header class=\"top\"><h1>Fearlezz</h1><nav class=\"tally\" aria-label=\"Groups\">",
+        crate::page::STYLE
+    )?;
+    let in_group = |g: Group| -> Vec<&(View, Journal)> {
+        views.iter().filter(|(v, _)| v.group == g).collect()
+    };
+    for group in GROUPS {
+        let n = in_group(group).len();
+        if n > 0 {
+            write!(
+                html,
+                "<a href=\"#{}\"><b class=\"num {}\" data-count=\"{n}\">{n}</b>{}</a>",
+                slug(group),
+                slug(group),
+                heading(group)
+            )?;
+        }
+    }
+    write!(
+        html,
+        "</nav><details class=\"about\"><summary>Built</summary><p>{} journals, built {}</p></details></header>",
         views.len(),
         esc(&now.to_string())
     )?;
-    for group in [Group::NeedsYou, Group::Failing, Group::Active, Group::Idle] {
-        let in_group: Vec<&(View, Journal)> =
-            views.iter().filter(|(v, _)| v.group == group).collect();
-        if in_group.is_empty() {
+    for group in GROUPS {
+        let list = in_group(group);
+        if list.is_empty() {
             continue;
         }
-        write!(html, "<h2>{} ({})</h2>", heading(group), in_group.len())?;
-        for (v, j) in in_group {
+        write!(
+            html,
+            "<h2 id=\"{}\"><span class=\"{}\">{}</span><span class=\"n num\">{}</span></h2>",
+            slug(group),
+            slug(group),
+            heading(group),
+            list.len()
+        )?;
+        for (v, j) in list {
             journal_card(&mut html, config, v, j, now)?;
         }
     }
-    html.push_str("</main></body></html>");
+    write!(
+        html,
+        "</main><script>{}{SCRIPT}</script></body></html>",
+        crate::page::SCRIPT
+    )?;
     Ok(html)
 }
 
@@ -77,6 +129,10 @@ fn heading(group: Group) -> &'static str {
     }
 }
 
+fn slug(group: Group) -> String {
+    group.label().replace(' ', "-")
+}
+
 fn journal_card(
     html: &mut String,
     config: &Config,
@@ -84,64 +140,74 @@ fn journal_card(
     j: &Journal,
     now: Timestamp,
 ) -> std::fmt::Result {
-    let class = v.group.label().replace(' ', "-");
     let last = v.last_at.map(|t| ago(now, t)).unwrap_or_default();
     write!(
         html,
-        "<section class=\"{class}\"><h3>{}</h3><p class=\"meta\">last activity {}{}</p><p class=\"now\">{}</p><div class=\"stages\">",
-        esc(&v.name),
+        "<section class=\"card {}\"><div class=\"head\"><h3>{}</h3>",
+        slug(v.group),
+        esc(&v.name)
+    )?;
+    if !v.live {
+        html.push_str("<span class=\"tag\">Not checked out</span>");
+    }
+    write!(
+        html,
+        "<span class=\"age\">{}</span></div><p class=\"now\">{}</p><ol class=\"track\" aria-label=\"Stages\">",
         esc(&last),
-        if v.live { "" } else { ", not checked out" },
         esc(&v.now)
     )?;
     for stage in config.stages.all() {
-        let class = match stage.cmp(&v.stage) {
-            std::cmp::Ordering::Less => "done",
-            std::cmp::Ordering::Equal => "cur",
-            std::cmp::Ordering::Greater => "",
+        let (class, current) = match stage.cmp(&v.stage) {
+            std::cmp::Ordering::Less => ("done", ""),
+            std::cmp::Ordering::Equal => ("cur", " aria-current=\"step\""),
+            std::cmp::Ordering::Greater => ("", ""),
         };
         write!(
             html,
-            "<span class=\"{class}\">{}</span>",
+            "<li class=\"{class}\"{current}>{}</li>",
             esc(config.stages.name(stage))
         )?;
     }
-    html.push_str("</div>");
-    if let Some(reason) = &v.went_back {
-        write!(html, "<p>Went back: {}</p>", esc(reason))?;
-    }
+    html.push_str("</ol>");
     if !v.checks.is_empty() {
-        html.push_str("<strong>Checks</strong><ul>");
+        html.push_str("<ul class=\"checks\" aria-label=\"Checks\">");
         for c in &v.checks {
+            // The state in words as well as colour, so it reads without seeing colour.
             let (class, extra) = match &c.state {
                 CheckState::Ok => ("ok", String::new()),
                 CheckState::Failed | CheckState::Unstable => ("bad", String::new()),
                 CheckState::Stale(why) => ("stale", format!(": {} changed", why.join(", "))),
-                _ => ("stale", String::new()),
+                CheckState::NeedsFresh | CheckState::Uncompared | CheckState::Never => {
+                    ("todo", String::new())
+                }
             };
-            let look = c.look.as_ref().map_or(String::new(), |l| {
-                format!(
-                    ", <a href=\"file://{}\">look: {}</a>",
-                    esc(&l.report.display().to_string()),
-                    esc(&l.counts())
-                )
-            });
             write!(
                 html,
-                "<li>{} <span class=\"{class}\">{}</span>{}{look}</li>",
+                "<li class=\"{class}\"><span class=\"dot\" aria-hidden=\"true\"></span>{}<span class=\"st\">{}</span></li>",
                 esc(&c.id),
-                state_label(&c.state),
-                esc(&extra)
+                esc(&format!("{}{extra}", state_label(&c.state)))
             )?;
+            if let Some(l) = &c.look {
+                write!(
+                    html,
+                    "<li class=\"link\"><a class=\"look\" href=\"file://{}\"><span class=\"dot\" aria-hidden=\"true\"></span>Look: {}</a></li>",
+                    esc(&l.report.display().to_string()),
+                    esc(&l.counts())
+                )?;
+            }
         }
         html.push_str("</ul>");
+    }
+    html.push_str("<details class=\"more\"><summary>More</summary>");
+    write!(html, "<p>Next: {}</p>", esc(&v.next))?;
+    if let Some(reason) = &v.went_back {
+        write!(html, "<p>Went back: {}</p>", esc(reason))?;
     }
     if let Some((at, text)) = &v.last_note {
         write!(html, "<p>Note, {}: {}</p>", esc(&ago(now, *at)), esc(text))?;
     }
-    write!(html, "<p class=\"meta\">Next: {}</p>", esc(&v.next))?;
     timeline(html, j, now)?;
-    html.push_str("</section>");
+    html.push_str("</details></section>");
     Ok(())
 }
 
@@ -172,6 +238,12 @@ fn timeline(html: &mut String, j: &Journal, now: Timestamp) -> std::fmt::Result 
                 None => format!("stage {to}"),
             },
             Event::Wait { question } => format!("asked you: {question}"),
+            Event::Approve {
+                check,
+                said,
+                by: Some(by),
+                ..
+            } => format!("approved {check} on GitHub by @{by}: \"{said}\""),
             Event::Approve { check, said, .. } => format!("approved {check}: \"{said}\""),
             Event::Note { text } => format!("note: {text}"),
         };
@@ -182,7 +254,7 @@ fn timeline(html: &mut String, j: &Journal, now: Timestamp) -> std::fmt::Result 
     if lines.is_empty() {
         return Ok(());
     }
-    html.push_str("<details><summary>Timeline</summary><ul class=\"tl\">");
+    html.push_str("<ul class=\"tl\">");
     for (at, text) in lines.iter().rev().take(20) {
         write!(
             html,
@@ -191,13 +263,6 @@ fn timeline(html: &mut String, j: &Journal, now: Timestamp) -> std::fmt::Result 
             esc(text)
         )?;
     }
-    html.push_str("</ul></details>");
+    html.push_str("</ul>");
     Ok(())
-}
-
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }

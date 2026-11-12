@@ -1,0 +1,34 @@
+# Playwright end to end tests whose `toHaveScreenshot` calls are the stills of the look.
+#
+# Fearlezz compares each still with the same test run on the base commit, so there are no
+# golden files: Playwright only writes the pictures. Fearlezz hands every run a free port in
+# FEARLEZZ_PORT, so Playwright's own webServer starts the app there and two worktrees, or a
+# worktree and its base, never collide. A few lines in playwright.config:
+#
+#   const port = Number(process.env.FEARLEZZ_PORT ?? 5173);
+#   webServer: { command: `vite --port ${port} --strictPort`, url: `http://localhost:${port}` },
+#   use: { baseURL: `http://localhost:${port}` },
+#   ...(process.env.FEARLEZZ_OUT && {
+#     snapshotPathTemplate: `${process.env.FEARLEZZ_OUT}/stills/{projectName}/{arg}{ext}`,
+#     outputDir: `${process.env.FEARLEZZ_OUT}/films`,   // videos, with use: { video: "on" }
+#     reporter: [["line"], ["junit", { outputFile: `${process.env.FEARLEZZ_OUT}/junit.xml` }]],
+#   }),
+#   expect: { toHaveScreenshot: { stylePath: "e2e/stills.css" } },   // [data-volatile] { visibility: hidden }
+#
+# The junit reporter is how Fearlezz counts the tests that ran, so the run stays a plain
+# command. A still is then named `<project>/<name>`, such as `mobile/home` for
+# `await expect(page).toHaveScreenshot("home.png")` in the mobile project. toHaveScreenshot
+# already stops animations, hides the caret and waits until two captures match.
+
+[check.playwright]
+run = "playwright test --update-snapshots=all"
+stage = "look"
+tests = "junit"
+stills = "stills/**/*.png"
+films = "films/**/*.webm"
+
+# The base commit's checkout needs the installed packages and browsers too; Playwright keeps
+# its browsers in a cache outside the repository, so only node_modules is cloned.
+[env]
+clone = ["node_modules"]
+clone_when = ["package-lock.json", "bun.lock", "pnpm-lock.yaml", "yarn.lock"]

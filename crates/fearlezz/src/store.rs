@@ -52,6 +52,9 @@ pub(crate) struct RunResult {
     /// For a check with a tests reader: how many tests ran; zero when there is no count.
     #[serde(default)]
     pub tests: Option<u64>,
+    /// For a check with a JUnit reader: each test case that ran, and whether it failed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cases: Vec<crate::counts::Case>,
     pub dir: PathBuf,
     pub log: PathBuf,
 }
@@ -66,6 +69,56 @@ impl RunResult {
     /// pass the final stage counts, so the proof before a merge is fresh.
     pub(crate) fn made_at_final(&self, journal: &str, final_stage: &str) -> bool {
         self.journal == journal && self.stage == final_stage
+    }
+}
+
+/// What a passing run showed against one base commit: how its pictures compare and what red
+/// before green found. A run compared with another base says nothing about this one, so the
+/// record is kept in the run's folder under the base commit and read for the base the work
+/// stands on now; none means the comparison is still to make.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct AgainstBase {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<Looked>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red: Option<crate::red::Mark>,
+}
+
+/// How a run's pictures were compared with the base.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Looked {
+    /// There was nothing to compare: no pictures on either side, or the same inputs.
+    Nothing,
+    /// The folder of the look.
+    At(PathBuf),
+}
+
+impl AgainstBase {
+    fn path(run: &RunResult, base: &str) -> PathBuf {
+        run.dir.join("against").join(format!("{base}.json"))
+    }
+
+    /// What `run` showed against `base`, if it was compared with it.
+    pub(crate) fn of(run: &RunResult, base: &str) -> Option<AgainstBase> {
+        let bytes = fs::read(Self::path(run, base)).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// Records another part of what `run` showed against `base`.
+    pub(crate) fn update(
+        run: &RunResult,
+        base: &str,
+        change: impl FnOnce(&mut AgainstBase),
+    ) -> Result<()> {
+        let mut record = Self::of(run, base).unwrap_or_default();
+        change(&mut record);
+        let path = Self::path(run, base);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        fs::write(path, serde_json::to_vec_pretty(&record)?)?;
+        Ok(())
     }
 }
 
@@ -114,8 +167,14 @@ impl Hasher {
             let levels = spec.levels.fingerprint(&spec.tools);
             parts.insert("(lints)".into(), sha256(levels.as_bytes()));
         }
+        if let Some(spec) = &check.findings {
+            parts.insert("(findings)".into(), definition(&spec.judged()));
+        }
         if let Some(reader) = &check.tests {
-            parts.insert("(tests)".into(), sha256(reader.fingerprint().as_bytes()));
+            parts.insert("(tests)".into(), definition(reader));
+        }
+        if let Some(pictures) = check.pictures.taken() {
+            parts.insert("(pictures)".into(), definition(&pictures));
         }
         if let Some(shell) = &check.shell {
             parts.insert("(shell)".into(), sha256(shell.as_bytes()));
@@ -135,7 +194,8 @@ impl Hasher {
             parts.insert(path.clone(), hash);
         }
         let mut key = Sha256::new();
-        key.update(b"fearlezz/1\0");
+        key.update(RESULT_FORMAT.as_bytes());
+        key.update(b"\0");
         key.update(check.run.as_bytes());
         for (name, hash) in &parts {
             key.update(b"\0");
@@ -148,6 +208,16 @@ impl Hasher {
             parts,
         })
     }
+}
+
+/// The format of a stored result, part of every key. Bump it when what a result holds or
+/// means changes, so results stored before run again (2: JUnit results keep each case).
+const RESULT_FORMAT: &str = "fearlezz/2";
+
+/// A part of the key from a definition as Fearlezz parsed it, so a field added to it joins
+/// the key without anyone writing it down.
+fn definition(parsed: &impl std::fmt::Debug) -> String {
+    sha256(format!("{parsed:?}").as_bytes())
 }
 
 fn sha256(bytes: &[u8]) -> String {

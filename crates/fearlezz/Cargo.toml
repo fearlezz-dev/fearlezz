@@ -12,6 +12,7 @@ categories = ["command-line-utilities", "development-tools::testing"]
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
+flate2 = "1.1.5"
 globset = "0.4.21"
 hex = "0.4.3"
 jiff = { version = "0.2.42", features = ["serde"] }
@@ -20,12 +21,24 @@ regex = "1.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 sha2 = "0.11.1"
+tempfile = "3.27.0"
 toml = "1.2.1"
 toml_edit = "0.25.19"
 
+# The window recorder: ScreenCaptureKit through the objc2 bindings.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSBitmapImageRep", "NSImageRep", "objc2-core-graphics"] }
+dispatch2 = "0.3.1"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes", "CFString", "CFArray"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "libc", "CGDirectDisplay", "CGImage", "CGWindow", "CGError"] }
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMTime"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSURL", "NSError", "NSArray", "NSData", "NSDictionary", "NSObject", "NSEnumerator"] }
+objc2-screen-capture-kit = "0.3.2"
+
 [dev-dependencies]
 assert_cmd = "2.2.2"
-tempfile = "3.27.0"
 
 [lints]
 workspace = true

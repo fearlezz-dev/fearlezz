@@ -472,3 +472,31 @@ inputs = ["src/**"]
         status.stdout
     );
 }
+
+#[test]
+fn every_check_gets_a_free_port_of_its_own() {
+    // A dev server a check starts itself (Playwright's webServer) listens on it, so two
+    // worktrees, or a worktree and its base checkout, never collide.
+    let config = r#"
+[check.port]
+run = 'echo "$FEARLEZZ_PORT" > "$FEARLEZZ_OUT/port.txt"'
+stage = "working"
+inputs = ["src/**"]
+"#;
+    let s = Setup::new(config, &[]);
+    s.repo.branch("feat/port");
+    s.change();
+    s.fz(&["run", "--stage", "working", "--no-run"]);
+    let out = s.fz(&["run", "port"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let result: serde_json::Value =
+        serde_json::from_str(&s.fz(&["--check", "port"]).stdout).unwrap();
+    let dir = std::path::Path::new(result["dir"].as_str().unwrap());
+    let port: u16 = std::fs::read_to_string(dir.join("port.txt"))
+        .unwrap()
+        .trim()
+        .parse()
+        .expect("FEARLEZZ_PORT is a port");
+    assert!(port > 0);
+    std::net::TcpListener::bind(("127.0.0.1", port)).expect("the port is free once the check ends");
+}

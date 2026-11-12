@@ -3,7 +3,6 @@
 [check.fmt]
 run = "cargo fmt --all --check"
 stage = "working"
-inputs = ["**/*.rs", "rustfmt.toml", ".rustfmt.toml"]
 
 # Lints are findings with the level [lints.clippy] and [lints.rustc] give them; only lines the
 # change touched count. Compile errors block wherever they are.
@@ -11,14 +10,15 @@ inputs = ["**/*.rs", "rustfmt.toml", ".rustfmt.toml"]
 run = "cargo clippy --all-targets --quiet --message-format=json"
 stage = "working"
 findings = { read = "cargo", lints = ["clippy", "rustc"] }
-inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "clippy.toml", "rust-toolchain.toml"]
 
 [check.tests]
 run = "cargo test --quiet"
 stage = "working"
 # Each test binary prints "test result: ok. N passed; M failed; ...".
 tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }
-inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
+# Integration tests live in tests folders; unit tests inside src cannot be told apart
+# from the code, so only the former show red before green.
+test_files = ["**/tests/**"]
 
 # Production code never unwraps or panics; tests may.
 [settings.clippy]

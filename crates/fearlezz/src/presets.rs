@@ -21,14 +21,21 @@ use toml::{Table, Value};
 use crate::config::FILE;
 
 pub(crate) const BUILTIN: &[(&str, &str)] = &[
+    ("actions", include_str!("../presets/actions.toml")),
     ("agents", include_str!("../presets/agents.toml")),
+    ("betterleaks", include_str!("../presets/betterleaks.toml")),
     ("devenv", include_str!("../presets/devenv.toml")),
     ("eslint", include_str!("../presets/eslint.toml")),
     ("flutter", include_str!("../presets/flutter.toml")),
+    ("flutter-look", include_str!("../presets/flutter-look.toml")),
     ("go", include_str!("../presets/go.toml")),
     ("kotlin", include_str!("../presets/kotlin.toml")),
+    ("osv-scanner", include_str!("../presets/osv-scanner.toml")),
+    ("playwright", include_str!("../presets/playwright.toml")),
     ("python", include_str!("../presets/python.toml")),
     ("rust", include_str!("../presets/rust.toml")),
+    ("safety", include_str!("../presets/safety.toml")),
+    ("trufflehog", include_str!("../presets/trufflehog.toml")),
     ("typescript", include_str!("../presets/typescript.toml")),
 ];
 
@@ -661,32 +668,6 @@ impl Source {
             },
         }
     }
-}
-
-/// The files in `root` that make up the config, as repository paths: `fearlezz.toml`, the
-/// lock, and every piece used by a path, however deep.
-pub(crate) fn config_files(root: &Path) -> Result<Vec<String>> {
-    let mut files = vec![FILE.to_string(), LOCK.to_string()];
-    let mut todo = vec![FILE.to_string()];
-    while let Some(file) = todo.pop() {
-        let Ok(text) = std::fs::read_to_string(root.join(&file)) else {
-            continue;
-        };
-        let table: Table = toml::from_str(&text).with_context(|| format!("reading {file}"))?;
-        let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-        let named = table.get("use").and_then(Value::as_array);
-        for spec in named.into_iter().flatten().filter_map(Value::as_str) {
-            if !(spec.starts_with("./") || spec.starts_with("../")) {
-                continue;
-            }
-            let path = normalize(&format!("{dir}/{spec}"))?;
-            if !files.contains(&path) {
-                files.push(path.clone());
-                todo.push(path);
-            }
-        }
-    }
-    Ok(files)
 }
 
 /// Merges `from` into `into`: tables merge key by key, anything else replaces. Pieces merge

@@ -60,31 +60,36 @@ pub(crate) fn execute(
         run_builtin(builtin, at, &dir, out)?;
         (true, Some(0))
     } else {
-        let status = spawn(check, &dir, out, at)?;
-        (status.success(), status.code())
+        spawn(check, &dir, out, at)?
     };
     let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
     let stdout_path = dir.join("stdout.txt");
 
-    let (proofs, mut proof_errors) = read_proofs(&dir.join("proof.jsonl"));
+    let (mut proofs, mut proof_errors) = read_proofs(&dir.join("proof.jsonl"));
+    proofs.extend(check.pictures.proofs(&dir));
     let mut passed = exit_ok;
     let (mut findings, mut findings_elsewhere) = (Vec::new(), 0);
     if let Some(spec) = &check.findings {
         let (found, errors) = spec.read.read(&stdout_path, &dir, at.root);
         proof_errors.extend(errors);
-        let found = spec.levels.apply(&spec.tools, found);
+        let found = spec.levels.apply(&spec.tools, spec.defaults(found));
         let verdict = crate::findings::judge(found, spec.on, at.changed, passed);
         passed = verdict.passed;
         findings = verdict.counted;
         findings_elsewhere = verdict.elsewhere;
     }
+    let mut cases = Vec::new();
     let tests = check.tests.as_ref().map(|reader| {
-        reader
-            .count(&[&log, &stdout_path], &dir, at.root, started)
-            .unwrap_or_else(|why| {
+        match reader.count(&[&log, &stdout_path], &dir, at.root, started) {
+            Ok((n, found)) => {
+                cases = found;
+                n
+            }
+            Err(why) => {
                 proof_errors.push(why);
                 0
-            })
+            }
+        }
     });
     if tests == Some(0) {
         passed = false;
@@ -110,6 +115,7 @@ pub(crate) fn execute(
         findings,
         findings_elsewhere,
         tests,
+        cases,
         dir,
         log,
     };
@@ -117,8 +123,9 @@ pub(crate) fn execute(
     Ok(result)
 }
 
-/// Runs the check's command in a clean env, inside the environment's shell if any.
-fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<std::process::ExitStatus> {
+/// Runs the check's command in a clean env, inside the environment's shell if any, recording
+/// its app's window when it has `record`. Returns whether it passed and its exit code.
+fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, Option<i32>)> {
     // A tool that prints findings on stdout keeps them apart from its log.
     let stdout_path = dir.join("stdout.txt");
     let stdout = match &check.findings {
@@ -137,7 +144,7 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<std::pr
         .env_clear()
         .stdin(Stdio::null())
         .stdout(stdout)
-        .stderr(out);
+        .stderr(out.try_clone()?);
     for name in BASE_ENV
         .iter()
         .copied()
@@ -150,14 +157,70 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<std::pr
     if let Some(path) = project_path(at.root) {
         cmd.env("PATH", path);
     }
+    cmd.env("FEARLEZZ_PORT", free_port()?.to_string());
     cmd.envs(at.vars);
     cmd.env("FEARLEZZ_RUN", &check.run)
         .env("FEARLEZZ_OUT", dir)
         .env("FEARLEZZ_CHECK", &check.id)
         .env("FEARLEZZ_STAGE", at.stage);
 
-    cmd.status()
-        .with_context(|| format!("starting check {}", check.id))
+    let Some(record) = &check.pictures.record else {
+        let status = cmd
+            .status()
+            .with_context(|| format!("starting check {}", check.id))?;
+        return Ok((status.success(), status.code()));
+    };
+    // Its own process group, so stopping it after `seconds` stops the app it started too.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut log = out;
+    // The windows open before the command starts are never recorded.
+    let mut recorder = match crate::record::Recorder::new(crate::record::System::default(), record)
+    {
+        Ok(r) => r,
+        Err(e) => {
+            use std::io::Write as _;
+            writeln!(log, "record: {e:#}")?;
+            return Ok((false, None));
+        }
+    };
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("starting check {}", check.id))?;
+    // A recorder that panics must still stop the app the command started.
+    let recorded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        recorder.during(&mut child, dir, &mut log)
+    }))
+    .unwrap_or_else(|panic| {
+        Err(anyhow::anyhow!(
+            "the recorder failed: {}",
+            crate::panic_text(&*panic)
+        ))
+    });
+    let recorded = match recorded {
+        Ok(r) => r,
+        Err(e) => {
+            use std::io::Write as _;
+            writeln!(log, "record: {e:#}")?;
+            crate::record::stop(&mut child)?;
+            return Ok((false, None));
+        }
+    };
+    let code = match &recorded.ended {
+        crate::record::Ended::Exited(status) => status.code(),
+        crate::record::Ended::AfterSeconds | crate::record::Ended::WaitedTooLong => None,
+    };
+    Ok((recorded.passed(), code))
+}
+
+/// A port nothing listens on right now, for a server the check starts itself (such as
+/// Playwright's `webServer`), so checks in two worktrees or on the base never collide. The
+/// system picks it from its wide ephemeral range, so another process taking it in the
+/// moment before the server starts is unlikely.
+fn free_port() -> Result<u16> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .context("finding a free port for FEARLEZZ_PORT")?;
+    Ok(listener.local_addr()?.port())
 }
 
 /// Folders where a project installs its own tools, found before the rest of PATH, as a
@@ -177,6 +240,16 @@ fn project_path(root: &Path) -> Option<std::ffi::OsString> {
     let rest = std::env::var_os("PATH").unwrap_or_default();
     std::env::join_paths(dirs.into_iter().chain(std::env::split_paths(&rest))).ok()
 }
+
+/// Tools the built in pieces run that nixpkgs packages under the same name, so a missing one
+/// can be answered with the line that adds it to a project's devenv.
+pub(crate) const NIX_TOOLS: [&str; 5] = [
+    "gitleaks",
+    "trufflehog",
+    "betterleaks",
+    "osv-scanner",
+    "zizmor",
+];
 
 /// The exit code a shell gives when it cannot find the command.
 pub(crate) const NOT_FOUND: i32 = 127;

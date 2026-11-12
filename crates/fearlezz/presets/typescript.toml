@@ -5,24 +5,21 @@
 [check.biome-lint]
 run = "biome lint --reporter=sarif ."
 stage = "working"
-inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "biome.json", "biome.jsonc", ".biome.json", ".biome.jsonc"]
 findings = { read = "sarif", lints = ["biome"] }
 
 [check.biome-format]
 run = "biome format ."
 stage = "working"
-inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.json", "biome.json", "biome.jsonc", ".biome.json", ".biome.jsonc"]
 
 [check.tsc]
 run = "tsc --noEmit"
 stage = "working"
-inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "tsconfig.json", "package.json"]
 
 [check.vitest]
 run = "vitest run --reporter=default --reporter=junit --outputFile.junit=\"$FEARLEZZ_OUT/junit.xml\""
 stage = "working"
 tests = "junit"
-inputs = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "package.json", "vitest.config.*", "vite.config.*"]
+test_files = ["**/*.test.*", "**/*.spec.*", "**/__tests__/**"]
 
 # Strictness switches, decided on the Lint Desk.
 [settings.tsconfig.compilerOptions]

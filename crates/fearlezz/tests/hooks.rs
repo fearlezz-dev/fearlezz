@@ -10,17 +10,16 @@ mod common;
 
 use common::Repo;
 
-/// `tests` passes; `unit` has a command an agent would run by hand and reads nothing here.
+/// `tests` passes; `unit` starts with a command an agent would run by hand, and passes here
+/// without a Cargo project.
 const CONFIG: &str = r#"
 [check.tests]
 run = "true"
 stage = "working"
-inputs = ["src/**"]
 
 [check.unit]
-run = "cargo test --quiet"
+run = "cargo test --quiet || true"
 stage = "working"
-inputs = ["never/**"]
 
 [settings.skill]
 agents = []
@@ -36,6 +35,7 @@ fn changed() -> Repo {
         "{CONFIG}\n[settings.hooks]\nagents = [\"claude\"]\n"
     ));
     repo.branch("feat/x");
+    repo.fz(&["setup", "sync"]);
     repo.write("src/lib.rs", "fn b() {}\n");
     repo.commit("change");
     repo
@@ -214,6 +214,27 @@ fn merging_past_ci_is_left_to_a_person() {
         &shell("gh pr merge 2 --squash"),
     );
     assert!(plain.is_null(), "{plain}");
+}
+
+#[test]
+fn approving_pictures_on_the_pull_request_is_left_to_a_person() {
+    let repo = changed();
+    for command in [
+        "gh pr comment 7 --body \"/fearlezz approve looks right\"",
+        "gh api repos/o/r/issues/7/comments -f body='/fearlezz approve ok'",
+        "curl -d '{\"body\":\"/fearlezz approve\"}' https://api.github.com/repos/o/r/issues/7/comments",
+    ] {
+        let answer = hook(&repo, "claude", "before-shell", &shell(command));
+        assert!(denied(&answer), "{command}: {answer}");
+        assert!(reason(&answer).contains("person"), "{answer}");
+    }
+    let search = hook(
+        &repo,
+        "claude",
+        "before-shell",
+        &shell("rg '/fearlezz approve' README.md"),
+    );
+    assert!(search.is_null(), "{search}");
 }
 
 #[test]

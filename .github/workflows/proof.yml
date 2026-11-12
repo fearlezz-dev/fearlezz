@@ -1,7 +1,10 @@
 name: proof
 
 on:
+  # In CI the title decides whether a change is a fix, so an edit proves it again. A job skipped
+  # by a condition would count as passed, so no edit is skipped.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   # The release workflow starts it on the release pull request, which the workflow token opens.
@@ -10,47 +13,57 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  statuses: write
 
 jobs:
+  # Fearlezz proves itself through its own action, built from this commit, so the action and
+  # `fearlezz run --ci` on GitHub Actions run on every pull request. Only this job reports to
+  # the pull request.
   proof:
     runs-on: ubuntu-latest
     concurrency:
-      group: proof-${{ github.ref }}
+      group: proof-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:
           name: devenv
       - run: nix profile install nixpkgs#devenv
-      - name: Prove this commit with Fearlezz
-        run: devenv shell -- check --comment "$RUNNER_TEMP/fearlezz.md"
-      # One comment per pull request, replaced on every run. Only CI writes it, so the agent
-      # whose work it judges cannot change it. A fork's token may not comment; the check stays.
-      - name: Show the status on the pull request
-        if: always() && github.event_name == 'pull_request'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+      - name: Build Fearlezz from this commit
         run: |
-          file="$RUNNER_TEMP/fearlezz.md"
-          [ -s "$file" ] || exit 0
-          comments="repos/$GITHUB_REPOSITORY/issues/$PR/comments"
-          id=$(gh api "$comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- fearlezz -->"))) | .id' | head -n 1)
-          if [ -n "$id" ]; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$file" > /dev/null
-          else
-            gh api "$comments" -F body=@"$file" > /dev/null
-          fi
-      - name: Keep the output of every check
-        if: always()
-        uses: actions/upload-artifact@v4
+          devenv shell -- cargo build --quiet
+          echo "$PWD/target/debug" >> "$GITHUB_PATH"
+      - uses: ./
         with:
-          name: proof-logs
-          path: .git/fearlezz/results/**/output.log
-          include-hidden-files: true
-          if-no-files-found: ignore
+          version: installed
+
+  # The code for macOS (recording, copy on write clones) is built, linted and tested here. It
+  # proves the commit without a token, so it writes nothing to the pull request.
+  proof-macos:
+    runs-on: macos-latest
+    concurrency:
+      group: proof-macos-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - run: nix profile install nixpkgs#devenv
+      - name: Build Fearlezz from this commit
+        run: |
+          devenv shell -- cargo build --quiet
+          echo "$PWD/target/debug" >> "$GITHUB_PATH"
+      - uses: ./
+        with:
+          version: installed
+          token: ""
