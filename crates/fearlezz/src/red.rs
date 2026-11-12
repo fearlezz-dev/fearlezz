@@ -13,6 +13,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::config::{Check, Config};
@@ -25,6 +26,8 @@ use crate::store::{Outcome, RunResult, Store};
 
 /// What the check did on the base commit with the change's test files.
 pub(crate) struct Red {
+    /// The base commit it ran on.
+    pub commit: String,
     /// The test files the change added, changed or removed that the check reads.
     pub files: Vec<String>,
     /// The run on the base commit with those files.
@@ -103,7 +106,7 @@ pub(crate) fn run(
     let mut name = hex::encode(hash.finalize());
     name.truncate(10);
     let name = format!("-red-{name}");
-    let mut base = Base::at(git, config, commit, &name)?;
+    let mut base = Base::at(git, config, commit.clone(), &name)?;
     for (path, content) in overlay {
         let to = base.wt.git.root.join(path);
         match content {
@@ -154,6 +157,7 @@ pub(crate) fn run(
         }
     };
     Ok(Some(Red {
+        commit,
         files,
         base: result,
         verdict,
@@ -197,8 +201,89 @@ fn fails(run: &RunResult, name: &str) -> bool {
     run.cases.iter().any(|c| c.name == name && c.failed)
 }
 
-/// Whether the change says it fixes a bug: the pull request title, else the head commit's
-/// subject, is a conventional `fix:` commit.
+/// File in a run's folder holding what red before green found for it.
+const MARK: &str = "red.json";
+
+/// What red before green found for a check's passing run, kept in that run's folder (as its
+/// look is) so the run, `fearlezz` and the hooks all read one verdict.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct Mark {
+    /// The base commit it ran on; a mark for another base says nothing about this one.
+    pub base: String,
+    /// Why the change's tests do not show what it does, when they do not.
+    pub unshown: Option<Unshown>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Unshown {
+    /// They pass on the base commit too.
+    PassesOnBase,
+    /// The check could not run on the base commit, for this reason.
+    DidNotRun(String),
+}
+
+impl Mark {
+    /// The mark of `run`, if red before green ran for it.
+    pub(crate) fn of(run: &RunResult) -> Option<Mark> {
+        let text = fs::read_to_string(run.dir.join(MARK)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    /// Records it as `run`'s.
+    pub(crate) fn save(&self, run: &RunResult) -> Result<()> {
+        fs::write(run.dir.join(MARK), serde_json::to_vec_pretty(self)?)?;
+        Ok(())
+    }
+
+    /// Forgets the mark of `run`, when red before green has nothing to say about it.
+    pub(crate) fn clear(run: &RunResult) -> Result<()> {
+        match fs::remove_file(run.dir.join(MARK)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
+    }
+
+    /// What to do when a fix is held by it, or None when it holds nothing.
+    pub(crate) fn next(&self, check: &str) -> Option<String> {
+        Some(match self.unshown.as_ref()? {
+            Unshown::PassesOnBase => format!("{NEXT}, then fearlezz run"),
+            // A next line is one line; the run printed the whole reason.
+            Unshown::DidNotRun(why) => format!(
+                "red before green {check} did not run ({}); make the check run on the base \
+                 commit, then fearlezz run",
+                why.lines().next().unwrap_or_default().trim_end_matches(':')
+            ),
+        })
+    }
+}
+
+impl Verdict {
+    /// Why it does not show the change, when it does not.
+    pub(crate) fn unshown(&self) -> Option<Unshown> {
+        matches!(self, Verdict::NotRed { .. }).then_some(Unshown::PassesOnBase)
+    }
+}
+
+/// What a fix whose tests pass on the base commit does next.
+pub(crate) const NEXT: &str = "change a test so it fails without the fix; when the change fixes \
+                               no bug, neither its title nor its commits start with fix:";
+
+/// Whether the change says it fixes a bug: its pull request title (when known) or the subject
+/// of any of its commits since the base commit is a conventional `fix:` commit. Uncommitted
+/// work with no commits of its own is not a fix yet, and a later format or merge commit does
+/// not hide an earlier fix. Locally the title is unknown, so CI can only be stricter.
+pub(crate) fn is_fix_change(git: &Git, config: &Config, title: Option<&str>) -> Result<bool> {
+    if title.is_some_and(is_fix) {
+        return Ok(true);
+    }
+    let Some(base) = git.merge_base(&config.base) else {
+        return Ok(false);
+    };
+    Ok(git.subjects_since(&base)?.iter().any(|s| is_fix(s)))
+}
+
+/// Whether a commit subject or title is a conventional `fix:` commit.
 pub(crate) fn is_fix(subject: &str) -> bool {
     let Some((kind, _)) = subject.split_once(':') else {
         return false;

@@ -125,9 +125,14 @@ impl Git {
         self.short("HEAD")
     }
 
-    /// The first line of the message of the commit checked out.
-    pub(crate) fn subject(&self) -> Result<String> {
-        Ok(self.git(&["log", "-1", "--format=%s"])?.trim().to_string())
+    /// The subjects of the commits on HEAD since `commit`, newest first.
+    pub(crate) fn subjects_since(&self, commit: &str) -> Result<Vec<String>> {
+        let range = format!("{commit}..HEAD");
+        Ok(self
+            .git(&["log", "--format=%s", &range])?
+            .lines()
+            .map(str::to_string)
+            .collect())
     }
 
     /// The short name of a commit.

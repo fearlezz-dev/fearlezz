@@ -73,6 +73,8 @@ pub(crate) struct CheckView {
     pub approved: Option<Approved>,
     /// The findings in scope of its latest run on these inputs.
     pub findings: Vec<crate::findings::Finding>,
+    /// What red before green found for its passing run on these inputs.
+    pub red: Option<crate::red::Mark>,
 }
 
 /// An approval of a check's changed pictures.
@@ -211,6 +213,7 @@ pub(crate) fn view(
     let mut skill_out_of_date = false;
     let mut committed = true;
     let mut floor_fails = false;
+    let mut red_next = None;
     if let Some(wt) = worktree {
         committed = wt.committed;
         // Only the final stage answers for what the base branch requires.
@@ -228,11 +231,12 @@ pub(crate) fn view(
                 continue;
             }
             let inputs = wt.inputs(check)?;
-            let look = latest
+            let passed = latest
                 .as_ref()
                 .filter(|ran| ran.key == inputs.key && ran.outcome == Outcome::Passed)
-                .and_then(|ran| store.get(ran.key, ran.result))
-                .and_then(|r| crate::look::Look::of(&r));
+                .and_then(|ran| store.get(ran.key, ran.result));
+            let look = passed.as_ref().and_then(crate::look::Look::of);
+            let red = passed.as_ref().and_then(crate::red::Mark::of);
             let findings = latest
                 .as_ref()
                 .filter(|ran| ran.key == inputs.key)
@@ -269,7 +273,11 @@ pub(crate) fn view(
                 look,
                 approved,
                 findings,
+                red,
             });
+        }
+        if stage == final_stage {
+            red_next = red_hold(config, wt, &checks)?;
         }
     } else {
         for check in &config.checks {
@@ -285,6 +293,7 @@ pub(crate) fn view(
                     look: None,
                     approved: None,
                     findings: Vec::new(),
+                    red: None,
                 });
             }
         }
@@ -318,7 +327,13 @@ pub(crate) fn view(
     } else {
         Group::Idle
     };
-    view.next = next(config, &view, skill_out_of_date, floor_fails);
+    view.next = next(
+        config,
+        &view,
+        skill_out_of_date,
+        floor_fails,
+        red_next.as_deref(),
+    );
     view.now = now_line(config, &view);
     Ok(view)
 }
@@ -369,9 +384,34 @@ fn changed_parts(store: &Store, ran: Ran<'_>, now: &Inputs) -> Vec<String> {
     changed
 }
 
+/// What holds a fix at the final stage: a check whose run on these inputs red before green
+/// marked, for this base commit, as not showing the fix. None when the change is no fix.
+fn red_hold(config: &Config, wt: &Worktree, checks: &[CheckView]) -> Result<Option<String>> {
+    let held: Vec<(&str, &crate::red::Mark)> = checks
+        .iter()
+        .filter(|c| c.state == CheckState::Ok)
+        .filter_map(|c| Some((c.id.as_str(), c.red.as_ref()?)))
+        .filter(|(_, mark)| mark.unshown.is_some())
+        .collect();
+    if held.is_empty() || !crate::red::is_fix_change(&wt.git, config, None)? {
+        return Ok(None);
+    }
+    let base = wt.git.merge_base(&config.base).unwrap_or_default();
+    Ok(held
+        .into_iter()
+        .filter(|(_, mark)| mark.base == base)
+        .find_map(|(id, mark)| mark.next(id)))
+}
+
 /// What the agent should do next, as one line. Order: the developer, the agent skill, failures,
-/// needed runs, moving on.
-fn next(config: &Config, v: &View, skill_out_of_date: bool, floor_fails: bool) -> String {
+/// needed runs, what the base branch requires, moving on.
+fn next(
+    config: &Config,
+    v: &View,
+    skill_out_of_date: bool,
+    floor_fails: bool,
+    red: Option<&str>,
+) -> String {
     let stages = &config.stages;
     if let Some(q) = &v.waiting {
         return format!("waiting for the developer: {q}");
@@ -432,6 +472,9 @@ fn next(config: &Config, v: &View, skill_out_of_date: bool, floor_fails: bool) -
             l.counts(),
             l.report.display(),
         );
+    }
+    if let Some(line) = red {
+        return line.to_string();
     }
     match stages.after(v.stage) {
         Some(s) => format!("when ready: fearlezz run --stage {}", stages.name(s)),

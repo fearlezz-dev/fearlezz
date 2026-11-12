@@ -1444,8 +1444,9 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         r.waits = waits;
     }
     // In CI, and at the final stage of a journal so the agent learns it before CI.
+    // It marks each run, so `fearlezz` and the hooks hold the work to the same verdict.
     let red_blocks = (in_memory || stage == final_stage)
-        && red_before_green(ctx, &wt, &green, &stage, report.as_mut());
+        && red_before_green(ctx, &wt, &green, &stage, report.as_mut())?;
     prune_store(ctx);
     let not_run_text = if not_run > 0 {
         format!(", {not_run} not run")
@@ -1472,17 +1473,11 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
     }
     if cannot_record > 0 {
         println!("next: give the recorder its permission (fix: above), then fearlezz run");
-    } else if red_blocks && !in_memory && failures.is_empty() {
-        println!("next: {RED_NEXT}, then fearlezz run");
     } else {
         println!("next: {}", next_line(&after));
     }
     Ok(failures.is_empty() && cannot_record == 0 && !red_blocks && settled(&after))
 }
-
-/// What a fix whose tests pass on the base commit does next.
-const RED_NEXT: &str = "change a test so it fails without the fix; when the change fixes no \
-                        bug, its title does not start with fix:";
 
 /// At most this many test names on one line; the rest are counted.
 const NAMES_SHOWN: usize = 5;
@@ -1502,19 +1497,17 @@ fn test_names(names: &[String], quote: &str) -> String {
 }
 
 /// Runs each green check that reads changed test files on the base commit with those files,
-/// one line per check, noted in the commit report when there is one. True when the change is
-/// a fix and its tests do not fail there.
+/// one line per check, noted in the commit report when there is one, and marks each run with
+/// what it found. True when the change is a fix and its tests do not fail there, or could not
+/// run there: what cannot be decided is not proven.
 fn red_before_green(
     ctx: &Ctx,
     wt: &Worktree,
     green: &[(&config::Check, store::RunResult)],
     stage: &str,
     mut report: Option<&mut CommitReport>,
-) -> bool {
-    let subject = pull_request("title")
-        .or_else(|| ctx.git.subject().ok())
-        .unwrap_or_default();
-    let fix = red::is_fix(&subject);
+) -> Result<bool> {
+    let fix = red::is_fix_change(&ctx.git, &ctx.config, pull_request("title").as_deref())?;
     let mut blocks = false;
     for (check, head) in green {
         let ran = red::run(
@@ -1526,15 +1519,50 @@ fn red_before_green(
             stage,
             &ctx.env(),
         );
+        let id = &check.id;
         let red = match ran {
             Ok(Some(red)) => red,
-            Ok(None) => continue,
+            Ok(None) => {
+                red::Mark::clear(head)?;
+                continue;
+            }
             Err(e) => {
-                println!("red before green {} failed: {e:#}", check.id);
+                let why = format!("{e:#}");
+                println!("red before green {id} did not run: {why}");
+                let base = ctx.git.merge_base(&ctx.config.base).unwrap_or_default();
+                red::Mark {
+                    base,
+                    unshown: Some(red::Unshown::DidNotRun(why.clone())),
+                }
+                .save(head)?;
+                let fix_line = "make the check run on the base commit";
+                if let Some(r) = report.as_mut() {
+                    r.notes.push(format!(
+                        "Red before green did not run for `{id}`: {}.",
+                        why.replace('\n', " ")
+                    ));
+                }
+                if fix {
+                    println!("  fix: {fix_line}; a fix is not proven until its tests fail there");
+                    if let Some(r) = report.as_mut() {
+                        r.red_items.push(floor::Item {
+                            what: format!("red before green did not run for `{id}`"),
+                            why: why.replace('\n', " "),
+                            fix: format!(
+                                "{fix_line}; a fix is not proven until its tests fail there"
+                            ),
+                        });
+                    }
+                    blocks = true;
+                }
                 continue;
             }
         };
-        let id = &check.id;
+        red::Mark {
+            base: red.commit.clone(),
+            unshown: red.verdict.unshown(),
+        }
+        .save(head)?;
         let (what, fails, passes) = red.subject();
         let one = red.files.len() == 1;
         let mut note = |text: String| {
@@ -1608,12 +1636,12 @@ fn red_before_green(
                 }
                 note(text);
                 if fix {
-                    println!("  fix: {RED_NEXT}");
+                    println!("  fix: {}", red::NEXT);
                     if let Some(r) = report.as_mut() {
                         r.red_items.push(floor::Item {
                             what: format!("the tests of `{id}` do not show the fix"),
                             why: format!("{what} {passes} on the base commit too"),
-                            fix: RED_NEXT.into(),
+                            fix: red::NEXT.into(),
                         });
                     }
                     blocks = true;
@@ -1621,7 +1649,7 @@ fn red_before_green(
             }
         }
     }
-    blocks
+    Ok(blocks)
 }
 
 /// Compares the stills and films of green checks with the base commit, one line per check.
