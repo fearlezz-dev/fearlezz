@@ -112,7 +112,7 @@ pub(crate) struct Work {
     pub name: String,
     pub ready: bool,
     pub waiting: bool,
-    /// The change touches files a check reads, outside `no_proof`.
+    /// The change touches files outside `no_proof`.
     pub needs_proof: bool,
     pub now: String,
     pub next: String,

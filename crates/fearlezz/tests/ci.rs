@@ -1,4 +1,4 @@
-//! Proving a commit for CI with `fearlezz run --ci`: what the change needs, fresh, with no
+//! Proving a commit for CI with `fearlezz run --ci`: every check, fresh, with no
 //! journal, against the rules of the base branch, so a change cannot weaken its own proof.
 
 // Clippy applies its test allowances (unwrap, expect, panic) only to cfg(test) code.
@@ -73,7 +73,7 @@ fn ci(repo: &Repo) -> common::Output {
 // What runs
 
 #[test]
-fn ci_runs_what_the_change_needs_fresh_and_writes_no_journal() {
+fn ci_runs_every_check_fresh_and_writes_no_journal() {
     let repo = branch_with_change();
     for round in 1..=2 {
         let out = repo.fz_env(&["run", "--ci"], &[("FEARLEZZ_JOURNAL", "ci/1")]);
@@ -90,6 +90,14 @@ fn ci_runs_what_the_change_needs_fresh_and_writes_no_journal() {
     }
     assert!(!repo.path(".git/fearlezz/journals/ci%2F1").exists());
     assert!(!repo.path(".git/fearlezz/journals/ci").exists());
+}
+
+#[test]
+fn ci_runs_every_check_whatever_its_inputs() {
+    let repo = branch_with_change();
+    let out = ci(&repo);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(runs(&repo.path(".runs/docs")), 1, "{}", out.stdout);
 }
 
 #[test]
@@ -229,7 +237,6 @@ fn the_status_comment_says_proven_and_lists_the_checks() {
 fn the_status_comment_names_each_blocker_and_what_to_do() {
     let repo = branch_with_change();
     repo.write("src/broken", "x\n");
-    repo.write("README.md", "changed\n");
     repo.commit("break");
     with_checks(
         &repo,
@@ -240,11 +247,6 @@ fn the_status_comment_names_each_blocker_and_what_to_do() {
     assert!(text.contains("**Not proven**"), "{text}");
     assert!(text.contains("| what | why | what to do |"), "{text}");
     assert!(text.contains("| check `tests` failed |"), "{text}");
-    assert!(text.contains("| `README.md` has no proof |"), "{text}");
-    assert!(
-        text.contains("add it to a check's inputs and proves"),
-        "{text}"
-    );
     assert!(text.contains("| check `e2e` is weaker |"), "{text}");
     assert!(text.contains("it is gone"), "{text}");
 }
@@ -274,102 +276,20 @@ fn turning_a_check_off_is_red_and_named() {
 }
 
 #[test]
-fn narrowing_the_inputs_is_red_and_named() {
-    let repo = branch_with_change();
-    with_checks(
-        &repo,
-        &CHECKS.replace(
-            "inputs = [\"src/**\"]\n\n[check.e2e]",
-            "inputs = [\"src/other/**\"]\n\n[check.e2e]",
-        ),
-    );
-    let out = ci(&repo);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(
-        out.stdout
-            .contains("weakens tests: it no longer reads src/lib.rs"),
-        "{}",
-        out.stdout
-    );
-}
-
-#[test]
-fn a_file_a_check_reads_but_does_not_prove_is_unproven() {
-    let checks = CHECKS
-        .replace(
-            "inputs = [\"src/**\"]\n\n[check.e2e]",
-            "inputs = [\"src/**\"]\nproves = [\"src/**\", \"!src/gen/**\"]\n\n[check.e2e]",
-        )
-        .replace(
-            "stage = \"merge\"\ninputs = [\"src/**\"]",
-            "stage = \"merge\"\ninputs = [\"src/**\"]\nproves = [\"src/lib.rs\"]",
+fn narrowing_or_dropping_the_inputs_weakens_nothing() {
+    for inputs in ["inputs = [\"src/other/**\"]\n", ""] {
+        let repo = branch_with_change();
+        with_checks(
+            &repo,
+            &CHECKS.replace(
+                "inputs = [\"src/**\"]\n\n[check.e2e]",
+                &format!("{inputs}\n[check.e2e]"),
+            ),
         );
-    let repo = repo_with(&format!("{NO_PROOF}{checks}"));
-    repo.branch("feat/x");
-    repo.write("src/gen/out.rs", "fn g() {}\n");
-    repo.commit("generated");
-    let out = ci(&repo);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(
-        out.stdout.contains("unproven src/gen/out.rs"),
-        "{}",
-        out.stdout
-    );
-    assert!(
-        out.stdout.contains(
-            "fix: add it to a check's inputs and proves (proves is its inputs unless set), or \
-             declare it in no_proof"
-        ),
-        "{}",
-        out.stdout
-    );
-    // It still reads the file, so the file still reruns it.
-    assert!(out.stdout.contains("passed tests"), "{}", out.stdout);
-}
-
-#[test]
-fn a_check_cannot_prove_what_it_does_not_read() {
-    let checks = CHECKS.replace(
-        "inputs = [\"src/**\"]\n\n[check.e2e]",
-        "inputs = [\"src/**\", \"!src/gen/**\"]\nproves = [\"src/**\"]\n\n[check.e2e]",
-    );
-    let repo = repo_with(&format!("{NO_PROOF}{checks}"));
-    repo.write("src/gen/out.rs", "fn g() {}\n");
-    let out = repo.fz(&[]);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(
-        out.stderr.contains(
-            "check tests: proves covers files its inputs do not read, such as src/gen/out.rs"
-        ),
-        "{}",
-        out.stderr
-    );
-}
-
-#[test]
-fn narrowing_what_a_check_proves_is_red_and_widening_is_fine() {
-    let narrowed = CHECKS.replace(
-        "inputs = [\"src/**\"]\n\n[check.e2e]",
-        "inputs = [\"src/**\"]\nproves = [\"src/other/**\"]\n\n[check.e2e]",
-    );
-    let repo = branch_with_change();
-    with_checks(&repo, &narrowed);
-    let out = ci(&repo);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(
-        out.stdout
-            .contains("weakens tests: it no longer proves src/lib.rs"),
-        "{}",
-        out.stdout
-    );
-
-    let repo = repo_with(&format!("{NO_PROOF}{narrowed}"));
-    repo.branch("feat/x");
-    repo.write("src/lib.rs", "fn b() {}\n");
-    repo.write("fearlezz.toml", &full(&format!("{NO_PROOF}{CHECKS}")));
-    repo.commit("widen");
-    let out = ci(&repo);
-    assert!(!out.stdout.contains("weakens"), "{}", out.stdout);
+        let out = ci(&repo);
+        assert!(out.ok, "{inputs}: {}", out.stdout);
+        assert!(!out.stdout.contains("weakens"), "{inputs}: {}", out.stdout);
+    }
 }
 
 #[test]
@@ -778,52 +698,25 @@ fn changing_the_env_variables_is_red_and_named() {
 }
 
 #[test]
-fn narrowing_the_env_inputs_is_red_but_widening_is_fine() {
-    let out = ci_after_tuning(|c| c.replace("inputs = [\"env.nix\"]", "inputs = []"));
-    assert_weakens(&out, "weakens env.inputs: it no longer has env.nix");
-    let out = ci_after_tuning(|c| {
-        c.replace(
-            "inputs = [\"env.nix\"]",
-            "inputs = [\"env.nix\", \"env.lock\"]",
-        )
-    });
-    assert!(out.ok, "{}", out.stdout);
-    assert!(!out.stdout.contains("weakens"), "{}", out.stdout);
+fn changing_the_env_inputs_weakens_nothing() {
+    for inputs in ["inputs = []", "inputs = [\"env.nix\", \"env.lock\"]"] {
+        let out = ci_after_tuning(|c| c.replace("inputs = [\"env.nix\"]", inputs));
+        assert!(out.ok, "{inputs}: {}", out.stdout);
+        assert!(!out.stdout.contains("weakens"), "{inputs}: {}", out.stdout);
+    }
 }
 
-// Every changed file is proven or declared
+// Proof is about behaviour, not files
 
 #[test]
-fn a_changed_file_no_check_reads_is_red() {
+fn a_changed_file_no_check_lists_in_its_inputs_blocks_nothing() {
     let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
     repo.branch("feat/x");
     repo.write("README.md", "changed\n");
     repo.commit("readme");
     let out = ci(&repo);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(out.stdout.contains("unproven README.md"), "{}", out.stdout);
-}
-
-#[test]
-fn the_work_is_never_ready_while_a_changed_file_is_unproven() {
-    for with_proven_change in [false, true] {
-        let repo = repo_with(&format!("{NO_PROOF}{CHECKS}"));
-        repo.branch("feat/x");
-        repo.write("README.md", "changed\n");
-        if with_proven_change {
-            repo.write("src/lib.rs", "fn b() {}\n");
-        }
-        repo.commit("readme");
-        assert!(!repo.fz(&["run", "--stage", "merge"]).ok);
-        let out = repo.fz(&[]);
-        assert!(!out.stdout.contains("ready to merge"), "{}", out.stdout);
-        assert!(
-            out.last_line()
-                .contains("takes away proof the base branch requires"),
-            "{}",
-            out.stdout
-        );
-    }
+    assert!(out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains("unproven"), "{}", out.stdout);
 }
 
 #[test]
@@ -834,33 +727,6 @@ fn a_file_the_base_declares_as_needing_no_proof_is_fine() {
     repo.commit("docs");
     let out = ci(&repo);
     assert!(out.ok, "{}", out.stdout);
-}
-
-#[test]
-fn a_file_a_negated_input_leaves_out_is_unproven() {
-    let checks = CHECKS.replace(
-        r#"inputs = ["src/**"]"#,
-        r#"inputs = ["src/**", "!src/gen/**"]"#,
-    );
-    let repo = Repo::new(
-        &format!("{NO_PROOF}{checks}"),
-        &[
-            (".gitignore", ".runs/\n"),
-            ("src/lib.rs", "fn a() {}\n"),
-            ("src/gen/out.rs", "fn g() {}\n"),
-        ],
-    );
-    std::fs::create_dir_all(repo.path(".runs")).unwrap();
-    repo.branch("feat/x");
-    repo.write("src/gen/out.rs", "fn h() {}\n");
-    repo.commit("generated");
-    let out = ci(&repo);
-    assert!(!out.ok, "{}", out.stdout);
-    assert!(
-        out.stdout.contains("unproven src/gen/out.rs"),
-        "{}",
-        out.stdout
-    );
 }
 
 #[test]
@@ -957,25 +823,6 @@ fn the_change_cannot_declare_its_own_files_as_needing_no_proof() {
     assert!(
         out.stdout
             .contains("weakens no_proof: it newly says *.md needs no proof"),
-        "{}",
-        out.stdout
-    );
-    assert!(out.stdout.contains("unproven README.md"), "{}", out.stdout);
-}
-
-#[test]
-fn the_config_files_are_judged_by_the_floor_not_by_a_check() {
-    let repo = branch_with_change();
-    with_checks(
-        &repo,
-        &format!(
-            "{CHECKS}\n[check.extra]\nrun = \"true\"\nstage = \"working\"\ninputs = [\"src/**\"]\n"
-        ),
-    );
-    let out = ci(&repo);
-    assert!(out.ok, "{}", out.stdout);
-    assert!(
-        !out.stdout.contains("unproven fearlezz.toml"),
         "{}",
         out.stdout
     );

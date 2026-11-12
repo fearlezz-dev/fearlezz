@@ -89,17 +89,15 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
 
 fn starter(found: &[Found]) -> Result<String, std::fmt::Error> {
     let mut text = String::from(
-        "# The proof this project's changes need. `fearlezz --plan` shows which checks a change\n\
-         # needs; the agent skill (`fearlezz setup sync` writes it) explains the rest.\n\n",
+        "# The proof this project's changes need. `fearlezz --plan` shows where each check stands;\n\
+         # the agent skill (`fearlezz setup sync` writes it) explains the rest.\n\n",
     );
     if found.iter().all(|p| p.file.is_none()) {
         text.push_str(
-            "# No language was found. Declare each check: a command that exits 0 on success, and\n\
-             # every file it reads.\n\
+            "# No language was found. Declare each check: a command that exits 0 on success.\n\
              # [check.tests]\n\
              # run = \"make test\"\n\
-             # stage = \"working\"\n\
-             # inputs = [\"src/**\", \"Makefile\"]\n\n",
+             # stage = \"working\"\n\n",
         );
     }
     let names: Vec<String> = found.iter().map(|p| format!("\"{}\"", p.piece)).collect();

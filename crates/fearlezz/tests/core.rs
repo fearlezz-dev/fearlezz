@@ -99,7 +99,7 @@ fn a_run_with_nothing_due_names_the_stage_that_has_checks() {
 // Plan
 
 #[test]
-fn plan_lists_only_checks_whose_inputs_the_change_touched() {
+fn plan_lists_every_check_once_the_work_changed_something() {
     let repo = repo();
     let out = repo.fz(&["--plan"]);
     assert!(out.ok, "{}", out.stderr);
@@ -111,14 +111,9 @@ fn plan_lists_only_checks_whose_inputs_the_change_touched() {
 
     repo.write("src/lib.rs", "fn b() {}\n");
     let out = repo.fz(&["--plan"]);
-    assert!(out.stdout.contains("tests"), "{}", out.stdout);
-    assert!(out.stdout.contains("screens"), "{}", out.stdout);
-    assert!(out.stdout.contains("e2e"), "{}", out.stdout);
-    assert!(
-        !out.stdout.contains("docs"),
-        "docs untouched: {}",
-        out.stdout
-    );
+    for check in ["tests", "screens", "e2e", "docs"] {
+        assert!(out.stdout.contains(check), "{check}: {}", out.stdout);
+    }
 }
 
 #[test]
@@ -194,15 +189,15 @@ fn every_command_ends_with_a_next_line() {
 // Run and result store
 
 #[test]
-fn run_runs_needed_checks_of_the_current_stage_and_earlier() {
+fn run_runs_the_checks_of_the_current_stage_and_earlier() {
     let repo = repo();
     repo.fz(&["run", "--stage", "working", "--no-run"]);
     repo.write("src/lib.rs", "fn b() {}\n");
     let out = repo.fz(&["run"]);
     assert!(out.ok, "{}", out.stderr);
     assert_eq!(runs(&repo.path(".runs/tests")), 1);
+    assert_eq!(runs(&repo.path(".runs/docs")), 1, "every check is needed");
     assert_eq!(runs(&repo.path(".runs/screens")), 0, "look comes later");
-    assert_eq!(runs(&repo.path(".runs/docs")), 0, "docs not touched");
 }
 
 #[test]
@@ -213,7 +208,7 @@ fn unchanged_inputs_reuse_the_earlier_result() {
     repo.fz(&["run"]);
     let out = repo.fz(&["run"]);
     assert_eq!(runs(&repo.path(".runs/tests")), 1);
-    assert!(out.stdout.contains("1 reused"), "{}", out.stdout);
+    assert!(out.stdout.contains("2 reused"), "{}", out.stdout);
 
     repo.write("docs/readme.md", "other\n");
     repo.fz(&["run", "tests"]);
@@ -266,6 +261,82 @@ inputs = ["src/**", "!src/gen/**", "src/gen/keep.rs"]
         2,
         "the later src/gen/keep.rs takes it back"
     );
+}
+
+/// `whole` sets no inputs, so it reads the whole tree outside `no_proof`; `src` reads `src/**`.
+fn no_proof_repo() -> Repo {
+    let config = r#"
+no_proof = ["docs/**"]
+
+[check.whole]
+run = "echo run >> .runs/whole"
+stage = "working"
+
+[check.src]
+run = "echo run >> .runs/src"
+stage = "working"
+inputs = ["src/**"]
+"#;
+    let repo = Repo::new(
+        config,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("src/lib.rs", "fn a() {}\n"),
+            ("build.txt", "one\n"),
+            ("docs/readme.md", "docs\n"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo
+}
+
+#[test]
+fn a_check_without_inputs_reruns_after_a_change_to_any_file_outside_no_proof() {
+    let repo = no_proof_repo();
+    repo.write("src/lib.rs", "fn b() {}\n");
+    assert!(repo.fz(&["run"]).ok);
+    assert_eq!(runs(&repo.path(".runs/whole")), 1);
+
+    repo.write("build.txt", "two\n");
+    assert!(repo.fz(&["run"]).ok);
+    assert_eq!(runs(&repo.path(".runs/whole")), 2, "build.txt is read");
+}
+
+#[test]
+fn an_edit_only_to_a_no_proof_file_reuses_every_result() {
+    let repo = no_proof_repo();
+    repo.write("src/lib.rs", "fn b() {}\n");
+    assert!(repo.fz(&["run"]).ok);
+    repo.write("docs/readme.md", "other\n");
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(out.stdout.contains("2 reused"), "{}", out.stdout);
+    assert_eq!(runs(&repo.path(".runs/whole")), 1);
+    assert_eq!(runs(&repo.path(".runs/src")), 1);
+}
+
+#[test]
+fn a_check_with_inputs_reuses_while_its_inputs_stay_the_same() {
+    let repo = no_proof_repo();
+    repo.write("src/lib.rs", "fn b() {}\n");
+    assert!(repo.fz(&["run"]).ok);
+    repo.write("build.txt", "two\n");
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}", out.stdout);
+    assert_eq!(runs(&repo.path(".runs/src")), 1, "{}", out.stdout);
+    assert_eq!(runs(&repo.path(".runs/whole")), 2, "{}", out.stdout);
+}
+
+#[test]
+fn every_check_is_needed_whatever_its_inputs() {
+    let repo = no_proof_repo();
+    repo.write("build.txt", "two\n");
+    let out = repo.fz(&["--plan"]);
+    assert!(out.stdout.contains("src"), "{}", out.stdout);
+    repo.fz(&["run"]);
+    assert_eq!(runs(&repo.path(".runs/src")), 1);
 }
 
 #[test]

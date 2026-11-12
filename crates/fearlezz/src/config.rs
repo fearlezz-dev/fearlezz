@@ -94,11 +94,10 @@ pub(crate) struct Check {
     pub id: String,
     pub run: String,
     pub stage: Stage,
-    /// What it reads: a change to any of them runs it again.
+    /// What it reads, the key its results are reused by: the files `inputs` names, or
+    /// without them every file outside `no_proof`. Only a speed hint; it never decides
+    /// whether the check is needed.
     inputs: Globs,
-    /// What of its inputs a pass proves, for the floor; None: all of them. A formatter reads
-    /// test files, yet proves none that nothing runs.
-    proves: Option<Globs>,
     /// Environment variables the check may see. Their values are part of its inputs.
     pub env: Vec<String>,
     pub needs: Vec<Need>,
@@ -375,7 +374,6 @@ struct RawCheck {
     stage: String,
     #[serde(default)]
     inputs: Vec<String>,
-    proves: Option<Vec<String>>,
     #[serde(default)]
     env: Vec<String>,
     #[serde(default)]
@@ -481,6 +479,14 @@ impl Config {
             )
         });
         let all_lints = Lints::parse(raw.lints.unwrap_or_default())?;
+        // Without inputs of its own, a check reads every file outside `no_proof`, so an edit
+        // to prose reruns nothing: `no_proof` taken back out of `**`, in its own order.
+        let whole_tree: Vec<String> = std::iter::once("**".to_string())
+            .chain(raw.no_proof.iter().map(|p| match p.strip_prefix('!') {
+                Some(back) => back.to_string(),
+                None => format!("!{p}"),
+            }))
+            .collect();
         let mut checks = Vec::new();
         for (id, c) in raw.check {
             let stage = stages.find(&c.stage).with_context(|| {
@@ -496,17 +502,15 @@ impl Config {
             }
             // Inside a shell, the environment's own files shape every result.
             let shell_inputs = || env.shell.iter().flat_map(|_| &env.inputs);
-            let inputs = globs(c.inputs.iter().chain(shell_inputs()))
+            let own = if c.inputs.is_empty() {
+                &whole_tree
+            } else {
+                &c.inputs
+            };
+            let inputs = globs(own.iter().chain(shell_inputs()))
                 .with_context(|| format!("check {id}: inputs"))?;
-            let proves = c
-                .proves
-                .as_ref()
-                .map(|p| globs(p.iter().chain(shell_inputs())))
-                .transpose()
-                .with_context(|| format!("check {id}: proves"))?;
             checks.push(Check {
                 inputs,
-                proves,
                 shell: env.shell.clone(),
                 builtin: None,
                 tests: c
@@ -622,31 +626,9 @@ impl Config {
         })
     }
 
-    /// Refuses a check whose `proves` covers one of `files` (the worktree's) that its inputs do
-    /// not: a check proves only what it reads. A file added later is never proven by it either.
-    pub(crate) fn check_proves(&self, files: &[String]) -> Result<()> {
-        for c in &self.checks {
-            let Some(proves) = &c.proves else { continue };
-            if let Some(f) = files.iter().find(|f| proves.is_match(f) && !c.reads(f)) {
-                bail!(
-                    "check {}: proves covers files its inputs do not read, such as {f}: a check \
-                     proves only what it reads, so narrow proves (a ! glob takes files back out) \
-                     or add the file to its inputs",
-                    c.id
-                );
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn needs_no_proof(&self, path: &str) -> bool {
-        self.no_proof.is_match(path)
-    }
-
-    /// Whether a change to `path` needs proof: a check reads it and `no_proof` does not
-    /// declare it.
+    /// Whether a change to `path` needs proof: `no_proof` does not declare it.
     pub(crate) fn needs_proof(&self, path: &str) -> bool {
-        !self.needs_no_proof(path) && self.checks.iter().any(|c| c.reads(path))
+        !self.no_proof.is_match(path)
     }
 
     /// Whether `check` takes pictures: it names them, or by convention runs in the look stage
@@ -671,7 +653,6 @@ fn builtin_check(id: &str, stages: &Stages, inputs: Globs, on: Scope, builtin: B
         run: format!("(fearlezz {id})"),
         stage: stages.find("working").unwrap_or(stages.first()),
         inputs,
-        proves: None,
         env: Vec::new(),
         needs: Vec::new(),
         services: None,
@@ -841,11 +822,6 @@ fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<Globs> {
 impl Check {
     pub(crate) fn reads(&self, path: &str) -> bool {
         self.inputs.is_match(path)
-    }
-
-    /// Whether a pass proves `path` for the floor: it reads it, and `proves` covers it.
-    pub(crate) fn proves(&self, path: &str) -> bool {
-        self.reads(path) && self.proves.as_ref().is_none_or(|p| p.is_match(path))
     }
 
     /// Whether `path` is one of its tests, by `test_files`.

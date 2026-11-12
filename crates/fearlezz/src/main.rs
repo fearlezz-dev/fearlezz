@@ -65,7 +65,7 @@ struct See {
     /// Another journal, in detail.
     #[arg(long, value_name = "NAME")]
     journal: Option<String>,
-    /// The proof this change needs, per stage.
+    /// The checks per stage and where each stands.
     #[arg(long)]
     plan: bool,
     /// What happened since a moment: `2h`, `30m`, `1d`, or a timestamp.
@@ -100,7 +100,7 @@ enum Cmd {
         /// Only move the stage, such as going back to fix something first.
         #[arg(long, requires = "stage")]
         no_run: bool,
-        /// Prove this commit, for CI: every check the change needs, fresh, with no journal. On
+        /// Prove this commit, for CI: every check, fresh, with no journal. On
         /// GitHub Actions with a token it also does what the event asks: a pull request gets
         /// its pictures, status comment and status, `/fearlezz approve` is answered, and closed
         /// pull requests lose their pictures.
@@ -246,9 +246,7 @@ impl Ctx {
     }
 
     fn worktree(&self) -> Result<Worktree> {
-        let wt = Worktree::read(self.git.clone(), &self.config)?;
-        self.config.check_proves(&wt.files)?;
-        Ok(wt)
+        Worktree::read(self.git.clone(), &self.config)
     }
 
     fn view(&self, journal: &Journal) -> Result<View> {
@@ -745,7 +743,7 @@ fn plan(ctx: &Ctx) -> Result<()> {
         let here: Vec<String> = v
             .checks
             .iter()
-            .filter(|c| c.needed && c.stage == stage)
+            .filter(|c| c.stage == stage)
             .map(|c| format!("{} {}", c.id, state_label(&c.state)))
             .collect();
         if here.is_empty() {
@@ -762,25 +760,24 @@ fn plan(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-/// The checks a run takes on: the named ones, every check when proving a commit on the base
-/// branch itself, and otherwise those the change needs in the current stage.
+/// The checks a run takes on: the named ones, every check when proving a commit, and otherwise
+/// every check of the current stage and earlier ones.
 fn targets<'a>(
     ctx: &'a Ctx,
     before: &View,
-    wt: &Worktree,
     ids: &[String],
     in_memory: bool,
 ) -> Result<Vec<&'a config::Check>> {
     if !ids.is_empty() {
         return ids.iter().map(|id| ctx.config.check(id)).collect();
     }
-    if in_memory && wt.changed.is_empty() {
+    if in_memory {
         return Ok(ctx.config.checks.iter().collect());
     }
     let due: Vec<&str> = before
         .checks
         .iter()
-        .filter(|c| c.needed && c.stage <= before.stage)
+        .filter(|c| c.stage <= before.stage)
         .map(|c| c.id.as_str())
         .collect();
     Ok(ctx
@@ -1055,7 +1052,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
     let stage = stages.name(before.stage).to_string();
     let final_stage = stages.name(stages.last()).to_string();
     let in_memory = j.is_in_memory();
-    let targets = targets(ctx, &before, &wt, ids, in_memory)?;
+    let targets = targets(ctx, &before, ids, in_memory)?;
     // A full run at the final stage answers for the whole work, and for what the base
     // branch requires, not only for its checks.
     let floor = if ids.is_empty() && stage == final_stage {
@@ -1084,10 +1081,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         // The change needs checks of a later stage only: say where they wait.
         let later = (ids.is_empty() && !in_memory)
             .then(|| {
-                let waiting = before
-                    .checks
-                    .iter()
-                    .filter(|c| c.needed && c.stage > before.stage);
+                let waiting = before.checks.iter().filter(|c| c.stage > before.stage);
                 let first = waiting.clone().map(|c| c.stage).min()?;
                 let names: Vec<&str> = waiting
                     .filter(|c| c.stage == first)

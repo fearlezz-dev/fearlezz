@@ -10,17 +10,16 @@ mod common;
 
 use common::Repo;
 
-/// `tests` passes; `unit` has a command an agent would run by hand and reads nothing here.
+/// `tests` passes; `unit` starts with a command an agent would run by hand, and passes here
+/// without a Cargo project.
 const CONFIG: &str = r#"
 [check.tests]
 run = "true"
 stage = "working"
-inputs = ["src/**"]
 
 [check.unit]
-run = "cargo test --quiet"
+run = "cargo test --quiet || true"
 stage = "working"
-inputs = ["never/**"]
 
 [settings.skill]
 agents = []
@@ -36,6 +35,7 @@ fn changed() -> Repo {
         "{CONFIG}\n[settings.hooks]\nagents = [\"claude\"]\n"
     ));
     repo.branch("feat/x");
+    repo.fz(&["setup", "sync"]);
     repo.write("src/lib.rs", "fn b() {}\n");
     repo.commit("change");
     repo

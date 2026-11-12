@@ -1,15 +1,10 @@
-# A Flutter app: formatting, the analyzer, and the tests.
-#
-# `flutter test` runs test/ only, so no check here proves a *_test.dart in integration_test/,
-# though the formatter and the analyzer read it: one nothing runs is no proof of itself, and
-# the floor names it unproven. The exception is integration_test/app_test.dart, the entry file
-# the flutter-film check of flutter-look runs.
+# A Flutter app: formatting, the analyzer, and the tests. `flutter test` runs test/ only;
+# integration_test/app_test.dart is the entry file the flutter-film check of flutter-look runs.
 
 [check.dart-format]
 run = "dart format --output=none --set-exit-if-changed ."
 stage = "working"
 inputs = ["**/*.dart"]
-proves = ["**/*.dart", "!integration_test/**/*_test.dart", "integration_test/app_test.dart"]
 
 # Lint findings get the level [lints.dart] gives them; other analyzer issues block. Only lines
 # the change touched count; compile errors block wherever they are.
@@ -17,7 +12,6 @@ proves = ["**/*.dart", "!integration_test/**/*_test.dart", "integration_test/app
 run = "dart analyze --format=machine"
 stage = "working"
 inputs = ["**/*.dart", "analysis_options.yaml", "pubspec.yaml", "pubspec.lock"]
-proves = ["**/*.dart", "!integration_test/**/*_test.dart", "integration_test/app_test.dart", "analysis_options.yaml", "pubspec.yaml", "pubspec.lock"]
 findings = { read = "dart", lints = ["dart"] }
 
 # The last line says "+12: All tests passed!" or "+10 -2: Some tests failed.".

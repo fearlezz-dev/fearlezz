@@ -72,8 +72,6 @@ pub enum CheckState {
 pub(crate) struct CheckView {
     pub id: String,
     pub stage: Stage,
-    /// The change touched one of its inputs.
-    pub needed: bool,
     pub state: CheckState,
     /// How its stills and films compare with the base, for a passing run.
     pub look: Option<crate::look::Look>,
@@ -231,13 +229,10 @@ pub(crate) fn view(
         // Asked once, and only when a check's red before green is in question.
         let mut fix: Option<bool> = None;
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
-        // The config shapes every check, though none reads it, so changing it needs them all.
-        let config_files = crate::presets::config_files(&wt.git.root)?;
-        let config_changed = wt.changed.iter().any(|p| config_files.contains(p));
         for check in &config.checks {
-            let needed = config_changed || wt.changed.iter().any(|p| check.reads(p));
             let latest = latest_ran(journal, &check.id);
-            if !needed && latest.is_none() {
+            // Any change needs every check; its inputs only say whether a pass still holds.
+            if wt.changed.is_empty() && latest.is_none() {
                 continue;
             }
             let inputs = wt.inputs(check)?;
@@ -268,7 +263,7 @@ pub(crate) fn view(
                         .is_some_and(|r| r.made_at_final(&journal.name, stages.name(final_stage)));
                     if stage == final_stage && !fresh {
                         CheckState::NeedsFresh
-                    } else if needed && compared.missing {
+                    } else if compared.missing {
                         CheckState::Uncompared
                     } else {
                         CheckState::Ok
@@ -282,7 +277,6 @@ pub(crate) fn view(
             checks.push(CheckView {
                 id: check.id.clone(),
                 stage: check.stage,
-                needed,
                 state,
                 look: compared.look,
                 approved,
@@ -299,7 +293,6 @@ pub(crate) fn view(
                 checks.push(CheckView {
                     id: check.id.clone(),
                     stage: check.stage,
-                    needed: true,
                     state: match ran.outcome {
                         Outcome::Passed => CheckState::Ok,
                         Outcome::Failed => CheckState::Failed,
@@ -479,11 +472,7 @@ fn next(
                 commit it"
             .into();
     }
-    let due: Vec<&CheckView> = v
-        .checks
-        .iter()
-        .filter(|c| c.needed && c.stage <= v.stage)
-        .collect();
+    let due: Vec<&CheckView> = v.checks.iter().filter(|c| c.stage <= v.stage).collect();
     if let Some(c) = due
         .iter()
         .find(|c| matches!(c.state, CheckState::Failed | CheckState::Unstable))
