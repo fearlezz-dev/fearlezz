@@ -58,11 +58,11 @@ impl Red {
     }
 }
 
-/// The change's test files for `check`: changed paths it reads that are tests.
+/// The change's test files for `check`, by `test_files` alone: its inputs only decide reuse.
 pub(crate) fn test_files(check: &Check, wt: &Worktree) -> Vec<String> {
     wt.changed
         .iter()
-        .filter(|p| check.reads(p) && check.is_test(p))
+        .filter(|p| check.is_test(p))
         .cloned()
         .collect()
 }

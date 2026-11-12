@@ -72,6 +72,31 @@ fn a_fix_whose_new_test_fails_on_the_base_commit_is_red_before_green() {
 }
 
 #[test]
+fn inputs_that_leave_the_tests_out_still_run_red_before_green() {
+    let repo = Repo::new(
+        &CHECKS.replace(
+            r#"inputs = ["src/**", "tests/**"]"#,
+            r#"inputs = ["src/**"]"#,
+        ),
+        &[
+            (".gitignore", ".runs/\n"),
+            ("src/value", "1\n"),
+            ("tests/old.sh", "test -e src/value\n"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("change");
+    change(&repo, PASSES_ANYWAY, "fix: the value is two");
+    let (out, _) = ci(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("not red before green tests"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn a_fix_whose_new_test_passes_on_the_base_commit_is_not_proven() {
     let repo = repo();
     change(&repo, PASSES_ANYWAY, "fix: the value is two");
