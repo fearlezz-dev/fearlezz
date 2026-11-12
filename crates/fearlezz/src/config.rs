@@ -702,8 +702,8 @@ impl Globs {
     /// and globs of one kind side by side mean the same in any order. Anything else may match
     /// more, and is named.
     pub(crate) fn widenings(&self, base: &Globs) -> Vec<Widening> {
-        let (b, h) = (runs_sorted(&base.patterns), runs_sorted(&self.patterns));
-        if narrows_to(&b, &h) {
+        let (b, h) = (&base.patterns, &self.patterns);
+        if narrows_to(b, h) {
             return Vec::new();
         }
         let positive = |p: &&String| !p.starts_with('!');
@@ -733,38 +733,55 @@ impl fmt::Debug for Globs {
     }
 }
 
-/// The globs with each run of one kind (positive or `!`) sorted, which keeps what they match.
-fn runs_sorted(patterns: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(patterns.len());
-    let mut start = 0;
-    for (i, p) in patterns.iter().enumerate() {
-        if i > 0 && p.starts_with('!') != patterns[i - 1].starts_with('!') {
-            out[start..].sort();
-            start = i;
-        }
-        out.push(p.clone());
+/// Whether `head` comes from `base` by dropping positive globs and putting in `!` globs only,
+/// where each run of one kind in `base` (globs side by side that all are, or all are not, `!`)
+/// may come in any order.
+fn narrows_to(base: &[String], head: &[String]) -> bool {
+    let runs: Vec<&[String]> = base
+        .chunk_by(|a, b| a.starts_with('!') == b.starts_with('!'))
+        .collect();
+    // A run this long is never written; compare it as written rather than search it.
+    if runs.iter().any(|r| r.len() >= 64) {
+        return base == head;
     }
-    out[start..].sort();
-    out
+    let mut failed = std::collections::HashSet::new();
+    narrows_from(&runs, head, (0, 0, 0), &mut failed)
 }
 
-/// Whether `head` comes from `base` by dropping positive globs and putting in `!` globs only.
-fn narrows_to(base: &[String], head: &[String]) -> bool {
-    // can[i][j]: base[i..] becomes head[j..].
-    let (n, m) = (base.len(), head.len());
-    let mut can = vec![vec![false; m + 1]; n + 1];
-    for i in (0..=n).rev() {
-        for j in (0..=m).rev() {
-            can[i][j] = if i == n && j == m {
-                true
-            } else {
-                (i < n && !base[i].starts_with('!') && can[i + 1][j])
-                    || (j < m && head[j].starts_with('!') && can[i][j + 1])
-                    || (i < n && j < m && base[i] == head[j] && can[i + 1][j + 1])
-            };
-        }
+/// Whether `head[j..]` comes from the runs from `r` on, with the members of run `r` in `taken`
+/// already matched.
+fn narrows_from(
+    runs: &[&[String]],
+    head: &[String],
+    (r, taken, j): (usize, u64, usize),
+    failed: &mut std::collections::HashSet<(usize, u64, usize)>,
+) -> bool {
+    let Some(run) = runs.get(r) else {
+        return head
+            .get(j..)
+            .unwrap_or_default()
+            .iter()
+            .all(|p| p.starts_with('!'));
+    };
+    if failed.contains(&(r, taken, j)) {
+        return false;
     }
-    can[0][0]
+    let negated = run.first().is_some_and(|p| p.starts_with('!'));
+    let all = (1u64 << run.len()) - 1;
+    // Positive globs left in a run may be dropped; `!` globs may not.
+    let ok = ((!negated || taken == all) && narrows_from(runs, head, (r + 1, 0, j), failed))
+        || head.get(j).is_some_and(|h| {
+            (h.starts_with('!') && narrows_from(runs, head, (r, taken, j + 1), failed))
+                || run.iter().enumerate().any(|(i, p)| {
+                    taken & (1 << i) == 0
+                        && p == h
+                        && narrows_from(runs, head, (r, taken | (1 << i), j + 1), failed)
+                })
+        });
+    if !ok {
+        failed.insert((r, taken, j));
+    }
+    ok
 }
 
 fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<Globs> {
