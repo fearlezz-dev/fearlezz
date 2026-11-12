@@ -114,8 +114,6 @@ pub(crate) fn windows() -> Result<Vec<Window>> {
                     bundle: app.bundleIdentifier().to_string(),
                     app: app.applicationName().to_string(),
                     title: w.title().map(|t| t.to_string()).unwrap_or_default(),
-                    x: frame.origin.x,
-                    y: frame.origin.y,
                     width: frame.size.width,
                     height: frame.size.height,
                 },

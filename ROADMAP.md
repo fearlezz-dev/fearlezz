@@ -37,7 +37,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
 | Pieces | Rust, TypeScript, ESLint, Playwright, Python, Go, Kotlin, Flutter, devenv, agents, safety, trufflehog, betterleaks, osv-scanner, actions; pinned with `fearlezz.lock`. Checks are named for their tools (`vitest`, `ruff`, `go-test`), so language pieces combine; Rust keeps `fmt`, `clippy`, `tests` |
 | Stills and films | Compared with the same check run on the base commit, checked out in the user cache folder (outside the repository, so dev servers serve it), with a report page: counts that filter, grouping by screen, viewport or theme, five ways to compare, films on one clock with lanes of where they differ, a decision per picture and an approve bar in the developer's words. Compared per color channel; films at 720p at most, stills at their own size. Listed in `proof.jsonl` or found by `stills` and `films` globs; `flaky` pictures show but never block. The `playwright` piece takes them from `toHaveScreenshot` and videos, its `webServer` on the free port every run gets (`FEARLEZZ_PORT`) |
-| Recording app windows | macOS, in the binary (ScreenCaptureKit via objc2): `fearlezz --still <window>` for the agent to look at its running app, and `record` on a check films or stills the window of the app its command starts. Where nothing can record it fails locally with the one time fix and is not run in CI. `flutter-look` piece: headless widget test stills, and integration test films. A virtual display (`display = "virtual"`) is experimental: it works, but a window manager rearranges windows while it exists |
+| Recording app windows | macOS, in the binary (ScreenCaptureKit via objc2): `fearlezz --still <window>` for the agent to look at its running app, and `record` on a check films or stills the window of the app its command starts. Where nothing can record it fails locally with the one time fix and is not run in CI. `flutter-look` piece: headless widget test stills, and integration test films. |
 | Approvals | A visual change waits for the developer's words. On a pull request a person with write access approves with `/fearlezz approve <words>`, which turns the `fearlezz/pictures` status green; `fearlezz say approve <check> --github` reads it into the journal, as the person's approval rather than the agent's report |
 | Safety | Pieces to pick from, each a check named for its tool: `safety` (gitleaks, the default every starter gets), `trufflehog` and `betterleaks` for secrets (gate on changed lines, never printed or stored), `osv-scanner` for vulnerable dependencies (flag, counted when the change touched the lockfile), `actions` (zizmor over GitHub workflows, its own levels). Read natively, without shell glue |
 | Environments | Fresh checkout setup, services with their own ports per worktree |
@@ -57,6 +57,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 | Capability | State |
 | --- | --- |
+| Recording off the developer's screens | A spike (branch `spike/virtual-display`) made a virtual display, moved a window onto it and recorded it there; the app still opens on the main screen, a tiling window manager (AeroSpace) rearranges windows, and input does not reach the app. Not in the binary. It needs its own drive: opt in, and absent wherever it cannot work |
 | Showcase | Stitch proofs into polished README films and release notes; prototyped once |
 | Code scanning | Secrets, dependencies and workflows are scanned (Safety, above); the code itself is not |
 | Hosted parts and proof links | `ee/` is empty; links may be hidden or need sign in |
@@ -73,7 +74,8 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 1. Merge this pull request: pictures that prove UI work locally and on the pull request, red before green, and the safety pieces.
 2. Cut the release: merge the release-please pull request, which tags the release and moves the `v0` tag, so `fearlezz-dev/fearlezz@v0` exists and the action stops refusing an old binary.
-3. The hosted parts in `ee/`: proof links and pages a team can open without the developer's machine.
+3. Recording off the developer's screens, in its own drive (see Not built).
+4. The hosted parts in `ee/`: proof links and pages a team can open without the developer's machine.
 
 ## Known problems
 

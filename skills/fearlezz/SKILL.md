@@ -64,7 +64,6 @@ inputs = ["Sources/**", "Package.swift"]
 record = { still = "home", film = "home", seconds = 3 }
 # window = "com.example.app"     the app when the command does not start it itself (open, launchd)
 # crop_top = 28                  leave out the title bar (off by default; some apps have none)
-# display = "virtual"            experimental: keep the window on a virtual display (needs Accessibility)
 ```
 
 The still is taken once the window is up; the film runs until the command ends, or for `seconds`, after which Fearlezz stops the command and the check counts as passed. Where nothing can record, the check does not run: locally it fails with the one time fix; in CI it is listed as not run and does not block, since looks of app windows are proven on a developer's machine.

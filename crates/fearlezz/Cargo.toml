@@ -23,16 +23,14 @@ sha2 = "0.11.1"
 toml = "1.2.1"
 toml_edit = "0.25.19"
 
-# The window recorder: ScreenCaptureKit through the objc2 bindings, and CGVirtualDisplay (a
-# private class) through the objc2 runtime.
+# The window recorder: ScreenCaptureKit through the objc2 bindings.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSBitmapImageRep", "NSImageRep", "objc2-core-graphics"] }
 dispatch2 = "0.3.1"
-objc2-application-services = { version = "0.3.2", default-features = false, features = ["std", "libc", "HIServices", "AXUIElement", "AXValue", "AXError"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes", "CFString", "CFArray"] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "libc", "CGDirectDisplay", "CGImage", "CGWindow", "CGEvent", "CGEventTypes", "CGEventSource", "CGRemoteOperation", "CGDisplayConfiguration", "CGError"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "libc", "CGDirectDisplay", "CGImage", "CGWindow", "CGError"] }
 objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMTime"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSURL", "NSError", "NSArray", "NSData", "NSDictionary", "NSObject", "NSEnumerator"] }
 objc2-screen-capture-kit = "0.3.2"

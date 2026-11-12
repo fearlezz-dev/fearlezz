@@ -17,20 +17,6 @@ use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
 
 #[cfg(target_os = "macos")]
-pub(crate) mod display;
-/// No virtual display where there is no macOS: the type has no values, so nothing that takes one
-/// can run.
-#[cfg(not(target_os = "macos"))]
-mod display {
-    pub(crate) enum Virtual {}
-
-    impl Virtual {
-        pub(crate) fn close(self) {
-            match self {}
-        }
-    }
-}
-#[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
 use macos as sys;
@@ -62,8 +48,6 @@ pub(crate) struct WindowInfo {
     pub bundle: String,
     pub app: String,
     pub title: String,
-    pub x: f64,
-    pub y: f64,
     pub width: f64,
     pub height: f64,
 }
@@ -129,20 +113,6 @@ pub(crate) struct Spec {
     /// Points cut from the top (the title bar); off by default, since some apps have none.
     #[serde(default)]
     pub crop_top: f64,
-    /// Where the app's window lives while it is recorded.
-    #[serde(default)]
-    pub display: Display,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Display {
-    /// Wherever the app opens it.
-    #[default]
-    Main,
-    /// A virtual display Fearlezz creates for the run, so the window stays off the
-    /// developer's screens. Needs Accessibility to move the window there. Experimental.
-    Virtual,
 }
 
 impl Spec {
@@ -343,19 +313,6 @@ pub(crate) fn during(
 ) -> Result<Recorded> {
     let clock = Instant::now();
     let root = i32::try_from(child.id())?;
-    let display = match spec.display {
-        Display::Main => None,
-        Display::Virtual => match open_display(log) {
-            Ok(d) => d,
-            Err(e) => {
-                writeln!(
-                    log,
-                    "record: no virtual display ({e:#}); recording where the window opens"
-                )?;
-                None
-            }
-        },
-    };
     // Wait for the window while the command runs.
     let window = loop {
         if let Some(status) = child.try_wait()? {
@@ -387,10 +344,6 @@ pub(crate) fn during(
         window.info.describe(),
         clock.elapsed().as_secs_f64()
     )?;
-    let window = match &display {
-        Some(d) => place(d, window, log)?,
-        None => window,
-    };
     std::thread::sleep(SETTLE);
     // The window may have taken its final size while it settled.
     let id = window.info.id;
@@ -459,10 +412,6 @@ pub(crate) fn during(
         stopped = child.try_wait()?.is_none();
     }
     append_proofs(out, &proofs)?;
-    // The display goes before the command stops, so its windows come back first.
-    if let Some(d) = display {
-        d.close();
-    }
     let status = if stopped && child.try_wait()?.is_none() {
         writeln!(
             log,
@@ -522,70 +471,6 @@ pub(crate) fn stop(child: &mut Child) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
-fn open_display(log: &mut impl Write) -> Result<Option<display::Virtual>> {
-    let frames = |windows: Vec<sys::Window>| -> Vec<(u32, i64, i64)> {
-        windows
-            .into_iter()
-            .map(|w| (w.info.id, w.info.x as i64, w.info.y as i64))
-            .collect()
-    };
-    let before = frames(sys::windows()?);
-    let clock = Instant::now();
-    let d = display::Virtual::create()?;
-    let took = clock.elapsed().as_secs_f64();
-    let b = d.bounds();
-    // Adding a display can make macOS move the developer's windows; say so when it does.
-    let after = frames(sys::windows()?);
-    let moved = after
-        .iter()
-        .filter(|w| before.iter().any(|v| v.0 == w.0 && v != *w))
-        .count();
-    writeln!(
-        log,
-        "record: virtual display {} of {}x{} points at ({}, {}) in {took:.2} s; {moved} other \
-         windows moved",
-        d.id, b.size.width, b.size.height, b.origin.x, b.origin.y
-    )?;
-    Ok(Some(d))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn open_display(_log: &mut impl Write) -> Result<Option<display::Virtual>> {
-    bail!("a virtual display needs macOS")
-}
-
-/// Moves the window onto the virtual display and finds it again there.
-#[cfg(target_os = "macos")]
-fn place(d: &display::Virtual, window: sys::Window, log: &mut impl Write) -> Result<sys::Window> {
-    match d.take(window.info.pid, window.info.width, window.info.height) {
-        Ok(()) => {
-            let id = window.info.id;
-            let moved = sys::windows()?.into_iter().find(|w| w.info.id == id);
-            if let Some(w) = &moved {
-                writeln!(
-                    log,
-                    "record: moved the window to ({}, {})",
-                    w.info.x, w.info.y
-                )?;
-            }
-            Ok(moved.unwrap_or(window))
-        }
-        Err(e) => {
-            writeln!(
-                log,
-                "record: could not move the window to the virtual display: {e:#}"
-            )?;
-            Ok(window)
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn place(d: &display::Virtual, _window: sys::Window, _log: &mut impl Write) -> Result<sys::Window> {
-    match *d {}
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,8 +482,6 @@ mod tests {
             bundle: format!("com.example.{app}"),
             app: app.into(),
             title: title.into(),
-            x: 0.0,
-            y: 0.0,
             width: 800.0,
             height: 600.0,
         }
