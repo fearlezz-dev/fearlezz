@@ -52,34 +52,108 @@ pub(crate) fn park(window: &WindowInfo) -> Result<String> {
         aerospace(&["move-node-to-workspace", "--window-id", &id, WORKSPACE])?;
         return Ok(format!("by AeroSpace, on its workspace {WORKSPACE}"));
     }
-    // SAFETY: reads this process's trust; never prompts.
-    if !unsafe { AXIsProcessTrusted() } {
-        let app =
-            super::responsible_app().unwrap_or_else(|| "the app that started the agent".into());
-        bail!(
-            "{app} may not move windows; once: System Settings, Privacy & Security, \
-             Accessibility, turn on {app}"
-        );
-    }
+    trusted("move windows")?;
     let element = ax_window(window)?;
-    let to = corner(window);
+    let displays = displays();
+    let to = corner(window, &displays)?;
     set_position(&element, to)?;
     std::thread::sleep(UNDO);
     let now = position(&element).context("reading where the window went")?;
     if (now.x - window.x).abs() < 1.0 && (now.y - window.y).abs() < 1.0 {
         bail!("a window manager moved it back; only AeroSpace is asked to park it");
     }
+    let size = size(&element).unwrap_or(CGSize::new(window.width, window.height));
+    let shown = visible(CGRect::new(now, size), &displays);
+    if shown > MOST_SHOWN {
+        bail!(
+            "macOS left {:.0}% of it on screen at ({}, {})",
+            shown * 100.0,
+            now.x,
+            now.y
+        );
+    }
     Ok("by Accessibility".into())
 }
 
+/// The largest part of a parked window that may still show; macOS keeps a strip.
+const MOST_SHOWN: f64 = 0.2;
+
+/// Fails with the one time fix unless this process may use Accessibility to `what`.
+fn trusted(what: &str) -> Result<()> {
+    // SAFETY: reads this process's trust; never prompts.
+    if unsafe { AXIsProcessTrusted() } {
+        return Ok(());
+    }
+    let app = super::responsible_app().unwrap_or_else(|| "the app that started the agent".into());
+    bail!(
+        "{app} may not {what}; once: System Settings, Privacy & Security, Accessibility, \
+         turn on {app}"
+    )
+}
+
+/// The bounds of every active display, in global points.
+fn displays() -> Vec<CGRect> {
+    let mut ids = [0_u32; 32];
+    let mut count = 0_u32;
+    // SAFETY: the buffer holds as many ids as passed.
+    let err = unsafe {
+        objc2_core_graphics::CGGetActiveDisplayList(32, ids.as_mut_ptr(), &raw mut count)
+    };
+    if err != objc2_core_graphics::CGError::Success {
+        return Vec::new();
+    }
+    ids.iter()
+        .take(count as usize)
+        .map(|id| objc2_core_graphics::CGDisplayBounds(*id))
+        .collect()
+}
+
+/// The part of `rect` that shows on any of `displays`, from 0 to 1.
+fn visible(rect: CGRect, displays: &[CGRect]) -> f64 {
+    let area = rect.size.width * rect.size.height;
+    if area <= 0.0 {
+        return 0.0;
+    }
+    let shown: f64 = displays
+        .iter()
+        .map(|d| {
+            let w = (rect.origin.x + rect.size.width).min(d.origin.x + d.size.width)
+                - rect.origin.x.max(d.origin.x);
+            let h = (rect.origin.y + rect.size.height).min(d.origin.y + d.size.height)
+                - rect.origin.y.max(d.origin.y);
+            w.max(0.0) * h.max(0.0)
+        })
+        .sum();
+    shown / area
+}
+
+/// How long one AeroSpace command may take before Fearlezz gives up on it.
+const AEROSPACE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Runs the AeroSpace command line and returns what it printed; fails when it is not
-/// installed or not running.
+/// installed, not running, or gives no answer in [`AEROSPACE_TIMEOUT`].
 fn aerospace(args: &[&str]) -> Result<String> {
-    let out = Command::new("aerospace")
+    let mut child = Command::new("aerospace")
         .args(args)
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .context("running aerospace")?;
+    let since = Instant::now();
+    while child.try_wait()?.is_none() {
+        if since.elapsed() >= AEROSPACE_TIMEOUT {
+            drop(child.kill());
+            drop(child.wait());
+            bail!(
+                "aerospace {} gave no answer in {AEROSPACE_TIMEOUT:?}",
+                args.join(" ")
+            );
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Its answers are a few lines, well within a pipe's buffer, so it never blocked on them.
+    let out = child.wait_with_output()?;
     if !out.status.success() {
         bail!(
             "aerospace {} failed: {}",
@@ -90,28 +164,40 @@ fn aerospace(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The bottom right corner of the display the window is on, past which macOS keeps only a
-/// strip of the window on screen.
-fn corner(window: &WindowInfo) -> CGPoint {
-    let centre = CGPoint::new(
+/// Where to move the window: past a bottom corner of a display with no other display
+/// beyond it, so macOS keeps only a strip on screen. The window's own display goes first.
+fn corner(window: &WindowInfo, displays: &[CGRect]) -> Result<CGPoint> {
+    let centre = (
         window.x + window.width / 2.0,
         window.y + window.height / 2.0,
     );
-    let mut display = 0_u32;
-    let mut count = 0_u32;
-    // SAFETY: room for one display id, as passed.
-    let err = unsafe {
-        objc2_core_graphics::CGGetDisplaysWithPoint(centre, 1, &raw mut display, &raw mut count)
+    let on = |d: &CGRect, (x, y): (f64, f64)| {
+        x >= d.origin.x
+            && x < d.origin.x + d.size.width
+            && y >= d.origin.y
+            && y < d.origin.y + d.size.height
     };
-    let bounds: CGRect = if err == objc2_core_graphics::CGError::Success && count == 1 {
-        objc2_core_graphics::CGDisplayBounds(display)
-    } else {
-        objc2_core_graphics::CGDisplayBounds(objc2_core_graphics::CGMainDisplayID())
-    };
-    CGPoint::new(
-        bounds.origin.x + bounds.size.width,
-        bounds.origin.y + bounds.size.height,
-    )
+    let mut ordered: Vec<&CGRect> = displays.iter().collect();
+    ordered.sort_by_key(|d| !on(d, centre));
+    for d in ordered {
+        let (left, right) = (d.origin.x, d.origin.x + d.size.width);
+        let bottom = d.origin.y + d.size.height;
+        // Each corner with a point just past it, which no display may cover.
+        let corners = [
+            (CGPoint::new(right, bottom), (right + 1.0, bottom + 1.0)),
+            (
+                CGPoint::new(left - window.width, bottom),
+                (left - 1.0, bottom + 1.0),
+            ),
+        ];
+        if let Some((to, _)) = corners
+            .into_iter()
+            .find(|(_, past)| !displays.iter().any(|other| on(other, *past)))
+        {
+            return Ok(to);
+        }
+    }
+    bail!("every bottom corner of every display has another display beyond it")
 }
 
 /// The Accessibility element of `window`: the window of its app with the same frame.
@@ -131,18 +217,51 @@ fn ax_window(window: &WindowInfo) -> Result<CFRetained<AXUIElement>> {
         let windows: CFRetained<CFArray> =
             CFRetained::from_raw(NonNull::new_unchecked(value.cast_mut().cast()));
         let windows: &CFArray<AXUIElement> = windows.cast_unchecked();
-        windows
+        // A window still opening has not reached its listed frame, so the title decides
+        // first and the nearest frame breaks ties.
+        let titled: Vec<CFRetained<AXUIElement>> = windows
             .iter()
-            .find(|w| {
-                let (Some(at), Some(size)) = (position(w), size(w)) else {
-                    return false;
-                };
-                (at.x - window.x).abs() < 2.0
-                    && (at.y - window.y).abs() < 2.0
-                    && (size.width - window.width).abs() < 2.0
-                    && (size.height - window.height).abs() < 2.0
-            })
-            .context("Accessibility shows no window of the app with the recorded window's frame")
+            .filter(|w| title(w).as_deref() == Some(window.title.as_str()))
+            .collect();
+        let candidates = if titled.is_empty() {
+            windows.iter().collect()
+        } else {
+            titled
+        };
+        candidates
+            .into_iter()
+            .min_by(|a, b| distance(a, window).total_cmp(&distance(b, window)))
+            .context("Accessibility shows no window of the app")
+    }
+}
+
+fn title(window: &AXUIElement) -> Option<String> {
+    // SAFETY: out pointers are valid; the value returned is owned and released by CFRetained.
+    unsafe {
+        let mut value: *const CFType = std::ptr::null();
+        let err = window.copy_attribute_value(
+            &CFString::from_static_str("AXTitle"),
+            NonNull::from(&mut value),
+        );
+        if err != AXError::Success || value.is_null() {
+            return None;
+        }
+        let value: CFRetained<CFType> =
+            CFRetained::from_raw(NonNull::new_unchecked(value.cast_mut()));
+        value.downcast_ref::<CFString>().map(ToString::to_string)
+    }
+}
+
+/// How far a window's frame is from the listed one, in points; unknown is farthest.
+fn distance(element: &AXUIElement, window: &WindowInfo) -> f64 {
+    match (position(element), size(element)) {
+        (Some(at), Some(size)) => {
+            (at.x - window.x).abs()
+                + (at.y - window.y).abs()
+                + (size.width - window.width).abs()
+                + (size.height - window.height).abs()
+        }
+        _ => f64::MAX,
     }
 }
 
@@ -202,15 +321,21 @@ fn read(window: &AXUIElement, attribute: &str, kind: AXValueType, into: NonNull<
     }
 }
 
-/// The pid of the focused app, by Accessibility (AppKit's front app goes stale in a process
-/// without a run loop); none without Accessibility.
-pub(crate) fn front() -> Option<i32> {
-    // SAFETY: reads this process's trust, then the system wide element's focused app; out
-    // pointers are valid and the value returned is owned.
+/// The pid of the focused app: by Accessibility (AppKit's front app goes stale in a process
+/// without a run loop), else by AeroSpace when it runs.
+pub(crate) fn front() -> Result<i32> {
+    if trusted("read which app is in front").is_err()
+        && let Ok(out) = aerospace(&["list-windows", "--focused", "--format", "%{app-pid}"])
+    {
+        return out
+            .trim()
+            .parse()
+            .with_context(|| format!("AeroSpace named no app in front: {out}"));
+    }
+    trusted("read which app is in front")?;
+    // SAFETY: reads the system wide element's focused app; out pointers are valid and the
+    // value returned is owned.
     unsafe {
-        if !AXIsProcessTrusted() {
-            return None;
-        }
         let system = AXUIElement::new_system_wide();
         let mut value: *const CFType = std::ptr::null();
         let err = system.copy_attribute_value(
@@ -218,12 +343,16 @@ pub(crate) fn front() -> Option<i32> {
             NonNull::from(&mut value),
         );
         if err != AXError::Success || value.is_null() {
-            return None;
+            bail!("no app is in front (AXError {})", err.0);
         }
         let app: CFRetained<AXUIElement> =
             CFRetained::from_raw(NonNull::new_unchecked(value.cast_mut().cast()));
         let mut pid = 0;
-        (app.pid(NonNull::from(&mut pid)) == AXError::Success).then_some(pid)
+        let err = app.pid(NonNull::from(&mut pid));
+        if err != AXError::Success {
+            bail!("the app in front has no pid (AXError {})", err.0);
+        }
+        Ok(pid)
     }
 }
 

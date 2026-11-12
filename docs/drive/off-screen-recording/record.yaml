@@ -4,7 +4,11 @@ goal: "Recording off the developer's screens" (ROADMAP Next 3); opt in, and abse
 pieces:
   - id: placement
     status: done
-    open: The flash cannot reach zero; about 70 ms median.
+    open: "The binary flashes far longer than the prototype: 0.3 to 1.5 s, outliers to 3.4 s; the window is found 0.4 to 1.9 s after launch. Accessibility misses the window 4 of 5 times when matched by the frame first listed."
+    measured:
+      - "ScreenCaptureKit listing 55 to 89 ms (median 70); CGWindowList 1.6 to 2.1 ms median"
+      - "binary flash, AeroSpace on (ms): 1469, 425, 419, 3418, never parked once (window gone)"
+      - "binary flash, AeroSpace off: 4 of 5 never parked (no AX window with the listed frame), one 329 ms" 
     tries:
       - id: spike-virtual-display
         what: CGVirtualDisplay, move the window there with AXPosition, record with ScreenCaptureKit
@@ -55,6 +59,8 @@ pieces:
         evidence: [spike/virtual-display display.rs click test]
 
 decided:
+  - id: fast-watch
+    what: "Fast watch for all": CGWindowList every 10 ms finds new windows for every recording; ScreenCaptureKit only captures.
   - id: opt-in-env
     what: "Your machine": FEARLEZZ_OFF_SCREEN=1 in the developer's environment turns parking on for every project.
   - id: park-off-screen
@@ -69,6 +75,15 @@ decided:
 open: []
 
 slices:
+  - id: review-fixes-and-fast-watch
+    tests:
+      - record::tests::off_screen_gives_focus_back_before_parking_when_the_app_took_it_first
+      - record::tests::off_screen_says_why_focus_is_not_given_back_when_it_cannot_read_focus
+    status: done
+    evidence:
+      - "14 real runs, all passed: native 5 + Flutter 2 per AeroSpace state, stills and films"
+      - "flash by Accessibility 114, 121, 124, 126, 140 ms; by AeroSpace 195, 289, 313, 445, 2286 ms"
+      - "a stuck replayd made every film fail machine wide (first sample buffer); restarting it fixed it"
   - id: recorder-decisions
     tests:
       - record::tests::off_screen_parks_the_window_as_soon_as_it_appears_before_recording_it
@@ -86,4 +101,4 @@ slices:
       - "Found: AeroSpace refused a window id it had not picked up yet; parking now waits up to 2 s for AeroSpace to list it"
 
 
-next: Full proof, code health review, then check in with the developer.
+next: Full proof, then check in with the result and the open questions (saved window frames, AGENTS.md exceptions).

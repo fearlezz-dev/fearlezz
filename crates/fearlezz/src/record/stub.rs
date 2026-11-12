@@ -16,7 +16,13 @@ pub(crate) fn allowed() -> bool {
     false
 }
 
-pub(crate) fn windows() -> Result<Vec<Window>> {
+pub(crate) fn windows(
+    _bundles: &mut std::collections::HashMap<i32, String>,
+) -> Result<Vec<super::WindowInfo>> {
+    bail!(NOT_HERE)
+}
+
+pub(crate) fn capturable(_id: u32) -> Result<Window> {
     bail!(NOT_HERE)
 }
 
@@ -44,8 +50,8 @@ pub(crate) fn park(_window: &super::WindowInfo) -> Result<String> {
     bail!(NOT_HERE)
 }
 
-pub(crate) fn front() -> Option<i32> {
-    None
+pub(crate) fn front() -> Result<i32> {
+    bail!(NOT_HERE)
 }
 
 pub(crate) fn bring_front(_pid: i32) -> Result<()> {

@@ -32,10 +32,10 @@ objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSBitmapImageRep", "NSImageRep", "NSRunningApplication", "libc", "objc2-core-graphics"] }
 objc2-application-services = { version = "0.3.2", default-features = false, features = ["std", "libc", "HIServices", "AXUIElement", "AXValue", "AXError"] }
 dispatch2 = "0.3.1"
-objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes", "CFString", "CFArray"] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "libc", "CGDirectDisplay", "CGImage", "CGWindow", "CGError"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes", "CFString", "CFArray", "CFDictionary"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "libc", "CGDirectDisplay", "CGImage", "CGWindow", "CGError", "CGGeometry"] }
 objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMTime"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSURL", "NSError", "NSArray", "NSData", "NSDictionary", "NSObject", "NSEnumerator"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSURL", "NSError", "NSArray", "NSData", "NSDictionary", "NSObject", "NSEnumerator", "NSValue"] }
 objc2-screen-capture-kit = "0.3.2"
 
 [dev-dependencies]

@@ -138,8 +138,9 @@ pub(crate) trait Screen {
     /// Moves the window off the developer's screens, keeping its size, without giving it
     /// focus; says how, such as "by Accessibility".
     fn park(&mut self, window: u32) -> Result<String>;
-    /// The pid of the app in front, which gets the developer's keys.
-    fn front(&mut self) -> Option<i32>;
+    /// The pid of the app in front, which gets the developer's keys; fails with why it
+    /// cannot be read and the fix.
+    fn front(&mut self) -> Result<i32>;
     /// Brings the app of `pid` to the front.
     fn bring_front(&mut self, pid: i32) -> Result<()>;
 }
@@ -155,14 +156,16 @@ pub(crate) trait Filming {
 /// The machine's own screen.
 #[derive(Default)]
 pub(crate) struct System {
-    listed: Vec<sys::Window>,
+    listed: Vec<WindowInfo>,
+    /// Each pid's bundle id, read once.
+    bundles: std::collections::HashMap<i32, String>,
 }
 
 impl System {
-    fn find(&self, id: u32) -> Result<&sys::Window> {
+    fn find(&self, id: u32) -> Result<&WindowInfo> {
         self.listed
             .iter()
-            .find(|w| w.info.id == id)
+            .find(|w| w.id == id)
             .with_context(|| format!("window {id} is gone"))
     }
 }
@@ -171,23 +174,23 @@ impl Screen for System {
     type Film = sys::Film;
 
     fn windows(&mut self) -> Result<Vec<WindowInfo>> {
-        self.listed = sys::windows()?;
-        Ok(self.listed.iter().map(|w| w.info.clone()).collect())
+        self.listed = sys::windows(&mut self.bundles)?;
+        Ok(self.listed.clone())
     }
 
     fn still(&mut self, window: u32, path: &Path, frame: &Frame) -> Result<(usize, usize)> {
-        sys::still(self.find(window)?, path, frame)
+        sys::still(&sys::capturable(window)?, path, frame)
     }
 
     fn film(&mut self, window: u32, path: &Path, frame: &Frame) -> Result<sys::Film> {
-        sys::start_film(self.find(window)?, path, frame)
+        sys::start_film(&sys::capturable(window)?, path, frame)
     }
 
     fn park(&mut self, window: u32) -> Result<String> {
-        place::park(&self.find(window)?.info)
+        place::park(self.find(window)?)
     }
 
-    fn front(&mut self) -> Option<i32> {
+    fn front(&mut self) -> Result<i32> {
         place::front()
     }
 
@@ -481,6 +484,9 @@ impl Recorded {
 
 /// How often the command and window are looked at.
 const POLL: Duration = Duration::from_millis(100);
+/// How often windows are listed while waiting for a new one: a listing takes about 2 ms,
+/// and a window to park shows on the developer's screen until it is found.
+const WATCH: Duration = Duration::from_millis(10);
 /// How often windows are listed while the recorder only waits for the command to end.
 const LIST_EVERY: Duration = Duration::from_secs(1);
 /// How long a window that just appeared gets to draw its first frame.
@@ -499,7 +505,8 @@ pub(crate) struct Recorder<'a, S> {
     before: BTreeSet<u32>,
     place: Place,
     /// The app in front before the command started, which gets focus back from a parked app.
-    developer: Option<i32>,
+    /// None when focus is not watched (the window stays) or no longer can be.
+    developer: Option<Result<i32, String>>,
 }
 
 impl<'a, S: Screen> Recorder<'a, S> {
@@ -507,7 +514,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
     pub(crate) fn new(mut screen: S, spec: &'a Spec, place: Place) -> Result<Self> {
         let before = screen.windows()?.iter().map(|w| w.id).collect();
         let developer = match place {
-            Place::OffScreen => screen.front(),
+            Place::OffScreen => Some(screen.front().map_err(|e| format!("{e:#}"))),
             Place::Stay => None,
         };
         Ok(Recorder {
@@ -616,30 +623,48 @@ impl<'a, S: Screen> Recorder<'a, S> {
             std::thread::sleep(SETTLE);
             return Ok(());
         }
+        if let Some(Err(why)) = &self.developer {
+            writeln!(log, "record: focus is not given back: {why}")?;
+            self.developer = None;
+        }
+        let mut told = false;
+        // The app may have taken focus already; parking can take a while.
+        self.give_back(window, &mut told, log)?;
         match self.screen.park(window.id) {
             Ok(how) => writeln!(log, "record: parked the window off screen {how}")?,
             Err(e) => writeln!(log, "record: the window stays where it opened: {e:#}")?,
         }
         let until = Instant::now() + SETTLE;
-        let mut told = false;
         while Instant::now() < until {
-            if let Some(developer) = self.developer
-                && developer != window.pid
-                && self.screen.front() == Some(window.pid)
-            {
-                match self.screen.bring_front(developer) {
-                    Ok(()) if !told => {
-                        told = true;
-                        writeln!(log, "record: gave focus back to the app in front before")?;
-                    }
-                    Ok(()) => {}
-                    Err(e) => {
-                        writeln!(log, "record: could not give focus back: {e:#}")?;
-                        self.developer = None;
-                    }
-                }
-            }
+            self.give_back(window, &mut told, log)?;
             std::thread::sleep(FOCUS_POLL);
+        }
+        Ok(())
+    }
+
+    /// Brings the developer's app back to the front when the window's app has taken it.
+    fn give_back(
+        &mut self,
+        window: &WindowInfo,
+        told: &mut bool,
+        log: &mut impl Write,
+    ) -> Result<()> {
+        let Some(Ok(developer)) = self.developer else {
+            return Ok(());
+        };
+        if developer == window.pid || self.screen.front().ok() != Some(window.pid) {
+            return Ok(());
+        }
+        match self.screen.bring_front(developer) {
+            Ok(()) if !*told => {
+                *told = true;
+                writeln!(log, "record: gave focus back to the app in front before")?;
+            }
+            Ok(()) => {}
+            Err(e) => {
+                writeln!(log, "record: could not give focus back: {e:#}")?;
+                self.developer = None;
+            }
         }
         Ok(())
     }
@@ -692,7 +717,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 stop(child)?;
                 return Ok(Err(Ended::WaitedTooLong));
             }
-            std::thread::sleep(POLL);
+            std::thread::sleep(WATCH);
         }
     }
 
@@ -906,6 +931,8 @@ mod tests {
         failures: usize,
         /// Why parking fails, when it does.
         park_fails: Option<&'static str>,
+        /// Why the app in front cannot be read, when it cannot.
+        front_fails: Option<&'static str>,
         /// The app in front from each time on, the latest that started; CHILD for the
         /// command's app.
         fronts: Vec<(f64, i32)>,
@@ -969,7 +996,10 @@ mod tests {
             Ok("by script".into())
         }
 
-        fn front(&mut self) -> Option<i32> {
+        fn front(&mut self) -> Result<i32> {
+            if let Some(why) = self.front_fails {
+                bail!(why);
+            }
             let now = self.start.elapsed().as_secs_f64();
             let scripted = self
                 .fronts
@@ -981,7 +1011,9 @@ mod tests {
                 (Some(s), Some(b)) if b.0 >= s.0 => Some(b),
                 (s, b) => s.or(b),
             };
-            latest.map(|(_, pid)| if pid == CHILD { self.child } else { pid })
+            latest
+                .map(|(_, pid)| if pid == CHILD { self.child } else { pid })
+                .context("no app is in front")
         }
 
         fn bring_front(&mut self, pid: i32) -> Result<()> {
@@ -1041,6 +1073,7 @@ mod tests {
     struct Desk {
         place: Place,
         park_fails: Option<&'static str>,
+        front_fails: Option<&'static str>,
         fronts: Vec<(f64, i32)>,
     }
 
@@ -1049,6 +1082,7 @@ mod tests {
             Desk {
                 place: Place::Stay,
                 park_fails: None,
+                front_fails: None,
                 fronts: Vec::new(),
             }
         }
@@ -1080,6 +1114,7 @@ mod tests {
             fail_from,
             failures,
             park_fails: desk.park_fails,
+            front_fails: desk.front_fails,
             fronts: desk.fronts,
             brought: None,
             events: Vec::new(),
@@ -1197,6 +1232,50 @@ mod tests {
             run.log
         );
         assert!(run.log.contains("record: gave focus back"), "{}", run.log);
+    }
+
+    #[test]
+    fn off_screen_gives_focus_back_before_parking_when_the_app_took_it_first() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 2",
+            Desk {
+                place: Place::OffScreen,
+                fronts: vec![(0.0, EDITOR), (0.05, CHILD)],
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(
+            run.events,
+            [&format!("front {EDITOR}"), "park 7", "film 7"],
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn off_screen_says_why_focus_is_not_given_back_when_it_cannot_read_focus() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 1.5",
+            Desk {
+                place: Place::OffScreen,
+                front_fails: Some("the terminal may not read which app is in front"),
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["park 7", "film 7"], "{}", run.log);
+        assert!(
+            run.log.contains(
+                "record: focus is not given back: the terminal may not read which app is in front"
+            ),
+            "{}",
+            run.log
+        );
     }
 
     #[test]
