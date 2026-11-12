@@ -1078,7 +1078,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         .then(|| CommitReport::start(ctx, &wt, targets.len(), out))
         .transpose()?;
     if targets.is_empty() {
-        // The change needs checks of a later stage only: say where they wait.
+        // Every check waits in a later stage: say where.
         let later = (ids.is_empty() && !in_memory)
             .then(|| {
                 let waiting = before.checks.iter().filter(|c| c.stage > before.stage);
