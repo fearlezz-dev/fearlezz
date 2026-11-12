@@ -175,8 +175,11 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut log = out;
     // The windows open before the command starts are never recorded.
-    let mut recorder = match crate::record::Recorder::new(crate::record::System::default(), record)
-    {
+    let mut recorder = match crate::record::Recorder::new(
+        crate::record::System::default(),
+        record,
+        crate::record::Place::from_env(),
+    ) {
         Ok(r) => r,
         Err(e) => {
             use std::io::Write as _;

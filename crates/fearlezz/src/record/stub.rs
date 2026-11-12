@@ -39,3 +39,15 @@ impl super::Filming for Film {
         bail!(NOT_HERE)
     }
 }
+
+pub(crate) fn park(_window: &super::WindowInfo) -> Result<String> {
+    bail!(NOT_HERE)
+}
+
+pub(crate) fn front() -> Option<i32> {
+    None
+}
+
+pub(crate) fn bring_front(_pid: i32) -> Result<()> {
+    bail!(NOT_HERE)
+}

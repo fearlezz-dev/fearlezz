@@ -26,6 +26,10 @@ use macos as sys;
 mod stub;
 #[cfg(not(target_os = "macos"))]
 use stub as sys;
+#[cfg(target_os = "macos")]
+mod place;
+#[cfg(not(target_os = "macos"))]
+use stub as place;
 
 /// What part of the window a capture keeps.
 #[cfg_attr(
@@ -46,6 +50,9 @@ pub(crate) struct WindowInfo {
     pub bundle: String,
     pub app: String,
     pub title: String,
+    /// The top left corner in global points, y down.
+    pub x: f64,
+    pub y: f64,
     pub width: f64,
     pub height: f64,
 }
@@ -98,6 +105,26 @@ fn choose<'w>(
         .max_by(|a, b| a.area().total_cmp(&b.area()))
 }
 
+/// Where a recorded window is kept while it records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Place {
+    /// Where it opened: on the developer's screen.
+    Stay,
+    /// Parked off the developer's screens, focus handed back: `FEARLEZZ_OFF_SCREEN=1`.
+    OffScreen,
+}
+
+impl Place {
+    /// The developer's choice for this machine, from `FEARLEZZ_OFF_SCREEN`.
+    pub(crate) fn from_env() -> Place {
+        if std::env::var_os("FEARLEZZ_OFF_SCREEN").is_some_and(|v| v == "1") {
+            Place::OffScreen
+        } else {
+            Place::Stay
+        }
+    }
+}
+
 /// The windows of the machine, as the recorder needs them: ScreenCaptureKit on macOS, a script
 /// in tests. Windows are named by their id from the latest [`Screen::windows`].
 pub(crate) trait Screen {
@@ -108,6 +135,13 @@ pub(crate) trait Screen {
     fn still(&mut self, window: u32, path: &Path, frame: &Frame) -> Result<(usize, usize)>;
     /// Starts filming the window into `path` (MP4).
     fn film(&mut self, window: u32, path: &Path, frame: &Frame) -> Result<Self::Film>;
+    /// Moves the window off the developer's screens, keeping its size, without giving it
+    /// focus; says how, such as "by Accessibility".
+    fn park(&mut self, window: u32) -> Result<String>;
+    /// The pid of the app in front, which gets the developer's keys.
+    fn front(&mut self) -> Option<i32>;
+    /// Brings the app of `pid` to the front.
+    fn bring_front(&mut self, pid: i32) -> Result<()>;
 }
 
 /// A film being recorded.
@@ -147,6 +181,18 @@ impl Screen for System {
 
     fn film(&mut self, window: u32, path: &Path, frame: &Frame) -> Result<sys::Film> {
         sys::start_film(self.find(window)?, path, frame)
+    }
+
+    fn park(&mut self, window: u32) -> Result<String> {
+        place::park(&self.find(window)?.info)
+    }
+
+    fn front(&mut self) -> Option<i32> {
+        place::front()
+    }
+
+    fn bring_front(&mut self, pid: i32) -> Result<()> {
+        place::bring_front(pid)
     }
 }
 
@@ -439,6 +485,8 @@ const POLL: Duration = Duration::from_millis(100);
 const LIST_EVERY: Duration = Duration::from_secs(1);
 /// How long a window that just appeared gets to draw its first frame.
 const SETTLE: Duration = Duration::from_millis(700);
+/// How often focus is looked at while a parked window settles.
+const FOCUS_POLL: Duration = Duration::from_millis(20);
 /// How many listings in a row may fail after the recording before the run fails.
 const LISTING_TRIES: usize = 3;
 
@@ -449,16 +497,25 @@ pub(crate) struct Recorder<'a, S> {
     /// The windows open before the command started, which are never recorded: an app the
     /// developer has open would otherwise be filmed on both sides of a look.
     before: BTreeSet<u32>,
+    place: Place,
+    /// The app in front before the command started, which gets focus back from a parked app.
+    developer: Option<i32>,
 }
 
 impl<'a, S: Screen> Recorder<'a, S> {
     /// Notes the windows open now; call it before starting the command.
-    pub(crate) fn new(mut screen: S, spec: &'a Spec) -> Result<Self> {
+    pub(crate) fn new(mut screen: S, spec: &'a Spec, place: Place) -> Result<Self> {
         let before = screen.windows()?.iter().map(|w| w.id).collect();
+        let developer = match place {
+            Place::OffScreen => screen.front(),
+            Place::Stay => None,
+        };
         Ok(Recorder {
             screen,
             spec,
             before,
+            place,
+            developer,
         })
     }
 
@@ -482,7 +539,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 });
             }
         };
-        std::thread::sleep(SETTLE);
+        self.settle(&window, log)?;
         // The window may have taken its final size while it settled; listing again also
         // hands the screen the window as it is now.
         let window = self
@@ -544,6 +601,47 @@ impl<'a, S: Screen> Recorder<'a, S> {
         append_proofs(out, &proofs)?;
         let ended = self.finish(child, root, window.id, deadline, log)?;
         Ok(Recorded { ended, recorded })
+    }
+
+    /// Gives a window that just appeared [`SETTLE`] to draw its first frame. Off screen, it is
+    /// parked first, and while it settles the developer's app gets focus back whenever the
+    /// window's app takes it; focus the developer moved elsewhere stays there.
+    fn settle(&mut self, window: &WindowInfo, log: &mut impl Write) -> Result<()> {
+        if self.place == Place::Stay {
+            writeln!(
+                log,
+                "record: the window stays on your screen; FEARLEZZ_OFF_SCREEN=1 in your \
+                 environment parks recorded windows off screen"
+            )?;
+            std::thread::sleep(SETTLE);
+            return Ok(());
+        }
+        match self.screen.park(window.id) {
+            Ok(how) => writeln!(log, "record: parked the window off screen {how}")?,
+            Err(e) => writeln!(log, "record: the window stays where it opened: {e:#}")?,
+        }
+        let until = Instant::now() + SETTLE;
+        let mut told = false;
+        while Instant::now() < until {
+            if let Some(developer) = self.developer
+                && developer != window.pid
+                && self.screen.front() == Some(window.pid)
+            {
+                match self.screen.bring_front(developer) {
+                    Ok(()) if !told => {
+                        told = true;
+                        writeln!(log, "record: gave focus back to the app in front before")?;
+                    }
+                    Ok(()) => {}
+                    Err(e) => {
+                        writeln!(log, "record: could not give focus back: {e:#}")?;
+                        self.developer = None;
+                    }
+                }
+            }
+            std::thread::sleep(FOCUS_POLL);
+        }
+        Ok(())
     }
 
     /// Waits for a window of the pick that was not open before the command started, or says
@@ -736,6 +834,8 @@ mod tests {
             bundle: format!("com.example.{app}"),
             app: app.into(),
             title: title.into(),
+            x: 100.0,
+            y: 100.0,
             width: 800.0,
             height: 600.0,
         }
@@ -804,6 +904,15 @@ mod tests {
         /// Listings from this many seconds on fail, `failures` times in a row.
         fail_from: f64,
         failures: usize,
+        /// Why parking fails, when it does.
+        park_fails: Option<&'static str>,
+        /// The app in front from each time on, the latest that started; CHILD for the
+        /// command's app.
+        fronts: Vec<(f64, i32)>,
+        /// The app brought to the front last, which wins over `fronts` until it changes.
+        brought: Option<(f64, i32)>,
+        /// What the recorder did to the screen, in order.
+        events: Vec<String>,
     }
 
     struct ScriptFilm {
@@ -846,12 +955,43 @@ mod tests {
                 .collect())
         }
 
-        fn still(&mut self, _window: u32, path: &Path, _frame: &Frame) -> Result<(usize, usize)> {
+        fn still(&mut self, window: u32, path: &Path, _frame: &Frame) -> Result<(usize, usize)> {
+            self.events.push(format!("still {window}"));
             std::fs::write(path, "still")?;
             Ok((800, 600))
         }
 
+        fn park(&mut self, window: u32) -> Result<String> {
+            if let Some(why) = self.park_fails {
+                bail!(why);
+            }
+            self.events.push(format!("park {window}"));
+            Ok("by script".into())
+        }
+
+        fn front(&mut self) -> Option<i32> {
+            let now = self.start.elapsed().as_secs_f64();
+            let scripted = self
+                .fronts
+                .iter()
+                .rev()
+                .find(|(from, _)| *from <= now)
+                .copied();
+            let latest = match (scripted, self.brought) {
+                (Some(s), Some(b)) if b.0 >= s.0 => Some(b),
+                (s, b) => s.or(b),
+            };
+            latest.map(|(_, pid)| if pid == CHILD { self.child } else { pid })
+        }
+
+        fn bring_front(&mut self, pid: i32) -> Result<()> {
+            self.events.push(format!("front {pid}"));
+            self.brought = Some((self.start.elapsed().as_secs_f64(), pid));
+            Ok(())
+        }
+
         fn film(&mut self, window: u32, path: &Path, _frame: &Frame) -> Result<ScriptFilm> {
+            self.events.push(format!("film {window}"));
             let until = self
                 .shown
                 .iter()
@@ -882,6 +1022,8 @@ mod tests {
         took: Duration,
         /// Whether the command still ran afterwards.
         left_running: bool,
+        /// What the recorder did to the screen, in order.
+        events: Vec<String>,
     }
 
     impl Run {
@@ -895,12 +1037,39 @@ mod tests {
         failing(spec, script, command, (f64::INFINITY, 0)).unwrap()
     }
 
+    /// The developer's side of a run: where windows go and who is in front when.
+    struct Desk {
+        place: Place,
+        park_fails: Option<&'static str>,
+        fronts: Vec<(f64, i32)>,
+    }
+
+    impl Default for Desk {
+        fn default() -> Self {
+            Desk {
+                place: Place::Stay,
+                park_fails: None,
+                fronts: Vec::new(),
+            }
+        }
+    }
+
+    /// As [`record`], with the developer's desk set up as `desk`.
+    fn at_desk(spec: &str, script: Vec<Shown>, command: &str, desk: Desk) -> Run {
+        run(spec, script, command, (f64::INFINITY, 0), desk).unwrap()
+    }
+
     /// As [`record`], with `failures` listings in a row failing from `fail_from` seconds on.
-    fn failing(
+    fn failing(spec: &str, script: Vec<Shown>, command: &str, fails: (f64, usize)) -> Result<Run> {
+        run(spec, script, command, fails, Desk::default())
+    }
+
+    fn run(
         spec: &str,
         script: Vec<Shown>,
         command: &str,
         (fail_from, failures): (f64, usize),
+        desk: Desk,
     ) -> Result<Run> {
         let spec = Spec::parse(toml::from_str::<toml::Value>(spec)?)?;
         let out = tempfile::tempdir()?;
@@ -910,8 +1079,12 @@ mod tests {
             child: 0,
             fail_from,
             failures,
+            park_fails: desk.park_fails,
+            fronts: desk.fronts,
+            brought: None,
+            events: Vec::new(),
         };
-        let mut recorder = Recorder::new(screen, &spec)?;
+        let mut recorder = Recorder::new(screen, &spec, desk.place)?;
         let mut cmd = std::process::Command::new("sh");
         cmd.arg("-c").arg(command);
         #[cfg(unix)]
@@ -932,7 +1105,114 @@ mod tests {
             out,
             took,
             left_running,
+            events: recorder.screen.events,
         })
+    }
+
+    /// The developer's editor, in front before the command starts.
+    const EDITOR: i32 = 500;
+
+    #[test]
+    fn off_screen_parks_the_window_as_soon_as_it_appears_before_recording_it() {
+        let run = at_desk(
+            "still = \"home\"\nfilm = \"home\"",
+            vec![shown(7, CHILD, 0.2, 60.0)],
+            "sleep 2",
+            Desk {
+                place: Place::OffScreen,
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["park 7", "still 7", "film 7"], "{}", run.log);
+        assert!(
+            run.log
+                .contains("record: parked the window off screen by script"),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn a_window_that_cannot_be_parked_is_recorded_where_it_opened_and_says_why() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.2, 60.0)],
+            "sleep 1.5",
+            Desk {
+                place: Place::OffScreen,
+                park_fails: Some("Accessibility is off for the terminal"),
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["film 7"]);
+        assert!(
+            run.log.contains(
+                "record: the window stays where it opened: Accessibility is off for the terminal"
+            ),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn without_off_screen_nothing_moves_and_the_log_says_how_to_turn_it_on() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.2, 60.0)],
+            "sleep 1.5",
+            Desk {
+                fronts: vec![(0.0, EDITOR), (0.3, CHILD)],
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(
+            run.events,
+            ["film 7"],
+            "neither parked nor focus taken back"
+        );
+        assert!(run.log.contains("FEARLEZZ_OFF_SCREEN=1"), "{}", run.log);
+    }
+
+    #[test]
+    fn off_screen_gives_focus_back_when_the_app_takes_it_while_it_settles() {
+        // The app takes focus after its window shows, as a real app does.
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 2",
+            Desk {
+                place: Place::OffScreen,
+                fronts: vec![(0.0, EDITOR), (0.4, CHILD)],
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(
+            run.events,
+            ["park 7", &format!("front {EDITOR}"), "film 7"],
+            "{}",
+            run.log
+        );
+        assert!(run.log.contains("record: gave focus back"), "{}", run.log);
+    }
+
+    #[test]
+    fn off_screen_leaves_focus_the_developer_moved_to_another_app() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 2",
+            Desk {
+                place: Place::OffScreen,
+                fronts: vec![(0.0, EDITOR), (0.3, 600)],
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["park 7", "film 7"], "{}", run.log);
     }
 
     #[test]
