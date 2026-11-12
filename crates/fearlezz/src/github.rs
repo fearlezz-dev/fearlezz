@@ -575,7 +575,7 @@ pub(crate) fn settle(
         set = Some(now);
         last = Some((pending, verdict));
     }
-    Ok(Ok(last.expect("every attempt reads or returns")))
+    last.map(Ok).context("settling made no attempt")
 }
 
 /// The latest `fearlezz/pictures` status of `head` if an app set it: head, state,
