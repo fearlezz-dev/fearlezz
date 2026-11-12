@@ -550,3 +550,67 @@ fn the_actions_piece_gates_what_zizmor_calls_an_error_on_a_changed_line() {
         out.stdout
     );
 }
+
+/// Runs the command of flutter-film in a project with these files, with a `flutter` that
+/// only says what it was asked to run.
+fn film_in(files: &[&str]) -> std::process::Output {
+    let preset: toml::Value = toml::from_str(include_str!("../presets/flutter-look.toml")).unwrap();
+    let run = preset["check"]["flutter-film"]["run"].as_str().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for file in files {
+        let path = dir.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+    }
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("flutter"), "#!/bin/sh\necho \"flutter $*\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(bin.join("flutter"), mode).unwrap();
+    }
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(run)
+        .current_dir(dir.path())
+        .env("PATH", path)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn flutter_film_runs_its_entry_file_with_the_helpers_it_imports() {
+    let out = film_in(&[
+        "integration_test/app_test.dart",
+        "integration_test/robot.dart",
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("flutter test integration_test/app_test.dart -d macos"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn flutter_film_fails_on_a_test_file_it_would_not_run() {
+    // Its inputs cover integration_test/**, so a second test file would count as proven.
+    let out = film_in(&[
+        "integration_test/app_test.dart",
+        "integration_test/flows/settings_test.dart",
+    ]);
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(!out.status.success(), "{stdout}{stderr}");
+    assert!(!stdout.contains("flutter test"), "{stdout}");
+    assert!(
+        stderr.contains("integration_test/flows/settings_test.dart"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("fix: "), "{stderr}");
+}
