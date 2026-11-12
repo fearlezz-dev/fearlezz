@@ -473,7 +473,7 @@ fn say(ctx: &Ctx, what: Say) -> Result<bool> {
 }
 
 /// Records the approval given on the pull request for the commit checked out here, by the
-/// rule CI uses too (`github::approval`).
+/// rule CI settles the status with (`github::Pending`), for a check whose pictures waited.
 fn approve_from_github(ctx: &Ctx, check: &str) -> Result<()> {
     let config = ctx.config.check(check)?;
     let mut wt = ctx.worktree()?;
@@ -484,7 +484,7 @@ fn approve_from_github(ctx: &Ctx, check: &str) -> Result<()> {
         );
     }
     let head = ctx.git.head()?;
-    let approval = github::approval_of_commit(&ctx.git.root, &head)?;
+    let approval = github::approval_of_commit(&ctx.git.root, &head, check)?;
     let key = wt.inputs(config)?.key;
     let mut j = ctx.journal()?;
     j.append(
