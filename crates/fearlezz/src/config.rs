@@ -927,7 +927,7 @@ mod tests {
         );
         let mut reversed = base.clone();
         reversed[1..].reverse();
-        assert!(globs(&reversed).widenings(&globs(&base)).is_empty());
+        assert_eq!(globs(&reversed).widenings(&globs(&base)), []);
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
