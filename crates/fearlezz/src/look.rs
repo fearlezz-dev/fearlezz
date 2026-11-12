@@ -346,7 +346,7 @@ pub(crate) fn without_before(
 /// One folder per pair of runs and the pictures called flaky, with a short name people can
 /// open.
 fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf {
-    let flaky = check.pictures.flaky.join("\0");
+    let flaky = check.pictures.flaky.patterns().join("\0");
     let pair = hex::encode(Sha256::digest(format!("{before}\0{after}\0{flaky}")));
     common
         .join("fearlezz")

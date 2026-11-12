@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 
-use crate::config::{self, Builtin, Config, Env, Ports};
+use crate::config::{self, Builtin, Config, Env, Ports, Widening};
 use crate::findings::Scope;
 use crate::presets;
 use crate::state::Worktree;
@@ -208,21 +208,16 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
     found.retain(|w| seen.insert(w.clone()));
     found.extend(base.settings.weakenings(&head.settings));
     found.extend(env_weakenings(&base.env, &head.env));
-    for glob in head.no_proof.iter().filter(|g| !base.no_proof.contains(g)) {
-        if !glob.starts_with('!') {
-            found.push((
-                "no_proof".into(),
-                format!("it newly says {glob} needs no proof"),
-            ));
-        }
-    }
-    for glob in base.no_proof.iter().filter(|g| !head.no_proof.contains(g)) {
-        if let Some(taken) = glob.strip_prefix('!') {
-            found.push((
-                "no_proof".into(),
-                format!("it no longer takes {taken} back from needing no proof"),
-            ));
-        }
+    for w in head.no_proof.widenings(&base.no_proof) {
+        let how = match w {
+            Widening::Added(glob) => format!("it newly says {glob} needs no proof"),
+            Widening::Dropped(glob) => format!(
+                "it no longer takes {} back from needing no proof",
+                glob.trim_start_matches('!')
+            ),
+            Widening::Reordered => "it reorders its globs so more files need no proof".into(),
+        };
+        found.push(("no_proof".into(), how));
     }
     found
 }

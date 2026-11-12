@@ -379,16 +379,18 @@ name = "snake_case"
 /// A branch whose config turns `LINTED` into `edit(LINTED)`, with the tool files synced on both
 /// sides, and what CI says about it.
 fn ci_after(edit: impl Fn(&str) -> String) -> common::Output {
-    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}{LINTED}"));
+    ci_between(LINTED, &edit(LINTED))
+}
+
+/// What CI says about a branch whose `LINTED` part of the config goes from `base` to `head`.
+fn ci_between(base: &str, head: &str) -> common::Output {
+    let repo = repo_with(&format!("{NO_PROOF}{CHECKS}{base}"));
     repo.fz(&["setup", "sync"]);
     repo.commit("sync");
     repo.branch("feat/x");
     repo.write("src/lib.rs", "fn b() {}\n");
     repo.commit("change");
-    repo.write(
-        "fearlezz.toml",
-        &full(&format!("{NO_PROOF}{CHECKS}{}", edit(LINTED))),
-    );
+    repo.write("fearlezz.toml", &full(&format!("{NO_PROOF}{CHECKS}{head}")));
     repo.fz(&["setup", "sync"]);
     repo.commit("config");
     ci(&repo)
@@ -409,6 +411,37 @@ fn lowering_a_lint_is_red_and_named() {
 fn calling_more_pictures_flaky_is_red_and_named() {
     let out = ci_after(|c| c.replace("env = [\"HOME\"]", "env = [\"HOME\"]\nflaky = [\"home\"]"));
     assert_weakens(&out, "weakens lint: it calls more pictures flaky (+home)");
+}
+
+#[test]
+fn dropping_a_flaky_negation_is_red_and_adding_one_is_fine() {
+    let flaky = |list: &str| {
+        LINTED.replace(
+            "env = [\"HOME\"]",
+            &format!("env = [\"HOME\"]\nflaky = {list}"),
+        )
+    };
+    let out = ci_between(&flaky(r#"["*", "!home"]"#), &flaky(r#"["*"]"#));
+    assert_weakens(&out, "weakens lint: it calls more pictures flaky (-!home)");
+
+    let out = ci_between(&flaky(r#"["*"]"#), &flaky(r#"["*", "!home"]"#));
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("flaky"), "{}", out.stdout);
+}
+
+#[test]
+fn reordering_flaky_so_a_negation_no_longer_holds_is_red() {
+    let flaky = |list: &str| {
+        LINTED.replace(
+            "env = [\"HOME\"]",
+            &format!("env = [\"HOME\"]\nflaky = {list}"),
+        )
+    };
+    let out = ci_between(&flaky(r#"["*", "!home"]"#), &flaky(r#"["!home", "*"]"#));
+    assert_weakens(
+        &out,
+        "weakens lint: it calls more pictures flaky (reordered)",
+    );
 }
 
 #[test]
@@ -758,6 +791,34 @@ fn dropping_a_negation_from_no_proof_weakens_it_and_adding_one_does_not() {
     repo.branch("feat/x");
     repo.write("fearlezz.toml", &full(&format!("{narrowed}{CHECKS}")));
     repo.commit("add a negation");
+    let out = ci(&repo);
+    assert!(!out.stdout.contains("weakens no_proof"), "{}", out.stdout);
+}
+
+#[test]
+fn reordering_no_proof_so_a_negation_no_longer_holds_weakens_it() {
+    let narrowed = "no_proof = [\"docs/**\", \"!docs/api/**\"]\n";
+    let reordered = "no_proof = [\"!docs/api/**\", \"docs/**\"]\n";
+    let repo = repo_with(&format!("{narrowed}{CHECKS}"));
+    repo.branch("feat/x");
+    repo.write("fearlezz.toml", &full(&format!("{reordered}{CHECKS}")));
+    repo.commit("reorder");
+    let out = ci(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("weakens no_proof: it reorders its globs so more files need no proof"),
+        "{}",
+        out.stdout
+    );
+
+    // Positive globs side by side mean the same in any order.
+    let both = "no_proof = [\"docs/**\", \"*.md\"]\n";
+    let swapped = "no_proof = [\"*.md\", \"docs/**\"]\n";
+    let repo = repo_with(&format!("{both}{CHECKS}"));
+    repo.branch("feat/x");
+    repo.write("fearlezz.toml", &full(&format!("{swapped}{CHECKS}")));
+    repo.commit("swap");
     let out = ci(&repo);
     assert!(!out.stdout.contains("weakens no_proof"), "{}", out.stdout);
 }

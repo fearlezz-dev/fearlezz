@@ -29,8 +29,7 @@ pub(crate) struct Config {
     pub settings: Settings,
     /// Globs of files that need no proof, such as prose. A change cannot add to them for
     /// itself: CI reads them from the base branch.
-    pub no_proof: Vec<String>,
-    no_proof_globs: Globs,
+    pub no_proof: Globs,
 }
 
 /// What makes a checkout usable and runs its services. Every part is optional; a project
@@ -129,8 +128,7 @@ pub(crate) struct Pictures {
     pub record: Option<crate::record::Spec>,
     /// Pictures (ids or globs, as written) that are compared and shown but never block or
     /// wait for approval.
-    pub flaky: Vec<String>,
-    flaky_globs: Globs,
+    pub flaky: Globs,
 }
 
 impl Pictures {
@@ -151,7 +149,7 @@ impl Pictures {
 
     /// Whether the picture named `name` is flaky, by `flaky`.
     pub(crate) fn is_flaky(&self, name: &str) -> bool {
-        self.flaky_globs.is_match(name)
+        self.flaky.is_match(name)
     }
 
     /// Which pictures a run takes, part of the check's inputs. `flaky` is not: it decides how
@@ -194,9 +192,13 @@ impl Pictures {
         }
         let flaky: Vec<String> = head
             .flaky
-            .iter()
-            .filter(|p| !self.flaky.contains(p))
-            .map(|p| format!("+{p}"))
+            .widenings(&self.flaky)
+            .into_iter()
+            .map(|w| match w {
+                Widening::Added(p) => format!("+{p}"),
+                Widening::Dropped(p) => format!("-{p}"),
+                Widening::Reordered => "reordered".into(),
+            })
             .collect();
         if !flaky.is_empty() {
             found.push(format!(
@@ -524,8 +526,7 @@ impl Config {
                         .map(crate::record::Spec::parse)
                         .transpose()
                         .with_context(|| format!("check {id}"))?,
-                    flaky_globs: globs(&c.flaky).with_context(|| format!("check {id}: flaky"))?,
-                    flaky: c.flaky,
+                    flaky: globs(&c.flaky).with_context(|| format!("check {id}: flaky"))?,
                 },
                 id: id.clone(),
                 run: c.run,
@@ -602,8 +603,7 @@ impl Config {
         }
         checks.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(Config {
-            no_proof_globs: globs(&raw.no_proof).context("no_proof")?,
-            no_proof: raw.no_proof,
+            no_proof: globs(&raw.no_proof).context("no_proof")?,
             settings,
             stages,
             checks,
@@ -613,7 +613,7 @@ impl Config {
     }
 
     pub(crate) fn needs_no_proof(&self, path: &str) -> bool {
-        self.no_proof_globs.is_match(path)
+        self.no_proof.is_match(path)
     }
 
     /// Whether a change to `path` needs proof: a check reads it and `no_proof` does not
@@ -667,11 +667,20 @@ fn builtin_check(id: &str, stages: &Stages, inputs: Globs, on: Scope, builtin: B
 /// Paths by a list of globs. `*` stays inside one path segment; `**` crosses segments. A
 /// glob with a leading `!` takes back what earlier globs matched, and a later glob can match
 /// it again: the last glob that matches a path decides, as in `.gitignore`.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct Globs {
+    /// As written, in order.
+    patterns: Vec<String>,
     set: GlobSet,
-    /// Per glob, in order: whether it starts with `!`.
-    negated: Vec<bool>,
+}
+
+/// How a glob list matches more than the base branch's: positive globs it adds, `!` globs it
+/// drops, or, with neither, an order that lets a positive glob win over a `!` glob again.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Widening {
+    Added(String),
+    Dropped(String),
+    Reordered,
 }
 
 impl Globs {
@@ -680,24 +689,95 @@ impl Globs {
             .matches(path)
             .into_iter()
             .max()
-            .and_then(|last| self.negated.get(last))
-            .is_some_and(|negated| !negated)
+            .and_then(|last| self.patterns.get(last))
+            .is_some_and(|p| !p.starts_with('!'))
     }
+
+    pub(crate) fn patterns(&self) -> &[String] {
+        &self.patterns
+    }
+
+    /// How these globs match paths that `base` does not, by a sound rule over the lists as
+    /// written: dropping a positive glob or putting in a `!` glob anywhere never matches more,
+    /// and globs of one kind side by side mean the same in any order. Anything else may match
+    /// more, and is named.
+    pub(crate) fn widenings(&self, base: &Globs) -> Vec<Widening> {
+        let (b, h) = (runs_sorted(&base.patterns), runs_sorted(&self.patterns));
+        if narrows_to(&b, &h) {
+            return Vec::new();
+        }
+        let positive = |p: &&String| !p.starts_with('!');
+        let mut found: Vec<Widening> = h
+            .iter()
+            .filter(positive)
+            .filter(|p| !b.contains(p))
+            .map(|p| Widening::Added(p.clone()))
+            .collect();
+        found.extend(
+            b.iter()
+                .filter(|p| !positive(p))
+                .filter(|p| !h.contains(p))
+                .map(|p| Widening::Dropped(p.clone())),
+        );
+        if found.is_empty() {
+            found.push(Widening::Reordered);
+        }
+        found
+    }
+}
+
+/// Only the globs as written, so a key built from it stays the same across globset versions.
+impl fmt::Debug for Globs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(&self.patterns).finish()
+    }
+}
+
+/// The globs with each run of one kind (positive or `!`) sorted, which keeps what they match.
+fn runs_sorted(patterns: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(patterns.len());
+    let mut start = 0;
+    for (i, p) in patterns.iter().enumerate() {
+        if i > 0 && p.starts_with('!') != patterns[i - 1].starts_with('!') {
+            out[start..].sort();
+            start = i;
+        }
+        out.push(p.clone());
+    }
+    out[start..].sort();
+    out
+}
+
+/// Whether `head` comes from `base` by dropping positive globs and putting in `!` globs only.
+fn narrows_to(base: &[String], head: &[String]) -> bool {
+    // can[i][j]: base[i..] becomes head[j..].
+    let (n, m) = (base.len(), head.len());
+    let mut can = vec![vec![false; m + 1]; n + 1];
+    for i in (0..=n).rev() {
+        for j in (0..=m).rev() {
+            can[i][j] = if i == n && j == m {
+                true
+            } else {
+                (i < n && !base[i].starts_with('!') && can[i + 1][j])
+                    || (j < m && head[j].starts_with('!') && can[i][j + 1])
+                    || (i < n && j < m && base[i] == head[j] && can[i + 1][j + 1])
+            };
+        }
+    }
+    can[0][0]
 }
 
 fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<Globs> {
     let mut set = GlobSetBuilder::new();
-    let mut negated = Vec::new();
+    let mut written = Vec::new();
     for p in patterns {
-        let (glob, not) = p
-            .strip_prefix('!')
-            .map_or((p.as_str(), false), |g| (g, true));
+        let glob = p.strip_prefix('!').unwrap_or(p);
         set.add(GlobBuilder::new(glob).literal_separator(true).build()?);
-        negated.push(not);
+        written.push(p.clone());
     }
     Ok(Globs {
+        patterns: written,
         set: set.build()?,
-        negated,
     })
 }
 
