@@ -61,7 +61,8 @@ impl Reader {
     /// A stable text of the reader, part of the check's inputs.
     pub(crate) fn fingerprint(&self) -> String {
         match self {
-            Reader::Junit { glob, .. } => format!("junit {glob}"),
+            // `cases` marks results that keep each case, so older ones run again once.
+            Reader::Junit { glob, .. } => format!("junit cases {glob}"),
             Reader::Count(re) => format!("count {}", re.as_str()),
         }
     }
@@ -280,6 +281,17 @@ fn attr(attrs: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::Reader;
+
+    #[test]
+    fn junit_results_from_before_cases_were_kept_run_again() {
+        // Results stored before each case was kept have none; red before green would call
+        // their tests unbuilt. Their key held `junit <glob>`, so this one must differ.
+        let reader = Reader::parse(&toml::Value::String("junit".into())).unwrap();
+        let Reader::Junit { glob, .. } = &reader else {
+            panic!("not junit");
+        };
+        assert_ne!(reader.fingerprint(), format!("junit {glob}"));
+    }
 
     #[test]
     fn a_pattern_sums_the_numbers_it_captures() {
