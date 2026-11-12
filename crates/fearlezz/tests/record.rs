@@ -109,6 +109,21 @@ fn a_record_names_a_still_or_a_film() {
 }
 
 #[test]
+fn an_empty_window_name_is_refused_since_it_would_match_any_window() {
+    let repo = Repo::new(
+        "[check.look]\nrun = \"true\"\nstage = \"look\"\nrecord = { film = \"app\", window = \" \" }\n",
+        &[],
+    );
+    let out = repo.fz(&[]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr.contains("record: window names no window"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
 fn dropping_the_record_of_a_check_weakens_the_proof() {
     let repo = repo();
     repo.write(

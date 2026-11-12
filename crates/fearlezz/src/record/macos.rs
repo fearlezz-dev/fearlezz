@@ -333,17 +333,17 @@ impl Film {
             Event::Stopped(e) => self.stopped = Some(e),
         }
     }
+}
 
-    /// Whether the recording ended by itself, such as when the window closed.
-    pub(crate) fn ended(&mut self) -> bool {
+impl super::Filming for Film {
+    fn ended(&mut self) -> bool {
         while let Ok(event) = self.events.try_recv() {
             self.take(event);
         }
         self.stopped.is_some() || self.done.is_some()
     }
 
-    /// Stops the film and waits until its file is written.
-    pub(crate) fn stop(mut self) -> Result<()> {
+    fn stop(mut self) -> Result<()> {
         if self.stopped.is_none() && self.done.is_none() {
             let (tx, rx) = mpsc::channel();
             let block = RcBlock::new(move |error: *mut NSError| {

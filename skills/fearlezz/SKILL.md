@@ -63,10 +63,11 @@ stage = "look"
 inputs = ["Sources/**", "Package.swift"]
 record = { still = "home", film = "home", seconds = 3 }
 # window = "com.example.app"     the app when the command does not start it itself (open, launchd)
+# wait = 300                     most seconds without a window to record (the default)
 # crop_top = 28                  leave out the title bar (off by default; some apps have none)
 ```
 
-The still is taken once the window is up; the film runs until the command ends, or for `seconds`, after which Fearlezz stops the command and the check counts as passed. Where nothing can record, the check does not run: locally it fails with the one time fix; in CI it is listed as not run and does not block, since looks of app windows are proven on a developer's machine.
+Only a window that appears after the command starts is recorded, never one already open, so quit the app before a run that names `window`. The still is taken once the window is up; the film runs until the command ends, or for `seconds`, after which Fearlezz stops the command and the check counts as passed. A run that goes `wait` seconds without a window (none appeared, or it closed while the command kept running) is stopped and fails. A run records its first window only: `flutter test integration_test -d macos` starts the app once per file, so film one entry file. Where nothing can record, the check does not run: locally it fails with the one time fix; in CI it is listed as not run and does not block, since looks of app windows are proven on a developer's machine.
 
 ## Seeing the work
 
