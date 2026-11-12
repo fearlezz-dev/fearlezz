@@ -2035,14 +2035,10 @@ fn the_proof_workflows_run_again_when_the_title_changes() {
         .and_then(|rest| rest.split("```").next())
         .unwrap();
     assert!(shown.contains(&format!("  {types}")), "{shown}");
-    // Only a new title or base reruns it, not an edit of the description.
-    let guard = "if: github.event.action != 'edited' || github.event.changes.title || github.event.changes.base";
-    assert_eq!(
-        own.matches(guard).count(),
-        own.matches("runs-on:").count(),
-        "{own}"
-    );
-    assert!(shown.contains(guard), "{shown}");
+    // A job skipped by a condition counts as passed for a required check, so an edit never
+    // skips the proof: a description edit must not unblock a red pull request.
+    assert!(!own.contains("changes.title"), "{own}");
+    assert!(!shown.contains("changes.title"), "{shown}");
 }
 
 #[test]

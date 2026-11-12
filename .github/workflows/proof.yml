@@ -1,7 +1,8 @@
 name: proof
 
 on:
-  # In CI the title decides whether a change is a fix, so a new title is proven again.
+  # In CI the title decides whether a change is a fix, so an edit proves it again. A job skipped
+  # by a condition would count as passed, so no edit is skipped.
   pull_request:
     types: [opened, synchronize, reopened, edited]
   push:
@@ -19,8 +20,6 @@ jobs:
   # `fearlezz run --ci` on GitHub Actions run on every pull request. Only this job reports to
   # the pull request.
   proof:
-    # An edit reruns the proof only for a new title or base, never for the description.
-    if: github.event.action != 'edited' || github.event.changes.title || github.event.changes.base
     runs-on: ubuntu-latest
     concurrency:
       group: proof-${{ github.event.pull_request.number || github.ref }}
@@ -46,7 +45,6 @@ jobs:
   # The code for macOS (recording, copy on write clones) is built, linted and tested here. It
   # proves the commit without a token, so it writes nothing to the pull request.
   proof-macos:
-    if: github.event.action != 'edited' || github.event.changes.title || github.event.changes.base
     runs-on: macos-latest
     concurrency:
       group: proof-macos-${{ github.event.pull_request.number || github.ref }}
