@@ -9,7 +9,10 @@
 # flutter-film: integration_test/app_test.dart drives the macOS app while Fearlezz films its
 # window from outside (macOS with Screen Recording). A run records its first window only and
 # `flutter test` starts the app once per file, so it films this one entry file; put every flow
-# to film in it. The app needs the integration_test dev dependency. Turn it off with `[check.flutter-film] off = true` for an app without them.
+# to film in it. Its inputs cover integration_test/** so helpers the entry file imports count,
+# so it fails while another *_test.dart lies there: that file would count as proven unrun.
+# The app needs the integration_test dev dependency. Turn it off with
+# `[check.flutter-film] off = true` for an app without them.
 
 [check.flutter-look]
 run = "flutter test look_test"
@@ -18,7 +21,15 @@ tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests
 inputs = ["lib/**", "look_test/**", "assets/**", "fonts/**", "pubspec.yaml", "pubspec.lock"]
 
 [check.flutter-film]
-run = "flutter test integration_test/app_test.dart -d macos"
+run = '''
+others=$(find integration_test -name '*_test.dart' ! -path integration_test/app_test.dart | sort)
+if [ -n "$others" ]; then
+  printf 'flutter-film runs only integration_test/app_test.dart, so these would count as proven without running:\n%s\n' "$others" >&2
+  echo 'fix: move their tests into integration_test/app_test.dart (helpers it imports must not end in _test.dart), or move the files out of integration_test/' >&2
+  exit 1
+fi
+exec flutter test integration_test/app_test.dart -d macos
+'''
 stage = "merge"
 tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
 inputs = ["lib/**", "integration_test/**", "macos/**", "assets/**", "fonts/**", "pubspec.yaml", "pubspec.lock"]
