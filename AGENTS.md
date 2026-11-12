@@ -47,6 +47,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 ## Command line
 
 - When adding a capability, make it a flag on `fearlezz` or `fearlezz run`, or a `say` or `setup` subcommand, and teach it through `next:` or `fix:` lines. Never add a fourth intake point.
+- A piece never needs shell glue: its check's `run` is a plain tool command, and Fearlezz reads the tool's own output.
 
 ## Style
 
