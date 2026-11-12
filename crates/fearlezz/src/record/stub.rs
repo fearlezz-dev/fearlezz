@@ -57,3 +57,13 @@ pub(crate) fn front() -> Result<i32> {
 pub(crate) fn bring_front(_pid: i32) -> Result<()> {
     bail!(NOT_HERE)
 }
+
+pub(crate) struct Saved;
+
+pub(crate) fn saved(_bundle: &str) -> Option<Saved> {
+    None
+}
+
+pub(crate) fn put_back(_saved: &Saved) -> Result<usize> {
+    bail!(NOT_HERE)
+}

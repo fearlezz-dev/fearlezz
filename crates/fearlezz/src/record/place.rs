@@ -20,6 +20,9 @@ use anyhow::{Context as _, Result, bail};
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
 use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFArray, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize};
+use objc2_foundation::{
+    NSData, NSDictionary, NSPropertyListReadOptions, NSPropertyListSerialization, NSString,
+};
 
 use super::WindowInfo;
 
@@ -137,41 +140,64 @@ fn visible(rect: CGRect, displays: &[CGRect]) -> f64 {
     shown / area
 }
 
-/// How long one AeroSpace command may take before Fearlezz gives up on it.
-const AEROSPACE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long one command (AeroSpace, `defaults`) may take before Fearlezz gives up on it.
+const TOOL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Runs the AeroSpace command line and returns what it printed; fails when it is not
-/// installed, not running, or gives no answer in [`AEROSPACE_TIMEOUT`].
+/// installed, not running, or gives no answer in [`TOOL_TIMEOUT`].
 fn aerospace(args: &[&str]) -> Result<String> {
-    let mut child = Command::new("aerospace")
+    tool("aerospace", args)
+}
+
+/// Runs `program` and returns what it printed, or fails with what it said, or when it gives
+/// no answer in [`TOOL_TIMEOUT`]. Its output is read while it runs, so a long answer never
+/// blocks it.
+fn tool(program: &str, args: &[&str]) -> Result<String> {
+    use std::io::Read as _;
+    let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("running aerospace")?;
+        .with_context(|| format!("running {program}"))?;
+    let mut out = child.stdout.take().context("no output pipe")?;
+    let mut err = child.stderr.take().context("no error pipe")?;
+    let stdout = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        drop(out.read_to_end(&mut text));
+        text
+    });
+    let stderr = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        drop(err.read_to_end(&mut text));
+        text
+    });
     let since = Instant::now();
-    while child.try_wait()?.is_none() {
-        if since.elapsed() >= AEROSPACE_TIMEOUT {
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if since.elapsed() >= TOOL_TIMEOUT {
             drop(child.kill());
             drop(child.wait());
             bail!(
-                "aerospace {} gave no answer in {AEROSPACE_TIMEOUT:?}",
+                "{program} {} gave no answer in {TOOL_TIMEOUT:?}",
                 args.join(" ")
             );
         }
         std::thread::sleep(Duration::from_millis(5));
-    }
-    // Its answers are a few lines, well within a pipe's buffer, so it never blocked on them.
-    let out = child.wait_with_output()?;
-    if !out.status.success() {
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    if !status.success() {
         bail!(
-            "aerospace {} failed: {}",
+            "{program} {} failed: {}",
             args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
+            String::from_utf8_lossy(&stderr).trim()
         );
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
 /// Where to move the window: past the bottom corner of a display that leaves the least of
@@ -358,4 +384,66 @@ pub(crate) fn bring_front(pid: i32) -> Result<()> {
         bail!("macOS did not bring pid {pid} to the front");
     }
     Ok(())
+}
+
+/// The window positions an app had saved (its `NSWindow Frame` preferences) before its
+/// window was parked: macOS saves a frame on every move, so without them the app's next
+/// normal launch would open jammed in the parking corner. Read and written with `defaults`,
+/// which reaches a sandboxed app's container and goes through the same preferences service
+/// as the app.
+pub(crate) struct Saved {
+    bundle: String,
+    frames: Vec<(String, String)>,
+}
+
+/// The window positions saved for `bundle`; none when it has no preferences yet.
+fn frames(bundle: &str) -> Vec<(String, String)> {
+    let Ok(plist) = tool("defaults", &["export", bundle, "-"]) else {
+        return Vec::new();
+    };
+    let data = NSData::with_bytes(plist.as_bytes());
+    // SAFETY: reads a property list from bytes; no format is asked for.
+    let parsed = unsafe {
+        NSPropertyListSerialization::propertyListWithData_options_format_error(
+            &data,
+            NSPropertyListReadOptions::empty(),
+            std::ptr::null_mut(),
+        )
+    };
+    let Some(dict) = parsed.ok().and_then(|p| p.downcast::<NSDictionary>().ok()) else {
+        return Vec::new();
+    };
+    dict.allKeys()
+        .into_iter()
+        .filter_map(|key| {
+            let value = dict.objectForKey(&key)?.downcast::<NSString>().ok()?;
+            let name = key.downcast::<NSString>().ok()?.to_string();
+            name.starts_with("NSWindow Frame ")
+                .then(|| (name, value.to_string()))
+        })
+        .collect()
+}
+
+/// What the app of `bundle` saved, read before its window is parked; none for an app
+/// without a bundle id, which has no preferences of its own.
+pub(crate) fn saved(bundle: &str) -> Option<Saved> {
+    (!bundle.is_empty()).then(|| Saved {
+        bundle: bundle.to_string(),
+        frames: frames(bundle),
+    })
+}
+
+/// Writes back what [`saved`] read and removes positions saved since, once the app has
+/// saved its last frame; returns how many it changed.
+pub(crate) fn put_back(saved: &Saved) -> Result<usize> {
+    let mut changed = 0;
+    for (key, now) in frames(&saved.bundle) {
+        match saved.frames.iter().find(|(k, _)| *k == key) {
+            Some((_, was)) if *was == now => continue,
+            Some((_, was)) => tool("defaults", &["write", &saved.bundle, &key, "-string", was])?,
+            None => tool("defaults", &["delete", &saved.bundle, &key])?,
+        };
+        changed += 1;
+    }
+    Ok(changed)
 }

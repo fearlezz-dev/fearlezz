@@ -143,6 +143,9 @@ pub(crate) trait Screen {
     fn front(&mut self) -> Result<i32>;
     /// Brings the app of `pid` to the front.
     fn bring_front(&mut self, pid: i32) -> Result<()>;
+    /// Puts back the window positions the parked window's app had saved before it was
+    /// parked, since macOS saves a frame on every move; returns how many.
+    fn put_back(&mut self) -> Result<usize>;
 }
 
 /// A film being recorded.
@@ -159,6 +162,8 @@ pub(crate) struct System {
     listed: Vec<WindowInfo>,
     /// Each app's bundle id by pid, read once.
     apps: std::collections::HashMap<i32, String>,
+    /// The window positions the parked window's app had saved.
+    saved: Option<place::Saved>,
 }
 
 impl System {
@@ -187,7 +192,10 @@ impl Screen for System {
     }
 
     fn park(&mut self, window: u32) -> Result<String> {
-        place::park(self.find(window)?)
+        let window = self.find(window)?.clone();
+        // Read before the move, which the app saves at once.
+        self.saved = place::saved(&window.bundle);
+        place::park(&window)
     }
 
     fn front(&mut self) -> Result<i32> {
@@ -196,6 +204,12 @@ impl Screen for System {
 
     fn bring_front(&mut self, pid: i32) -> Result<()> {
         place::bring_front(pid)
+    }
+
+    fn put_back(&mut self) -> Result<usize> {
+        self.saved
+            .take()
+            .map_or(Ok(0), |saved| place::put_back(&saved))
     }
 }
 
@@ -507,6 +521,8 @@ pub(crate) struct Recorder<'a, S> {
     /// The app in front before the command started, which gets focus back from a parked app.
     /// None when focus is not watched (the window stays) or no longer can be.
     developer: Option<Result<i32, String>>,
+    /// Whether the window was parked, so its app's saved positions are put back.
+    parked: bool,
 }
 
 impl<'a, S: Screen> Recorder<'a, S> {
@@ -523,6 +539,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
             before,
             place,
             developer,
+            parked: false,
         })
     }
 
@@ -535,6 +552,25 @@ impl<'a, S: Screen> Recorder<'a, S> {
         out: &Path,
         log: &mut impl Write,
     ) -> Result<Recorded> {
+        let recorded = self.record(child, out, log);
+        // Once the command ended, its app saved its last frame: the parked one.
+        if self.parked {
+            match self.screen.put_back() {
+                Ok(0) => {}
+                Ok(n) => writeln!(
+                    log,
+                    "record: put back {n} window position the app had saved"
+                )?,
+                Err(e) => writeln!(
+                    log,
+                    "record: could not put back the app's saved window position: {e:#}"
+                )?,
+            }
+        }
+        recorded
+    }
+
+    fn record(&mut self, child: &mut Child, out: &Path, log: &mut impl Write) -> Result<Recorded> {
         let spec = self.spec;
         let root = i32::try_from(child.id())?;
         let window = match self.appear(child, root, log)? {
@@ -631,7 +667,10 @@ impl<'a, S: Screen> Recorder<'a, S> {
         // The app may have taken focus already; parking can take a while.
         self.give_back(window, &mut told, log)?;
         match self.screen.park(window.id) {
-            Ok(how) => writeln!(log, "record: parked the window off screen {how}")?,
+            Ok(how) => {
+                self.parked = true;
+                writeln!(log, "record: parked the window off screen {how}")?;
+            }
             Err(e) => writeln!(log, "record: could not park the window off screen: {e:#}")?,
         }
         let until = Instant::now() + SETTLE;
@@ -933,6 +972,8 @@ mod tests {
         park_fails: Option<&'static str>,
         /// Why the app in front cannot be read, when it cannot.
         front_fails: Option<&'static str>,
+        /// Why saved window positions cannot be put back, when they cannot.
+        put_back_fails: Option<&'static str>,
         /// The app in front from each time on, the latest that started; CHILD for the
         /// command's app.
         fronts: Vec<(f64, i32)>,
@@ -1022,6 +1063,14 @@ mod tests {
             Ok(())
         }
 
+        fn put_back(&mut self) -> Result<usize> {
+            if let Some(why) = self.put_back_fails {
+                bail!(why);
+            }
+            self.events.push("put back".into());
+            Ok(1)
+        }
+
         fn film(&mut self, window: u32, path: &Path, _frame: &Frame) -> Result<ScriptFilm> {
             self.events.push(format!("film {window}"));
             let until = self
@@ -1074,6 +1123,7 @@ mod tests {
         place: Place,
         park_fails: Option<&'static str>,
         front_fails: Option<&'static str>,
+        put_back_fails: Option<&'static str>,
         fronts: Vec<(f64, i32)>,
     }
 
@@ -1083,6 +1133,7 @@ mod tests {
                 place: Place::Stay,
                 park_fails: None,
                 front_fails: None,
+                put_back_fails: None,
                 fronts: Vec::new(),
             }
         }
@@ -1115,6 +1166,7 @@ mod tests {
             failures,
             park_fails: desk.park_fails,
             front_fails: desk.front_fails,
+            put_back_fails: desk.put_back_fails,
             fronts: desk.fronts,
             brought: None,
             events: Vec::new(),
@@ -1159,7 +1211,12 @@ mod tests {
             },
         );
         assert!(run.recorded.passed(), "{}", run.log);
-        assert_eq!(run.events, ["park 7", "still 7", "film 7"], "{}", run.log);
+        assert_eq!(
+            run.events,
+            ["park 7", "still 7", "film 7", "put back"],
+            "{}",
+            run.log
+        );
         assert!(
             run.log
                 .contains("record: parked the window off screen by script"),
@@ -1227,7 +1284,7 @@ mod tests {
         assert!(run.recorded.passed(), "{}", run.log);
         assert_eq!(
             run.events,
-            ["park 7", &format!("front {EDITOR}"), "film 7"],
+            ["park 7", &format!("front {EDITOR}"), "film 7", "put back"],
             "{}",
             run.log
         );
@@ -1249,7 +1306,7 @@ mod tests {
         assert!(run.recorded.passed(), "{}", run.log);
         assert_eq!(
             run.events,
-            [&format!("front {EDITOR}"), "park 7", "film 7"],
+            [&format!("front {EDITOR}"), "park 7", "film 7", "put back"],
             "{}",
             run.log
         );
@@ -1268,10 +1325,70 @@ mod tests {
             },
         );
         assert!(run.recorded.passed(), "{}", run.log);
-        assert_eq!(run.events, ["park 7", "film 7"], "{}", run.log);
+        assert_eq!(run.events, ["park 7", "film 7", "put back"], "{}", run.log);
         assert!(
             run.log.contains(
                 "record: focus is not given back: the terminal may not read which app is in front"
+            ),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn off_screen_puts_back_the_saved_window_position_once_the_command_ended() {
+        let run = at_desk(
+            "film = \"home\"\nseconds = 0.5",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 30",
+            Desk {
+                place: Place::OffScreen,
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events.last().map(String::as_str), Some("put back"));
+        assert!(!run.left_running, "the command ended before");
+        assert!(
+            run.log
+                .contains("record: put back 1 window position the app had saved"),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn a_window_that_was_not_parked_has_no_position_to_put_back() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 1.5",
+            Desk {
+                place: Place::OffScreen,
+                park_fails: Some("Accessibility is off for the terminal"),
+                ..Desk::default()
+            },
+        );
+        assert_eq!(run.events, ["film 7"], "{}", run.log);
+    }
+
+    #[test]
+    fn saved_positions_that_cannot_be_put_back_are_told_and_the_run_still_passes() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 1.5",
+            Desk {
+                place: Place::OffScreen,
+                put_back_fails: Some("the preferences cannot be written"),
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert!(
+            run.log.contains(
+                "record: could not put back the app's saved window position: the preferences \
+                 cannot be written"
             ),
             "{}",
             run.log
@@ -1291,7 +1408,7 @@ mod tests {
             },
         );
         assert!(run.recorded.passed(), "{}", run.log);
-        assert_eq!(run.events, ["park 7", "film 7"], "{}", run.log);
+        assert_eq!(run.events, ["park 7", "film 7", "put back"], "{}", run.log);
     }
 
     #[test]

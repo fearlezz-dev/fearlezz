@@ -73,6 +73,8 @@ decided:
     what: "We only care about actually moving the application to its own screen, because most harnesses like Codex and Claude already have tools to interact with the UI." The check's test drives the app; Fearlezz only films.
   - id: aerospace-decoupled
     what: "Don't couple this project to AeroSpace. If people have it, it can automatically help them, or they can configure it a little bit. Not having AeroSpace shouldn't break anything."
+  - id: restore-saved-frames
+    what: "Restore after run": the window positions an app saved while parked are put back once the command ends.
   - id: prototype-freedom
     what: "While testing, confuse the stuff as much as you want. While not testing, don't mess it up." The developer's desktop is restored after each try.
 
@@ -102,14 +104,22 @@ slices:
       - "AeroSpace on: parked by AeroSpace, full window still 1280x864 (native) and 1600x1264 (Flutter); workspaces unchanged"
       - "AeroSpace off: parked by Accessibility, focus back after about 0.4 s; Flutter film still drawing while parked (counter 9 to 18)"
       - "Found: AeroSpace refused a window id it had not picked up yet; parking now waits up to 2 s for AeroSpace to list it"
+  - id: saved-frames
+    tests:
+      - record::tests::off_screen_puts_back_the_saved_window_position_once_the_command_ended
+      - record::tests::a_window_that_was_not_parked_has_no_position_to_put_back
+      - record::tests::saved_positions_that_cannot_be_put_back_are_told_and_the_run_still_passes
+    status: done
+    evidence:
+      - "a SwiftUI app that saves its frame reopened where it was in 4 of 4 cases: sandboxed and plain, by Accessibility and by AeroSpace; each log says it put back 1 position"
+      - "read and written through the defaults tool: the CFPreferences API cannot reach a sandboxed app's container, and reads a stale cache by path"
+      - "found: when a bundle id has a leftover sandbox container, defaults reads the container, so a plain app with that id is not put back (test leftover only)"
 
 
 open:
   - id: film-failures
     ask: "Reproduced on main (998ceb8) too: after 27 good films during a load spike every film fails until replayd restarts. Existing problem, now in ROADMAP Known problems. Investigate as its own drive?"
-  - id: saved-frames
-    ask: An app that saves its window position may reopen in the parked corner next time; move it back before the command ends?
   - id: aerospace-no-ax-focus
     ask: With AeroSpace on and Accessibility off, focus give back is unproven (needs Accessibility turned off for the agent's app).
 
-next: "Developer reviews the result (full proof 7 of 7 on 89f84cf); then Finish: pull request." 
+next: "Full proof, then Finish: pull request." 
