@@ -424,9 +424,19 @@ fn dropping_a_flaky_negation_is_red_and_adding_one_is_fine() {
     let out = ci_between(&flaky(r#"["*", "!home"]"#), &flaky(r#"["*"]"#));
     assert_weakens(&out, "weakens lint: it calls more pictures flaky (-!home)");
 
-    let out = ci_between(&flaky(r#"["*"]"#), &flaky(r#"["*", "!home"]"#));
-    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    assert!(!out.stdout.contains("flaky"), "{}", out.stdout);
+    for (base, head) in [
+        (r#"["*"]"#, r#"["*", "!home"]"#),
+        (r#"["home", "about"]"#, r#"["home", "!home/x", "about"]"#),
+        (r#"["home", "about"]"#, r#"["about"]"#),
+    ] {
+        let out = ci_between(&flaky(base), &flaky(head));
+        assert!(out.ok, "{base} to {head}: {}\n{}", out.stdout, out.stderr);
+        assert!(
+            !out.stdout.contains("flaky"),
+            "{base} to {head}: {}",
+            out.stdout
+        );
+    }
 }
 
 #[test]
@@ -811,6 +821,33 @@ fn reordering_no_proof_so_a_negation_no_longer_holds_weakens_it() {
         "{}",
         out.stdout
     );
+
+    // A `!` glob put in anywhere only narrows, and so does dropping a positive glob.
+    for (base, head) in [
+        (
+            r#"["docs/**", "*.md"]"#,
+            r#"["docs/**", "!docs/api/**", "*.md"]"#,
+        ),
+        (r#"["docs/**", "*.md"]"#, r#"["*.md", "!docs/api/**"]"#),
+        (
+            r#"["!a/**", "docs/**", "*.md"]"#,
+            r#"["!a/**", "*.md", "!b/**", "docs/**"]"#,
+        ),
+    ] {
+        let repo = repo_with(&format!("no_proof = {base}\n{CHECKS}"));
+        repo.branch("feat/x");
+        repo.write(
+            "fearlezz.toml",
+            &full(&format!("no_proof = {head}\n{CHECKS}")),
+        );
+        repo.commit("narrow");
+        let out = ci(&repo);
+        assert!(
+            !out.stdout.contains("weakens no_proof"),
+            "{base} to {head}: {}",
+            out.stdout
+        );
+    }
 
     // Positive globs side by side mean the same in any order.
     let both = "no_proof = [\"docs/**\", \"*.md\"]\n";
@@ -1544,8 +1581,9 @@ ffmpeg -v error -nostdin -f lavfi -i "color=c=$(cat src/color.txt):s=64x48:r=10:
 echo '{"kind":"film","file":"home.mp4"}' >> "$FEARLEZZ_OUT/proof.jsonl"
 "#;
 
-#[test]
-fn a_rerun_that_films_the_same_change_keeps_the_approval() {
+/// A pull request whose film `home` turned from red to blue, proven on pull request 7 as run
+/// 42, and an approval of it by `lead`.
+fn filmed_and_approved() -> (FakeGitHub, Repo, String, serde_json::Value) {
     let gh = FakeGitHub::start();
     let repo = Repo::new(
         SCREENS,
@@ -1553,6 +1591,7 @@ fn a_rerun_that_films_the_same_change_keeps_the_approval() {
             (".gitignore", ".runs/\n"),
             ("record.sh", FILM),
             ("src/color.txt", "red"),
+            ("src/other.txt", "a"),
         ],
     );
     repo.branch("feat/look");
@@ -1571,6 +1610,13 @@ fn a_rerun_that_films_the_same_change_keeps_the_approval() {
     gh.state().permissions.insert("lead".into(), "write".into());
     let approval = comment_event(&gh, "lead", "/fearlezz approve the blue film is right");
     answer(&gh, &approval);
+    (gh, repo, head, approval)
+}
+
+#[test]
+fn a_rerun_that_films_the_same_change_keeps_the_approval() {
+    let (gh, repo, head, approval) = filmed_and_approved();
+    let event = pull_request(&head, "owner/repo");
     let out = on_actions(&gh, &repo.root, "pull_request", &event, "43");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
@@ -1579,6 +1625,22 @@ fn a_rerun_that_films_the_same_change_keeps_the_approval() {
         status.target,
         approval["comment"]["html_url"].as_str().unwrap()
     );
+}
+
+#[test]
+fn a_rerun_of_the_same_head_over_a_moved_base_needs_a_new_approval() {
+    let (gh, repo, head, _) = filmed_and_approved();
+    // The base branch moved on; GitHub checks out a merge of the same head into it.
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("src/other.txt", "b");
+    repo.commit("base moved on");
+    repo.git(&["checkout", "-q", "--detach"]);
+    repo.git(&["merge", "-q", "--no-ff", "--no-edit", "feat/look"]);
+    let event = pull_request(&head, "owner/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &event, "43");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending", "{}", out.stdout);
 }
 
 // Approvals by comment
