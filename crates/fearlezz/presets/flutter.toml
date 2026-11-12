@@ -1,16 +1,20 @@
 # A Flutter app: formatting, the analyzer, and the tests.
+#
+# `flutter test` runs test/ only, so no check here reads a *_test.dart in integration_test/:
+# one nothing runs is no proof of itself, and the floor names it unproven. The exception is
+# integration_test/app_test.dart, the entry file the flutter-film check of flutter-look runs.
 
 [check.dart-format]
 run = "dart format --output=none --set-exit-if-changed ."
 stage = "working"
-inputs = ["**/*.dart"]
+inputs = ["**/*.dart", "!integration_test/**/*_test.dart", "integration_test/app_test.dart"]
 
 # Lint findings get the level [lints.dart] gives them; other analyzer issues block. Only lines
 # the change touched count; compile errors block wherever they are.
 [check.dart-analyze]
 run = "dart analyze --format=machine"
 stage = "working"
-inputs = ["**/*.dart", "analysis_options.yaml", "pubspec.yaml", "pubspec.lock"]
+inputs = ["**/*.dart", "!integration_test/**/*_test.dart", "integration_test/app_test.dart", "analysis_options.yaml", "pubspec.yaml", "pubspec.lock"]
 findings = { read = "dart", lints = ["dart"] }
 
 # The last line says "+12: All tests passed!" or "+10 -2: Some tests failed.".
@@ -18,7 +22,7 @@ findings = { read = "dart", lints = ["dart"] }
 run = "flutter test"
 stage = "working"
 tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
-inputs = ["**/*.dart", "pubspec.yaml", "pubspec.lock"]
+inputs = ["**/*.dart", "!integration_test/**", "pubspec.yaml", "pubspec.lock"]
 test_files = ["test/**"]
 
 # Flutter's own excludes come too: every flutter command appends build/** and each platform

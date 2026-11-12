@@ -594,3 +594,36 @@ fn flutter_film_reads_its_entry_file_and_helpers_but_no_other_test_file() {
         out.stdout
     );
 }
+
+#[test]
+fn with_the_flutter_piece_an_integration_test_nothing_runs_is_still_unproven() {
+    let repo = Repo::new(
+        "use = [\"flutter\", \"flutter-look\"]\n",
+        &[
+            ("lib/main.dart", "void main() {}\n"),
+            ("integration_test/app_test.dart", "void main() {}\n"),
+            (
+                "integration_test/flows/settings_test.dart",
+                "void main() {}\n",
+            ),
+        ],
+    );
+    repo.branch("feat/x");
+    // `flutter test` runs test/ only, and the entry file is the one flutter-film runs.
+    repo.write("integration_test/app_test.dart", "// changed\n");
+    let plan = repo.fz(&["--plan"]).stdout;
+    repo.git(&["checkout", "--", "."]);
+    assert!(!plan.contains("flutter-test"), "{plan}");
+    assert!(plan.contains("dart-analyze"), "{plan}");
+
+    repo.write("integration_test/flows/settings_test.dart", "// changed\n");
+    repo.commit("another test file");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("unproven integration_test/flows/settings_test.dart"),
+        "{}",
+        out.stdout
+    );
+}
