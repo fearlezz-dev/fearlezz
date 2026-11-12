@@ -923,7 +923,7 @@ mod tests {
         assert!(!run.recorded.passed());
         assert!(!run.left_running, "the command was stopped");
         assert!(run.took < Duration::from_secs(10), "{:?}", run.took);
-        assert!(run.proofs().is_empty());
+        assert_eq!(run.proofs(), "");
         assert!(
             run.log
                 .contains("no new window of \"Demo\" appeared in 0.5 s"),
