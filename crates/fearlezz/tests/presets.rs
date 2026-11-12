@@ -595,10 +595,11 @@ fn flutter_film_reads_its_entry_file_and_helpers_but_no_other_test_file() {
     );
 }
 
-#[test]
-fn with_the_flutter_piece_an_integration_test_nothing_runs_is_still_unproven() {
+/// Under `use`, a changed integration test file other than the entry file reruns the
+/// formatter and the analyzer, which read it, yet no check proves it, since nothing runs it.
+fn an_extra_integration_test_reruns_its_readers_but_is_unproven(pieces: &str) {
     let repo = Repo::new(
-        "use = [\"flutter\", \"flutter-look\"]\n",
+        &format!("use = {pieces}\n"),
         &[
             ("lib/main.dart", "void main() {}\n"),
             ("integration_test/app_test.dart", "void main() {}\n"),
@@ -609,20 +610,58 @@ fn with_the_flutter_piece_an_integration_test_nothing_runs_is_still_unproven() {
         ],
     );
     repo.branch("feat/x");
-    // `flutter test` runs test/ only, and the entry file is the one flutter-film runs.
-    repo.write("integration_test/app_test.dart", "// changed\n");
+    repo.write(
+        "integration_test/flows/settings_test.dart",
+        "void  main( ) {}\n",
+    );
     let plan = repo.fz(&["--plan"]).stdout;
-    repo.git(&["checkout", "--", "."]);
-    assert!(!plan.contains("flutter-test"), "{plan}");
-    assert!(plan.contains("dart-analyze"), "{plan}");
-
-    repo.write("integration_test/flows/settings_test.dart", "// changed\n");
+    assert!(plan.contains("dart-format"), "{pieces}: {plan}");
+    assert!(plan.contains("dart-analyze"), "{pieces}: {plan}");
+    assert!(!plan.contains("flutter-test"), "{pieces}: {plan}");
     repo.commit("another test file");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{pieces}: {}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("unproven integration_test/flows/settings_test.dart"),
+        "{pieces}: {}",
+        out.stdout
+    );
+}
+
+#[test]
+fn the_flutter_piece_reads_integration_tests_but_proves_none_it_does_not_run() {
+    an_extra_integration_test_reruns_its_readers_but_is_unproven(r#"["flutter"]"#);
+}
+
+#[test]
+fn with_flutter_look_an_integration_test_nothing_runs_is_still_unproven() {
+    an_extra_integration_test_reruns_its_readers_but_is_unproven(r#"["flutter", "flutter-look"]"#);
+}
+
+#[test]
+fn the_kotlin_piece_reads_instrumented_tests_but_proves_none() {
+    let repo = Repo::new(
+        "use = [\"kotlin\"]\n",
+        &[
+            ("app/src/main/kotlin/App.kt", "fun main() {}\n"),
+            ("app/src/androidTest/kotlin/AppTest.kt", "class AppTest\n"),
+        ],
+    );
+    repo.branch("feat/x");
+    // `./gradlew test` runs unit tests only; instrumented tests run on a device.
+    repo.write(
+        "app/src/androidTest/kotlin/AppTest.kt",
+        "class AppTest {}\n",
+    );
+    let plan = repo.fz(&["--plan"]).stdout;
+    assert!(plan.contains("ktlint"), "{plan}");
+    repo.commit("an instrumented test");
     let out = repo.fz(&["run", "--ci"]);
     assert!(!out.ok, "{}", out.stdout);
     assert!(
         out.stdout
-            .contains("unproven integration_test/flows/settings_test.dart"),
+            .contains("unproven app/src/androidTest/kotlin/AppTest.kt"),
         "{}",
         out.stdout
     );

@@ -1,4 +1,8 @@
 # Kotlin with ktlint (style), detekt (code smells) and the Gradle tests.
+#
+# `./gradlew test` runs unit tests only, so no check here proves an instrumented test in
+# src/androidTest/, though each reads it: one nothing runs is no proof of itself, and the
+# floor names it unproven.
 
 # Findings get the level [lints.ktlint] and [lints.detekt] give them. Only lines the change
 # touched count.
@@ -6,12 +10,14 @@
 run = "ktlint --reporter=sarif,output=$FEARLEZZ_OUT/findings.sarif '**/*.kt' '**/*.kts'"
 stage = "working"
 inputs = ["**/*.kt", "**/*.kts", ".editorconfig"]
+proves = ["**/*.kt", "**/*.kts", ".editorconfig", "!**/src/androidTest/**"]
 findings = { read = "sarif", lints = ["ktlint"] }
 
 [check.detekt]
 run = "detekt --config config/detekt/detekt.yml --report sarif:$FEARLEZZ_OUT/findings.sarif"
 stage = "working"
 inputs = ["**/*.kt", "**/*.kts", "config/detekt/detekt.yml"]
+proves = ["**/*.kt", "**/*.kts", "config/detekt/detekt.yml", "!**/src/androidTest/**"]
 findings = { read = "sarif", lints = ["detekt"] }
 
 # --rerun runs the tests even when Gradle thinks they are up to date, so this run writes the
@@ -21,6 +27,7 @@ run = "./gradlew test --rerun"
 stage = "working"
 tests = { junit = "**/build/test-results/test/*.xml" }
 inputs = ["**/*.kt", "**/*.kts", "**/*.java", "gradle/**", "gradle.properties", "**/src/test/resources/**"]
+proves = ["**/*.kt", "**/*.kts", "**/*.java", "gradle/**", "gradle.properties", "**/src/test/resources/**", "!**/src/androidTest/**"]
 test_files = ["**/src/test/**"]
 
 # The rule list names rules of newer detekt releases too; detekt skips the ones it lacks.
