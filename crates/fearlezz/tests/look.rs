@@ -86,6 +86,35 @@ fn the_base_run_and_the_comparison_are_reused() {
 }
 
 #[test]
+fn a_broken_look_needs_a_new_comparison_instead_of_reading_ok() {
+    let (repo, counter) = repo();
+    let out = repo.fz_env(&["run"], &[("COUNTER", &counter)]);
+    let report = out
+        .lines()
+        .iter()
+        .find_map(|l| l.trim().strip_prefix("report: "))
+        .map(std::path::PathBuf::from)
+        .expect("a report line");
+    // A look written in part, as a crash while writing it leaves it.
+    let look = report.parent().unwrap().join("look.json");
+    std::fs::write(&look, "{\"check\":").unwrap();
+    let status = repo.fz_env(&[], &[("COUNTER", &counter)]);
+    assert!(
+        status
+            .stdout
+            .contains("not compared with this base commit yet"),
+        "{}",
+        status.stdout
+    );
+    let again = repo.fz_env(&["run"], &[("COUNTER", &counter)]);
+    assert!(
+        again.stdout.contains("look screens: 1 changed"),
+        "{}",
+        again.stdout
+    );
+}
+
+#[test]
 fn status_and_next_point_at_the_report() {
     let (repo, counter) = repo();
     repo.fz_env(&["run"], &[("COUNTER", &counter)]);

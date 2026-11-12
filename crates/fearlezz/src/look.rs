@@ -538,6 +538,9 @@ fn build(
         report: dir.join("index.html"),
     };
     crate::report::write(dir, &mut look)?;
-    fs::write(dir.join("look.json"), serde_json::to_string_pretty(&look)?)?;
+    // Whole or not at all: a reader never sees a look written in part.
+    let part = dir.join("look.json.part");
+    fs::write(&part, serde_json::to_string_pretty(&look)?)?;
+    fs::rename(&part, dir.join("look.json"))?;
     Ok(look)
 }

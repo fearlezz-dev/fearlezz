@@ -423,6 +423,11 @@ fn compared(
         Some(crate::store::Looked::At(dir)) => crate::look::Look::at(dir),
         _ => None,
     };
+    let look_missing = match &against.look {
+        None => true,
+        Some(crate::store::Looked::At(_)) => look.is_none(),
+        Some(crate::store::Looked::Nothing) => false,
+    };
     let wants_look = crate::look::has_media(run) || config.takes_pictures(check);
     let wants_red = at_final
         && against.red.is_none()
@@ -433,7 +438,9 @@ fn compared(
         };
     Ok(Compared {
         look,
-        missing: (wants_look && against.look.is_none()) || wants_red,
+        // A look recorded but gone or unreadable is missing, so the next run makes it again
+        // rather than the check reading ok with nothing to approve.
+        missing: (wants_look && look_missing) || wants_red,
         red: against.red,
     })
 }
