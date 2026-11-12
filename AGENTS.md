@@ -29,7 +29,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `counts.rs`: how many tests a check ran (JUnit reports, or a pattern in its output); zero fails the check.
 - `env.rs`: the environment: preparing a fresh checkout (copy-on-write clones of ignored folders), and starting, reusing, resetting and stopping the services checks need.
 - `media.rs`: comparing two stills or films (stable states, time warping, blurred pixel diff).
-- `record.rs`: recording an app's window on macOS (ScreenCaptureKit through objc2): `fearlezz --still` and a check's `record` table; `record/place.rs` parks it off the developer's screens (`FEARLEZZ_OFF_SCREEN=1`), by AeroSpace when it runs, Accessibility otherwise.
+- `record.rs`: recording an app's window on macOS (ScreenCaptureKit through objc2): `fearlezz --still` and a check's `record` table; `record/place.rs` parks it off the developer's screens (`FEARLEZZ_OFF_SCREEN=1`), by AeroSpace when it runs, Accessibility otherwise, gives focus back, and puts back the window positions the app saved while parked.
 - `look.rs`: comparing a check's pictures with the same check run on the base commit; `report.rs`: the look report page.
 - `page.rs`: what the static pages share (colours, controls, motion); they fetch nothing.
 - `red.rs`: red before green, a check run on the base commit with the change's test files laid over it.

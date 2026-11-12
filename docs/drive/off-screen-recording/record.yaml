@@ -1,10 +1,9 @@
 # docs/drive/off-screen-recording/record.yaml: the working state of one piece of work.
-goal: "Recording off the developer's screens" (ROADMAP Next 3); opt in, and absent (not failing) wherever it cannot work.
+goal: "Recording off the developer's screens" (was ROADMAP Next); opt in, and absent (not failing) wherever it cannot work.
 
 pieces:
   - id: placement
     status: done
-    open: "The binary flashes far longer than the prototype: 0.3 to 1.5 s, outliers to 3.4 s; the window is found 0.4 to 1.9 s after launch. Accessibility misses the window 4 of 5 times when matched by the frame first listed."
     measured:
       - "ScreenCaptureKit listing 55 to 89 ms (median 70); CGWindowList 1.6 to 2.1 ms median"
       - "binary flash, AeroSpace on (ms): 1469, 425, 419, 3418, never parked once (window gone)"

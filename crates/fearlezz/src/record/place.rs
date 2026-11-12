@@ -16,7 +16,7 @@ use std::process::{Command, Stdio};
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
 use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFArray, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize};
@@ -393,14 +393,15 @@ pub(crate) fn bring_front(pid: i32) -> Result<()> {
 /// as the app.
 pub(crate) struct Saved {
     bundle: String,
-    frames: Vec<(String, String)>,
+    /// Why they could not be read, when they could not: nothing is put back then, since
+    /// an empty list would remove positions the app saved long before.
+    frames: std::result::Result<Vec<(String, String)>, String>,
 }
 
-/// The window positions saved for `bundle`; none when it has no preferences yet.
-fn frames(bundle: &str) -> Vec<(String, String)> {
-    let Ok(plist) = tool("defaults", &["export", bundle, "-"]) else {
-        return Vec::new();
-    };
+/// The window positions saved for `bundle`; none when it has no preferences yet (`defaults`
+/// exports an empty dictionary then).
+fn frames(bundle: &str) -> Result<Vec<(String, String)>> {
+    let plist = tool("defaults", &["export", bundle, "-"])?;
     let data = NSData::with_bytes(plist.as_bytes());
     // SAFETY: reads a property list from bytes; no format is asked for.
     let parsed = unsafe {
@@ -410,10 +411,12 @@ fn frames(bundle: &str) -> Vec<(String, String)> {
             std::ptr::null_mut(),
         )
     };
-    let Some(dict) = parsed.ok().and_then(|p| p.downcast::<NSDictionary>().ok()) else {
-        return Vec::new();
-    };
-    dict.allKeys()
+    let dict = parsed
+        .ok()
+        .and_then(|p| p.downcast::<NSDictionary>().ok())
+        .with_context(|| format!("defaults exported no dictionary for {bundle}"))?;
+    Ok(dict
+        .allKeys()
         .into_iter()
         .filter_map(|key| {
             let value = dict.objectForKey(&key)?.downcast::<NSString>().ok()?;
@@ -421,7 +424,7 @@ fn frames(bundle: &str) -> Vec<(String, String)> {
             name.starts_with("NSWindow Frame ")
                 .then(|| (name, value.to_string()))
         })
-        .collect()
+        .collect())
 }
 
 /// What the app of `bundle` saved, read before its window is parked; none for an app
@@ -429,16 +432,20 @@ fn frames(bundle: &str) -> Vec<(String, String)> {
 pub(crate) fn saved(bundle: &str) -> Option<Saved> {
     (!bundle.is_empty()).then(|| Saved {
         bundle: bundle.to_string(),
-        frames: frames(bundle),
+        frames: frames(bundle).map_err(|e| format!("{e:#}")),
     })
 }
 
 /// Writes back what [`saved`] read and removes positions saved since, once the app has
 /// saved its last frame; returns how many it changed.
 pub(crate) fn put_back(saved: &Saved) -> Result<usize> {
+    let before = saved
+        .frames
+        .as_ref()
+        .map_err(|e| anyhow!("they could not be read before parking: {e}"))?;
     let mut changed = 0;
-    for (key, now) in frames(&saved.bundle) {
-        match saved.frames.iter().find(|(k, _)| *k == key) {
+    for (key, now) in frames(&saved.bundle)? {
+        match before.iter().find(|(k, _)| *k == key) {
             Some((_, was)) if *was == now => continue,
             Some((_, was)) => tool("defaults", &["write", &saved.bundle, &key, "-string", was])?,
             None => tool("defaults", &["delete", &saved.bundle, &key])?,

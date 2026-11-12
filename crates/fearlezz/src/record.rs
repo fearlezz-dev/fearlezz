@@ -553,8 +553,12 @@ impl<'a, S: Screen> Recorder<'a, S> {
         log: &mut impl Write,
     ) -> Result<Recorded> {
         let recorded = self.record(child, out, log);
-        // Once the command ended, its app saved its last frame: the parked one.
+        // Once the command ended, its app saved its last frame: the parked one. A recording
+        // that failed left it running, so it is stopped first.
         if self.parked {
+            if recorded.is_err() {
+                stop(child)?;
+            }
             match self.screen.put_back() {
                 Ok(0) => {}
                 Ok(n) => writeln!(
@@ -1067,7 +1071,19 @@ mod tests {
             if let Some(why) = self.put_back_fails {
                 bail!(why);
             }
-            self.events.push("put back".into());
+            let running = std::process::Command::new("kill")
+                .args(["-0", &self.child.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            self.events.push(
+                if running {
+                    "put back while the command ran"
+                } else {
+                    "put back"
+                }
+                .into(),
+            );
             Ok(1)
         }
 
@@ -1186,13 +1202,14 @@ mod tests {
         if left_running {
             stop(&mut child)?;
         }
+        let events = recorder.screen.events;
         Ok(Run {
-            recorded: recorded?,
+            recorded: recorded.with_context(|| format!("screen events {events:?}"))?,
             log: String::from_utf8(log)?,
             out,
             took,
             left_running,
-            events: recorder.screen.events,
+            events,
         })
     }
 
@@ -1355,6 +1372,25 @@ mod tests {
             "{}",
             run.log
         );
+    }
+
+    #[test]
+    fn a_recording_that_fails_stops_the_command_before_putting_back_saved_positions() {
+        let err = run(
+            "film = \"app\"",
+            vec![shown(7, CHILD, 0.1, 1.2)],
+            "sleep 30",
+            (1.5, 100),
+            Desk {
+                place: Place::OffScreen,
+                ..Desk::default()
+            },
+        )
+        .err()
+        .expect("the run fails");
+        let err = format!("{err:#}");
+        assert!(err.contains("\"put back\""), "{err}");
+        assert!(!err.contains("while the command ran"), "{err}");
     }
 
     #[test]
