@@ -136,8 +136,9 @@ pub(crate) trait Screen {
     /// Starts filming the window into `path` (MP4).
     fn film(&mut self, window: u32, path: &Path, frame: &Frame) -> Result<Self::Film>;
     /// Moves the window off the developer's screens, keeping its size, without giving it
-    /// focus; says how, such as "by Accessibility".
-    fn park(&mut self, window: u32) -> Result<String>;
+    /// focus; says how, such as "by Accessibility", or why it cannot yet. Asked again until
+    /// it is parked, so it never waits itself.
+    fn park(&mut self, window: u32) -> Result<Parking>;
     /// The pid of the app in front, which gets the developer's keys; fails with why it
     /// cannot be read and the fix.
     fn front(&mut self) -> Result<i32>;
@@ -146,6 +147,14 @@ pub(crate) trait Screen {
     /// Puts back the window positions the parked window's app had saved before it was
     /// parked, since macOS saves a frame on every move; returns how many.
     fn put_back(&mut self) -> Result<usize>;
+}
+
+/// Where parking a window stands.
+pub(crate) enum Parking {
+    /// Parked, and how.
+    Parked(String),
+    /// Not yet, and why: the window manager has not picked the window up.
+    NotYet(String),
 }
 
 /// A film being recorded.
@@ -191,10 +200,12 @@ impl Screen for System {
         sys::start_film(&sys::capturable(window)?, path, frame)
     }
 
-    fn park(&mut self, window: u32) -> Result<String> {
+    fn park(&mut self, window: u32) -> Result<Parking> {
         let window = self.find(window)?.clone();
-        // Read before the move, which the app saves at once.
-        self.saved = place::saved(&window.bundle);
+        // Read before the first move, which the app saves at once.
+        if self.saved.is_none() {
+            self.saved = place::saved(&window.bundle);
+        }
         place::park(&window)
     }
 
@@ -507,6 +518,14 @@ const LIST_EVERY: Duration = Duration::from_secs(1);
 const SETTLE: Duration = Duration::from_millis(700);
 /// How often focus is looked at while a parked window settles.
 const FOCUS_POLL: Duration = Duration::from_millis(20);
+/// How long a window manager gets to pick up a new window before it can be parked:
+/// AeroSpace learns of windows on its own schedule, which took over 2 s on a loaded machine.
+/// Short in unit tests, whose scripted screen never picks some windows up.
+const PICK_UP: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(10)
+};
 /// How many listings in a row may fail after the recording before the run fails.
 const LISTING_TRIES: usize = 3;
 
@@ -668,18 +687,33 @@ impl<'a, S: Screen> Recorder<'a, S> {
             self.developer = None;
         }
         let mut told = false;
-        // The app may have taken focus already; parking can take a while.
-        self.give_back(window, &mut told, log)?;
-        match self.screen.park(window.id) {
-            Ok(how) => {
-                self.parked = true;
-                writeln!(log, "record: parked the window off screen {how}")?;
-            }
-            Err(e) => writeln!(log, "record: could not park the window off screen: {e:#}")?,
-        }
-        let until = Instant::now() + SETTLE;
-        while Instant::now() < until {
+        let since = Instant::now();
+        // Settling starts once parking ended; until then the window manager may still have
+        // to pick the window up, and focus goes back all the while.
+        let mut settled_at = None;
+        while settled_at.is_none_or(|at| Instant::now() < at) {
             self.give_back(window, &mut told, log)?;
+            if settled_at.is_none() {
+                let failed = match self.screen.park(window.id) {
+                    Ok(Parking::Parked(how)) => {
+                        self.parked = true;
+                        writeln!(log, "record: parked the window off screen {how}")?;
+                        None
+                    }
+                    Ok(Parking::NotYet(why)) if since.elapsed() >= PICK_UP => {
+                        Some(format!("{why} after {PICK_UP:?}"))
+                    }
+                    Ok(Parking::NotYet(_)) => {
+                        std::thread::sleep(FOCUS_POLL);
+                        continue;
+                    }
+                    Err(e) => Some(format!("{e:#}")),
+                };
+                if let Some(e) = failed {
+                    writeln!(log, "record: could not park the window off screen: {e}")?;
+                }
+                settled_at = Some(Instant::now() + SETTLE);
+            }
             std::thread::sleep(FOCUS_POLL);
         }
         Ok(())
@@ -974,6 +1008,9 @@ mod tests {
         failures: usize,
         /// Why parking fails, when it does.
         park_fails: Option<&'static str>,
+        /// Parking waits until this many seconds after the screen was made, as AeroSpace
+        /// does until it picks up a new window.
+        park_from: f64,
         /// Why the app in front cannot be read, when it cannot.
         front_fails: Option<&'static str>,
         /// Why saved window positions cannot be put back, when they cannot.
@@ -1033,12 +1070,15 @@ mod tests {
             Ok((800, 600))
         }
 
-        fn park(&mut self, window: u32) -> Result<String> {
+        fn park(&mut self, window: u32) -> Result<Parking> {
             if let Some(why) = self.park_fails {
                 bail!(why);
             }
+            if self.start.elapsed().as_secs_f64() < self.park_from {
+                return Ok(Parking::NotYet("the script has not picked it up".into()));
+            }
             self.events.push(format!("park {window}"));
-            Ok("by script".into())
+            Ok(Parking::Parked("by script".into()))
         }
 
         fn front(&mut self) -> Result<i32> {
@@ -1138,6 +1178,7 @@ mod tests {
     struct Desk {
         place: Place,
         park_fails: Option<&'static str>,
+        park_from: f64,
         front_fails: Option<&'static str>,
         put_back_fails: Option<&'static str>,
         fronts: Vec<(f64, i32)>,
@@ -1148,6 +1189,7 @@ mod tests {
             Desk {
                 place: Place::Stay,
                 park_fails: None,
+                park_from: 0.0,
                 front_fails: None,
                 put_back_fails: None,
                 fronts: Vec::new(),
@@ -1181,6 +1223,7 @@ mod tests {
             fail_from,
             failures,
             park_fails: desk.park_fails,
+            park_from: desk.park_from,
             front_fails: desk.front_fails,
             put_back_fails: desk.put_back_fails,
             fronts: desk.fronts,
@@ -1324,6 +1367,52 @@ mod tests {
         assert_eq!(
             run.events,
             [&format!("front {EDITOR}"), "park 7", "film 7", "put back"],
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn off_screen_gives_focus_back_while_parking_waits_for_the_window_manager() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 2.5",
+            Desk {
+                place: Place::OffScreen,
+                park_from: 1.0,
+                fronts: vec![(0.0, EDITOR), (0.5, CHILD)],
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(
+            run.events,
+            [&format!("front {EDITOR}"), "park 7", "film 7", "put back"],
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn a_window_the_window_manager_never_picks_up_is_recorded_where_it_opened() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 4",
+            Desk {
+                place: Place::OffScreen,
+                park_from: f64::INFINITY,
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["film 7"], "{}", run.log);
+        assert!(
+            run.log.contains(&format!(
+                "record: could not park the window off screen: the script has not picked it \
+                 up after {PICK_UP:?}"
+            )),
             "{}",
             run.log
         );

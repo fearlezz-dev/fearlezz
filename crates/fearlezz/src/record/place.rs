@@ -24,7 +24,7 @@ use objc2_foundation::{
     NSData, NSDictionary, NSPropertyListReadOptions, NSPropertyListSerialization, NSString,
 };
 
-use super::WindowInfo;
+use super::{Parking, WindowInfo};
 
 /// The AeroSpace workspace parked windows float on; never shown unless the developer goes
 /// there, and gone once its windows close.
@@ -33,18 +33,13 @@ const WORKSPACE: &str = "fearlezz";
 /// How long a window manager gets to undo a move before the move counts.
 const UNDO: Duration = Duration::from_millis(150);
 
-/// How long AeroSpace gets to pick up a new window: it learns of windows on its own
-/// schedule, after the window server lists them, and refuses ids it does not know yet. On a
-/// loaded machine that took over 2 s, so it gets long enough to end parked.
-const PICK_UP: Duration = Duration::from_secs(10);
-
-/// Parks `window` and says how.
-pub(crate) fn park(window: &WindowInfo) -> Result<String> {
+/// Parks `window` and says how, or why not yet: AeroSpace learns of windows on its own
+/// schedule, after the window server lists them, and refuses ids it does not know yet.
+pub(crate) fn park(window: &WindowInfo) -> Result<Parking> {
     if aerospace(&["list-workspaces", "--focused"]).is_ok() {
         let id = window.id.to_string();
-        let since = Instant::now();
         let pid = window.pid.to_string();
-        while !aerospace(&[
+        if !aerospace(&[
             "list-windows",
             "--monitor",
             "all",
@@ -56,14 +51,15 @@ pub(crate) fn park(window: &WindowInfo) -> Result<String> {
         .lines()
         .any(|l| l.trim() == id)
         {
-            if since.elapsed() >= PICK_UP {
-                bail!("AeroSpace did not pick up the window in {PICK_UP:?}");
-            }
-            std::thread::sleep(Duration::from_millis(50));
+            return Ok(Parking::NotYet(
+                "AeroSpace did not pick up the window".into(),
+            ));
         }
         aerospace(&["layout", "floating", "--window-id", &id])?;
         aerospace(&["move-node-to-workspace", "--window-id", &id, WORKSPACE])?;
-        return Ok(format!("by AeroSpace, on its workspace {WORKSPACE}"));
+        return Ok(Parking::Parked(format!(
+            "by AeroSpace, on its workspace {WORKSPACE}"
+        )));
     }
     trusted("move windows")?;
     let element = ax_window(window)?;
@@ -85,7 +81,7 @@ pub(crate) fn park(window: &WindowInfo) -> Result<String> {
             now.y
         );
     }
-    Ok("by Accessibility".into())
+    Ok(Parking::Parked("by Accessibility".into()))
 }
 
 /// The largest part of a parked window that may still show; macOS keeps a strip.

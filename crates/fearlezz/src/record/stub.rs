@@ -46,7 +46,7 @@ impl super::Filming for Film {
     }
 }
 
-pub(crate) fn park(_window: &super::WindowInfo) -> Result<String> {
+pub(crate) fn park(_window: &super::WindowInfo) -> Result<super::Parking> {
     bail!(NOT_HERE)
 }
 

@@ -113,6 +113,17 @@ slices:
       - "a SwiftUI app that saves its frame reopened where it was in 4 of 4 cases: sandboxed and plain, by Accessibility and by AeroSpace; each log says it put back 1 position"
       - "read and written through the defaults tool: the CFPreferences API cannot reach a sandboxed app's container, and reads a stale cache by path"
       - "found: when a bundle id has a leftover sandbox container, defaults reads the container, so a plain app with that id is not put back (test leftover only)"
+  - id: review-round-two
+    tests:
+      - record::tests::a_recording_that_fails_stops_the_command_before_putting_back_saved_positions
+      - record::tests::off_screen_gives_focus_back_while_parking_waits_for_the_window_manager
+      - record::tests::a_window_the_window_manager_never_picks_up_is_recorded_where_it_opened
+    status: done
+    evidence:
+      - "a failed defaults read is an error, never an empty list that would delete saved positions"
+      - "parking is one step of the settle loop, so focus goes back while AeroSpace picks the window up"
+      - "6 real runs passed (AeroSpace on and off), focus given back in each; saved position put back in both"
+      - "defaults export takes about 10 ms at load 33, so reading before the move adds little to the flash"
 
 
 open:
