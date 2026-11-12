@@ -1,6 +1,6 @@
 //! The pull request on GitHub: changed pictures shown in the status comment, the hidden line
 //! an approval by comment checks, and approvals read back from the pull request. CI writes the
-//! comment and answers `/fearlezz approve`; the scripts around it live in `action.sh`.
+//! comment and answers `/fearlezz approve` (`action.rs`).
 
 use std::fmt::Write as _;
 use std::fs;
@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::look::{Change, Look};
+
+/// The first line of the status comment, so CI finds its own comment to replace.
+pub(crate) const COMMENT_MARKER: &str = "<!-- fearlezz -->";
 
 /// Starts the hidden line of the status comment that says what an approval covers.
 pub(crate) const WAITING_MARKER: &str = "<!-- fearlezz-pictures ";
@@ -43,7 +46,7 @@ pub(crate) struct Approval {
     pub by: String,
     pub said: String,
     /// Where the reply is, filled in when it is read back.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub url: String,
 }
 

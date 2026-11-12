@@ -12,6 +12,7 @@ categories = ["command-line-utilities", "development-tools::testing"]
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
+flate2 = "1.1.5"
 globset = "0.4.21"
 hex = "0.4.3"
 jiff = { version = "0.2.42", features = ["serde"] }
@@ -20,6 +21,7 @@ regex = "1.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 sha2 = "0.11.1"
+tempfile = "3.27.0"
 toml = "1.2.1"
 toml_edit = "0.25.19"
 
@@ -37,7 +39,6 @@ objc2-screen-capture-kit = "0.3.2"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
-tempfile = "3.27.0"
 
 [lints]
 workspace = true

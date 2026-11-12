@@ -4,6 +4,8 @@
 #![cfg(test)]
 #![allow(dead_code, reason = "each test file uses only some of the helpers")]
 
+pub(crate) mod github;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
@@ -203,6 +205,30 @@ pub(crate) fn git_in(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// The variables GitHub Actions sets for every step, which tests set only on purpose.
+const ACTIONS_ENV: [&str; 14] = [
+    "GITHUB_ACTIONS",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_EVENT_PATH",
+    "GITHUB_STEP_SUMMARY",
+    "GITHUB_OUTPUT",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_API_URL",
+    "GITHUB_REPOSITORY",
+    "GITHUB_SERVER_URL",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+    "RUNNER_TEMP",
+    "RUNNER_TOOL_CACHE",
+];
+
+/// Runs `fearlezz` in a folder that need not be a repository, as a workflow without a checkout
+/// does.
+pub(crate) fn fz_at_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+    fz_in(dir, None, args, env)
+}
+
 fn fz_in(dir: &Path, cache: Option<&Path>, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut cmd = Command::cargo_bin("fearlezz").unwrap();
     if let Some(cache) = cache {
@@ -212,10 +238,11 @@ fn fz_in(dir: &Path, cache: Option<&Path>, args: &[&str], env: &[(&str, &str)]) 
     cmd.args(args)
         .current_dir(dir)
         .env_remove("CI")
-        .env_remove("FEARLEZZ_JOURNAL")
-        .env_remove("GITHUB_STEP_SUMMARY")
-        .env_remove("GITHUB_OUTPUT")
-        .env_remove("GITHUB_EVENT_PATH");
+        .env_remove("FEARLEZZ_JOURNAL");
+    // On GitHub's runners these say the run is a workflow's, which talks to GitHub.
+    for name in ACTIONS_ENV {
+        cmd.env_remove(name);
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }

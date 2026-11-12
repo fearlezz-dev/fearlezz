@@ -1,5 +1,6 @@
 //! `fearlezz`: helps coding agents prove their work. See the README for the model.
 
+mod action;
 mod config;
 mod counts;
 mod env;
@@ -100,7 +101,10 @@ enum Cmd {
         /// Only move the stage, such as going back to fix something first.
         #[arg(long, requires = "stage")]
         no_run: bool,
-        /// Prove this commit, for CI: every check the change needs, fresh, with no journal.
+        /// Prove this commit, for CI: every check the change needs, fresh, with no journal. On
+        /// GitHub Actions with a token it also does what the event asks: a pull request gets
+        /// its pictures, status comment and status, `/fearlezz approve` is answered, and closed
+        /// pull requests lose their pictures.
         #[arg(long, conflicts_with_all = ["checks", "stage"])]
         ci: bool,
         /// With --ci: also write the short status for the pull request to this file.
@@ -303,6 +307,69 @@ fn prepared() -> Result<Ctx> {
     Ok(ctx)
 }
 
+/// Proves this commit for CI. On GitHub Actions it does what the event asks: a pull request's
+/// proof also pushes its changed pictures, writes its status comment and sets its status; a
+/// comment, a closed pull request or the schedule need no checkout.
+fn ci_run(
+    comment: Option<PathBuf>,
+    pictures: Option<PathBuf>,
+    pictures_url: Option<String>,
+) -> Result<bool> {
+    let actions = action::Actions::detect()?;
+    if let Some(gh) = &actions {
+        let task = gh.task();
+        if task != action::Task::Prove {
+            return gh.act(&task);
+        }
+    }
+    let ctx = prepared()?;
+    if actions.is_some()
+        && needs_ffmpeg(&ctx.config)
+        && let Some(dir) = action::install_ffmpeg()?
+    {
+        let mut path = std::ffi::OsString::from(&dir);
+        path.push(":");
+        path.push(std::env::var_os("PATH").unwrap_or_default());
+        #[expect(
+            unsafe_code,
+            reason = "the checks find the installed ffmpeg through PATH"
+        )]
+        // SAFETY: Fearlezz runs no other thread yet, so nothing reads the environment while it
+        // changes.
+        unsafe {
+            std::env::set_var("PATH", path);
+        }
+    }
+    let pull = actions.as_ref().and_then(action::Actions::pull);
+    let pictures = pictures.or_else(|| {
+        actions.as_ref()?;
+        std::env::var_os("RUNNER_TEMP").map(|t| PathBuf::from(t).join("fearlezz-pictures"))
+    });
+    let pictures_url = pictures_url.or_else(|| pull.as_ref()?.url.clone());
+    let mut journal = Journal::in_memory("ci");
+    let to = ctx.config.stages.name(ctx.config.stages.last()).to_string();
+    journal.append(ctx.now, Event::Stage { to, reason: None })?;
+    let out = CiOut {
+        comment,
+        pictures,
+        pictures_url,
+        pull,
+    };
+    run_checks(&ctx, journal, &[], true, out)
+}
+
+/// Whether a check records pictures, which needs ffmpeg: it names them by a glob or a `record`
+/// table, or by convention runs in the look stage and lists them in `proof.jsonl`.
+fn needs_ffmpeg(config: &Config) -> bool {
+    let stages = &config.stages;
+    config.checks.iter().any(|c| {
+        c.stills.is_some()
+            || c.films.is_some()
+            || c.record.is_some()
+            || stages.name(c.stage) == "look"
+    })
+}
+
 fn dispatch(cmd: Cmd) -> Result<bool> {
     match cmd {
         Cmd::Run {
@@ -316,18 +383,10 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
             pictures,
             pictures_url,
         } => {
-            let ctx = prepared()?;
             if ci {
-                let mut journal = Journal::in_memory("ci");
-                let to = ctx.config.stages.name(ctx.config.stages.last()).to_string();
-                journal.append(ctx.now, Event::Stage { to, reason: None })?;
-                let out = CiOut {
-                    comment,
-                    pictures,
-                    pictures_url,
-                };
-                return run_checks(&ctx, journal, &[], true, out);
+                return ci_run(comment, pictures, pictures_url);
             }
+            let ctx = prepared()?;
             if let Some(name) = stage {
                 move_stage(&ctx, name, reason)?;
                 if no_run {
@@ -587,16 +646,7 @@ fn setup(what: Setup) -> Result<bool> {
             }
         }
         Setup::Needs => {
-            let ctx = ctx()?;
-            let stages = &ctx.config.stages;
-            // A check records pictures when it names them by a glob or a `record` table, or by
-            // convention when it runs in the look stage and lists them in `proof.jsonl`.
-            if ctx.config.checks.iter().any(|c| {
-                c.stills.is_some()
-                    || c.films.is_some()
-                    || c.record.is_some()
-                    || stages.name(c.stage) == "look"
-            }) {
+            if needs_ffmpeg(&ctx()?.config) {
                 println!("ffmpeg");
             }
         }
@@ -846,6 +896,8 @@ struct CiOut {
     pictures: Option<PathBuf>,
     /// Where CI serves that folder, so the status shows the pictures.
     pictures_url: Option<String>,
+    /// The pull request on GitHub the proof reports to.
+    pull: Option<action::Pull>,
 }
 
 /// One check in the report.
@@ -868,9 +920,6 @@ fn pull_request(pointer: &str) -> Option<String> {
         .as_str()
         .map(str::to_string)
 }
-
-/// The first line of the status comment, so CI finds its own comment to replace.
-const COMMENT_MARKER: &str = "<!-- fearlezz -->";
 
 impl CommitReport {
     fn start(ctx: &Ctx, wt: &Worktree, to_run: usize, out: CiOut) -> Result<CommitReport> {
@@ -957,14 +1006,6 @@ impl CommitReport {
         if let Some(dir) = &self.out.pictures {
             github::copy_pictures(&self.waits, dir)?;
         }
-        if let Some(path) = std::env::var_os("GITHUB_OUTPUT") {
-            let checks: Vec<&str> = self.waits.iter().map(|w| w.look.check.as_str()).collect();
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(Path::new(&path))?
-                .write_all(format!("pictures={}\n", checks.join(" ")).as_bytes())?;
-        }
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
             let page = self.page(&items, failures)?;
             std::fs::OpenOptions::new()
@@ -976,6 +1017,10 @@ impl CommitReport {
         if let Some(path) = &self.out.comment {
             std::fs::write(path, self.status(&items)?)
                 .with_context(|| format!("writing {}", path.display()))?;
+        }
+        if let Some(pull) = &self.out.pull {
+            let checks: Vec<String> = self.waits.iter().map(|w| w.look.check.clone()).collect();
+            pull.report(&self.status(&items)?, &checks, self.out.pictures.as_deref());
         }
         Ok(())
     }
@@ -1050,7 +1095,8 @@ impl CommitReport {
         let mut text = String::new();
         writeln!(
             text,
-            "{COMMENT_MARKER}\n### Fearlezz\n\n{}\n",
+            "{}\n### Fearlezz\n\n{}\n",
+            github::COMMENT_MARKER,
             self.headline(items)
         )?;
         blockers(&mut text, items)?;

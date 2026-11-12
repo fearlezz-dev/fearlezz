@@ -76,7 +76,7 @@ jobs:
       - uses: fearlezz-dev/fearlezz@v0
 ```
 
-The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. The action installs the release of its own tag (`version: v0.2.0` pins one), runs `fearlezz run --ci`, keeps one status comment on the pull request (`comment: false` turns it off) and uploads the check logs. Set `devenv: true` when the checks run in a devenv shell. When a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg, cached (`ffmpeg: false` skips it).
+The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. The action installs the release of its own tag (`version: v0.2.0` pins one), runs `fearlezz run --ci` and uploads the check logs. Set `devenv: true` when the checks run in a devenv shell. On GitHub Actions with a token (`GITHUB_TOKEN`), `fearlezz run --ci` does what the event asks through GitHub's API, so a workflow can also run it without the action: it keeps one status comment on the pull request, and when a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg into the runner's tool cache.
 
 Changed pictures show on the pull request, before and after, from the `fearlezz-pictures` branch (one folder per pull request; in a private repository only people who can read it see them). A pull request from a fork cannot push there, so its pictures are in the run's `fearlezz-pictures` artifact. Changed pictures do not fail the proof: they set the `fearlezz/pictures` status to pending, and the comment says they wait. Require that status next to the proof check to make merging wait for a person.
 

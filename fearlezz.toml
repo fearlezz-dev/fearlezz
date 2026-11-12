@@ -4,7 +4,7 @@
 
 use = ["devenv", "rust", "agents"]
 
-# Prose needs no proof. The workflows, the release config, install.sh and the action are proven
+# Prose needs no proof. The workflows, the release config, install.sh and the action manifest are proven
 # by the checks below. The Nix flake is left out on purpose: a change to it is red in CI until a
 # person with admin rights merges past it.
 no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
@@ -23,9 +23,3 @@ inputs = [".github/workflows/**"]
 run = "jq empty release-please-config.json .release-please-manifest.json && yq '.' action.yml > /dev/null && shellcheck install.sh"
 stage = "working"
 inputs = ["release-please-config.json", ".release-please-manifest.json", "action.yml", "install.sh"]
-
-# The steps of the action, which runs them with bash on GitHub's runners.
-[check.action]
-run = "shellcheck action.sh"
-stage = "working"
-inputs = ["action.sh"]

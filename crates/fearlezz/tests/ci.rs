@@ -6,6 +6,7 @@
 
 mod common;
 
+use common::github::FakeGitHub;
 use common::{Repo, runs};
 
 /// `tests` fails while `src/broken` exists. Each check appends a line to `.runs/<name>`.
@@ -844,13 +845,11 @@ fn screens_main() -> Repo {
 
 const PICTURES_URL: &str = "https://github.com/owner/repo/raw/fearlezz-pictures/pr-7/42-1";
 
-/// `fearlezz run --ci` as the action runs it: the comment, the pictures folder and its URL, and
-/// the step outputs.
-fn ci_with_pictures(repo: &Repo, url: Option<&str>) -> (common::Output, String, String) {
+/// `fearlezz run --ci` with the comment written to a file and the pictures copied into a
+/// folder served at `url`, as on a CI other than GitHub Actions.
+fn ci_with_pictures(repo: &Repo, url: Option<&str>) -> (common::Output, String) {
     let comment = repo.path(".runs/comment.md");
     let dir = repo.path(".runs/pictures");
-    let outputs = repo.path(".runs/outputs");
-    drop(std::fs::remove_file(&outputs));
     let mut args = vec![
         "run",
         "--ci",
@@ -862,13 +861,10 @@ fn ci_with_pictures(repo: &Repo, url: Option<&str>) -> (common::Output, String, 
     if let Some(url) = url {
         args.extend(["--pictures-url", url]);
     }
-    let mut env = GITHUB.to_vec();
-    env.push(("GITHUB_OUTPUT", outputs.to_str().unwrap()));
-    let out = repo.fz_env(&args, &env);
+    let out = repo.fz_env(&args, &GITHUB);
     let text = std::fs::read_to_string(&comment)
         .unwrap_or_else(|_| panic!("{}\n{}", out.stdout, out.stderr));
-    let outputs = std::fs::read_to_string(&outputs).unwrap_or_default();
-    (out, text, outputs)
+    (out, text)
 }
 
 /// The JSON in the hidden line an approval checks.
@@ -883,13 +879,12 @@ fn waiting(text: &str) -> serde_json::Value {
 #[test]
 fn changed_pictures_wait_for_a_person_without_failing_the_proof() {
     let repo = screens_branch("blue");
-    let (out, text, outputs) = ci_with_pictures(&repo, Some(PICTURES_URL));
+    let (out, text) = ci_with_pictures(&repo, Some(PICTURES_URL));
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(text.contains("**Pictures wait**"), "{text}");
     let shown: Vec<&str> = text.lines().filter(|l| !l.starts_with("<!--")).collect();
     assert!(!shown.iter().any(|l| l.contains("Proven")), "{text}");
     assert!(text.contains("`/fearlezz approve "), "{text}");
-    assert!(outputs.contains("pictures=screens\n"), "{outputs}");
     let head = repo.git(&["rev-parse", "HEAD"]);
     let w = waiting(&text);
     assert_eq!(w["head"], head.trim(), "{text}");
@@ -903,7 +898,7 @@ fn changed_pictures_wait_for_a_person_without_failing_the_proof() {
 #[test]
 fn the_comment_shows_before_and_after_from_the_pictures_folder() {
     let repo = screens_branch("blue");
-    let (out, text, _) = ci_with_pictures(&repo, Some(PICTURES_URL));
+    let (out, text) = ci_with_pictures(&repo, Some(PICTURES_URL));
     assert!(out.ok, "{}", out.stdout);
     let sources: Vec<&str> = text
         .split("src=\"")
@@ -944,7 +939,7 @@ fn the_comment_marks_flaky_pictures() {
     repo.write("src/color.txt", "blue");
     repo.write("src/about.txt", "black");
     repo.commit("colors");
-    let (out, text, _) = ci_with_pictures(&repo, None);
+    let (out, text) = ci_with_pictures(&repo, None);
     assert!(out.ok, "{}", out.stdout);
     assert!(text.contains("**home.png** changed:"), "{text}");
     assert!(
@@ -956,7 +951,7 @@ fn the_comment_marks_flaky_pictures() {
 #[test]
 fn without_a_pictures_url_the_comment_names_the_artifact() {
     let repo = screens_branch("blue");
-    let (out, text, _) = ci_with_pictures(&repo, None);
+    let (out, text) = ci_with_pictures(&repo, None);
     assert!(out.ok, "{}", out.stdout);
     assert!(!text.contains("<img"), "{text}");
     assert!(text.contains("**home.png** changed"), "{text}");
@@ -967,7 +962,7 @@ fn without_a_pictures_url_the_comment_names_the_artifact() {
 fn the_fingerprint_follows_the_inputs_of_the_pictures() {
     let repo = screens_branch("blue");
     let fingerprint = |repo: &Repo| {
-        let (out, text, _) = ci_with_pictures(repo, None);
+        let (out, text) = ci_with_pictures(repo, None);
         assert!(text.contains("fearlezz-pictures"), "{}", out.stdout);
         waiting(&text)["fingerprint"].clone()
     };
@@ -986,11 +981,10 @@ fn pictures_that_stay_the_same_leave_the_commit_proven() {
     let repo = screens_main();
     repo.write("src/other.txt", "b");
     repo.commit("other");
-    let (out, text, outputs) = ci_with_pictures(&repo, Some(PICTURES_URL));
+    let (out, text) = ci_with_pictures(&repo, Some(PICTURES_URL));
     assert!(out.ok, "{}", out.stdout);
     assert!(text.contains("**Proven**"), "{text}");
     assert!(!text.contains("fearlezz-pictures"), "{text}");
-    assert!(outputs.contains("pictures=\n"), "{outputs}");
 }
 
 #[test]
@@ -1003,7 +997,7 @@ fn a_failing_check_stays_not_proven_with_pictures_waiting() {
         )),
     );
     repo.commit("unit");
-    let (out, text, _) = ci_with_pictures(&repo, None);
+    let (out, text) = ci_with_pictures(&repo, None);
     assert!(!out.ok, "{}", out.stdout);
     assert!(text.contains("**Not proven**"), "{text}");
     assert!(!text.contains("**Proven**:"), "{text}");
@@ -1036,4 +1030,292 @@ fn films_and_recordings_outside_the_look_stage_need_ffmpeg_too() {
         assert!(out.ok, "{}", out.stderr);
         assert_eq!(out.stdout, "ffmpeg\n", "{field}");
     }
+}
+
+// On GitHub Actions: what the event asks, against a fake GitHub API
+
+const BRANCH: &str = "fearlezz-pictures";
+
+/// A workflow's run of `fearlezz run --ci` for `event` (written to the event file), in `dir`,
+/// talking to the fake API.
+fn on_actions(
+    gh: &FakeGitHub,
+    dir: &std::path::Path,
+    name: &str,
+    event: &serde_json::Value,
+    run: &str,
+) -> common::Output {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("event.json");
+    std::fs::write(&file, event.to_string()).unwrap();
+    let temp_dir = temp.path().to_str().unwrap();
+    common::fz_at_env(
+        dir,
+        &["run", "--ci"],
+        &[
+            ("GITHUB_ACTIONS", "true"),
+            ("GITHUB_EVENT_NAME", name),
+            ("GITHUB_EVENT_PATH", file.to_str().unwrap()),
+            ("GITHUB_TOKEN", "token"),
+            ("GITHUB_API_URL", &gh.url),
+            ("GITHUB_SERVER_URL", "https://github.com"),
+            ("GITHUB_REPOSITORY", "owner/repo"),
+            ("GITHUB_RUN_ID", run),
+            ("GITHUB_RUN_ATTEMPT", "1"),
+            ("RUNNER_TEMP", temp_dir),
+        ],
+    )
+}
+
+/// The event of pull request 7 at `head`, opened from `from` (this repository or a fork).
+fn pull_request(head: &str, from: &str) -> serde_json::Value {
+    serde_json::json!({
+        "action": "synchronize",
+        "number": 7,
+        "pull_request": {
+            "number": 7,
+            "head": { "sha": head, "repo": { "full_name": from } },
+        },
+        "repository": { "full_name": "owner/repo" },
+    })
+}
+
+fn head_of(repo: &Repo) -> String {
+    repo.git(&["rev-parse", "HEAD"]).trim().to_string()
+}
+
+/// The status comment Fearlezz wrote on pull request 7.
+fn status_comment(gh: &FakeGitHub) -> common::github::Comment {
+    let mine: Vec<_> = gh
+        .state()
+        .comments
+        .iter()
+        .filter(|c| c.pr == 7 && c.body.starts_with("<!-- fearlezz -->"))
+        .cloned()
+        .collect();
+    assert_eq!(mine.len(), 1, "one status comment: {mine:?}");
+    mine[0].clone()
+}
+
+/// A branch with changed pictures, proven on pull request 7 of the fake.
+fn proven_on_actions() -> (FakeGitHub, Repo, String) {
+    let gh = FakeGitHub::start();
+    let repo = screens_branch("blue");
+    let head = head_of(&repo);
+    gh.state().pulls.insert(7, (head.clone(), "open".into()));
+    let event = pull_request(&head, "owner/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &event, "42");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    (gh, repo, head)
+}
+
+#[test]
+fn on_a_pull_request_ci_publishes_the_pictures_comments_and_waits() {
+    let (gh, _repo, head) = proven_on_actions();
+    let files = gh.state().branch_files(BRANCH);
+    assert_eq!(files.len(), 2, "before and after of home: {files:?}");
+    assert!(
+        files.iter().all(|f| f.starts_with("pr-7/42-1/")),
+        "{files:?}"
+    );
+    let comment = status_comment(&gh);
+    assert!(
+        comment.body.contains("**Pictures wait**"),
+        "{}",
+        comment.body
+    );
+    for file in &files {
+        let src = format!("https://github.com/owner/repo/raw/{BRANCH}/{file}");
+        assert!(comment.body.contains(&src), "{src} in {}", comment.body);
+    }
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
+    assert_eq!(status.target, comment.url());
+}
+
+#[test]
+fn a_new_run_replaces_the_comment_and_the_pictures() {
+    let (gh, repo, head) = proven_on_actions();
+    let event = pull_request(&head, "owner/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &event, "43");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    status_comment(&gh);
+    let files = gh.state().branch_files(BRANCH);
+    assert!(
+        files.iter().all(|f| f.starts_with("pr-7/43-1/")),
+        "{files:?}"
+    );
+    assert_eq!(gh.state().branch_parents(BRANCH).len(), 1);
+}
+
+#[test]
+fn pictures_that_stay_the_same_set_the_status_green() {
+    let gh = FakeGitHub::start();
+    let repo = screens_main();
+    repo.write("src/other.txt", "b");
+    repo.commit("other");
+    let head = head_of(&repo);
+    let event = pull_request(&head, "owner/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &event, "42");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(status_comment(&gh).body.contains("**Proven**"));
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "success");
+    assert_eq!(gh.state().branch_files(BRANCH), Vec::<String>::new());
+}
+
+#[test]
+fn a_fork_keeps_its_pictures_in_the_artifact() {
+    let gh = FakeGitHub::start();
+    let repo = screens_branch("blue");
+    let head = head_of(&repo);
+    let event = pull_request(&head, "someone/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &event, "42");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(gh.state().branch_files(BRANCH), Vec::<String>::new());
+    let comment = status_comment(&gh);
+    assert!(!comment.body.contains("<img"), "{}", comment.body);
+    assert!(
+        comment.body.contains("`fearlezz-pictures` artifact"),
+        "{}",
+        comment.body
+    );
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
+/// The event of a comment on pull request 7 by `login`.
+fn comment_event(gh: &FakeGitHub, login: &str, body: &str) -> serde_json::Value {
+    let c = gh.state().add_comment(7, login, "User", body);
+    serde_json::json!({
+        "action": "created",
+        "issue": { "number": 7, "pull_request": { "url": "https://api.github.com/x" } },
+        "comment": { "id": c.id, "body": body, "html_url": c.url(),
+                     "user": { "login": login, "type": "User" } },
+        "repository": { "full_name": "owner/repo" },
+    })
+}
+
+/// Answers a comment in a folder with no checkout, as the pictures workflow runs, and returns
+/// the last comment on the pull request.
+fn answer(gh: &FakeGitHub, event: &serde_json::Value) -> String {
+    let empty = tempfile::tempdir().unwrap();
+    let out = on_actions(gh, empty.path(), "issue_comment", event, "50");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    gh.state().comments.last().unwrap().body.clone()
+}
+
+#[test]
+fn a_person_with_write_access_approves_the_pictures_by_comment() {
+    let (gh, _repo, head) = proven_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    let event = comment_event(&gh, "lead", "/fearlezz approve the blue home is right");
+    let asked = event["comment"]["html_url"].as_str().unwrap().to_string();
+    let reply = answer(&gh, &event);
+    assert!(reply.contains("> the blue home is right"), "{reply}");
+    assert!(reply.contains("<!-- fearlezz-approved "), "{reply}");
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "success");
+    assert_eq!(status.target, asked);
+    let comment = status_comment(&gh);
+    assert!(comment.body.contains("**Proven**"), "{}", comment.body);
+    assert!(comment.body.contains("@lead approved"), "{}", comment.body);
+}
+
+#[test]
+fn approving_needs_write_access() {
+    let (gh, _repo, head) = proven_on_actions();
+    gh.state()
+        .permissions
+        .insert("visitor".into(), "read".into());
+    let reply = answer(
+        &gh,
+        &comment_event(&gh, "visitor", "/fearlezz approve fine"),
+    );
+    assert!(reply.contains("needs write access"), "{reply}");
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
+#[test]
+fn approving_needs_words() {
+    let (gh, _repo, head) = proven_on_actions();
+    gh.state().permissions.insert("lead".into(), "admin".into());
+    let reply = answer(&gh, &comment_event(&gh, "lead", "/fearlezz approve"));
+    assert!(reply.contains("your own words"), "{reply}");
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
+#[test]
+fn an_approval_for_an_older_head_is_refused() {
+    let (gh, _repo, head) = proven_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    gh.state().pulls.insert(7, ("f".repeat(40), "open".into()));
+    let reply = answer(&gh, &comment_event(&gh, "lead", "/fearlezz approve ok"));
+    assert!(
+        reply.contains("nothing to approve for fffffff yet"),
+        "{reply}"
+    );
+    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
+#[test]
+fn other_comments_are_left_alone() {
+    let (gh, _repo, _) = proven_on_actions();
+    let before = gh.state().comments.len();
+    answer(
+        &gh,
+        &comment_event(&gh, "lead", "/fearlezz approved? not yet"),
+    );
+    assert_eq!(gh.state().comments.len(), before + 1, "no reply");
+}
+
+/// The event of pull request 7 closing.
+fn closed() -> serde_json::Value {
+    let mut event = pull_request(&"a".repeat(40), "owner/repo");
+    event["action"] = "closed".into();
+    event
+}
+
+#[test]
+fn closing_a_pull_request_removes_its_pictures_and_squashes() {
+    let gh = FakeGitHub::start();
+    gh.state()
+        .put(BRANCH, &[("pr-7/1-1/a.png", "a"), ("pr-8/1-1/b.png", "b")]);
+    gh.state().put(BRANCH, &[("pr-8/2-1/c.png", "c")]);
+    let empty = tempfile::tempdir().unwrap();
+    let out = on_actions(&gh, empty.path(), "pull_request", &closed(), "60");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let files = gh.state().branch_files(BRANCH);
+    assert_eq!(files, ["pr-8/1-1/b.png", "pr-8/2-1/c.png"]);
+    assert!(gh.state().branch_parents(BRANCH).is_empty(), "one commit");
+}
+
+#[test]
+fn closing_the_last_pull_request_with_pictures_removes_the_branch() {
+    let gh = FakeGitHub::start();
+    gh.state().put(BRANCH, &[("pr-7/1-1/a.png", "a")]);
+    let empty = tempfile::tempdir().unwrap();
+    let out = on_actions(&gh, empty.path(), "pull_request", &closed(), "60");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!gh.state().refs.contains_key(&format!("heads/{BRANCH}")));
+}
+
+#[test]
+fn the_schedule_removes_the_pictures_of_closed_pull_requests() {
+    let gh = FakeGitHub::start();
+    gh.state()
+        .put(BRANCH, &[("pr-7/1-1/a.png", "a"), ("pr-8/1-1/b.png", "b")]);
+    gh.state().pulls.insert(7, ("a".repeat(40), "open".into()));
+    gh.state()
+        .pulls
+        .insert(8, ("b".repeat(40), "closed".into()));
+    let empty = tempfile::tempdir().unwrap();
+    let event = serde_json::json!({ "schedule": "0 4 * * 1" });
+    let out = on_actions(&gh, empty.path(), "schedule", &event, "70");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(gh.state().branch_files(BRANCH), ["pr-7/1-1/a.png"]);
+    assert!(gh.state().branch_parents(BRANCH).is_empty(), "one commit");
 }
