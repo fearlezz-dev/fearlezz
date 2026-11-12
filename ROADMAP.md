@@ -2,7 +2,7 @@
 
 What Fearlezz is for, where it stands and where it is going. Read this first when picking up the work, and update it in the same change that moves something.
 
-Last updated: 2026-11-12.
+Last updated: 2026-11-13.
 
 ## Purpose
 
@@ -72,10 +72,8 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 ## Next
 
-1. Merge this pull request: pictures that prove UI work locally and on the pull request, red before green, and the safety pieces.
-2. Cut the release: merge the release-please pull request, which tags the release and moves the `v0` tag, so `fearlezz-dev/fearlezz@v0` exists and the action stops refusing an old binary.
-3. Recording off the developer's screens, in its own drive (see Not built).
-4. The hosted parts in `ee/`: proof links and pages a team can open without the developer's machine.
+1. Recording off the developer's screens, in its own drive (see Not built).
+2. The hosted parts in `ee/`: proof links and pages a team can open without the developer's machine.
 
 ## Known problems
 
