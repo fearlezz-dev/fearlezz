@@ -20,9 +20,11 @@ jobs:
   release-please:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # The package lives at crates/fearlezz, so the action names its outputs by that path;
+    # the unprefixed release_created and tag_name are only set for a package at the root.
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      release_created: ${{ steps.release.outputs['crates/fearlezz--release_created'] }}
+      tag_name: ${{ steps.release.outputs['crates/fearlezz--tag_name'] }}
     steps:
       - id: release
         uses: googleapis/release-please-action@v5.0.0
