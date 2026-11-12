@@ -17,7 +17,7 @@
       exec = ''cd "$DEVENV_ROOT" && cargo fmt --all'';
     };
     check = {
-      description = "Prove this commit with every check the change needs, fresh, as CI does";
+      description = "Prove this commit with every check, fresh, as CI does";
       exec = ''
         set -euo pipefail
         cd "$DEVENV_ROOT"
