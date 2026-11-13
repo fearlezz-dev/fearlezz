@@ -1074,7 +1074,8 @@ pub(crate) fn note_films(
             "replayd": machine.capture_service,
             "load": machine.load,
         });
-        lines.push_str(&format!("{line}\n"));
+        lines.push_str(&line.to_string());
+        lines.push('\n');
     }
     // One write, so lines from runs in other worktrees never interleave.
     std::fs::OpenOptions::new()
