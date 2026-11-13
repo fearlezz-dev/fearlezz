@@ -1,0 +1,31 @@
+# The proof host. Secrets (GITHUB_CLIENT_SECRET, GITHUB_APP_KEY, SESSION_KEY) are set with
+# `wrangler secret put`; the tests pass every setting with `wrangler dev --var`.
+name = "fearlezz-host"
+main = "build/index.js"
+compatibility_date = "2026-10-01"
+
+[build]
+command = "worker-build --release"
+
+[vars]
+# The host's origin, which CI asks its OIDC token for.
+AUDIENCE = "https://proof.fearlezz.dev"
+OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+OIDC_JWKS = "https://token.actions.githubusercontent.com/.well-known/jwks"
+GITHUB_API = "https://api.github.com"
+# Where people sign in.
+GITHUB_WEB = "https://github.com"
+# The Fearlezz GitHub App's client id: its OAuth client, and the issuer of its JWTs.
+GITHUB_CLIENT_ID = "set-when-deployed"
+INSTALL_URL = "https://github.com/apps/fearlezz/installations/new"
+
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "fearlezz-proofs"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fearlezz-proofs"
+# Local runs need no real database; deploying sets the id wrangler gives.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
