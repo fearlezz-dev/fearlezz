@@ -83,4 +83,4 @@ slices:
     tests: []
     status: todo
 
-next: Harden the host (files origin with signed links in a frame, sessions in D1, cached JWKS and access) in a subagent worktree.
+next: "Two slices run in their own worktrees: harden the host (ee/), and accept weakenings under fearlezz/approval (core). Then approve and accept on the hosted page by posting the comment as the signed in person."
