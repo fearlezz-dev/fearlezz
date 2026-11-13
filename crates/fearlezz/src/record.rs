@@ -51,7 +51,15 @@ pub(crate) struct WindowInfo {
     pub app: String,
     pub title: String,
     /// The top left corner in global points, y down.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "only parking on macOS reads it")
+    )]
     pub x: f64,
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "only parking on macOS reads it")
+    )]
     pub y: f64,
     pub width: f64,
     pub height: f64,
@@ -150,6 +158,13 @@ pub(crate) trait Screen {
 }
 
 /// Where parking a window stands.
+#[cfg_attr(
+    all(not(target_os = "macos"), not(test)),
+    expect(
+        dead_code,
+        reason = "only parking on macOS and the test screen build it"
+    )
+)]
 pub(crate) enum Parking {
     /// Parked, and how.
     Parked(String),
