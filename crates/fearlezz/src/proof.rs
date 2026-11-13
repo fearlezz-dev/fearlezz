@@ -288,6 +288,17 @@ impl Proof {
         items
     }
 
+    /// How many blockers the change itself has to fix: all but what it weakens, which only a
+    /// person settles (by accepting it where it waits, by asking an admin where it blocks).
+    pub(crate) fn to_fix(&self) -> usize {
+        let weakened = if self.weakenings_wait {
+            0
+        } else {
+            self.weakened.len()
+        };
+        self.blockers().len() - weakened
+    }
+
     /// What a reader should know besides the blockers: checks that did not run here, then
     /// what red before green showed.
     pub(crate) fn notes(&self) -> Vec<String> {
