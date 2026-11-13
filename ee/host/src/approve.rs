@@ -48,12 +48,6 @@ struct Ask {
     words: String,
 }
 
-#[derive(Deserialize)]
-struct Row {
-    pull: Option<f64>,
-    proof: String,
-}
-
 pub async fn act(
     mut req: Request,
     env: &Env,
@@ -81,13 +75,9 @@ pub async fn act(
     if !pages::open(&req, env, config, &repo).await? {
         return Err(sign_in_again());
     }
-    let row: Option<Row> = env
-        .d1("DB")?
-        .prepare("SELECT pull, proof FROM proofs WHERE id = ?1 AND repo = ?2 AND done = 1")
-        .bind(&[id.into(), repo.as_str().into()])?
-        .first(None)
-        .await?;
-    let row = row.ok_or_else(|| Refusal::new(404, "not found"))?;
+    let row = pages::whole(env, &repo, id)
+        .await?
+        .ok_or_else(|| Refusal::new(404, "not found"))?;
     let proof: Value = serde_json::from_str(&row.proof)
         .map_err(|e| worker::Error::RustError(format!("a stored proof does not read back: {e}")))?;
     let Some(pull) = row.pull.map(|n| n as u64) else {
@@ -96,12 +86,7 @@ pub async fn act(
             "this proof is of no pull request, so there is nothing to comment on",
         ));
     };
-    let latest: Option<String> = env
-        .d1("DB")?
-        .prepare("SELECT proof FROM latest WHERE repo = ?1 AND pull = ?2")
-        .bind(&[repo.as_str().into(), (pull as f64).into()])?
-        .first(Some("proof"))
-        .await?;
+    let latest = pages::latest(env, &repo, pull).await?;
     if latest.as_deref() != Some(id) {
         let newer = latest
             .map(|l| format!(": open {}/{owner}/{name}/proofs/{l}/", config.app_origin))
@@ -177,7 +162,7 @@ pub async fn act(
 
 /// Only the shell on the app origin may ask, and only with JSON: a page on another site can send
 /// the session cookie with a form post, never this.
-fn same_origin(req: &Request, config: &Config) -> Result<(), Refusal> {
+pub fn same_origin(req: &Request, config: &Config) -> Result<(), Refusal> {
     let origin = req.headers().get("Origin")?;
     if origin.as_deref() != Some(config.app_origin.as_str()) {
         return Err(Refusal::new(
@@ -250,7 +235,7 @@ fn waits(proof: &Value, kind: Kind, check: Option<&str>) -> Result<(), Refusal> 
     Ok(())
 }
 
-fn sign_in_again() -> Refusal {
+pub fn sign_in_again() -> Refusal {
     Refusal::new(401, "your GitHub sign in expired; sign in again")
 }
 

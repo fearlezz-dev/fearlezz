@@ -15,6 +15,7 @@ mod github;
 mod oidc;
 mod pages;
 mod session;
+mod share;
 
 use worker::{Env, Request, Response, Result, event};
 
@@ -22,8 +23,10 @@ use worker::{Env, Request, Response, Result, event};
 async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
     let config = Config::from(&env)?;
     let path = req.path();
-    // API callers and the shell's posts read JSON; people read text.
-    let json = path.starts_with("/api/") || req.method() == worker::Method::Post;
+    // API callers and the shell's posts and asks read JSON; people read text.
+    let json = path.starts_with("/api/")
+        || req.method() == worker::Method::Post
+        || path.ends_with("/share");
     let on_files = req.url()?.origin().ascii_serialization() == config.files_origin;
     let answer = if on_files {
         files::serve(&req, &env, &config, &path).await
@@ -51,6 +54,16 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
             Some(kind) => approve::act(req, env, config, owner, repo, id, kind).await,
             None => Err(Refusal::new(404, "not found")),
         },
+        ("POST", [owner, repo, "pull", number, "share"]) => {
+            share::make(req, env, config, owner, repo, number).await
+        }
+        ("GET", [owner, repo, "pull", number, "share"]) => {
+            share::list(&req, env, config, owner, repo, number).await
+        }
+        ("POST", [owner, repo, "pull", number, "share", token, "revoke"]) => {
+            share::revoke(req, env, config, owner, repo, number, token).await
+        }
+        ("GET", ["s", token]) => share::view(env, config, token).await,
         ("GET", [owner, repo, "pull", number]) => {
             pages::pull(&req, env, config, owner, repo, number).await
         }

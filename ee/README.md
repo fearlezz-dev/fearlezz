@@ -58,8 +58,10 @@ App origin pages:
 | --- | --- |
 | `/<owner>/<repo>/proofs/<id>/` | The shell: a tiny title above a full height frame of `<FILES_ORIGIN>/<grant>/index.html`. The host writes it, never CI. Nothing below this path is served here. |
 | `/<owner>/<repo>/pull/<n>` | A redirect to the latest whole proof of that pull request. |
+| `/s/<token>` | A share link: the shell of its pull request's latest whole proof, for anyone, without a session. It only views; see below. |
 | `/login`, `/callback`, `/logout` | GitHub sign in. |
 | `POST /<owner>/<repo>/proofs/<id>/approve`, `.../accept` | Posts `/fearlezz approve <words>` or `/fearlezz accept <words>` on the pull request as the signed in person. Only the shell calls these; see below. |
+| `POST /<owner>/<repo>/pull/<n>/share`, `GET` the same path, `POST .../share/<token>/revoke` | Makes a share link of the pull request, lists its live links, and revokes one. Only the shell's Share control calls these; see below. |
 
 Files origin: `/<grant>/<path>` is the bundle's file at that path, with its content type and
 `Range` support (films need it), so the page's relative links keep working.
@@ -111,9 +113,56 @@ These are early refusals with clear reasons; CI still judges the comment.
 ### Who sees a page
 
 Anyone for a public repository; otherwise a signed in person whom GitHub gives at least read
-access to the repository. Anyone else gets `404`, so a private repository's name is not
-confirmed. A person without a session is sent to sign in first. Approving needs write access
-and accepting admin rights (above); share links come later.
+access to the repository, or anyone holding a live share link of the pull request. Anyone else
+gets `404`, so a private repository's name is not confirmed. A person without a session is sent
+to sign in first. Approving needs write access and accepting admin rights (above).
+
+| Who | Sees | Approves, accepts | Shares |
+| --- | --- | --- | --- |
+| Anyone, public repository | every proof | no | no |
+| Signed in reader | every proof | no | no |
+| Signed in writer | every proof | approves | makes, lists, revokes links |
+| Signed in admin | every proof | approves and accepts | makes, lists, revokes links |
+| Holder of a share link | the latest whole proof of that one pull request, at `/s/<token>` | no | no |
+
+### Share links
+
+A person with write access makes a link anyone can open, until someone with write access
+revokes it. A link names a pull request, not a proof: `/s/<token>` always frames the pull
+request's latest whole proof, the one `/<owner>/<repo>/pull/<n>` leads to, so it follows the
+work as CI proves new commits.
+
+- **The token** is 128 random bits, kept in D1 (`shares`: token, repository, pull request, who
+  made it, when, when revoked). An unknown or revoked token gets a bare `404` that names no
+  repository.
+- **Only that pull request.** The link skips the repository's access check for its own pull
+  request's latest proof alone. The proof's own address, other pull requests and the API still
+  need what they needed before.
+- **It only views.** The link's shell never posts: when the framed page asks to approve or
+  accept, the shell tells it the link only views and points to the pull request's own address
+  to sign in, even for a signed in writer. Its `connect-src` is `'none'`, and it shows no Share
+  control.
+- **The files** come from the files origin under the same one hour grant of one proof as
+  any other view, handed out fresh on each load; the token never reaches the files origin, and
+  the shell sends no referrer and asks not to be indexed.
+- **The Share control** shows in the shell's bar at a proof's own address for a signed in
+  person with write access (GitHub's collaborator permission, cached 5 minutes like who may
+  read). It makes a link and shows it to copy, and lists the pull request's live links, each
+  with Revoke.
+
+The endpoints take the session and answer JSON; making and revoking also need
+`Origin` = `APP_ORIGIN` and a JSON body, as approving does, and each call asks GitHub for the
+person's permission afresh.
+
+| Call | Answers |
+| --- | --- |
+| `POST /<owner>/<repo>/pull/<n>/share` | `201 {"url": "<APP_ORIGIN>/s/<token>", "token", "made_by", "made_at"}`. `404` when the pull request has no whole proof. |
+| `GET /<owner>/<repo>/pull/<n>/share` | `200 {"links": [...]}`: the live links, newest first, each as above. |
+| `POST /<owner>/<repo>/pull/<n>/share/<token>/revoke` | `200 {"revoked": "<token>"}`. `404` for a token of another pull request or one already revoked. |
+
+A refusal is `401` without a session (or with a token GitHub no longer takes), `403` from
+another origin or without write access, `404` for a private repository the person cannot read,
+and `415` for a body that is not JSON.
 
 - **Sessions** live in D1 (`sessions`): the person's login, GitHub user token and expiry (eight
   hours, as long as the token). The token stays on the server; it reads who may see a

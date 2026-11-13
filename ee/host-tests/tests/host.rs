@@ -276,6 +276,47 @@ fn main() {
             "the_shell_sends_what_its_frame_asks_to_its_own_origin",
             the_shell_sends_what_its_frame_asks_to_its_own_origin,
         ),
+        (
+            "a_writer_makes_a_share_link_anyone_can_open",
+            a_writer_makes_a_share_link_anyone_can_open,
+        ),
+        (
+            "a_share_link_opens_the_latest_proof_of_its_pull_request",
+            a_share_link_opens_the_latest_proof_of_its_pull_request,
+        ),
+        (
+            "a_share_link_opens_nothing_else",
+            a_share_link_opens_nothing_else,
+        ),
+        (
+            "a_revoked_share_link_finds_nothing",
+            a_revoked_share_link_finds_nothing,
+        ),
+        (
+            "an_unknown_share_link_finds_nothing",
+            an_unknown_share_link_finds_nothing,
+        ),
+        ("sharing_needs_write_access", sharing_needs_write_access),
+        (
+            "sharing_from_another_site_is_refused",
+            sharing_from_another_site_is_refused,
+        ),
+        (
+            "share_links_are_listed_to_writers",
+            share_links_are_listed_to_writers,
+        ),
+        (
+            "revoking_needs_write_access_and_a_link_of_that_pull_request",
+            revoking_needs_write_access_and_a_link_of_that_pull_request,
+        ),
+        (
+            "the_shell_offers_share_to_writers_alone",
+            the_shell_offers_share_to_writers_alone,
+        ),
+        (
+            "a_share_link_view_offers_no_posting",
+            a_share_link_view_offers_no_posting,
+        ),
     ];
     let trials = tests
         .iter()
@@ -1122,6 +1163,238 @@ fn the_shell_sends_what_its_frame_asks_to_its_own_origin() {
     );
 }
 
+// Share links.
+
+fn a_writer_makes_a_share_link_anyone_can_open() {
+    let page = format!("<p>shared vault {}</p>", now());
+    let id = upload_with(
+        "owner/vault",
+        70,
+        &proof("owner/vault", 70),
+        &[("index.html", page.as_bytes())],
+    );
+    let session = sign_in("writer-code", "/");
+    let answer = share("owner/vault", 70, Some(&session));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let made = answer.json();
+    let token = made["token"].as_str().unwrap().to_owned();
+    assert!(token.len() >= 32, "unguessable: {token}");
+    assert_eq!(
+        made["url"].as_str().unwrap(),
+        format!("{}/s/{token}", world().worker.url)
+    );
+    assert_eq!(made["made_by"], "writer");
+
+    // Without any session, the private pull request's proof opens through the link.
+    let answer = get(&format!("/s/{token}"), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert!(cookie_set(&answer, "session").is_none());
+    assert_eq!(answer.header("cache-control"), Some("no-store"));
+    assert_eq!(answer.header("referrer-policy"), Some("no-referrer"));
+    assert!(
+        answer.text().contains("Pull request 70"),
+        "{}",
+        answer.text()
+    );
+    let frame = frame_url(&answer);
+    assert!(frame.starts_with(&world().worker.files), "{frame}");
+    let answer = get_url(&frame, &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.body, page.as_bytes());
+    // The proof's own address still needs a session.
+    let answer = get(&format!("/owner/vault/proofs/{id}/"), &[]);
+    assert_eq!(answer.status, 302, "{}", answer.text());
+}
+
+fn a_share_link_opens_the_latest_proof_of_its_pull_request() {
+    let first = format!("<p>first of 71 {}</p>", now());
+    upload_with(
+        "owner/vault",
+        71,
+        &proof("owner/vault", 71),
+        &[("index.html", first.as_bytes())],
+    );
+    let session = sign_in("writer-code", "/");
+    let token = share("owner/vault", 71, Some(&session)).json()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let second = format!("<p>second of 71 {}</p>", now());
+    upload_with(
+        "owner/vault",
+        71,
+        &proof("owner/vault", 71),
+        &[("index.html", second.as_bytes())],
+    );
+    let answer = get(&format!("/s/{token}"), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let answer = get_url(&frame_url(&answer), &[]);
+    assert_eq!(answer.body, second.as_bytes());
+}
+
+fn a_share_link_opens_nothing_else() {
+    let other = upload_proof("owner/vault", 73, &proof("owner/vault", 73));
+    upload_proof("owner/vault", 72, &proof("owner/vault", 72));
+    let session = sign_in("writer-code", "/");
+    let token = share("owner/vault", 72, Some(&session)).json()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(get(&format!("/s/{token}"), &[]).status, 200);
+    // Another pull request of the same repository still asks for a sign in.
+    assert_eq!(get("/owner/vault/pull/73", &[]).status, 302);
+    let answer = get(&format!("/owner/vault/proofs/{other}/"), &[]);
+    assert_eq!(answer.status, 302, "{}", answer.text());
+    // The link's paths below it are nothing.
+    assert_eq!(get(&format!("/s/{token}/index.html"), &[]).status, 404);
+}
+
+fn a_revoked_share_link_finds_nothing() {
+    upload_proof("owner/vault", 74, &proof("owner/vault", 74));
+    let session = sign_in("writer-code", "/");
+    let token = share("owner/vault", 74, Some(&session)).json()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(get(&format!("/s/{token}"), &[]).status, 200);
+    let answer = revoke("owner/vault", 74, &token, Some(&session));
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let answer = get(&format!("/s/{token}"), &[]);
+    assert_eq!(answer.status, 404, "{}", answer.text());
+    assert!(!answer.text().contains("vault"), "{}", answer.text());
+    // Not even a writer's session brings it back.
+    let answer = get(&format!("/s/{token}"), &[("Cookie", &session)]);
+    assert_eq!(answer.status, 404, "{}", answer.text());
+}
+
+fn an_unknown_share_link_finds_nothing() {
+    for token in ["0123456789abcdef0123456789abcdef", "nothing", ""] {
+        let answer = get(&format!("/s/{token}"), &[]);
+        assert_eq!(answer.status, 404, "{token}: {}", answer.text());
+        assert!(!answer.text().contains("owner"), "{}", answer.text());
+    }
+}
+
+fn sharing_needs_write_access() {
+    upload_proof("owner/vault", 75, &proof("owner/vault", 75));
+    let answer = share("owner/vault", 75, None);
+    assert_eq!(answer.status, 401, "{}", answer.text());
+    let reader = sign_in("reader-code", "/");
+    let answer = share("owner/vault", 75, Some(&reader));
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    let error = answer.json()["error"].as_str().unwrap().to_owned();
+    assert!(error.contains("write access"), "{error}");
+    // Someone GitHub shows nothing of the private repository learns nothing of it.
+    let stranger = sign_in("stranger-code", "/");
+    let answer = share("owner/vault", 75, Some(&stranger));
+    assert_eq!(answer.status, 404, "{}", answer.text());
+    // A pull request without a whole proof has nothing to share.
+    let writer = sign_in("writer-code", "/");
+    let answer = share("owner/vault", 76, Some(&writer));
+    assert_eq!(answer.status, 404, "{}", answer.text());
+    let answer = links("owner/vault", 75, Some(&writer));
+    assert_eq!(answer.json()["links"], json!([]), "nothing was made");
+}
+
+fn sharing_from_another_site_is_refused() {
+    upload_proof("owner/vault", 77, &proof("owner/vault", 77));
+    let session = sign_in("writer-code", "/");
+    let files = world().worker.files.clone();
+    for origin in [Some("https://evil.test"), Some(files.as_str()), None] {
+        let mut headers = vec![
+            ("Cookie", session.as_str()),
+            ("Content-Type", "application/json"),
+        ];
+        if let Some(origin) = origin {
+            headers.push(("Origin", origin));
+        }
+        let path = "/owner/vault/pull/77/share";
+        let answer = request("POST", path, &headers, Some(b"{}".to_vec()));
+        assert_eq!(answer.status, 403, "{origin:?}: {}", answer.text());
+    }
+    let answer = links("owner/vault", 77, Some(&session));
+    assert_eq!(answer.json()["links"], json!([]), "nothing was made");
+}
+
+fn share_links_are_listed_to_writers() {
+    upload_proof("owner/vault", 78, &proof("owner/vault", 78));
+    let session = sign_in("writer-code", "/");
+    let made = || {
+        share("owner/vault", 78, Some(&session)).json()["token"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (kept, gone) = (made(), made());
+    revoke("owner/vault", 78, &gone, Some(&session));
+    let answer = links("owner/vault", 78, Some(&session));
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let listed = answer.json()["links"].as_array().unwrap().clone();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["token"].as_str().unwrap(), kept);
+    assert_eq!(
+        listed[0]["url"].as_str().unwrap(),
+        format!("{}/s/{kept}", world().worker.url)
+    );
+    assert_eq!(listed[0]["made_by"], "writer");
+    assert!(listed[0]["made_at"].as_i64().unwrap() > 0);
+    let reader = sign_in("reader-code", "/");
+    assert_eq!(links("owner/vault", 78, Some(&reader)).status, 403);
+    assert_eq!(links("owner/vault", 78, None).status, 401);
+}
+
+fn revoking_needs_write_access_and_a_link_of_that_pull_request() {
+    upload_proof("owner/vault", 79, &proof("owner/vault", 79));
+    let writer = sign_in("writer-code", "/");
+    let token = share("owner/vault", 79, Some(&writer)).json()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let reader = sign_in("reader-code", "/");
+    assert_eq!(revoke("owner/vault", 79, &token, Some(&reader)).status, 403);
+    assert_eq!(revoke("owner/vault", 79, &token, None).status, 401);
+    // The token names another pull request, or another repository.
+    assert_eq!(revoke("owner/vault", 80, &token, Some(&writer)).status, 404);
+    assert_eq!(revoke("owner/team", 79, &token, Some(&writer)).status, 404);
+    assert_eq!(get(&format!("/s/{token}"), &[]).status, 200, "still live");
+}
+
+fn the_shell_offers_share_to_writers_alone() {
+    let id = upload_proof("owner/team", 81, &proof("owner/team", 81));
+    let path = format!("/owner/team/proofs/{id}/");
+    let writer = sign_in("writer-code", "/");
+    let html = get(&path, &[("Cookie", &writer)]).text();
+    assert!(html.contains("id=\"share\""), "{html}");
+    assert!(html.contains("/owner/team/pull/81/share"), "{html}");
+    let reader = sign_in("reader-code", "/");
+    let html = get(&path, &[("Cookie", &reader)]).text();
+    assert!(!html.contains("id=\"share\""), "{html}");
+    let html = get(&path, &[]).text();
+    assert!(!html.contains("id=\"share\""), "{html}");
+}
+
+fn a_share_link_view_offers_no_posting() {
+    upload_proof("owner/team", 82, &waiting("owner/team", 82));
+    let writer = sign_in("writer-code", "/");
+    let token = share("owner/team", 82, Some(&writer)).json()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for session in [None, Some(writer.as_str())] {
+        let headers: Vec<(&str, &str)> = session.iter().map(|s| ("Cookie", *s)).collect();
+        let answer = get(&format!("/s/{token}"), &headers);
+        assert_eq!(answer.status, 200, "{}", answer.text());
+        let html = answer.text();
+        // It answers its frame, but never posts and never offers to share.
+        assert!(html.contains("e.source !== frame.contentWindow"), "{html}");
+        assert!(!html.contains("fetch("), "{html}");
+        assert!(!html.contains("id=\"share\""), "{html}");
+        assert!(html.contains("share link"), "{html}");
+        let csp = answer.header("content-security-policy").unwrap();
+        assert!(csp.contains("connect-src 'none'"), "{csp}");
+    }
+}
+
 // Helpers.
 
 /// A proof whose pictures of `screens` wait for approval and whose weakening waits for an
@@ -1158,6 +1431,37 @@ fn act(repository: &str, id: &str, kind: &str, session: Option<&str>, body: Valu
         headers.push(("Cookie", session));
     }
     request("POST", &path, &headers, Some(body.to_string().into_bytes()))
+}
+
+/// Makes a share link of a pull request, as the shell's script asks: same origin, JSON.
+fn share(repository: &str, pull: u64, session: Option<&str>) -> Answer {
+    post_json(&format!("/{repository}/pull/{pull}/share"), session)
+}
+
+/// Revokes a share link, as the shell's script asks.
+fn revoke(repository: &str, pull: u64, token: &str, session: Option<&str>) -> Answer {
+    post_json(
+        &format!("/{repository}/pull/{pull}/share/{token}/revoke"),
+        session,
+    )
+}
+
+/// The live share links of a pull request.
+fn links(repository: &str, pull: u64, session: Option<&str>) -> Answer {
+    let headers: Vec<(&str, &str)> = session.iter().map(|s| ("Cookie", *s)).collect();
+    get(&format!("/{repository}/pull/{pull}/share"), &headers)
+}
+
+fn post_json(path: &str, session: Option<&str>) -> Answer {
+    let origin = world().worker.url.clone();
+    let mut headers = vec![
+        ("Origin", origin.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    if let Some(session) = session {
+        headers.push(("Cookie", session));
+    }
+    request("POST", path, &headers, Some(b"{}".to_vec()))
 }
 
 /// The claims Actions puts in a pull request run's token.
