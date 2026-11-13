@@ -5,6 +5,7 @@
     reason = "ScreenCaptureKit and AppKit are Objective C APIs; every call is unsafe in objc2"
 )]
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::Mutex;
@@ -14,13 +15,19 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow, bail};
 use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{AllocAnyThread as _, DefinedClass as _, MainThreadMarker, define_class, msg_send};
-use objc2_app_kit::{NSApplication, NSBitmapImageFileType, NSBitmapImageRep};
-use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
-use objc2_core_graphics::{CGImage, CGPreflightScreenCaptureAccess};
+use objc2_app_kit::{NSApplication, NSBitmapImageFileType, NSBitmapImageRep, NSRunningApplication};
+use objc2_core_foundation::{CFArray, CFDictionary, CFRetained, CFString, CGPoint, CGRect, CGSize};
+use objc2_core_graphics::{
+    CGImage, CGPreflightScreenCaptureAccess, CGRectMakeWithDictionaryRepresentation,
+    CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowBounds, kCGWindowLayer, kCGWindowName,
+    kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
+};
 use objc2_core_media::{CMTime, CMTimeFlags};
-use objc2_foundation::{NSDictionary, NSError, NSObject, NSObjectProtocol, NSString, NSURL};
+use objc2_foundation::{
+    NSArray, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString, NSURL,
+};
 use objc2_screen_capture_kit::{
     SCContentFilter, SCRecordingOutput, SCRecordingOutputConfiguration, SCRecordingOutputDelegate,
     SCScreenshotManager, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamDelegate,
@@ -75,8 +82,115 @@ fn wait<T>(rx: &Receiver<Result<T, String>>, what: &str) -> Result<T> {
         .map_err(|e| anyhow!("{what}: {e}"))
 }
 
-/// Every normal window of every app, offscreen ones included.
-pub(crate) fn windows() -> Result<Vec<Window>> {
+/// Every normal window of every app, off screen ones included, from the window server:
+/// about 2 ms a listing, against about 70 ms for ScreenCaptureKit, so a new window is found
+/// within a few frames of showing. Only windows of an app count, as ScreenCaptureKit lists
+/// them. `apps` remembers each app's bundle id by pid.
+pub(crate) fn windows(apps: &mut HashMap<i32, String>) -> Result<Vec<super::WindowInfo>> {
+    connect();
+    let list = CGWindowListCopyWindowInfo(
+        CGWindowListOption::OptionAll | CGWindowListOption::ExcludeDesktopElements,
+        0,
+    )
+    .context("the window server listed no windows")?;
+    // SAFETY: CFArray and NSArray are toll free bridged, and the window server's list holds
+    // dictionaries keyed by strings; the reference lives no longer than `list`.
+    let list: &NSArray<NSDictionary<NSString, AnyObject>> =
+        unsafe { &*std::ptr::from_ref::<CFArray>(&list).cast() };
+    let mut out = Vec::new();
+    for w in list {
+        // SAFETY: the keys are the window server's own constant strings.
+        let (number, layer, pid, owner, name, bounds) = unsafe {
+            (
+                kCGWindowNumber,
+                kCGWindowLayer,
+                kCGWindowOwnerPID,
+                kCGWindowOwnerName,
+                kCGWindowName,
+                kCGWindowBounds,
+            )
+        };
+        if self::number(&w, layer) != Some(0) {
+            continue;
+        }
+        let (Some(id), Some(pid), Some(frame)) = (
+            self::number(&w, number),
+            self::number(&w, pid),
+            rect(&w, bounds),
+        ) else {
+            continue;
+        };
+        let (Ok(id), Ok(pid)) = (u32::try_from(id), i32::try_from(pid)) else {
+            continue;
+        };
+        // An app that just started may not be one yet, so only an app is remembered.
+        let bundle = match apps.get(&pid) {
+            Some(bundle) => bundle.clone(),
+            None => {
+                let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+                else {
+                    continue;
+                };
+                let bundle = app
+                    .bundleIdentifier()
+                    .map(|b| b.to_string())
+                    .unwrap_or_default();
+                apps.insert(pid, bundle.clone());
+                bundle
+            }
+        };
+        out.push(super::WindowInfo {
+            id,
+            pid,
+            bundle,
+            app: text(&w, owner).unwrap_or_default(),
+            title: text(&w, name).unwrap_or_default(),
+            x: frame.origin.x,
+            y: frame.origin.y,
+            width: frame.size.width,
+            height: frame.size.height,
+        });
+    }
+    Ok(out)
+}
+
+/// The value of `key` in a window server dictionary, as a CF key bridged to an NS one.
+fn value(w: &NSDictionary<NSString, AnyObject>, key: &CFString) -> Option<Retained<AnyObject>> {
+    // SAFETY: CFString and NSString are toll free bridged.
+    let key: &NSString = unsafe { &*std::ptr::from_ref(key).cast() };
+    w.objectForKey(key)
+}
+
+fn number(w: &NSDictionary<NSString, AnyObject>, key: &CFString) -> Option<i64> {
+    value(w, key)?
+        .downcast::<NSNumber>()
+        .ok()
+        .map(|n| n.as_i64())
+}
+
+fn text(w: &NSDictionary<NSString, AnyObject>, key: &CFString) -> Option<String> {
+    value(w, key)?
+        .downcast::<NSString>()
+        .ok()
+        .map(|t| t.to_string())
+}
+
+fn rect(w: &NSDictionary<NSString, AnyObject>, key: &CFString) -> Option<CGRect> {
+    let bounds = value(w, key)?;
+    let mut rect = CGRect::default();
+    // SAFETY: a window's bounds are a CFDictionary, toll free bridged with the NSDictionary
+    // returned; it lives during the call.
+    let read = unsafe {
+        CGRectMakeWithDictionaryRepresentation(
+            Some(&*Retained::as_ptr(&bounds).cast::<CFDictionary>()),
+            &raw mut rect,
+        )
+    };
+    read.then_some(rect)
+}
+
+/// The window `id` as ScreenCaptureKit can capture it, listed afresh.
+pub(crate) fn capturable(id: u32) -> Result<Window> {
     connect();
     let (tx, rx) = mpsc::channel();
     let block = RcBlock::new(
@@ -96,32 +210,36 @@ pub(crate) fn windows() -> Result<Vec<Window>> {
         );
     }
     let content = wait(&rx, "listing windows")?.0;
-    let mut out = Vec::new();
     // SAFETY: plain property reads on objects ScreenCaptureKit returned.
     unsafe {
-        for w in content.windows() {
-            if w.windowLayer() != 0 {
-                continue;
-            }
-            let Some(app) = w.owningApplication() else {
-                continue;
-            };
-            let frame = w.frame();
-            out.push(Window {
-                info: super::WindowInfo {
-                    id: w.windowID(),
-                    pid: app.processID(),
-                    bundle: app.bundleIdentifier().to_string(),
-                    app: app.applicationName().to_string(),
-                    title: w.title().map(|t| t.to_string()).unwrap_or_default(),
-                    width: frame.size.width,
-                    height: frame.size.height,
-                },
-                inner: w,
-            });
-        }
+        let w = content
+            .windows()
+            .into_iter()
+            .find(|w| w.windowID() == id)
+            .with_context(|| format!("window {id} is gone"))?;
+        let frame = w.frame();
+        let app = w.owningApplication();
+        Ok(Window {
+            info: super::WindowInfo {
+                id,
+                pid: app.as_ref().map_or(0, |a| a.processID()),
+                bundle: app
+                    .as_ref()
+                    .map(|a| a.bundleIdentifier().to_string())
+                    .unwrap_or_default(),
+                app: app
+                    .as_ref()
+                    .map(|a| a.applicationName().to_string())
+                    .unwrap_or_default(),
+                title: w.title().map(|t| t.to_string()).unwrap_or_default(),
+                x: frame.origin.x,
+                y: frame.origin.y,
+                width: frame.size.width,
+                height: frame.size.height,
+            },
+            inner: w,
+        })
     }
-    Ok(out)
 }
 
 fn filter(window: &Window) -> Retained<SCContentFilter> {
@@ -262,6 +380,8 @@ impl Recording {
 /// A film being recorded.
 pub(crate) struct Film {
     stream: Retained<SCStream>,
+    /// The window filmed, held while the stream runs.
+    _window: Retained<SCWindow>,
     _output: Retained<SCRecordingOutput>,
     _delegate: Retained<Recording>,
     events: Receiver<Event>,
@@ -316,6 +436,7 @@ pub(crate) fn start_film(window: &Window, path: &Path, frame: &Frame) -> Result<
         wait(&started, "starting the film")?;
         Ok(Film {
             stream,
+            _window: window.inner.clone(),
             _output: output,
             _delegate: delegate,
             events,
@@ -370,4 +491,27 @@ impl super::Filming for Film {
             },
         }
     }
+}
+
+/// The pid of `replayd`, the macOS service behind every capture: the same pid across
+/// failing films means it is stuck, a new one that it restarted.
+pub(crate) fn capture_service() -> Option<u32> {
+    super::place::tool("pgrep", &["-x", "replayd"])
+        .ok()?
+        .lines()
+        .next()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// The machine's load over the last minute.
+pub(crate) fn load() -> Option<f64> {
+    // Prints "{ 1.23 4.56 7.89 }".
+    super::place::tool("sysctl", &["-n", "vm.loadavg"])
+        .ok()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
 }

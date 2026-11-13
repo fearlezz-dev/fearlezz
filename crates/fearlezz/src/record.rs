@@ -26,6 +26,10 @@ use macos as sys;
 mod stub;
 #[cfg(not(target_os = "macos"))]
 use stub as sys;
+#[cfg(target_os = "macos")]
+mod place;
+#[cfg(not(target_os = "macos"))]
+use stub as place;
 
 /// What part of the window a capture keeps.
 #[cfg_attr(
@@ -38,7 +42,7 @@ pub(crate) struct Frame {
     pub crop_top: f64,
 }
 
-/// A window as ScreenCaptureKit lists it.
+/// A window as the window server lists it.
 #[derive(Clone, Debug)]
 pub(crate) struct WindowInfo {
     pub id: u32,
@@ -46,6 +50,17 @@ pub(crate) struct WindowInfo {
     pub bundle: String,
     pub app: String,
     pub title: String,
+    /// The top left corner in global points, y down.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "only parking on macOS reads it")
+    )]
+    pub x: f64,
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "only parking on macOS reads it")
+    )]
+    pub y: f64,
     pub width: f64,
     pub height: f64,
 }
@@ -98,8 +113,28 @@ fn choose<'w>(
         .max_by(|a, b| a.area().total_cmp(&b.area()))
 }
 
-/// The windows of the machine, as the recorder needs them: ScreenCaptureKit on macOS, a script
-/// in tests. Windows are named by their id from the latest [`Screen::windows`].
+/// Where a recorded window is kept while it records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Place {
+    /// Where it opened: on the developer's screen.
+    Stay,
+    /// Parked off the developer's screens, focus handed back: `FEARLEZZ_OFF_SCREEN=1`.
+    OffScreen,
+}
+
+impl Place {
+    /// The developer's choice for this machine, from `FEARLEZZ_OFF_SCREEN`.
+    pub(crate) fn from_env() -> Place {
+        if std::env::var_os("FEARLEZZ_OFF_SCREEN").is_some_and(|v| v == "1") {
+            Place::OffScreen
+        } else {
+            Place::Stay
+        }
+    }
+}
+
+/// The windows of the machine, as the recorder needs them: the window server's list and
+/// ScreenCaptureKit on macOS, a script in tests. Windows are named by their id from the latest [`Screen::windows`].
 pub(crate) trait Screen {
     type Film: Filming;
     /// Every normal window of every app.
@@ -108,6 +143,33 @@ pub(crate) trait Screen {
     fn still(&mut self, window: u32, path: &Path, frame: &Frame) -> Result<(usize, usize)>;
     /// Starts filming the window into `path` (MP4).
     fn film(&mut self, window: u32, path: &Path, frame: &Frame) -> Result<Self::Film>;
+    /// Moves the window off the developer's screens, keeping its size, without giving it
+    /// focus; says how, such as "by Accessibility", or why it cannot yet. Asked again until
+    /// it is parked, so it never waits itself.
+    fn park(&mut self, window: u32) -> Result<Parking>;
+    /// The pid of the app in front, which gets the developer's keys; fails with why it
+    /// cannot be read and the fix.
+    fn front(&mut self) -> Result<i32>;
+    /// Brings the app of `pid` to the front.
+    fn bring_front(&mut self, pid: i32) -> Result<()>;
+    /// Puts back the window positions the parked window's app had saved before it was
+    /// parked, since macOS saves a frame on every move; returns how many.
+    fn put_back(&mut self) -> Result<usize>;
+}
+
+/// Where parking a window stands.
+#[cfg_attr(
+    all(not(target_os = "macos"), not(test)),
+    expect(
+        dead_code,
+        reason = "only parking on macOS and the test screen build it"
+    )
+)]
+pub(crate) enum Parking {
+    /// Parked, and how.
+    Parked(String),
+    /// Not yet, and why: the window manager has not picked the window up.
+    NotYet(String),
 }
 
 /// A film being recorded.
@@ -121,14 +183,21 @@ pub(crate) trait Filming {
 /// The machine's own screen.
 #[derive(Default)]
 pub(crate) struct System {
-    listed: Vec<sys::Window>,
+    listed: Vec<WindowInfo>,
+    /// Each app's bundle id by pid, read once.
+    apps: std::collections::HashMap<i32, String>,
+    /// The window positions the parked window's app had saved.
+    saved: Option<place::Saved>,
+    /// The app in front as last read through AeroSpace, which is asked at most every
+    /// [`PARK_EVERY`]: it answers on the thread that picks new windows up.
+    front: Option<(Instant, i32)>,
 }
 
 impl System {
-    fn find(&self, id: u32) -> Result<&sys::Window> {
+    fn find(&self, id: u32) -> Result<&WindowInfo> {
         self.listed
             .iter()
-            .find(|w| w.info.id == id)
+            .find(|w| w.id == id)
             .with_context(|| format!("window {id} is gone"))
     }
 }
@@ -137,16 +206,49 @@ impl Screen for System {
     type Film = sys::Film;
 
     fn windows(&mut self) -> Result<Vec<WindowInfo>> {
-        self.listed = sys::windows()?;
-        Ok(self.listed.iter().map(|w| w.info.clone()).collect())
+        self.listed = sys::windows(&mut self.apps)?;
+        Ok(self.listed.clone())
     }
 
     fn still(&mut self, window: u32, path: &Path, frame: &Frame) -> Result<(usize, usize)> {
-        sys::still(self.find(window)?, path, frame)
+        sys::still(&sys::capturable(window)?, path, frame)
     }
 
     fn film(&mut self, window: u32, path: &Path, frame: &Frame) -> Result<sys::Film> {
-        sys::start_film(self.find(window)?, path, frame)
+        sys::start_film(&sys::capturable(window)?, path, frame)
+    }
+
+    fn park(&mut self, window: u32) -> Result<Parking> {
+        let window = self.find(window)?.clone();
+        // Read before the first move, which the app saves at once.
+        if self.saved.is_none() {
+            self.saved = place::saved(&window.bundle);
+        }
+        place::park(&window)
+    }
+
+    fn front(&mut self) -> Result<i32> {
+        if place::reads_front_cheaply() {
+            return place::front();
+        }
+        if let Some((at, pid)) = self.front
+            && at.elapsed() < PARK_EVERY
+        {
+            return Ok(pid);
+        }
+        let pid = place::front()?;
+        self.front = Some((Instant::now(), pid));
+        Ok(pid)
+    }
+
+    fn bring_front(&mut self, pid: i32) -> Result<()> {
+        place::bring_front(pid)
+    }
+
+    fn put_back(&mut self) -> Result<usize> {
+        self.saved
+            .take()
+            .map_or(Ok(0), |saved| place::put_back(&saved))
     }
 }
 
@@ -435,10 +537,34 @@ impl Recorded {
 
 /// How often the command and window are looked at.
 const POLL: Duration = Duration::from_millis(100);
+/// How often windows are listed while waiting for a new one: a listing takes about 2 ms,
+/// and a window to park shows on the developer's screen until it is found.
+const WATCH: Duration = Duration::from_millis(10);
 /// How often windows are listed while the recorder only waits for the command to end.
 const LIST_EVERY: Duration = Duration::from_secs(1);
 /// How long a window that just appeared gets to draw its first frame.
 const SETTLE: Duration = Duration::from_millis(700);
+/// How often focus is looked at while a parked window settles.
+const FOCUS_POLL: Duration = Duration::from_millis(20);
+/// How often parking is asked again while the window manager has not picked the window up:
+/// each ask is a query to AeroSpace, which answers on the same thread that picks windows up.
+const PARK_EVERY: Duration = Duration::from_millis(100);
+/// How long recording waits for parking, so a film starts on the window's final size when
+/// the window manager is on time (AeroSpace tiles a window it picks up, then parking floats
+/// it, and both can resize it); a short app is recorded even when it is not.
+const PARK_WAIT: Duration = if cfg!(test) {
+    Duration::from_millis(1500)
+} else {
+    Duration::from_secs(3)
+};
+/// How long a window manager gets to pick up a new window before it can be parked:
+/// AeroSpace learns of windows on its own schedule, which took over 2 s on a loaded machine.
+/// Short in unit tests, whose scripted screen never picks some windows up.
+const PICK_UP: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(10)
+};
 /// How many listings in a row may fail after the recording before the run fails.
 const LISTING_TRIES: usize = 3;
 
@@ -449,17 +575,56 @@ pub(crate) struct Recorder<'a, S> {
     /// The windows open before the command started, which are never recorded: an app the
     /// developer has open would otherwise be filmed on both sides of a look.
     before: BTreeSet<u32>,
+    place: Place,
+    /// The app in front before the command started, which gets focus back from a parked app.
+    /// None when focus is not watched (the window stays) or no longer can be.
+    developer: Option<Result<i32, String>>,
+    /// Whether the window was parked, so its app's saved positions are put back.
+    parked: bool,
+    /// How each film went, for the machine's film log.
+    films: Vec<FilmOutcome>,
+    /// Parking and focus still going on, off screen.
+    tend: Option<Tend>,
+}
+
+/// Parking a window and giving focus back while it is recorded.
+struct Tend {
+    window: WindowInfo,
+    /// When parking started.
+    since: Instant,
+    /// When parking was last asked.
+    tried: Option<Instant>,
+    /// Until when focus is still watched, once parking ended.
+    settled_at: Option<Instant>,
+    /// Whether giving focus back was told in the log.
+    told: bool,
+    /// The window's size when recording started, once it has.
+    filmed: Option<(f64, f64)>,
 }
 
 impl<'a, S: Screen> Recorder<'a, S> {
     /// Notes the windows open now; call it before starting the command.
-    pub(crate) fn new(mut screen: S, spec: &'a Spec) -> Result<Self> {
+    pub(crate) fn new(mut screen: S, spec: &'a Spec, place: Place) -> Result<Self> {
         let before = screen.windows()?.iter().map(|w| w.id).collect();
+        let developer = match place {
+            Place::OffScreen => Some(screen.front().map_err(|e| format!("{e:#}"))),
+            Place::Stay => None,
+        };
         Ok(Recorder {
             screen,
             spec,
             before,
+            place,
+            developer,
+            parked: false,
+            films: Vec::new(),
+            tend: None,
         })
+    }
+
+    /// How each film of this recording went, failed ones too.
+    pub(crate) fn films(&self) -> &[FilmOutcome] {
+        &self.films
     }
 
     /// Runs alongside the check's command (`child`, leader of its own process group): waits
@@ -471,6 +636,29 @@ impl<'a, S: Screen> Recorder<'a, S> {
         out: &Path,
         log: &mut impl Write,
     ) -> Result<Recorded> {
+        let recorded = self.record(child, out, log);
+        // Once the command ended, its app saved its last frame: the parked one. A recording
+        // that failed left it running, so it is stopped first.
+        if self.parked {
+            if recorded.is_err() {
+                stop(child)?;
+            }
+            match self.screen.put_back() {
+                Ok(0) => {}
+                Ok(n) => writeln!(
+                    log,
+                    "record: put back {n} window position the app had saved"
+                )?,
+                Err(e) => writeln!(
+                    log,
+                    "record: could not put back the app's saved window position: {e:#}"
+                )?,
+            }
+        }
+        recorded
+    }
+
+    fn record(&mut self, child: &mut Child, out: &Path, log: &mut impl Write) -> Result<Recorded> {
         let spec = self.spec;
         let root = i32::try_from(child.id())?;
         let window = match self.appear(child, root, log)? {
@@ -482,7 +670,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 });
             }
         };
-        std::thread::sleep(SETTLE);
+        self.settle(&window, log)?;
         // The window may have taken its final size while it settled; listing again also
         // hands the screen the window as it is now.
         let window = self
@@ -491,6 +679,9 @@ impl<'a, S: Screen> Recorder<'a, S> {
             .into_iter()
             .find(|w| w.id == window.id)
             .unwrap_or(window);
+        if let Some(tend) = &mut self.tend {
+            tend.filmed = Some((window.width, window.height));
+        }
         let recording = Instant::now();
         // A deadline past what an Instant holds is no deadline.
         let deadline = spec.seconds().and_then(|s| recording.checked_add(s));
@@ -518,32 +709,185 @@ impl<'a, S: Screen> Recorder<'a, S> {
         if let Some(name) = &spec.film {
             let file = format!("{name}.mp4");
             let path = out.join(&file);
-            let mut film = self.screen.film(window.id, &path, &frame)?;
+            let mut film = match self.screen.film(window.id, &path, &frame) {
+                Ok(film) => film,
+                Err(e) => {
+                    self.films.push(FilmOutcome {
+                        name: name.clone(),
+                        seconds: 0.0,
+                        error: Some(format!("{e:#}")),
+                    });
+                    return Err(e);
+                }
+            };
             while child.try_wait()?.is_none()
                 && !film.ended()
                 && deadline.is_none_or(|d| Instant::now() < d)
             {
-                std::thread::sleep(POLL);
+                self.pause(POLL, log)?;
             }
             let secs = recording.elapsed().as_secs_f64();
-            match film.stop() {
+            let error = match film.stop() {
                 Ok(()) if path.exists() => {
                     writeln!(log, "record: film {file} of {secs:.1} s")?;
                     proofs.push(("film", file, name));
+                    None
                 }
                 Ok(()) => {
                     writeln!(log, "record: film {file} was not written")?;
                     recorded = false;
+                    Some("its file was not written".to_string())
                 }
                 Err(e) => {
                     writeln!(log, "record: film {file} failed: {e:#}")?;
                     recorded = false;
+                    Some(format!("{e:#}"))
                 }
-            }
+            };
+            self.films.push(FilmOutcome {
+                name: name.clone(),
+                seconds: secs,
+                error,
+            });
         }
         append_proofs(out, &proofs)?;
         let ended = self.finish(child, root, window.id, deadline, log)?;
         Ok(Recorded { ended, recorded })
+    }
+
+    /// Gives a window that just appeared [`SETTLE`] to draw its first frame. Off screen, it
+    /// starts parking the window and giving focus back, which go on while it is recorded
+    /// (see [`Recorder::pause`]): where the window is changes nothing in a window capture.
+    fn settle(&mut self, window: &WindowInfo, log: &mut impl Write) -> Result<()> {
+        if self.place == Place::Stay {
+            writeln!(
+                log,
+                "record: the window stays on your screen; FEARLEZZ_OFF_SCREEN=1 in your \
+                 environment parks recorded windows off screen"
+            )?;
+        } else {
+            if let Some(Err(why)) = &self.developer {
+                writeln!(log, "record: focus is not given back: {why}")?;
+                self.developer = None;
+            }
+            self.tend = Some(Tend {
+                window: window.clone(),
+                since: Instant::now(),
+                tried: None,
+                settled_at: None,
+                told: false,
+                filmed: None,
+            });
+        }
+        self.pause(SETTLE, log)?;
+        let since = Instant::now() - SETTLE;
+        while self.parking() && since.elapsed() < PARK_WAIT {
+            self.pause(FOCUS_POLL, log)?;
+        }
+        Ok(())
+    }
+
+    /// Whether the window is still being parked.
+    fn parking(&self) -> bool {
+        self.tend.as_ref().is_some_and(|t| t.settled_at.is_none())
+    }
+
+    /// Waits `time`, parking the window and giving focus back meanwhile while that goes on.
+    fn pause(&mut self, time: Duration, log: &mut impl Write) -> Result<()> {
+        let until = Instant::now() + time;
+        loop {
+            self.tend(log)?;
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(());
+            }
+            let step = if self.tend.is_some() {
+                FOCUS_POLL
+            } else {
+                left
+            };
+            std::thread::sleep(step.min(left));
+        }
+    }
+
+    /// One step of parking and focus: focus goes back whenever the window's app takes it,
+    /// parking is asked every [`PARK_EVERY`] until the window is parked or [`PICK_UP`]
+    /// passed, and focus is watched for [`SETTLE`] after that.
+    fn tend(&mut self, log: &mut impl Write) -> Result<()> {
+        let Some(mut tend) = self.tend.take() else {
+            return Ok(());
+        };
+        self.give_back(&tend.window, &mut tend.told, log)?;
+        if tend.settled_at.is_none() && tend.tried.is_none_or(|t| t.elapsed() >= PARK_EVERY) {
+            tend.tried = Some(Instant::now());
+            let ended = match self.screen.park(tend.window.id) {
+                Ok(Parking::Parked(how)) => {
+                    self.parked = true;
+                    writeln!(log, "record: parked the window off screen {how}")?;
+                    if let Some((width, height)) = tend.filmed {
+                        let now = self.screen.windows().ok().and_then(|windows| {
+                            windows.into_iter().find(|w| w.id == tend.window.id)
+                        });
+                        if let Some(now) = now.filter(|n| (n.width, n.height) != (width, height)) {
+                            writeln!(
+                                log,
+                                "record: the window changed size from {width}x{height} to {}x{} \
+                                 while it was filmed, as the window manager picked it up late; \
+                                 the film may be cut or padded",
+                                now.width, now.height
+                            )?;
+                        }
+                    }
+                    true
+                }
+                Ok(Parking::NotYet(why)) if tend.since.elapsed() >= PICK_UP => {
+                    writeln!(
+                        log,
+                        "record: could not park the window off screen: {why} after {PICK_UP:?}"
+                    )?;
+                    true
+                }
+                Ok(Parking::NotYet(_)) => false,
+                Err(e) => {
+                    writeln!(log, "record: could not park the window off screen: {e:#}")?;
+                    true
+                }
+            };
+            if ended {
+                tend.settled_at = Some(Instant::now() + SETTLE);
+            }
+        }
+        if tend.settled_at.is_none_or(|at| Instant::now() < at) {
+            self.tend = Some(tend);
+        }
+        Ok(())
+    }
+
+    /// Brings the developer's app back to the front when the window's app has taken it.
+    fn give_back(
+        &mut self,
+        window: &WindowInfo,
+        told: &mut bool,
+        log: &mut impl Write,
+    ) -> Result<()> {
+        let Some(Ok(developer)) = self.developer else {
+            return Ok(());
+        };
+        if developer == window.pid || self.screen.front().ok() != Some(window.pid) {
+            return Ok(());
+        }
+        match self.screen.bring_front(developer) {
+            Ok(()) if !*told => {
+                *told = true;
+                writeln!(log, "record: gave focus back to the app in front before")?;
+            }
+            Ok(()) => {}
+            Err(e) => {
+                writeln!(log, "record: could not give focus back: {e:#}")?;
+                self.developer = None;
+            }
+        }
+        Ok(())
     }
 
     /// Waits for a window of the pick that was not open before the command started, or says
@@ -594,7 +938,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 stop(child)?;
                 return Ok(Err(Ended::WaitedTooLong));
             }
-            std::thread::sleep(POLL);
+            std::thread::sleep(WATCH);
         }
     }
 
@@ -645,7 +989,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                             log,
                             "record: listing the windows failed, trying again: {e:#}"
                         )?;
-                        std::thread::sleep(POLL);
+                        self.pause(POLL, log)?;
                         continue;
                     }
                     Err(e) => return Err(e),
@@ -675,7 +1019,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                     return Ok(Ended::WaitedTooLong);
                 }
             }
-            std::thread::sleep(POLL);
+            self.pause(POLL, log)?;
         }
     }
 }
@@ -692,6 +1036,68 @@ fn append_proofs(out: &Path, proofs: &[(&str, String, &String)]) -> Result<()> {
         let line = serde_json::json!({ "kind": kind, "file": path, "id": id });
         writeln!(file, "{line}")?;
     }
+    Ok(())
+}
+
+/// How one film went.
+pub(crate) struct FilmOutcome {
+    pub(crate) name: String,
+    pub(crate) seconds: f64,
+    /// Why it failed, when it did.
+    pub(crate) error: Option<String>,
+}
+
+/// What the machine was doing when films ended: films fail machine wide when the capture
+/// service is stuck, which shows as failures in a row under one service pid.
+pub(crate) struct Machine {
+    pub(crate) capture_service: Option<u32>,
+    pub(crate) load: Option<f64>,
+}
+
+impl Machine {
+    pub(crate) fn now() -> Self {
+        Machine {
+            capture_service: sys::capture_service(),
+            load: sys::load(),
+        }
+    }
+}
+
+/// Appends one line per film to the machine's film log at `file` (every repository and
+/// worktree writes to the same one), so how often films fail can be counted.
+pub(crate) fn note_films(
+    file: &Path,
+    repo: &Path,
+    check: &str,
+    films: &[FilmOutcome],
+    machine: &Machine,
+) -> Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let at = jiff::Timestamp::now().to_string();
+    let mut lines = String::new();
+    for film in films {
+        let line = serde_json::json!({
+            "at": at,
+            "repo": repo.display().to_string(),
+            "check": check,
+            "film": film.name,
+            "ok": film.error.is_none(),
+            "seconds": (film.seconds * 10.0).round() / 10.0,
+            "error": film.error,
+            "replayd": machine.capture_service,
+            "load": machine.load,
+        });
+        lines.push_str(&line.to_string());
+        lines.push('\n');
+    }
+    // One write, so lines from runs in other worktrees never interleave.
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)?
+        .write_all(lines.as_bytes())?;
     Ok(())
 }
 
@@ -736,6 +1142,8 @@ mod tests {
             bundle: format!("com.example.{app}"),
             app: app.into(),
             title: title.into(),
+            x: 100.0,
+            y: 100.0,
             width: 800.0,
             height: 600.0,
         }
@@ -804,12 +1212,35 @@ mod tests {
         /// Listings from this many seconds on fail, `failures` times in a row.
         fail_from: f64,
         failures: usize,
+        /// Why parking fails, when it does.
+        park_fails: Option<&'static str>,
+        /// Parking waits until this many seconds after the screen was made, as AeroSpace
+        /// does until it picks up a new window.
+        park_from: f64,
+        /// Whether parking makes the window wider, as AeroSpace's tiling and floating can.
+        park_resizes: bool,
+        /// Whether the window was parked.
+        parked: bool,
+        /// Why the app in front cannot be read, when it cannot.
+        front_fails: Option<&'static str>,
+        /// Why saved window positions cannot be put back, when they cannot.
+        put_back_fails: Option<&'static str>,
+        /// Why films cannot be finished, when they cannot.
+        film_fails: Option<&'static str>,
+        /// The app in front from each time on, the latest that started; CHILD for the
+        /// command's app.
+        fronts: Vec<(f64, i32)>,
+        /// The app brought to the front last, which wins over `fronts` until it changes.
+        brought: Option<(f64, i32)>,
+        /// What the recorder did to the screen, in order.
+        events: Vec<String>,
     }
 
     struct ScriptFilm {
         start: Instant,
         until: f64,
         path: PathBuf,
+        fails: Option<&'static str>,
     }
 
     impl Filming for ScriptFilm {
@@ -818,6 +1249,9 @@ mod tests {
         }
 
         fn stop(self) -> Result<()> {
+            if let Some(why) = self.fails {
+                bail!(why);
+            }
             std::fs::write(&self.path, "film")?;
             Ok(())
         }
@@ -841,17 +1275,80 @@ mod tests {
                     if w.pid == CHILD {
                         w.pid = self.child;
                     }
+                    if self.parked && self.park_resizes {
+                        w.width += 100.0;
+                    }
                     w
                 })
                 .collect())
         }
 
-        fn still(&mut self, _window: u32, path: &Path, _frame: &Frame) -> Result<(usize, usize)> {
+        fn still(&mut self, window: u32, path: &Path, _frame: &Frame) -> Result<(usize, usize)> {
+            self.events.push(format!("still {window}"));
             std::fs::write(path, "still")?;
             Ok((800, 600))
         }
 
+        fn park(&mut self, window: u32) -> Result<Parking> {
+            if let Some(why) = self.park_fails {
+                bail!(why);
+            }
+            if self.start.elapsed().as_secs_f64() < self.park_from {
+                return Ok(Parking::NotYet("the script has not picked it up".into()));
+            }
+            self.events.push(format!("park {window}"));
+            self.parked = true;
+            Ok(Parking::Parked("by script".into()))
+        }
+
+        fn front(&mut self) -> Result<i32> {
+            if let Some(why) = self.front_fails {
+                bail!(why);
+            }
+            let now = self.start.elapsed().as_secs_f64();
+            let scripted = self
+                .fronts
+                .iter()
+                .rev()
+                .find(|(from, _)| *from <= now)
+                .copied();
+            let latest = match (scripted, self.brought) {
+                (Some(s), Some(b)) if b.0 >= s.0 => Some(b),
+                (s, b) => s.or(b),
+            };
+            latest
+                .map(|(_, pid)| if pid == CHILD { self.child } else { pid })
+                .context("no app is in front")
+        }
+
+        fn bring_front(&mut self, pid: i32) -> Result<()> {
+            self.events.push(format!("front {pid}"));
+            self.brought = Some((self.start.elapsed().as_secs_f64(), pid));
+            Ok(())
+        }
+
+        fn put_back(&mut self) -> Result<usize> {
+            if let Some(why) = self.put_back_fails {
+                bail!(why);
+            }
+            let running = std::process::Command::new("kill")
+                .args(["-0", &self.child.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            self.events.push(
+                if running {
+                    "put back while the command ran"
+                } else {
+                    "put back"
+                }
+                .into(),
+            );
+            Ok(1)
+        }
+
         fn film(&mut self, window: u32, path: &Path, _frame: &Frame) -> Result<ScriptFilm> {
+            self.events.push(format!("film {window}"));
             let until = self
                 .shown
                 .iter()
@@ -861,6 +1358,7 @@ mod tests {
                 start: self.start,
                 until,
                 path: path.to_path_buf(),
+                fails: self.film_fails,
             })
         }
     }
@@ -882,6 +1380,10 @@ mod tests {
         took: Duration,
         /// Whether the command still ran afterwards.
         left_running: bool,
+        /// What the recorder did to the screen, in order.
+        events: Vec<String>,
+        /// How each film went, for the machine's film log.
+        films: Vec<FilmOutcome>,
     }
 
     impl Run {
@@ -895,12 +1397,49 @@ mod tests {
         failing(spec, script, command, (f64::INFINITY, 0)).unwrap()
     }
 
+    /// The developer's side of a run: where windows go and who is in front when.
+    struct Desk {
+        place: Place,
+        park_fails: Option<&'static str>,
+        park_from: f64,
+        park_resizes: bool,
+        front_fails: Option<&'static str>,
+        put_back_fails: Option<&'static str>,
+        film_fails: Option<&'static str>,
+        fronts: Vec<(f64, i32)>,
+    }
+
+    impl Default for Desk {
+        fn default() -> Self {
+            Desk {
+                place: Place::Stay,
+                park_fails: None,
+                park_from: 0.0,
+                park_resizes: false,
+                front_fails: None,
+                put_back_fails: None,
+                film_fails: None,
+                fronts: Vec::new(),
+            }
+        }
+    }
+
+    /// As [`record`], with the developer's desk set up as `desk`.
+    fn at_desk(spec: &str, script: Vec<Shown>, command: &str, desk: Desk) -> Run {
+        run(spec, script, command, (f64::INFINITY, 0), desk).unwrap()
+    }
+
     /// As [`record`], with `failures` listings in a row failing from `fail_from` seconds on.
-    fn failing(
+    fn failing(spec: &str, script: Vec<Shown>, command: &str, fails: (f64, usize)) -> Result<Run> {
+        run(spec, script, command, fails, Desk::default())
+    }
+
+    fn run(
         spec: &str,
         script: Vec<Shown>,
         command: &str,
         (fail_from, failures): (f64, usize),
+        desk: Desk,
     ) -> Result<Run> {
         let spec = Spec::parse(toml::from_str::<toml::Value>(spec)?)?;
         let out = tempfile::tempdir()?;
@@ -910,8 +1449,18 @@ mod tests {
             child: 0,
             fail_from,
             failures,
+            park_fails: desk.park_fails,
+            park_from: desk.park_from,
+            park_resizes: desk.park_resizes,
+            parked: false,
+            front_fails: desk.front_fails,
+            put_back_fails: desk.put_back_fails,
+            film_fails: desk.film_fails,
+            fronts: desk.fronts,
+            brought: None,
+            events: Vec::new(),
         };
-        let mut recorder = Recorder::new(screen, &spec)?;
+        let mut recorder = Recorder::new(screen, &spec, desk.place)?;
         let mut cmd = std::process::Command::new("sh");
         cmd.arg("-c").arg(command);
         #[cfg(unix)]
@@ -926,13 +1475,401 @@ mod tests {
         if left_running {
             stop(&mut child)?;
         }
+        let films = std::mem::take(&mut recorder.films);
+        let events = recorder.screen.events;
         Ok(Run {
-            recorded: recorded?,
+            recorded: recorded.with_context(|| format!("screen events {events:?}"))?,
             log: String::from_utf8(log)?,
             out,
             took,
             left_running,
+            events,
+            films,
         })
+    }
+
+    /// The developer's editor, in front before the command starts.
+    const EDITOR: i32 = 500;
+
+    #[test]
+    fn off_screen_parks_the_window_as_soon_as_it_appears_before_recording_it() {
+        let run = at_desk(
+            "still = \"home\"\nfilm = \"home\"",
+            vec![shown(7, CHILD, 0.2, 60.0)],
+            "sleep 2",
+            Desk {
+                place: Place::OffScreen,
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(
+            run.events,
+            ["park 7", "still 7", "film 7", "put back"],
+            "{}",
+            run.log
+        );
+        assert!(
+            run.log
+                .contains("record: parked the window off screen by script"),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn a_window_that_cannot_be_parked_is_recorded_where_it_opened_and_says_why() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.2, 60.0)],
+            "sleep 1.5",
+            Desk {
+                place: Place::OffScreen,
+                park_fails: Some("Accessibility is off for the terminal"),
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["film 7"]);
+        assert!(
+            run.log.contains(
+                "record: could not park the window off screen: Accessibility is off for the terminal"
+            ),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn without_off_screen_nothing_moves_and_the_log_says_how_to_turn_it_on() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.2, 60.0)],
+            "sleep 1.5",
+            Desk {
+                fronts: vec![(0.0, EDITOR), (0.3, CHILD)],
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(
+            run.events,
+            ["film 7"],
+            "neither parked nor focus taken back"
+        );
+        assert!(run.log.contains("FEARLEZZ_OFF_SCREEN=1"), "{}", run.log);
+    }
+
+    #[test]
+    fn off_screen_gives_focus_back_when_the_app_takes_it_while_it_settles() {
+        // The app takes focus after its window shows, as a real app does.
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 2",
+            Desk {
+                place: Place::OffScreen,
+                fronts: vec![(0.0, EDITOR), (0.4, CHILD)],
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(
+            run.events,
+            ["park 7", &format!("front {EDITOR}"), "film 7", "put back"],
+            "{}",
+            run.log
+        );
+        assert!(run.log.contains("record: gave focus back"), "{}", run.log);
+    }
+
+    #[test]
+    fn off_screen_gives_focus_back_before_parking_when_the_app_took_it_first() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 2",
+            Desk {
+                place: Place::OffScreen,
+                fronts: vec![(0.0, EDITOR), (0.05, CHILD)],
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(
+            run.events,
+            [&format!("front {EDITOR}"), "park 7", "film 7", "put back"],
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn off_screen_records_at_once_and_parks_once_the_window_manager_picked_the_window_up() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 3",
+            Desk {
+                place: Place::OffScreen,
+                park_from: 1.9,
+                fronts: vec![(0.0, EDITOR), (0.5, CHILD)],
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(
+            run.events,
+            [&format!("front {EDITOR}"), "film 7", "park 7", "put back"],
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn off_screen_waits_a_little_for_parking_so_the_film_starts_on_its_final_size() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 3",
+            Desk {
+                place: Place::OffScreen,
+                park_from: 1.2,
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["park 7", "film 7", "put back"], "{}", run.log);
+    }
+
+    #[test]
+    fn a_window_parked_while_it_is_filmed_says_when_its_size_changed() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 3",
+            Desk {
+                place: Place::OffScreen,
+                park_from: 1.9,
+                park_resizes: true,
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert!(
+            run.log.contains(
+                "record: the window changed size from 800x600 to 900x600 while it was filmed"
+            ),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn a_window_the_window_manager_never_picks_up_is_recorded_where_it_opened() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 4",
+            Desk {
+                place: Place::OffScreen,
+                park_from: f64::INFINITY,
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["film 7"], "{}", run.log);
+        assert!(
+            run.log.contains(&format!(
+                "record: could not park the window off screen: the script has not picked it \
+                 up after {PICK_UP:?}"
+            )),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn off_screen_says_why_focus_is_not_given_back_when_it_cannot_read_focus() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 1.5",
+            Desk {
+                place: Place::OffScreen,
+                front_fails: Some("the terminal may not read which app is in front"),
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["park 7", "film 7", "put back"], "{}", run.log);
+        assert!(
+            run.log.contains(
+                "record: focus is not given back: the terminal may not read which app is in front"
+            ),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn off_screen_puts_back_the_saved_window_position_once_the_command_ended() {
+        let run = at_desk(
+            "film = \"home\"\nseconds = 0.5",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 30",
+            Desk {
+                place: Place::OffScreen,
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events.last().map(String::as_str), Some("put back"));
+        assert!(!run.left_running, "the command ended before");
+        assert!(
+            run.log
+                .contains("record: put back 1 window position the app had saved"),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn a_recording_that_fails_stops_the_command_before_putting_back_saved_positions() {
+        let err = run(
+            "film = \"app\"",
+            vec![shown(7, CHILD, 0.1, 1.2)],
+            "sleep 30",
+            (1.5, 100),
+            Desk {
+                place: Place::OffScreen,
+                ..Desk::default()
+            },
+        )
+        .err()
+        .expect("the run fails");
+        let err = format!("{err:#}");
+        assert!(err.contains("\"put back\""), "{err}");
+        assert!(!err.contains("while the command ran"), "{err}");
+    }
+
+    #[test]
+    fn every_film_is_noted_with_how_it_went() {
+        let good = record(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 1.5",
+        );
+        assert_eq!(good.films.len(), 1, "{}", good.log);
+        assert_eq!(good.films[0].name, "home");
+        assert_eq!(good.films[0].error, None);
+        let bad = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 1.5",
+            Desk {
+                film_fails: Some("failure to process first sample buffer"),
+                ..Desk::default()
+            },
+        );
+        assert_eq!(bad.films.len(), 1, "{}", bad.log);
+        assert_eq!(
+            bad.films[0].error.as_deref(),
+            Some("failure to process first sample buffer")
+        );
+    }
+
+    #[test]
+    fn the_film_log_gets_one_line_per_film_with_the_machine_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("deep").join("films.jsonl");
+        let films = [
+            FilmOutcome {
+                name: "home".into(),
+                seconds: 4.2,
+                error: None,
+            },
+            FilmOutcome {
+                name: "menu".into(),
+                seconds: 0.0,
+                error: Some("failure to process first sample buffer".into()),
+            },
+        ];
+        let machine = Machine {
+            capture_service: Some(812),
+            load: Some(33.4),
+        };
+        note_films(&file, Path::new("/work/app"), "look", &films, &machine).unwrap();
+        note_films(&file, Path::new("/work/app"), "look", &films[..1], &machine).unwrap();
+        let lines: Vec<serde_json::Value> = std::fs::read_to_string(&file)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1]["repo"], "/work/app");
+        assert_eq!(lines[1]["check"], "look");
+        assert_eq!(lines[1]["film"], "menu");
+        assert_eq!(lines[1]["ok"], false);
+        assert_eq!(lines[1]["error"], "failure to process first sample buffer");
+        assert_eq!(lines[1]["replayd"], 812);
+        assert_eq!(lines[1]["load"], 33.4);
+        assert_eq!(lines[0]["ok"], true);
+        assert!(lines[0]["at"].as_str().is_some_and(|at| at.contains('T')));
+    }
+
+    #[test]
+    fn a_window_that_was_not_parked_has_no_position_to_put_back() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 1.5",
+            Desk {
+                place: Place::OffScreen,
+                park_fails: Some("Accessibility is off for the terminal"),
+                ..Desk::default()
+            },
+        );
+        assert_eq!(run.events, ["film 7"], "{}", run.log);
+    }
+
+    #[test]
+    fn saved_positions_that_cannot_be_put_back_are_told_and_the_run_still_passes() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 1.5",
+            Desk {
+                place: Place::OffScreen,
+                put_back_fails: Some("the preferences cannot be written"),
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert!(
+            run.log.contains(
+                "record: could not put back the app's saved window position: the preferences \
+                 cannot be written"
+            ),
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn off_screen_leaves_focus_the_developer_moved_to_another_app() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 2",
+            Desk {
+                place: Place::OffScreen,
+                fronts: vec![(0.0, EDITOR), (0.3, 600)],
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["park 7", "film 7", "put back"], "{}", run.log);
     }
 
     #[test]

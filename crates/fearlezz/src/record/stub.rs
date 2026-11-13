@@ -16,7 +16,13 @@ pub(crate) fn allowed() -> bool {
     false
 }
 
-pub(crate) fn windows() -> Result<Vec<Window>> {
+pub(crate) fn windows(
+    _apps: &mut std::collections::HashMap<i32, String>,
+) -> Result<Vec<super::WindowInfo>> {
+    bail!(NOT_HERE)
+}
+
+pub(crate) fn capturable(_id: u32) -> Result<Window> {
     bail!(NOT_HERE)
 }
 
@@ -38,4 +44,38 @@ impl super::Filming for Film {
     fn stop(self) -> Result<()> {
         bail!(NOT_HERE)
     }
+}
+
+pub(crate) fn park(_window: &super::WindowInfo) -> Result<super::Parking> {
+    bail!(NOT_HERE)
+}
+
+pub(crate) fn front() -> Result<i32> {
+    bail!(NOT_HERE)
+}
+
+pub(crate) fn bring_front(_pid: i32) -> Result<()> {
+    bail!(NOT_HERE)
+}
+
+pub(crate) struct Saved;
+
+pub(crate) fn saved(_bundle: &str) -> Option<Saved> {
+    None
+}
+
+pub(crate) fn put_back(_saved: &Saved) -> Result<usize> {
+    bail!(NOT_HERE)
+}
+
+pub(crate) fn capture_service() -> Option<u32> {
+    None
+}
+
+pub(crate) fn load() -> Option<f64> {
+    None
+}
+
+pub(crate) fn reads_front_cheaply() -> bool {
+    true
 }
