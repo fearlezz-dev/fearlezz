@@ -492,3 +492,26 @@ impl super::Filming for Film {
         }
     }
 }
+
+/// The pid of `replayd`, the macOS service behind every capture: the same pid across
+/// failing films means it is stuck, a new one that it restarted.
+pub(crate) fn capture_service() -> Option<u32> {
+    super::place::tool("pgrep", &["-x", "replayd"])
+        .ok()?
+        .lines()
+        .next()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// The machine's load over the last minute.
+pub(crate) fn load() -> Option<f64> {
+    // Prints "{ 1.23 4.56 7.89 }".
+    super::place::tool("sysctl", &["-n", "vm.loadavg"])
+        .ok()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}

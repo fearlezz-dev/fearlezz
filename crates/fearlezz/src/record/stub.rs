@@ -67,3 +67,11 @@ pub(crate) fn saved(_bundle: &str) -> Option<Saved> {
 pub(crate) fn put_back(_saved: &Saved) -> Result<usize> {
     bail!(NOT_HERE)
 }
+
+pub(crate) fn capture_service() -> Option<u32> {
+    None
+}
+
+pub(crate) fn load() -> Option<f64> {
+    None
+}

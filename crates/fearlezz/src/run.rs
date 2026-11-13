@@ -200,6 +200,28 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
             crate::panic_text(&*panic)
         ))
     });
+    // Every film, failed ones too, so how often films fail can be counted machine wide.
+    let films = recorder.films();
+    let noted = if films.is_empty() {
+        Ok(())
+    } else {
+        crate::git::cache_dir().and_then(|dir| {
+            crate::record::note_films(
+                &dir.join("films.jsonl"),
+                at.root,
+                &check.id,
+                films,
+                &crate::record::Machine::now(),
+            )
+        })
+    };
+    if let Err(e) = noted {
+        use std::io::Write as _;
+        writeln!(
+            log,
+            "record: could not note the film in the machine's film log: {e:#}"
+        )?;
+    }
     let recorded = match recorded {
         Ok(r) => r,
         Err(e) => {

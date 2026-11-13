@@ -518,6 +518,9 @@ const LIST_EVERY: Duration = Duration::from_secs(1);
 const SETTLE: Duration = Duration::from_millis(700);
 /// How often focus is looked at while a parked window settles.
 const FOCUS_POLL: Duration = Duration::from_millis(20);
+/// How often parking is asked again while the window manager has not picked the window up:
+/// each ask is a query to AeroSpace, which answers on the same thread that picks windows up.
+const PARK_EVERY: Duration = Duration::from_millis(100);
 /// How long a window manager gets to pick up a new window before it can be parked:
 /// AeroSpace learns of windows on its own schedule, which took over 2 s on a loaded machine.
 /// Short in unit tests, whose scripted screen never picks some windows up.
@@ -542,6 +545,8 @@ pub(crate) struct Recorder<'a, S> {
     developer: Option<Result<i32, String>>,
     /// Whether the window was parked, so its app's saved positions are put back.
     parked: bool,
+    /// How each film went, for the machine's film log.
+    films: Vec<FilmOutcome>,
 }
 
 impl<'a, S: Screen> Recorder<'a, S> {
@@ -559,7 +564,13 @@ impl<'a, S: Screen> Recorder<'a, S> {
             place,
             developer,
             parked: false,
+            films: Vec::new(),
         })
+    }
+
+    /// How each film of this recording went, failed ones too.
+    pub(crate) fn films(&self) -> &[FilmOutcome] {
+        &self.films
     }
 
     /// Runs alongside the check's command (`child`, leader of its own process group): waits
@@ -641,7 +652,17 @@ impl<'a, S: Screen> Recorder<'a, S> {
         if let Some(name) = &spec.film {
             let file = format!("{name}.mp4");
             let path = out.join(&file);
-            let mut film = self.screen.film(window.id, &path, &frame)?;
+            let mut film = match self.screen.film(window.id, &path, &frame) {
+                Ok(film) => film,
+                Err(e) => {
+                    self.films.push(FilmOutcome {
+                        name: name.clone(),
+                        seconds: 0.0,
+                        error: Some(format!("{e:#}")),
+                    });
+                    return Err(e);
+                }
+            };
             while child.try_wait()?.is_none()
                 && !film.ended()
                 && deadline.is_none_or(|d| Instant::now() < d)
@@ -649,20 +670,28 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 std::thread::sleep(POLL);
             }
             let secs = recording.elapsed().as_secs_f64();
-            match film.stop() {
+            let error = match film.stop() {
                 Ok(()) if path.exists() => {
                     writeln!(log, "record: film {file} of {secs:.1} s")?;
                     proofs.push(("film", file, name));
+                    None
                 }
                 Ok(()) => {
                     writeln!(log, "record: film {file} was not written")?;
                     recorded = false;
+                    Some("its file was not written".to_string())
                 }
                 Err(e) => {
                     writeln!(log, "record: film {file} failed: {e:#}")?;
                     recorded = false;
+                    Some(format!("{e:#}"))
                 }
-            }
+            };
+            self.films.push(FilmOutcome {
+                name: name.clone(),
+                seconds: secs,
+                error,
+            });
         }
         append_proofs(out, &proofs)?;
         let ended = self.finish(child, root, window.id, deadline, log)?;
@@ -691,9 +720,11 @@ impl<'a, S: Screen> Recorder<'a, S> {
         // Settling starts once parking ended; until then the window manager may still have
         // to pick the window up, and focus goes back all the while.
         let mut settled_at = None;
+        let mut tried: Option<Instant> = None;
         while settled_at.is_none_or(|at| Instant::now() < at) {
             self.give_back(window, &mut told, log)?;
-            if settled_at.is_none() {
+            if settled_at.is_none() && tried.is_none_or(|t| t.elapsed() >= PARK_EVERY) {
+                tried = Some(Instant::now());
                 let failed = match self.screen.park(window.id) {
                     Ok(Parking::Parked(how)) => {
                         self.parked = true;
@@ -707,6 +738,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                         std::thread::sleep(FOCUS_POLL);
                         continue;
                     }
+
                     Err(e) => Some(format!("{e:#}")),
                 };
                 if let Some(e) = failed {
@@ -895,6 +927,67 @@ fn append_proofs(out: &Path, proofs: &[(&str, String, &String)]) -> Result<()> {
     Ok(())
 }
 
+/// How one film went.
+pub(crate) struct FilmOutcome {
+    pub(crate) name: String,
+    pub(crate) seconds: f64,
+    /// Why it failed, when it did.
+    pub(crate) error: Option<String>,
+}
+
+/// What the machine was doing when films ended: films fail machine wide when the capture
+/// service is stuck, which shows as failures in a row under one service pid.
+pub(crate) struct Machine {
+    pub(crate) capture_service: Option<u32>,
+    pub(crate) load: Option<f64>,
+}
+
+impl Machine {
+    pub(crate) fn now() -> Self {
+        Machine {
+            capture_service: sys::capture_service(),
+            load: sys::load(),
+        }
+    }
+}
+
+/// Appends one line per film to the machine's film log at `file` (every repository and
+/// worktree writes to the same one), so how often films fail can be counted.
+pub(crate) fn note_films(
+    file: &Path,
+    repo: &Path,
+    check: &str,
+    films: &[FilmOutcome],
+    machine: &Machine,
+) -> Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let at = jiff::Timestamp::now().to_string();
+    let mut lines = String::new();
+    for film in films {
+        let line = serde_json::json!({
+            "at": at,
+            "repo": repo.display().to_string(),
+            "check": check,
+            "film": film.name,
+            "ok": film.error.is_none(),
+            "seconds": (film.seconds * 10.0).round() / 10.0,
+            "error": film.error,
+            "replayd": machine.capture_service,
+            "load": machine.load,
+        });
+        lines.push_str(&format!("{line}\n"));
+    }
+    // One write, so lines from runs in other worktrees never interleave.
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)?
+        .write_all(lines.as_bytes())?;
+    Ok(())
+}
+
 /// Ends the command's process group: politely, then for sure.
 #[cfg(unix)]
 #[expect(
@@ -1015,6 +1108,8 @@ mod tests {
         front_fails: Option<&'static str>,
         /// Why saved window positions cannot be put back, when they cannot.
         put_back_fails: Option<&'static str>,
+        /// Why films cannot be finished, when they cannot.
+        film_fails: Option<&'static str>,
         /// The app in front from each time on, the latest that started; CHILD for the
         /// command's app.
         fronts: Vec<(f64, i32)>,
@@ -1028,6 +1123,7 @@ mod tests {
         start: Instant,
         until: f64,
         path: PathBuf,
+        fails: Option<&'static str>,
     }
 
     impl Filming for ScriptFilm {
@@ -1036,6 +1132,9 @@ mod tests {
         }
 
         fn stop(self) -> Result<()> {
+            if let Some(why) = self.fails {
+                bail!(why);
+            }
             std::fs::write(&self.path, "film")?;
             Ok(())
         }
@@ -1138,6 +1237,7 @@ mod tests {
                 start: self.start,
                 until,
                 path: path.to_path_buf(),
+                fails: self.film_fails,
             })
         }
     }
@@ -1161,6 +1261,8 @@ mod tests {
         left_running: bool,
         /// What the recorder did to the screen, in order.
         events: Vec<String>,
+        /// How each film went, for the machine's film log.
+        films: Vec<FilmOutcome>,
     }
 
     impl Run {
@@ -1181,6 +1283,7 @@ mod tests {
         park_from: f64,
         front_fails: Option<&'static str>,
         put_back_fails: Option<&'static str>,
+        film_fails: Option<&'static str>,
         fronts: Vec<(f64, i32)>,
     }
 
@@ -1192,6 +1295,7 @@ mod tests {
                 park_from: 0.0,
                 front_fails: None,
                 put_back_fails: None,
+                film_fails: None,
                 fronts: Vec::new(),
             }
         }
@@ -1226,6 +1330,7 @@ mod tests {
             park_from: desk.park_from,
             front_fails: desk.front_fails,
             put_back_fails: desk.put_back_fails,
+            film_fails: desk.film_fails,
             fronts: desk.fronts,
             brought: None,
             events: Vec::new(),
@@ -1245,6 +1350,7 @@ mod tests {
         if left_running {
             stop(&mut child)?;
         }
+        let films = std::mem::take(&mut recorder.films);
         let events = recorder.screen.events;
         Ok(Run {
             recorded: recorded.with_context(|| format!("screen events {events:?}"))?,
@@ -1253,6 +1359,7 @@ mod tests {
             took,
             left_running,
             events,
+            films,
         })
     }
 
@@ -1480,6 +1587,71 @@ mod tests {
         let err = format!("{err:#}");
         assert!(err.contains("\"put back\""), "{err}");
         assert!(!err.contains("while the command ran"), "{err}");
+    }
+
+    #[test]
+    fn every_film_is_noted_with_how_it_went() {
+        let good = record(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 1.5",
+        );
+        assert_eq!(good.films.len(), 1, "{}", good.log);
+        assert_eq!(good.films[0].name, "home");
+        assert_eq!(good.films[0].error, None);
+        let bad = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 1.5",
+            Desk {
+                film_fails: Some("failure to process first sample buffer"),
+                ..Desk::default()
+            },
+        );
+        assert_eq!(bad.films.len(), 1, "{}", bad.log);
+        assert_eq!(
+            bad.films[0].error.as_deref(),
+            Some("failure to process first sample buffer")
+        );
+    }
+
+    #[test]
+    fn the_film_log_gets_one_line_per_film_with_the_machine_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("deep").join("films.jsonl");
+        let films = [
+            FilmOutcome {
+                name: "home".into(),
+                seconds: 4.2,
+                error: None,
+            },
+            FilmOutcome {
+                name: "menu".into(),
+                seconds: 0.0,
+                error: Some("failure to process first sample buffer".into()),
+            },
+        ];
+        let machine = Machine {
+            capture_service: Some(812),
+            load: Some(33.4),
+        };
+        note_films(&file, Path::new("/work/app"), "look", &films, &machine).unwrap();
+        note_films(&file, Path::new("/work/app"), "look", &films[..1], &machine).unwrap();
+        let lines: Vec<serde_json::Value> = std::fs::read_to_string(&file)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1]["repo"], "/work/app");
+        assert_eq!(lines[1]["check"], "look");
+        assert_eq!(lines[1]["film"], "menu");
+        assert_eq!(lines[1]["ok"], false);
+        assert_eq!(lines[1]["error"], "failure to process first sample buffer");
+        assert_eq!(lines[1]["replayd"], 812);
+        assert_eq!(lines[1]["load"], 33.4);
+        assert_eq!(lines[0]["ok"], true);
+        assert!(lines[0]["at"].as_str().is_some_and(|at| at.contains('T')));
     }
 
     #[test]

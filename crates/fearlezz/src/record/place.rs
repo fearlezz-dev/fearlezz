@@ -148,7 +148,7 @@ fn aerospace(args: &[&str]) -> Result<String> {
 /// Runs `program` and returns what it printed, or fails with what it said, or when it gives
 /// no answer in [`TOOL_TIMEOUT`]. Its output is read while it runs, so a long answer never
 /// blocks it.
-fn tool(program: &str, args: &[&str]) -> Result<String> {
+pub(super) fn tool(program: &str, args: &[&str]) -> Result<String> {
     use std::io::Read as _;
     let mut child = Command::new(program)
         .args(args)
