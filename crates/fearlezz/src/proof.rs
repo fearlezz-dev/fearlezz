@@ -149,6 +149,8 @@ pub(crate) enum Verdict {
     BaseFails,
     /// The tests pass on the base too.
     NotRed,
+    /// The change adds the check, so the base has nothing to compare.
+    New,
     /// The check could not run on the base.
     DidNotRun,
 }
@@ -411,6 +413,10 @@ impl Red {
             Verdict::BaseFails => format!(
                 "Red before green shows nothing for `{id}`: it already fails on the base \
                  commit without the change's test files."
+            ),
+            Verdict::New => format!(
+                "Red before green has nothing to compare for `{id}`: the check is new in this \
+                 change."
             ),
             Verdict::NotRed => {
                 let mut text = format!(

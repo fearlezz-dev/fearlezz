@@ -1174,6 +1174,7 @@ fn check(html: &mut String, dir: &Path, c: &Check, open: bool) -> Result<()> {
             Verdict::NotRed if red.blocks => ("changed", "Not red"),
             Verdict::NotRed => ("gone", "Not red"),
             Verdict::BaseFails => ("gone", "Base fails"),
+            Verdict::New => ("gone", "New check"),
             Verdict::DidNotRun if red.blocks => ("changed", "Red did not run"),
             Verdict::DidNotRun => ("gone", "Red did not run"),
         };

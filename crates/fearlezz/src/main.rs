@@ -1360,7 +1360,7 @@ fn red_before_green(
             blocks,
         };
         match &red.verdict {
-            red::Verdict::Red { tests } => {
+            red::Verdict::Red { tests, log } => {
                 println!(
                     "red before green {id}: {what} {fails} on the base commit and {passes} here"
                 );
@@ -1370,10 +1370,10 @@ fn red_before_green(
                         proof::test_names(tests, "")
                     );
                 }
-                println!("  log on the base: {}", red.base.log.display());
+                println!("  log on the base: {}", log.display());
                 record(shown(proof::Verdict::Red, tests, false));
             }
-            red::Verdict::Unbuilt => {
+            red::Verdict::Unbuilt { log } => {
                 let build = if one {
                     "does not build"
                 } else {
@@ -1383,7 +1383,7 @@ fn red_before_green(
                     "red before green {id}: {what} {build} on the base commit, which counts as \
                      failing, and {passes} here"
                 );
-                println!("  log on the base: {}", red.base.log.display());
+                println!("  log on the base: {}", log.display());
                 record(shown(proof::Verdict::Unbuilt, &[], false));
             }
             red::Verdict::BaseFails { log } => {
@@ -1393,6 +1393,13 @@ fn red_before_green(
                 );
                 println!("  log on the base: {}", log.display());
                 record(shown(proof::Verdict::BaseFails, &[], false));
+            }
+            red::Verdict::New => {
+                println!(
+                    "red before green {id}: the check is new in this change, so the base commit \
+                     has nothing to compare"
+                );
+                record(shown(proof::Verdict::New, &[], false));
             }
             red::Verdict::NotRed { tests } => {
                 let it = if one { "it does" } else { "they do" };

@@ -28,24 +28,24 @@ use crate::store::{Outcome, RunResult, Store};
 pub(crate) struct Red {
     /// The test files the change added, changed or removed that the check reads.
     pub files: Vec<String>,
-    /// The run on the base commit with those files.
-    pub base: RunResult,
     pub verdict: Verdict,
 }
 
 /// What the run on the base commit shows.
 pub(crate) enum Verdict {
     /// The check failed on the base and passes here. `tests` names the tests that failed there
-    /// and pass here, when its reader names tests.
-    Red { tests: Vec<String> },
+    /// and pass here, when its reader names tests; `log` is its output there.
+    Red { tests: Vec<String>, log: PathBuf },
     /// The check failed on the base before any of the change's tests ran: they do not build
     /// there. Counted as red.
-    Unbuilt,
+    Unbuilt { log: PathBuf },
     /// The check fails on the base without the change's test files too.
     BaseFails { log: PathBuf },
     /// The check passed on the base too. `tests` names the change's tests, when its reader
     /// names them.
     NotRed { tests: Vec<String> },
+    /// The base commit has no such check: the change adds it, so there is nothing to compare.
+    New,
 }
 
 /// The change's test files for `check`, by `test_files` alone: its inputs only decide reuse.
@@ -74,6 +74,12 @@ pub(crate) fn run(
     let files = test_files(check, wt);
     if files.is_empty() {
         return Ok(None);
+    }
+    if !on_base_config(git, wt, &check.id)? {
+        return Ok(Some(Red {
+            files,
+            verdict: Verdict::New,
+        }));
     }
     let mut hash = Sha256::new();
     let mut overlay = Vec::new();
@@ -131,19 +137,34 @@ pub(crate) fn run(
             if tests.is_empty() {
                 Verdict::BaseFails { log: plain.log }
             } else {
-                Verdict::Red { tests }
+                Verdict::Red {
+                    tests,
+                    log: result.log.clone(),
+                }
             }
         } else if tests.is_empty() && names_tests {
-            Verdict::Unbuilt
+            Verdict::Unbuilt {
+                log: result.log.clone(),
+            }
         } else {
-            Verdict::Red { tests }
+            Verdict::Red {
+                tests,
+                log: result.log.clone(),
+            }
         }
     };
-    Ok(Some(Red {
-        files,
-        base: result,
-        verdict,
-    }))
+    Ok(Some(Red { files, verdict }))
+}
+
+/// Whether the base commit's config has check `id`: one the change adds has no run there to
+/// compare with.
+fn on_base_config(git: &Git, wt: &Worktree, id: &str) -> Result<bool> {
+    let (base, _hold) = git.base_worktree(&wt.base, "")?;
+    if !base.root.join(crate::config::FILE).exists() {
+        return Ok(false);
+    }
+    let config = Config::load(&base.root, &git.common)?;
+    Ok(config.checks.iter().any(|c| c.id == id))
 }
 
 /// The check's run on `base`, reused when its inputs ran there before.
