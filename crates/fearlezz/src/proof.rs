@@ -176,6 +176,22 @@ impl Proof {
         }
     }
 
+    /// The proof of one look alone, for its own page.
+    pub(crate) fn of_look(look: Look) -> Proof {
+        Proof {
+            schema: SCHEMA,
+            repository: None,
+            pull: None,
+            commit: String::new(),
+            head: String::new(),
+            base: String::new(),
+            run_url: None,
+            checks: Vec::new(),
+            weakened: Vec::new(),
+            looks: vec![look],
+        }
+    }
+
     /// Adds a check that ran, with why it failed when it did.
     pub(crate) fn ran(
         &mut self,
@@ -292,7 +308,7 @@ impl Proof {
     }
 
     /// Writes `proof.json` into `dir` with every check's output and every picture's media
-    /// beside it, named relative to `dir`.
+    /// beside it, named relative to `dir`, and the page that shows it as `index.html`.
     pub(crate) fn write(&self, dir: &Path) -> Result<()> {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let mut out = self.clone();
@@ -319,7 +335,8 @@ impl Proof {
         }
         let path = dir.join("proof.json");
         fs::write(&path, serde_json::to_string_pretty(&out)?)
-            .with_context(|| format!("writing {}", path.display()))
+            .with_context(|| format!("writing {}", path.display()))?;
+        crate::report::write_proof(dir, &out)
     }
 }
 
@@ -332,7 +349,8 @@ impl Red {
         }
     }
 
-    fn note(&self, id: &str) -> String {
+    /// What it showed, in a sentence for a reader.
+    pub(crate) fn note(&self, id: &str) -> String {
         let (what, _, passes) = Red::subject(&self.files);
         let names = |text: &mut String, lead: &str| {
             if !self.tests.is_empty() {

@@ -308,3 +308,120 @@ fn the_bundle_holds_every_picture_with_its_media() {
         }
     }
 }
+
+// The page
+
+fn page(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("index.html")).expect("the bundle has its page")
+}
+
+#[test]
+fn the_page_leads_with_the_verdict_and_opens_what_broke() {
+    let repo = repo(CHECKS, &[("src/a.txt", "a\n")]);
+    repo.branch("feat/x");
+    repo.write("src/broken", "x\n");
+    repo.commit("break");
+    let (_, dir, _) = prove(&repo, &[]);
+    let html = page(&dir);
+    assert!(
+        html.contains("<h1>Not ready: 1 thing to fix</h1>"),
+        "{html}"
+    );
+    assert!(html.contains("Did anything break?"), "{html}");
+    // The failed check comes first and open, with why, what to do and its output.
+    let lint = html.find("id=\"check-lint\" open").expect("lint open");
+    let tests = html.find("id=\"check-tests\"").expect("tests listed");
+    assert!(lint < tests, "the failed check comes first");
+    assert!(
+        html.contains("Its command ended with exit code 1"),
+        "{html}"
+    );
+    assert!(html.contains("looking"), "its output: {html}");
+    assert!(html.contains("href=\"outputs/lint.log\""), "{html}");
+}
+
+#[test]
+fn the_page_says_ready_when_everything_holds() {
+    let repo = repo(CHECKS, &[("src/a.txt", "a\n")]);
+    repo.branch("feat/x");
+    repo.write("src/a.txt", "b\n");
+    repo.commit("change");
+    let (out, dir, _) = prove(&repo, &[]);
+    assert!(out.ok, "{}", out.stdout);
+    let html = page(&dir);
+    assert!(html.contains("<h1>Ready to merge</h1>"), "{html}");
+    assert!(!html.contains("Waits for you"), "{html}");
+}
+
+#[test]
+fn the_page_names_the_pull_request_and_fetches_nothing() {
+    let repo = repo(CHECKS, &[("src/a.txt", "a\n")]);
+    repo.branch("feat/x");
+    repo.write("src/a.txt", "b\n");
+    repo.commit("change");
+    let event = repo.path(".runs/event.json");
+    std::fs::write(
+        &event,
+        serde_json::json!({"pull_request": {
+            "number": 17,
+            "title": "feat: settings <save> on enter",
+            "html_url": "https://github.com/owner/repo/pull/17",
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let (_, dir, _) = prove(&repo, &[("GITHUB_EVENT_PATH", event.to_str().unwrap())]);
+    let html = page(&dir);
+    assert!(
+        html.contains("#17 feat: settings &lt;save&gt; on enter"),
+        "escaped title: {html}"
+    );
+    assert!(!html.contains("src=\"http"), "{html}");
+    assert!(!html.contains("<link"), "{html}");
+    assert!(html.contains("prefers-reduced-motion"));
+    assert!(html.contains("prefers-color-scheme: dark"));
+}
+
+#[test]
+fn the_page_puts_weaker_checks_with_what_waits_for_a_person() {
+    let repo = repo(CHECKS, &[("src/a.txt", "a\n")]);
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("echo looking; test ! -e src/broken", "true"),
+    );
+    repo.commit("weaker lint");
+    let (_, dir, _) = prove(&repo, &[]);
+    let html = page(&dir);
+    assert!(html.contains("Not ready: 1 thing wait"), "{html}");
+    let waits = html.find("Waits for you").expect("waits");
+    let weak = html
+        .find("Check <code>lint</code> is weaker")
+        .expect("the weakening");
+    assert!(waits < weak && weak < html.find("Did anything break?").unwrap());
+}
+
+#[test]
+fn the_page_shows_every_picture_and_how_to_approve_them() {
+    let repo = repo(SCREENS, &[("record.sh", RECORD), ("src/color.txt", "red")]);
+    repo.branch("feat/look");
+    repo.write("src/color.txt", "blue");
+    repo.commit("color");
+    let (_, dir, _) = prove(&repo, &[]);
+    let html = page(&dir);
+    assert!(html.contains("Does it look right to you?"), "{html}");
+    assert!(
+        html.contains("fearlezz say approve screens --said"),
+        "{html}"
+    );
+    assert!(html.contains("data-name=\"home.png\" data-change=\"changed\""));
+    assert!(html.contains("data-name=\"about.png\" data-change=\"same\""));
+    for src in html.split("src=\"").skip(1) {
+        let rel = src.split('"').next().unwrap();
+        assert!(
+            dir.join(rel).is_file(),
+            "the page shows {rel}, which is missing"
+        );
+    }
+}
