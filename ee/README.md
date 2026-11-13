@@ -14,6 +14,12 @@ A repository opts in by installing the Fearlezz GitHub App and letting its workf
 GitHub's OIDC token (`permissions: id-token: write`). CI asks whether the repository is
 installed before it sends anything.
 
+The app needs these repository permissions: **Metadata** read (who may read a repository, a
+person's permission, a pull request's head) and **Pull requests** write (GitHub takes it, or
+Issues write, for a comment on a pull request), so the user tokens of people signed in through
+it may post their approve and accept comments. A user token acts with both the app's and the
+person's permissions, so it posts only where the person could comment anyway.
+
 ### Protocol, version 1
 
 Every API call from CI carries `Authorization: Bearer <token>`: a GitHub Actions OIDC token
@@ -53,6 +59,7 @@ App origin pages:
 | `/<owner>/<repo>/proofs/<id>/` | The shell: a tiny title above a full height frame of `<FILES_ORIGIN>/<grant>/index.html`. The host writes it, never CI. Nothing below this path is served here. |
 | `/<owner>/<repo>/pull/<n>` | A redirect to the latest whole proof of that pull request. |
 | `/login`, `/callback`, `/logout` | GitHub sign in. |
+| `POST /<owner>/<repo>/proofs/<id>/approve`, `.../accept` | Posts `/fearlezz approve <words>` or `/fearlezz accept <words>` on the pull request as the signed in person. Only the shell calls these; see below. |
 
 Files origin: `/<grant>/<path>` is the bundle's file at that path, with its content type and
 `Range` support (films need it), so the page's relative links keep working.
@@ -67,15 +74,50 @@ Files origin: `/<grant>/<path>` is the bundle's file at that path, with its cont
   for browsers too old for it), so only the shell may frame them. The shell itself may not be
   framed and is never cached, since it holds a grant.
 
+### Approving on the page
+
+The page offers an Approve button per check whose pictures wait and an Accept button beside a
+weakening that waits for an admin, each with a field for the person's own words. The host never
+approves anything itself: it posts the same comment a person would write on the pull request,
+as that person, with their GitHub token, and CI judges it exactly as any other (who may, when
+it was written, what it covers). A fork's approval names its head:
+`/fearlezz approve <short head> <words>`.
+
+The page runs on the files origin, which never holds the sign in, so it cannot call the host.
+Framed (`window.parent !== window`), its button sends
+`postMessage({kind: "fearlezz:approve" | "fearlezz:accept", check, words})` to its parent. The
+shell takes messages only from its frame's window and from `FILES_ORIGIN`, posts them to its own
+origin, shows what came of it in a bar above the frame (the comment's link, or why it was
+refused), and answers the frame with `{kind: "fearlezz:posted", of, check, ok, text}`. Opened
+locally, not framed, the page shows the command or comment to copy instead. The shell's one
+script runs by a nonce that changes per view, and its `connect-src` is `'self'`.
+
+`POST /<owner>/<repo>/proofs/<id>/approve` (or `accept`) takes `{"check": "<check>", "words":
+"<words>"}` (`check` only for approve) and answers `201 {"url": "<comment url>", "pull": <n>,
+"comment": "<what was posted>", "login": "<who>"}`, or `{"error": "<why>"}` with:
+
+| Status | When |
+| --- | --- |
+| `403` | The `Origin` header is not `APP_ORIGIN` (the session cookie is `SameSite=Lax` too), or the person lacks write access (approve) or admin rights (accept), as GitHub's collaborator permission says when asked with their token. |
+| `415` | The body is not JSON, so no form on another site can post it. |
+| `401` | No session, or GitHub no longer takes its token: sign in again. |
+| `400` | Words empty, over 500 characters, or on more than one line. |
+| `404` | No such whole proof, or a private repository the person cannot read. |
+| `409` | The proof is not the latest whole proof of its pull request (the error names the newer one), the pull request's head moved past the proof's, or nothing of the kind waits in it (no changed pictures of that check, no weakening that waits). |
+| `502` | GitHub refused the comment, such as when the app lacks the permission below. |
+
+These are early refusals with clear reasons; CI still judges the comment.
+
 ### Who sees a page
 
 Anyone for a public repository; otherwise a signed in person whom GitHub gives at least read
 access to the repository. Anyone else gets `404`, so a private repository's name is not
-confirmed. A person without a session is sent to sign in first. Who may approve (write access)
-and share links come later.
+confirmed. A person without a session is sent to sign in first. Approving needs write access
+and accepting admin rights (above); share links come later.
 
-- **Sessions** live in D1 (`sessions`): the person's login, GitHub token and expiry (eight
-  hours, as long as the token). The `session` cookie (HttpOnly, Secure, SameSite=Lax) holds
+- **Sessions** live in D1 (`sessions`): the person's login, GitHub user token and expiry (eight
+  hours, as long as the token). The token stays on the server; it reads who may see a
+  repository and posts the person's approve and accept comments. The `session` cookie (HttpOnly, Secure, SameSite=Lax) holds
   only the row's random 128 bit id. Logging out deletes the row, so an old cookie signs in
   no one.
 - **GitHub's answers are cached** in D1 (`cache`): who may read a repository, per login and

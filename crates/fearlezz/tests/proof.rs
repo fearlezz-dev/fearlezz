@@ -397,6 +397,92 @@ fn the_page_puts_weaker_checks_with_what_waits_for_a_person() {
         .find("Check <code>lint</code> is weaker")
         .expect("the weakening");
     assert!(waits < weak && weak < html.find("Did anything break?").unwrap());
+    // Outside a pull request nothing can accept it, so the page offers no accept.
+    assert!(!html.contains("data-post=\"accept\""), "{html}");
+}
+
+#[test]
+fn the_page_offers_an_accept_where_a_weakening_waits() {
+    let repo = repo(CHECKS, &[("src/a.txt", "a\n")]);
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("echo looking; test ! -e src/broken", "true"),
+    );
+    repo.commit("weaker lint");
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    let gh = common::github::FakeGitHub::start();
+    gh.state().pulls.insert(7, (head.clone(), "open".into()));
+    let event = repo.path(".runs/event.json");
+    let pull = serde_json::json!({
+        "action": "synchronize",
+        "number": 7,
+        "pull_request": {
+            "number": 7,
+            "title": "feat: a weaker lint",
+            "head": {"sha": head, "repo": {"full_name": "owner/repo"}},
+        },
+        "repository": {"full_name": "owner/repo"},
+    });
+    std::fs::write(&event, pull.to_string()).unwrap();
+    let graphql = format!("{}/graphql", gh.url);
+    let temp = repo.path(".runs");
+    let (out, dir, proof) = prove(
+        &repo,
+        &[
+            ("GITHUB_ACTIONS", "true"),
+            ("GITHUB_EVENT_NAME", "pull_request"),
+            ("GITHUB_EVENT_PATH", event.to_str().unwrap()),
+            ("GITHUB_TOKEN", common::github::WORKFLOW_TOKEN),
+            ("GITHUB_API_URL", &gh.url),
+            ("GITHUB_GRAPHQL_URL", &graphql),
+            ("GITHUB_SERVER_URL", "https://github.com"),
+            ("GITHUB_REPOSITORY", "owner/repo"),
+            ("GITHUB_RUN_ID", "42"),
+            ("GITHUB_RUN_ATTEMPT", "1"),
+            ("RUNNER_TEMP", temp.to_str().unwrap()),
+        ],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(proof["weakenings_wait"], true, "{proof:#}");
+    let html = page(&dir);
+    let weak = html
+        .find("Check <code>lint</code> is weaker")
+        .expect("the weakening");
+    let accept = html.find("data-post=\"accept\"").expect("an accept");
+    assert!(weak < accept, "the accept sits with the weakening");
+    // Locally the comment is there to copy; framed, a button has the host post it.
+    assert!(html.contains("/fearlezz accept &lt;why the weaker proof is right&gt;"));
+    assert!(html.contains("<span>Accept</span>"), "{html}");
+    assert!(html.contains("<span>Copy accept comment</span>"), "{html}");
+}
+
+#[test]
+fn the_page_lets_a_person_approve_in_their_own_words() {
+    let repo = repo(SCREENS, &[("record.sh", RECORD), ("src/color.txt", "red")]);
+    repo.branch("feat/look");
+    repo.write("src/color.txt", "blue");
+    repo.commit("color");
+    let (_, dir, _) = prove(&repo, &[]);
+    let html = page(&dir);
+    let row = &html[html.find("class=\"row approve\"").expect("the approve row")..];
+    let row = &row[..row.find("</section>").unwrap()];
+    assert!(
+        row.contains("data-post=\"approve\" data-check=\"screens\""),
+        "{row}"
+    );
+    // The words are the person's own: nothing is filled in for them.
+    assert!(row.contains("<input required"), "{row}");
+    assert!(!row.contains("value=\"looks good\""), "{row}");
+    assert!(row.contains("<span>Approve</span>"), "{row}");
+    // Locally the command stays; framed, the page asks its parent, the host's shell, and
+    // fetches nothing itself.
+    assert!(row.contains("fearlezz say approve screens --said"), "{row}");
+    assert!(html.contains("var FRAMED = window.parent !== window;"));
+    assert!(html.contains("window.parent.postMessage({ kind: 'fearlezz:' + act.dataset.post"));
+    assert!(html.contains("e.source !== window.parent"));
+    assert!(!html.contains("fetch("), "the page fetches nothing");
 }
 
 #[test]

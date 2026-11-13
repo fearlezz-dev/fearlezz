@@ -81,10 +81,11 @@ slices:
     status: done
     note: "On CI a weakening waits in fearlezz/approval until an admin comments `/fearlezz accept <words>`; a fork's weakening still fails its proof, since its run cannot record what waits."
   - id: approve-on-page
-    tests: []
-    status: todo
+    tests: [crates/fearlezz/tests/proof.rs the_page_lets_a_person_approve_in_their_own_words the_page_offers_an_accept_where_a_weakening_waits, ee/host-tests/tests/host.rs an_approval_on_the_page_* a_forks_approval_names_its_head an_admin_accepts_a_weakening_on_the_page accepting_* approving_* the_shell_sends_what_its_frame_asks_to_its_own_origin]
+    status: done
+    note: "The page has an Approve button per waiting check and an Accept beside each waiting weakening (one accept covers them all), with the person's words required; framed it posts a message to its parent, locally it keeps the command or comment to copy. The shell takes messages only from its frame and FILES_ORIGIN, posts same origin JSON, shows the comment link or the refusal in a bar and tells the frame. The worker needs a session, Origin = APP_ORIGIN and JSON, the latest whole proof of the pull request with its head unmoved, something of the kind waiting, and write access (approve) or admin (accept) by GitHub's collaborator permission asked with the user token; it posts the comment with that token, a fork's approval naming its head. Open: the browser message flow is not driven in a real browser; never deployed; the app's pull requests write permission is documented, not yet set." 
   - id: share-links
     tests: []
     status: todo
 
-next: "Approve and accept on the hosted page: post the comment as the signed in person."
+next: "Share links: a person with write access makes a link anyone can open, until revoked."

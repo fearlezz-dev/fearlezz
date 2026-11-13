@@ -1,6 +1,7 @@
 //! A fake GitHub on a local port: the parts the proof host asks (the Actions OIDC keys, the app's
 //! installation on a repository and its installation tokens, a repository as a token sees it,
-//! the OAuth code exchange and the signed in user), kept in memory. It checks the app's JWT with
+//! the OAuth code exchange and the signed in user, a person's permission, a pull request's head
+//! and the comments people post on it), kept in memory. It checks the app's JWT with
 //! the app's public key, so a test proves the host signs it as GitHub expects.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,6 +30,27 @@ pub struct Repo {
     pub installation: Option<u64>,
     /// Logins with at least read access.
     pub readers: BTreeSet<String>,
+    /// Logins with write access.
+    pub writers: BTreeSet<String>,
+    /// Logins with admin rights.
+    pub admins: BTreeSet<String>,
+}
+
+/// A pull request's head: its commit and the repository it comes from.
+#[derive(Clone)]
+pub struct Head {
+    pub sha: String,
+    pub from: String,
+}
+
+/// A comment someone posted on a pull request.
+#[derive(Clone, Debug)]
+pub struct Posted {
+    pub repo: String,
+    pub pull: u64,
+    /// Whose token posted it.
+    pub login: String,
+    pub body: String,
 }
 
 pub struct State {
@@ -41,7 +63,13 @@ pub struct State {
     pub oidc_keys: Vec<(String, RsaPublicKey)>,
     /// Every request asked, as method and path, so a test can count what the host asks.
     pub asked: Vec<(String, String)>,
+    /// Pull request heads by repository and number; any other is `HEAD` from its own repository.
+    pub heads: BTreeMap<(String, u64), Head>,
+    pub posted: Vec<Posted>,
 }
+
+/// The head of a pull request nobody set one for: the head `proof.json` names in the tests.
+pub const HEAD: &str = "abc1234abc1234abc1234abc1234abc1234abc1";
 
 pub struct FakeGitHub {
     pub url: String,
@@ -54,10 +82,21 @@ struct Keys {
 
 impl FakeGitHub {
     pub fn start(oidc: RsaPublicKey, app: RsaPublicKey) -> FakeGitHub {
+        let set = |logins: &[&str]| logins.iter().map(|l| (*l).to_owned()).collect();
         let repo = |private: bool, installation: Option<u64>, readers: &[&str]| Repo {
             private,
             installation,
-            readers: readers.iter().map(|r| (*r).to_owned()).collect(),
+            readers: set(readers),
+            writers: BTreeSet::new(),
+            admins: BTreeSet::new(),
+        };
+        // Where people approve: a writer, an admin, and a reader who may only look.
+        let team = |private: bool, installation: Option<u64>| Repo {
+            private,
+            installation,
+            readers: set(&["reader", "writer", "admin"]),
+            writers: set(&["writer", "admin"]),
+            admins: set(&["admin"]),
         };
         let state = State {
             repos: BTreeMap::from([
@@ -68,14 +107,20 @@ impl FakeGitHub {
                 // Only the caching tests view these, so they can count what the host asks.
                 ("owner/cached".to_owned(), repo(true, Some(4), &["reader"])),
                 ("owner/open".to_owned(), repo(false, Some(5), &[])),
+                ("owner/team".to_owned(), team(false, Some(6))),
+                ("owner/vault".to_owned(), team(true, Some(7))),
             ]),
             codes: BTreeMap::from([
                 ("reader-code".to_owned(), "reader".to_owned()),
                 ("stranger-code".to_owned(), "stranger".to_owned()),
+                ("writer-code".to_owned(), "writer".to_owned()),
+                ("admin-code".to_owned(), "admin".to_owned()),
             ]),
             tokens: BTreeMap::new(),
             oidc_keys: vec![(KID.to_owned(), oidc)],
             asked: Vec::new(),
+            heads: BTreeMap::new(),
+            posted: Vec::new(),
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -100,6 +145,27 @@ impl FakeGitHub {
             .iter()
             .filter(|(m, p)| m == method && p == path)
             .count()
+    }
+
+    /// Sets the head of a pull request, as a push or a fork would.
+    pub fn set_head(&self, repo: &str, pull: u64, sha: &str, from: &str) {
+        let mut state = self.state.lock().unwrap();
+        let head = Head {
+            sha: sha.to_owned(),
+            from: from.to_owned(),
+        };
+        state.heads.insert((repo.to_owned(), pull), head);
+    }
+
+    /// The comments posted on a pull request, oldest first.
+    pub fn posted(&self, repo: &str, pull: u64) -> Vec<Posted> {
+        let state = self.state.lock().unwrap();
+        state
+            .posted
+            .iter()
+            .filter(|p| p.repo == repo && p.pull == pull)
+            .cloned()
+            .collect()
     }
 
     /// Publishes another Actions OIDC key, as GitHub does when it rotates them.
@@ -225,6 +291,86 @@ fn answer(
                     "private": repo.private,
                     "permissions": {"admin": false, "push": false, "pull": reads},
                 }),
+            )
+        }
+        ("GET", ["repos", owner, name, "collaborators", login, "permission"]) => {
+            let full = format!("{owner}/{name}");
+            let Some(caller) = state.tokens.get(token).cloned() else {
+                return (401, json!({"message": "Bad credentials"}));
+            };
+            let Some(repo) = state.repos.get(&full) else {
+                return (404, json!({"message": "Not Found"}));
+            };
+            if repo.private && !repo.readers.contains(&caller) {
+                return (404, json!({"message": "Not Found"}));
+            }
+            let login = (*login).to_owned();
+            let permission = if repo.admins.contains(&login) {
+                "admin"
+            } else if repo.writers.contains(&login) {
+                "write"
+            } else if repo.readers.contains(&login) || !repo.private {
+                "read"
+            } else {
+                "none"
+            };
+            (
+                200,
+                json!({"permission": permission, "user": {"login": login}}),
+            )
+        }
+        ("GET", ["repos", owner, name, "pulls", number]) => {
+            let full = format!("{owner}/{name}");
+            if !state.tokens.contains_key(token) {
+                return (401, json!({"message": "Bad credentials"}));
+            }
+            let Ok(number) = number.parse::<u64>() else {
+                return (404, json!({"message": "Not Found"}));
+            };
+            let head = state
+                .heads
+                .get(&(full.clone(), number))
+                .cloned()
+                .unwrap_or(Head {
+                    sha: HEAD.to_owned(),
+                    from: full.clone(),
+                });
+            (
+                200,
+                json!({
+                    "number": number,
+                    "state": "open",
+                    "head": {"sha": head.sha, "repo": {"full_name": head.from}},
+                    "base": {"repo": {"full_name": full}},
+                }),
+            )
+        }
+        ("POST", ["repos", owner, name, "issues", number, "comments"]) => {
+            let full = format!("{owner}/{name}");
+            let Some(login) = state.tokens.get(token).cloned() else {
+                return (401, json!({"message": "Bad credentials"}));
+            };
+            let readable = state
+                .repos
+                .get(&full)
+                .is_some_and(|r| !r.private || r.readers.contains(&login));
+            let (Ok(number), true) = (number.parse::<u64>(), readable) else {
+                return (404, json!({"message": "Not Found"}));
+            };
+            let Some(body) = body.get("body").and_then(Value::as_str) else {
+                return (422, json!({"message": "body is missing"}));
+            };
+            let id = state.posted.len() + 1;
+            state.posted.push(Posted {
+                repo: full.clone(),
+                pull: number,
+                login: login.clone(),
+                body: body.to_owned(),
+            });
+            let url = format!("https://github.com/{full}/pull/{number}#issuecomment-{id}");
+            (
+                201,
+                json!({"id": id, "body": body, "html_url": url, "user": {"login": login, "type": "User"}}),
             )
         }
         ("POST", ["login", "oauth", "access_token"]) => {

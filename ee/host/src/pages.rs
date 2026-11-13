@@ -1,5 +1,6 @@
-//! The pages on the app origin: a proof's shell, which frames its bundle from the files origin,
-//! and a pull request's latest whole proof. Who sees them mirrors GitHub: anyone for a public
+//! The pages on the app origin: a proof's shell, which frames its bundle from the files origin
+//! and passes on what the page asks to approve or accept, and a pull request's latest whole
+//! proof. Who sees them mirrors GitHub: anyone for a public
 //! repository, people who may read it for a private one, and `404` for everyone else, so a
 //! private repository's name is not confirmed.
 
@@ -7,7 +8,7 @@ use serde::Deserialize;
 use worker::{Env, Headers, Request, Response};
 
 use crate::session::{self, to_sign_in};
-use crate::{Answer, Config, Refusal, cache, files, github, repo_key};
+use crate::{Answer, Config, Refusal, cache, crypto, files, github, repo_key};
 
 /// How long the host trusts GitHub's word on who may see a repository.
 const SIGHT_SECONDS: i64 = 300;
@@ -18,7 +19,7 @@ fn not_found() -> Refusal {
 
 /// Whether the request may see the repository's pages: `false` means sign in first, and a
 /// person GitHub shows nothing of it gets `404`.
-async fn open(req: &Request, env: &Env, config: &Config, repo: &str) -> Result<bool, Refusal> {
+pub async fn open(req: &Request, env: &Env, config: &Config, repo: &str) -> Result<bool, Refusal> {
     if let Some(session) = session::read(req, env).await? {
         let key = format!("reads:{}:{repo}", session.login.to_lowercase());
         let reads = match cache::get(env, &key).await? {
@@ -123,6 +124,7 @@ pub async fn shell(
         None => format!("{owner}/{name}"),
     };
     let frame = format!("{}index.html", files::folder(config, &repo, id).await?);
+    let nonce = crypto::random_id()?;
 
     let headers = Headers::new();
     headers.set("Content-Type", "text/html; charset=utf-8")?;
@@ -131,19 +133,28 @@ pub async fn shell(
     headers.set(
         "Content-Security-Policy",
         &format!(
-            "default-src 'none'; style-src 'unsafe-inline'; frame-src {}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+            "default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{nonce}'; connect-src 'self'; frame-src {}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
             config.files_origin
         ),
     )?;
     headers.set("X-Frame-Options", "DENY")?;
     headers.set("Referrer-Policy", "no-referrer")?;
-    Ok(Response::ok(shell_html(&title, &frame))?.with_headers(headers))
+    let html = shell_html(&title, &frame, &nonce, &config.files_origin);
+    Ok(Response::ok(html)?.with_headers(headers))
 }
 
 /// The shell: a tiny title above a frame filling the window. The sandbox lets the bundle run its
-/// scripts on its own origin, but never navigate the window away from the app.
-fn shell_html(title: &str, frame: &str) -> String {
+/// scripts on its own origin, but never navigate the window away from the app. The page cannot
+/// reach the API from there, so when a person approves or accepts in it, it asks the shell by
+/// message; the shell takes messages only from its frame on the files origin, posts them to its
+/// own origin with the session, shows what came of it in a bar above the frame, and tells the
+/// page.
+fn shell_html(title: &str, frame: &str, nonce: &str, files_origin: &str) -> String {
     let (title, frame) = (escape(title), escape(frame));
+    // A JSON string inside a script: `<` escaped, so no value can end the script early.
+    let files = serde_json::to_string(files_origin)
+        .unwrap_or_default()
+        .replace('<', "\\u003c");
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -155,13 +166,65 @@ fn shell_html(title: &str, frame: &str) -> String {
 html, body {{ margin: 0; height: 100%; }}
 body {{ display: flex; flex-direction: column; font: 12px/1.5 system-ui, sans-serif; color: #555; background: #fff; }}
 header {{ padding: 2px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+#said {{ margin: 4px 12px; padding: 6px 12px; border: 1px solid #d0d0d0; border-radius: 8px; font-size: 13px; color: #222; }}
+#said.ok {{ border-color: #2f8f5b; }}
+#said.no {{ border-color: #c4532c; }}
+#said a {{ color: inherit; font-weight: 600; }}
 iframe {{ flex: 1; width: 100%; border: 0; }}
-@media (prefers-color-scheme: dark) {{ body {{ color: #aaa; background: #111; }} }}
+@media (prefers-color-scheme: dark) {{ body {{ color: #aaa; background: #111; }} #said {{ color: #eee; border-color: #444; }} }}
 </style>
 </head>
 <body>
 <header>{title}</header>
+<p id="said" role="status" hidden></p>
 <iframe src="{frame}" sandbox="allow-scripts allow-same-origin" title="{title}"></iframe>
+<script nonce="{nonce}">
+(function () {{
+var FILES = {files};
+var frame = document.querySelector('iframe'), said = document.getElementById('said');
+function show(ok, text, link, label) {{
+  said.textContent = text;
+  if (link) {{
+    var a = document.createElement('a');
+    a.href = link; a.textContent = label;
+    if (ok) {{ a.target = '_blank'; a.rel = 'noopener'; }}
+    said.appendChild(document.createTextNode(' '));
+    said.appendChild(a);
+  }}
+  said.className = ok ? 'ok' : 'no';
+  said.hidden = false;
+}}
+window.addEventListener('message', function (e) {{
+  if (e.source !== frame.contentWindow || e.origin !== FILES) return;
+  var m = e.data || {{}};
+  var kind = m.kind === 'fearlezz:approve' ? 'approve' : m.kind === 'fearlezz:accept' ? 'accept' : null;
+  if (!kind || typeof m.words !== 'string') return;
+  var check = typeof m.check === 'string' ? m.check : null;
+  function tell(ok, text) {{
+    frame.contentWindow.postMessage({{ kind: 'fearlezz:posted', of: kind, check: check, ok: ok, text: text }}, FILES);
+  }}
+  fetch(location.pathname + kind, {{
+    method: 'POST', credentials: 'same-origin',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ check: check, words: m.words }})
+  }}).then(function (r) {{
+    return r.json().catch(function () {{ return {{}}; }}).then(function (b) {{ return {{ status: r.status, body: b }}; }});
+  }}).then(function (a) {{
+    if (a.status === 201) {{
+      show(true, 'Posted on pull request #' + a.body.pull + ' as @' + a.body.login + ': ' + a.body.comment + '.', a.body.url, 'Open the comment');
+      tell(true, 'Posted on the pull request as @' + a.body.login + '. CI counts it now.');
+    }} else {{
+      var why = a.body.error || 'the host answered ' + a.status;
+      show(false, 'Not posted: ' + why + '.', a.status === 401 ? '/login?next=' + encodeURIComponent(location.pathname) : null, 'Sign in');
+      tell(false, 'Not posted: ' + why + '.');
+    }}
+  }}, function () {{
+    show(false, 'Not posted: the host could not be reached. Try again.');
+    tell(false, 'Not posted: the host could not be reached.');
+  }});
+}});
+}})();
+</script>
 </body>
 </html>
 "#

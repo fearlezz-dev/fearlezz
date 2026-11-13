@@ -1,6 +1,7 @@
 //! The proof page: one static page that shows everything a proof holds. Its verdict and
 //! what waits for a person (a weaker check, pictures to approve, with the approve command in
-//! the developer's own words) come first; then whether anything broke (every check, its
+//! the developer's own words, or, framed by the proof host, an Approve or Accept button that
+//! asks the host to post the comment as the person) come first; then whether anything broke (every check, its
 //! tests, findings, red before green and output); then whether it looks right: counts that
 //! filter, pictures grouped by screen, viewport or theme, five ways to compare a before with
 //! its after, films on one clock with lanes of where they differ, and a decision per picture.
@@ -303,6 +304,22 @@ kbd { font: 14px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
 .cmd { font: 14px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--quiet);
   overflow-x: auto; white-space: nowrap; margin: 0; }
 
+/* Framed by the proof host, a button posts the comment as the person instead of a command to
+   copy; the host's shell does the posting, so the page still fetches nothing. */
+.go .send { display: none; }
+.framed .go .send { display: inline-flex; }
+.framed .go .copy, .framed .go .copy2, .framed .go .copy-comment { display: none; }
+.go button:disabled { opacity: .45; cursor: default; transform: none; }
+.go .send.done:disabled { opacity: 1; }
+.approve.blocked .go .send { background: var(--changed); }
+.weak .act { margin-top: 18px; }
+.row .cmd { max-width: none; }
+.weak .cmd { margin-top: 10px; }
+.posted { margin: 0; font-weight: 700; animation: rise .3s var(--ease); }
+.posted.ok { color: var(--ok); }
+.posted.no { color: var(--changed); }
+@keyframes rise { from { opacity: 0; transform: translateY(4px); } }
+
 @media (max-width: 760px) {
   main { padding-top: 24px; }
   .stage.side { grid-template-columns: 1fr; }
@@ -321,12 +338,15 @@ kbd { font: 14px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
   .count { min-width: 0; padding: 8px 14px 10px; }
   .count b { font-size: 26px; }
 }
-@media (prefers-reduced-motion: reduce) { .lane i, .mark, .strip li { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .lane i, .mark, .strip li, .posted { animation: none; } }
 "#;
 
 /// Everything on the page that moves or decides.
 const SCRIPT: &str = r#"
 (function () {
+// Framed, the page is on the proof host, whose shell posts approvals for it.
+var FRAMED = window.parent !== window;
+if (FRAMED) document.documentElement.classList.add('framed');
 var WORD = { changed: 'Changed', timing: 'Timing only', new: 'New', gone: 'Gone', unreadable: 'Could not read', same: 'Unchanged' };
 
 function el(tag, cls, kids) {
@@ -668,7 +688,7 @@ function dock() {
     copy.dataset.copy = c; copy.dataset.label = 'Copy approve command';
     copy2.hidden = false; copy2.dataset.label = 'Copy as message';
     copy2.dataset.copy = 'The ' + CHECK + ' look is right. In my words: ' + quote(words) + (flakyLine ? '\n' + flakyLine : '');
-    cmd.textContent = c;
+    cmd.textContent = FRAMED ? 'Posts on the pull request as you: /fearlezz approve ' + (said.value.trim() || '<your words>') : c;
   }
   [copy, copy2].forEach(function (b) { if (!b.classList.contains('done')) b.querySelector('span').textContent = b.dataset.label; });
 }
@@ -688,6 +708,68 @@ if (row) {
 
 dock();
 layout();
+});
+
+// ----- approve or accept on the proof host -----------------------------------------------
+// Framed, the page runs on the host's files origin, which never holds the sign in, so it
+// cannot post anything itself: it asks the shell, its parent, which posts the comment as the
+// person and answers with what came of it. Locally the comment or command is there to copy.
+var posts = Array.prototype.slice.call(document.querySelectorAll('[data-post]'));
+posts.forEach(function (act) {
+  var row = act.closest('.row'), input = act.querySelector('.said input'), send = act.querySelector('.send');
+  var note = row.querySelector('.posted'), cmd = row.querySelector('.cmd'), copy = act.querySelector('.copy-comment');
+  function ready() {
+    var busy = row.classList.contains('sending') || row.classList.contains('sent');
+    send.disabled = busy || !input.value.trim() || row.classList.contains('blocked');
+    if (act.dataset.post === 'accept') {
+      var c = '/fearlezz accept ' + (input.value.trim() || '<why the weaker proof is right>');
+      if (copy) copy.dataset.copy = c;
+      cmd.textContent = (FRAMED ? 'Posts on the pull request as you: ' : 'An admin comments on the pull request: ') + c;
+    }
+  }
+  act.ready = ready;
+  input.addEventListener('input', ready);
+  new MutationObserver(ready).observe(row, { attributes: true, attributeFilter: ['class'] });
+  if (copy) copy.addEventListener('click', function () {
+    copyText(copy.dataset.copy).then(function () {
+      copy.classList.remove('done'); void copy.offsetWidth; copy.classList.add('done');
+      copy.querySelector('span').textContent = 'Copied';
+      clearTimeout(copy.timer);
+      copy.timer = setTimeout(function () { copy.classList.remove('done'); copy.querySelector('span').textContent = copy.dataset.label; }, 1800);
+    });
+  });
+  send.addEventListener('click', function () {
+    var words = input.value.trim();
+    if (!FRAMED || !words || send.disabled) return;
+    row.classList.add('sending');
+    send.querySelector('span').textContent = 'Posting';
+    note.hidden = true;
+    // Only the host's shell may frame the page (its files allow no other frame ancestor), so
+    // the parent is the shell; the message holds nothing but the person's words.
+    window.parent.postMessage({ kind: 'fearlezz:' + act.dataset.post, check: act.dataset.check || null, words: words }, '*');
+  });
+  act.answer = function (m) {
+    row.classList.remove('sending');
+    note.textContent = m.text;
+    note.className = 'posted ' + (m.ok ? 'ok' : 'no');
+    note.hidden = false;
+    if (m.ok) {
+      row.classList.add('sent');
+      input.disabled = true;
+      send.classList.add('done');
+      send.querySelector('span').textContent = 'Posted';
+    } else send.querySelector('span').textContent = send.dataset.label;
+    ready();
+  };
+  ready();
+});
+window.addEventListener('message', function (e) {
+  if (!FRAMED || e.source !== window.parent) return;
+  var m = e.data || {};
+  if (m.kind !== 'fearlezz:posted') return;
+  posts.forEach(function (act) {
+    if (act.dataset.post === m.of && (act.dataset.check || null) === (m.check || null)) act.answer(m);
+  });
 });
 
 // ----- keys ---------------------------------------------------------------------------
@@ -866,7 +948,7 @@ fn verdict(proof: &Proof) -> (String, String, &'static str) {
         .ran_here()
         .filter(|c| c.outcome == Ran::Failed)
         .count();
-    let fixes = proof.blockers().len() - proof.weakened.len();
+    let fixes = proof.to_fix();
     let person = proof.weakened.len() + waits.len();
     let things = |n: usize| {
         if n == 1 {
@@ -886,17 +968,14 @@ fn verdict(proof: &Proof) -> (String, String, &'static str) {
     if person > 0 {
         let mut what = Vec::new();
         if !waits.is_empty() {
-            what.push("approve changed pictures");
+            what.push("a person with write access approves changed pictures");
         }
         if !proof.weakened.is_empty() {
-            what.push("accept a weaker check");
+            what.push("a person with admin rights accepts a weaker check");
         }
         return (
             format!("Not ready: {} wait for you", things(person)),
-            format!(
-                "Every check passed. A person with write access has to {}.",
-                what.join(" and ")
-            ),
+            format!("Every check passed. It waits until {}.", what.join(" and ")),
             "wait",
         );
     }
@@ -919,11 +998,15 @@ fn waits(html: &mut String, proof: &Proof) -> std::fmt::Result {
     for item in &proof.weakened {
         write!(
             html,
-            "<div class=\"row weak\"><div class=\"what\"><p class=\"title\"><b>{}</b><span class=\"word timing\">Weaker</span></p><p>{}</p><p class=\"fix\">{}</p></div></div>",
+            "<div class=\"row weak\"><div class=\"what\"><p class=\"title\"><b>{}</b><span class=\"word timing\">Weaker</span></p><p>{}</p><p class=\"fix\">{}</p></div>",
             prose(&sentence(&item.what)),
             prose(&sentence(&item.why)),
             prose(&sentence(&item.fix))
         )?;
+        if proof.weakenings_wait {
+            accept(html)?;
+        }
+        html.push_str("</div>");
     }
     for look in &waits {
         approve(html, look)?;
@@ -932,8 +1015,21 @@ fn waits(html: &mut String, proof: &Proof) -> std::fmt::Result {
     Ok(())
 }
 
+/// Accepting a weakening that waits for an admin: their words, and the comment to copy, or,
+/// framed by the proof host, an Accept button that has the host post it as them. One accept
+/// covers the whole weakened proof.
+fn accept(html: &mut String) -> std::fmt::Result {
+    let comment = "/fearlezz accept <why the weaker proof is right>";
+    write!(
+        html,
+        "<div class=\"act\" data-post=\"accept\"><label class=\"said\"><span>Why it is right</span><input required maxlength=\"500\" placeholder=\"in your own words\" autocomplete=\"off\"></label><div class=\"go\"><button type=\"button\" class=\"primary copy-comment\" data-label=\"Copy accept comment\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy accept comment</span></button><button type=\"button\" class=\"primary send\" data-label=\"Accept\" disabled><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Accept</span></button></div></div><p class=\"cmd\">An admin comments on the pull request: {}</p><p class=\"posted\" role=\"status\" hidden></p>",
+        esc(comment)
+    )
+}
+
 /// One look's pictures to approve: a peek at the first, how many were looked at, and the
-/// approve command in the developer's own words.
+/// approve command in the developer's own words, or, framed by the proof host, an Approve
+/// button that has the host post `/fearlezz approve <words>` as the person.
 fn approve(html: &mut String, look: &Look) -> std::fmt::Result {
     let need = look.to_look_at();
     let check = esc(&look.check);
@@ -961,7 +1057,7 @@ fn approve(html: &mut String, look: &Look) -> std::fmt::Result {
     let command = format!("fearlezz say approve {} --said \"looks good\"", look.check);
     write!(
         html,
-        "</div><div class=\"what\"><b>Pictures of <code>{check}</code></b><p class=\"q\">{}. <a href=\"#look-{check}\">Look at them</a></p></div><div class=\"progress\"><svg class=\"ring\" viewBox=\"0 0 38 38\" aria-hidden=\"true\"><circle class=\"track\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/><circle class=\"fill\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/></svg><span><span class=\"num seen\">0</span> of <span class=\"num need\">{need}</span> looked at</span></div></div><div class=\"act\"><label class=\"said\"><span>In your words</span><input value=\"looks good\" autocomplete=\"off\"></label><div class=\"go\"><button type=\"button\" class=\"primary copy\" data-copy=\"{cmd}\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy approve command</span></button><button type=\"button\" class=\"second copy2\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy as message</span></button></div></div><p class=\"cmd\">{cmd}</p></div>",
+        "</div><div class=\"what\"><b>Pictures of <code>{check}</code></b><p class=\"q\">{}. <a href=\"#look-{check}\">Look at them</a></p></div><div class=\"progress\"><svg class=\"ring\" viewBox=\"0 0 38 38\" aria-hidden=\"true\"><circle class=\"track\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/><circle class=\"fill\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/></svg><span><span class=\"num seen\">0</span> of <span class=\"num need\">{need}</span> looked at</span></div></div><div class=\"act\" data-post=\"approve\" data-check=\"{check}\"><label class=\"said\"><span>In your words</span><input required maxlength=\"500\" placeholder=\"looks good\" autocomplete=\"off\"></label><div class=\"go\"><button type=\"button\" class=\"primary copy\" data-copy=\"{cmd}\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy approve command</span></button><button type=\"button\" class=\"second copy2\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy as message</span></button><button type=\"button\" class=\"primary send\" data-label=\"Approve\" disabled><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Approve</span></button></div></div><p class=\"cmd\">{cmd}</p><p class=\"posted\" role=\"status\" hidden></p></div>",
         esc(&look.counts()),
         cmd = esc(&command)
     )
@@ -972,7 +1068,7 @@ fn breaks(html: &mut String, dir: &Path, proof: &Proof) -> Result<()> {
     if proof.checks.is_empty() {
         return Ok(());
     }
-    let broke = proof.blockers().len() > proof.weakened.len();
+    let broke = proof.to_fix() > 0;
     let ran: Vec<&Check> = proof.ran_here().collect();
     let passed = ran.iter().filter(|c| c.outcome == Ran::Passed).count();
     let tests: u64 = ran.iter().filter_map(|c| c.tests).sum();

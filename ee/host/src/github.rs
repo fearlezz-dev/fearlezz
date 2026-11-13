@@ -1,5 +1,6 @@
 //! What the host asks GitHub: whether the app is installed on a repository, whether a
-//! repository is public or a person may read it, and who signed in.
+//! repository is public or a person may read it, who signed in, and, for approving on a page,
+//! a person's permission, a pull request's head, and posting a comment as that person.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -147,4 +148,98 @@ pub async fn login(config: &Config, token: &str) -> Result<Option<String>> {
     let url = format!("{}/user", config.github_api);
     let reply = call(Method::Get, &url, Some(token), None).await?;
     Ok(reply.body["login"].as_str().map(str::to_owned))
+}
+
+/// What a person may do in a repository, as CI's judgment of an approval reads it.
+pub enum Permission {
+    Admin,
+    Write,
+    /// Read, or nothing.
+    Less,
+    /// The token no longer works.
+    BadToken,
+}
+
+/// The permission of `login` on `repo`, asked with their own token: the legacy role GitHub
+/// gives (`admin`, `write`, `read`, `none`), the one CI counts.
+pub async fn permission(
+    config: &Config,
+    repo: &str,
+    login: &str,
+    token: &str,
+) -> Result<Permission> {
+    let url = format!(
+        "{}/repos/{repo}/collaborators/{login}/permission",
+        config.github_api
+    );
+    let reply = call(Method::Get, &url, Some(token), None).await?;
+    Ok(match (reply.status, reply.body["permission"].as_str()) {
+        (401, _) => Permission::BadToken,
+        (200, Some("admin")) => Permission::Admin,
+        (200, Some("write")) => Permission::Write,
+        _ => Permission::Less,
+    })
+}
+
+/// A pull request's head: its commit and the repository it comes from.
+pub struct Head {
+    pub sha: String,
+    pub from: String,
+}
+
+/// The head of pull request `number`, or None when the token no longer works.
+pub async fn head(config: &Config, repo: &str, number: u64, token: &str) -> Result<Option<Head>> {
+    let url = format!("{}/repos/{repo}/pulls/{number}", config.github_api);
+    let reply = call(Method::Get, &url, Some(token), None).await?;
+    match reply.status {
+        200 => Ok(Some(Head {
+            sha: reply.body["head"]["sha"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            from: reply.body["head"]["repo"]["full_name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        })),
+        401 => Ok(None),
+        status => Err(worker::Error::RustError(format!(
+            "GitHub answered {status} for pull request {number} of {repo}"
+        ))),
+    }
+}
+
+/// What came of posting a comment.
+pub enum Posted {
+    /// Its page.
+    Url(String),
+    BadToken,
+    /// GitHub's status, such as 403 when the app lacks the permission to comment.
+    Refused(u16),
+}
+
+/// Posts `body` on pull request `number` as the person whose token it is.
+pub async fn comment(
+    config: &Config,
+    repo: &str,
+    number: u64,
+    token: &str,
+    body: &str,
+) -> Result<Posted> {
+    let url = format!(
+        "{}/repos/{repo}/issues/{number}/comments",
+        config.github_api
+    );
+    let reply = call(
+        Method::Post,
+        &url,
+        Some(token),
+        Some(&json!({"body": body})),
+    )
+    .await?;
+    Ok(match (reply.status, reply.body["html_url"].as_str()) {
+        (201, Some(url)) => Posted::Url(url.to_owned()),
+        (401, _) => Posted::BadToken,
+        (status, _) => Posted::Refused(status),
+    })
 }

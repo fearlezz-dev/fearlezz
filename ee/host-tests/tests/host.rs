@@ -224,6 +224,58 @@ fn main() {
             "an_unknown_key_id_refetches_the_jwks_once",
             an_unknown_key_id_refetches_the_jwks_once,
         ),
+        (
+            "an_approval_on_the_page_posts_the_comment_as_the_person",
+            an_approval_on_the_page_posts_the_comment_as_the_person,
+        ),
+        (
+            "a_forks_approval_names_its_head",
+            a_forks_approval_names_its_head,
+        ),
+        (
+            "an_admin_accepts_a_weakening_on_the_page",
+            an_admin_accepts_a_weakening_on_the_page,
+        ),
+        (
+            "accepting_on_the_page_needs_admin_rights",
+            accepting_on_the_page_needs_admin_rights,
+        ),
+        (
+            "approving_on_the_page_needs_write_access",
+            approving_on_the_page_needs_write_access,
+        ),
+        (
+            "approving_on_the_page_needs_a_session",
+            approving_on_the_page_needs_a_session,
+        ),
+        (
+            "approving_from_another_site_is_refused",
+            approving_from_another_site_is_refused,
+        ),
+        (
+            "approving_needs_words_on_one_line",
+            approving_needs_words_on_one_line,
+        ),
+        (
+            "approving_an_older_proof_is_refused",
+            approving_an_older_proof_is_refused,
+        ),
+        (
+            "approving_after_a_newer_push_is_refused",
+            approving_after_a_newer_push_is_refused,
+        ),
+        (
+            "approving_needs_something_that_waits",
+            approving_needs_something_that_waits,
+        ),
+        (
+            "approving_a_private_proof_without_access_gets_not_found",
+            approving_a_private_proof_without_access_gets_not_found,
+        ),
+        (
+            "the_shell_sends_what_its_frame_asks_to_its_own_origin",
+            the_shell_sends_what_its_frame_asks_to_its_own_origin,
+        ),
     ];
     let trials = tests
         .iter()
@@ -838,7 +890,275 @@ fn an_unknown_key_id_refetches_the_jwks_once() {
     assert_eq!(github.asked("GET", jwks), before + 2);
 }
 
+// Approving and accepting on the page.
+
+fn an_approval_on_the_page_posts_the_comment_as_the_person() {
+    let id = upload_proof("owner/team", 50, &waiting("owner/team", 50));
+    let session = sign_in("writer-code", "/");
+    let words = json!({"check": "screens", "words": "  the header reads well "});
+    let answer = act("owner/team", &id, "approve", Some(&session), words);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let posted = world().github.posted("owner/team", 50);
+    assert_eq!(posted.len(), 1, "{posted:?}");
+    assert_eq!(
+        posted[0].login, "writer",
+        "posted with the person's own token"
+    );
+    assert_eq!(posted[0].body, "/fearlezz approve the header reads well");
+    let url = answer.json()["url"].as_str().unwrap().to_owned();
+    assert!(
+        url.starts_with("https://github.com/owner/team/pull/50#issuecomment-"),
+        "{url}"
+    );
+    assert_eq!(answer.json()["pull"], 50);
+}
+
+fn a_forks_approval_names_its_head() {
+    let id = upload_proof("owner/team", 51, &waiting("owner/team", 51));
+    world()
+        .github
+        .set_head("owner/team", 51, github::HEAD, "someone/team");
+    let session = sign_in("writer-code", "/");
+    let words = json!({"check": "screens", "words": "looks right"});
+    let answer = act("owner/team", &id, "approve", Some(&session), words);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let posted = world().github.posted("owner/team", 51);
+    assert_eq!(posted[0].body, "/fearlezz approve abc1234 looks right");
+}
+
+fn an_admin_accepts_a_weakening_on_the_page() {
+    let id = upload_proof("owner/team", 52, &waiting("owner/team", 52));
+    let session = sign_in("admin-code", "/");
+    let words = json!({"words": "the old command hid nothing"});
+    let answer = act("owner/team", &id, "accept", Some(&session), words);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let posted = world().github.posted("owner/team", 52);
+    assert_eq!(posted.len(), 1, "{posted:?}");
+    assert_eq!(posted[0].login, "admin");
+    assert_eq!(
+        posted[0].body,
+        "/fearlezz accept the old command hid nothing"
+    );
+}
+
+fn accepting_on_the_page_needs_admin_rights() {
+    let id = upload_proof("owner/team", 53, &waiting("owner/team", 53));
+    let session = sign_in("writer-code", "/");
+    let answer = act(
+        "owner/team",
+        &id,
+        "accept",
+        Some(&session),
+        json!({"words": "fine"}),
+    );
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    let error = answer.json()["error"].as_str().unwrap().to_owned();
+    assert!(error.contains("admin rights"), "{error}");
+    assert!(world().github.posted("owner/team", 53).is_empty());
+}
+
+fn approving_on_the_page_needs_write_access() {
+    let id = upload_proof("owner/team", 54, &waiting("owner/team", 54));
+    let session = sign_in("reader-code", "/");
+    let words = json!({"check": "screens", "words": "fine"});
+    let answer = act("owner/team", &id, "approve", Some(&session), words);
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    let error = answer.json()["error"].as_str().unwrap().to_owned();
+    assert!(error.contains("write access"), "{error}");
+    assert!(world().github.posted("owner/team", 54).is_empty());
+}
+
+fn approving_on_the_page_needs_a_session() {
+    let id = upload_proof("owner/team", 55, &waiting("owner/team", 55));
+    let words = json!({"check": "screens", "words": "fine"});
+    let answer = act("owner/team", &id, "approve", None, words);
+    assert_eq!(answer.status, 401, "{}", answer.text());
+    assert!(answer.json()["error"].as_str().unwrap().contains("sign in"));
+    assert!(world().github.posted("owner/team", 55).is_empty());
+}
+
+fn approving_from_another_site_is_refused() {
+    let id = upload_proof("owner/team", 56, &waiting("owner/team", 56));
+    let session = sign_in("writer-code", "/");
+    let path = format!("/owner/team/proofs/{id}/approve");
+    let body = json!({"check": "screens", "words": "fine"})
+        .to_string()
+        .into_bytes();
+    let files = world().worker.files.clone();
+    let cookie = session.as_str();
+    for origin in [Some("https://evil.test"), Some(files.as_str()), None] {
+        let mut headers = vec![("Cookie", cookie), ("Content-Type", "application/json")];
+        if let Some(origin) = origin {
+            headers.push(("Origin", origin));
+        }
+        let answer = request("POST", &path, &headers, Some(body.clone()));
+        assert_eq!(answer.status, 403, "{origin:?}: {}", answer.text());
+    }
+    // A form post from the app's own origin is no JSON, and gets nothing either.
+    let origin = world().worker.url.clone();
+    let headers = [
+        ("Cookie", cookie),
+        ("Origin", origin.as_str()),
+        ("Content-Type", "application/x-www-form-urlencoded"),
+    ];
+    let answer = request("POST", &path, &headers, Some(b"words=fine".to_vec()));
+    assert_eq!(answer.status, 415, "{}", answer.text());
+    assert!(world().github.posted("owner/team", 56).is_empty());
+}
+
+fn approving_needs_words_on_one_line() {
+    let id = upload_proof("owner/team", 57, &waiting("owner/team", 57));
+    let session = sign_in("writer-code", "/");
+    for words in ["", "   ", "fine\nreally", "fine\rreally"] {
+        let body = json!({"check": "screens", "words": words});
+        let answer = act("owner/team", &id, "approve", Some(&session), body);
+        assert_eq!(answer.status, 400, "{words:?}: {}", answer.text());
+    }
+    let long = "a".repeat(501);
+    let body = json!({"check": "screens", "words": long});
+    let answer = act("owner/team", &id, "approve", Some(&session), body);
+    assert_eq!(answer.status, 400, "{}", answer.text());
+    assert!(world().github.posted("owner/team", 57).is_empty());
+}
+
+fn approving_an_older_proof_is_refused() {
+    let older = upload_proof("owner/team", 58, &waiting("owner/team", 58));
+    let newer = upload_proof("owner/team", 58, &waiting("owner/team", 58));
+    let session = sign_in("writer-code", "/");
+    let words = json!({"check": "screens", "words": "fine"});
+    let answer = act(
+        "owner/team",
+        &older,
+        "approve",
+        Some(&session),
+        words.clone(),
+    );
+    assert_eq!(answer.status, 409, "{}", answer.text());
+    let error = answer.json()["error"].as_str().unwrap().to_owned();
+    assert!(error.contains("newer proof"), "{error}");
+    assert!(error.contains(&newer), "it names the newer one: {error}");
+    assert!(world().github.posted("owner/team", 58).is_empty());
+    let answer = act("owner/team", &newer, "approve", Some(&session), words);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+}
+
+fn approving_after_a_newer_push_is_refused() {
+    let id = upload_proof("owner/team", 59, &waiting("owner/team", 59));
+    world().github.set_head(
+        "owner/team",
+        59,
+        "fff0000fff0000fff0000fff0000fff0000fff00",
+        "owner/team",
+    );
+    let session = sign_in("writer-code", "/");
+    let words = json!({"check": "screens", "words": "fine"});
+    let answer = act("owner/team", &id, "approve", Some(&session), words);
+    assert_eq!(answer.status, 409, "{}", answer.text());
+    let error = answer.json()["error"].as_str().unwrap().to_owned();
+    assert!(error.contains("fff0000"), "{error}");
+    assert!(world().github.posted("owner/team", 59).is_empty());
+}
+
+fn approving_needs_something_that_waits() {
+    // Nothing waits in a proof without pictures or weakenings.
+    let id = upload_proof("owner/team", 60, &proof("owner/team", 60));
+    let session = sign_in("admin-code", "/");
+    let approve = json!({"check": "screens", "words": "fine"});
+    let answer = act("owner/team", &id, "approve", Some(&session), approve);
+    assert_eq!(answer.status, 409, "{}", answer.text());
+    let answer = act(
+        "owner/team",
+        &id,
+        "accept",
+        Some(&session),
+        json!({"words": "fine"}),
+    );
+    assert_eq!(answer.status, 409, "{}", answer.text());
+    // Pictures of another check do not wait.
+    let id = upload_proof("owner/team", 61, &waiting("owner/team", 61));
+    let other = json!({"check": "others", "words": "fine"});
+    let answer = act("owner/team", &id, "approve", Some(&session), other);
+    assert_eq!(answer.status, 409, "{}", answer.text());
+    assert!(world().github.posted("owner/team", 60).is_empty());
+    assert!(world().github.posted("owner/team", 61).is_empty());
+}
+
+fn approving_a_private_proof_without_access_gets_not_found() {
+    let id = upload_proof("owner/vault", 62, &waiting("owner/vault", 62));
+    let session = sign_in("stranger-code", "/");
+    let words = json!({"check": "screens", "words": "fine"});
+    let answer = act("owner/vault", &id, "approve", Some(&session), words.clone());
+    assert_eq!(answer.status, 404, "{}", answer.text());
+    // A writer of the private repository approves it.
+    let session = sign_in("writer-code", "/");
+    let answer = act("owner/vault", &id, "approve", Some(&session), words);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+}
+
+fn the_shell_sends_what_its_frame_asks_to_its_own_origin() {
+    let id = upload_proof("owner/team", 63, &waiting("owner/team", 63));
+    let answer = get(&format!("/owner/team/proofs/{id}/"), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let csp = answer.header("content-security-policy").unwrap().to_owned();
+    let html = answer.text();
+    // Its one script runs by a nonce that changes per view, and may only call its own origin.
+    let nonce = attribute(&html[html.find("<script").unwrap()..], "nonce").unwrap();
+    assert!(nonce.len() >= 32, "{nonce}");
+    assert!(
+        csp.contains(&format!("script-src 'nonce-{nonce}'")),
+        "{csp}"
+    );
+    assert!(csp.contains("connect-src 'self'"), "{csp}");
+    let again = get(&format!("/owner/team/proofs/{id}/"), &[]).text();
+    assert!(!again.contains(&nonce), "a fresh nonce per view");
+    // It listens to its frame alone, from the files origin, and sends nothing elsewhere.
+    let files = &world().worker.files;
+    assert!(html.contains("e.source !== frame.contentWindow"), "{html}");
+    assert!(html.contains(&format!("\"{files}\"")), "{html}");
+    assert!(html.contains("credentials: 'same-origin'"), "{html}");
+    assert!(
+        html.contains("id=\"said\""),
+        "the bar for what happened: {html}"
+    );
+}
+
 // Helpers.
+
+/// A proof whose pictures of `screens` wait for approval and whose weakening waits for an
+/// admin's accept.
+fn waiting(repository: &str, pull: u64) -> Value {
+    let mut proof = proof(repository, pull);
+    proof["looks"] = json!([{
+        "check": "screens",
+        "base_commit": "def5678",
+        "base_result": "passed",
+        "items": [
+            {"name": "home.png", "change": "changed", "flaky": false},
+            {"name": "about.png", "change": "same", "flaky": false},
+        ],
+    }]);
+    proof["weakened"] = json!([{
+        "what": "check `tests` is weaker",
+        "why": "it runs another command",
+        "fix": "ask a person with admin rights",
+    }]);
+    proof["weakenings_wait"] = json!(true);
+    proof
+}
+
+/// Approves or accepts a proof from its shell, as the shell's script asks: same origin, JSON.
+fn act(repository: &str, id: &str, kind: &str, session: Option<&str>, body: Value) -> Answer {
+    let path = format!("/{repository}/proofs/{id}/{kind}");
+    let origin = world().worker.url.clone();
+    let mut headers = vec![
+        ("Origin", origin.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    if let Some(session) = session {
+        headers.push(("Cookie", session));
+    }
+    request("POST", &path, &headers, Some(body.to_string().into_bytes()))
+}
 
 /// The claims Actions puts in a pull request run's token.
 fn claims(repository: &str, pull: u64) -> Value {
@@ -910,8 +1230,18 @@ fn upload_body(proof: &Value, files: &[(&str, &[u8])]) -> Vec<u8> {
 
 /// The whole upload as CI does it; the proof's id.
 fn upload(repository: &str, pull: u64, files: &[(&str, &[u8])]) -> String {
+    upload_with(repository, pull, &proof(repository, pull), files)
+}
+
+/// The upload of `proof` with a page of its own.
+fn upload_proof(repository: &str, pull: u64, proof: &Value) -> String {
+    let page = format!("<p>{repository} {pull} {}</p>", now());
+    upload_with(repository, pull, proof, &[("index.html", page.as_bytes())])
+}
+
+fn upload_with(repository: &str, pull: u64, proof: &Value, files: &[(&str, &[u8])]) -> String {
     let token = ci(repository, pull);
-    let body = upload_body(&proof(repository, pull), files);
+    let body = upload_body(proof, files);
     let answer = api("POST", "/api/v1/proofs", &token, Some(body));
     assert_eq!(answer.status, 201, "{}", answer.text());
     let created = answer.json();

@@ -7,6 +7,7 @@
 //! where the session cookie lives.
 
 mod api;
+mod approve;
 mod cache;
 mod crypto;
 mod files;
@@ -21,7 +22,8 @@ use worker::{Env, Request, Response, Result, event};
 async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
     let config = Config::from(&env)?;
     let path = req.path();
-    let api = path.starts_with("/api/");
+    // API callers and the shell's posts read JSON; people read text.
+    let json = path.starts_with("/api/") || req.method() == worker::Method::Post;
     let on_files = req.url()?.origin().ascii_serialization() == config.files_origin;
     let answer = if on_files {
         files::serve(&req, &env, &config, &path).await
@@ -30,7 +32,7 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
     };
     match answer {
         Ok(response) => Ok(response),
-        Err(refusal) => refusal.response(api && !on_files),
+        Err(refusal) => refusal.response(json && !on_files),
     }
 }
 
@@ -45,6 +47,10 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         ("GET", ["login"]) => session::login(&req, config).await,
         ("GET", ["callback"]) => session::callback(&req, env, config).await,
         ("GET", ["logout"]) => session::logout(&req, env).await,
+        ("POST", [owner, repo, "proofs", id, action]) => match approve::Kind::from_path(action) {
+            Some(kind) => approve::act(req, env, config, owner, repo, id, kind).await,
+            None => Err(Refusal::new(404, "not found")),
+        },
         ("GET", [owner, repo, "pull", number]) => {
             pages::pull(&req, env, config, owner, repo, number).await
         }
@@ -73,8 +79,8 @@ impl Refusal {
     }
 
     /// API callers read JSON; people read text.
-    fn response(&self, api: bool) -> Result<Response> {
-        let response = if api {
+    fn response(&self, json: bool) -> Result<Response> {
+        let response = if json {
             Response::from_json(&serde_json::json!({"error": self.message}))?
         } else {
             Response::ok(self.message.clone())?
