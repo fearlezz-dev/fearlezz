@@ -217,9 +217,8 @@ fn the_bundle_says_what_the_change_weakens() {
     assert!(!out.ok, "{}", out.stdout);
     let weakened = proof["weakened"].as_array().unwrap();
     assert_eq!(weakened.len(), 1, "{proof:#}");
-    assert_eq!(weakened[0]["what"], "check `lint` is weaker", "{proof:#}");
-    assert!(weakened[0]["why"].is_string(), "{proof:#}");
-    assert!(weakened[0]["fix"].is_string(), "{proof:#}");
+    assert_eq!(weakened[0]["check"], "lint", "{proof:#}");
+    assert!(weakened[0]["how"].is_string(), "{proof:#}");
 }
 
 /// Every shell script in `tests/` must pass; they are the check's test files.

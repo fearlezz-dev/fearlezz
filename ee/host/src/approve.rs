@@ -7,38 +7,17 @@
 //! The page that asks runs on the files origin, which never gets the sign in; its shell on the
 //! app origin passes the ask on, so these endpoints take only same origin JSON.
 
+use fearlezz_proof::Proof;
+use fearlezz_proof::waits::{Kind, short};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use worker::{Env, Request, Response};
 
-use crate::github::{self, Permission};
+use crate::github;
 use crate::{Answer, Config, Refusal, pages, repo_key, session};
 
 /// Longer words than this are no approval but an essay; the pull request has room for that.
 const MAX_WORDS: usize = 500;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    Approve,
-    Accept,
-}
-
-impl Kind {
-    pub fn from_path(segment: &str) -> Option<Kind> {
-        match segment {
-            "approve" => Some(Kind::Approve),
-            "accept" => Some(Kind::Accept),
-            _ => None,
-        }
-    }
-
-    fn word(self) -> &'static str {
-        match self {
-            Kind::Approve => "approve",
-            Kind::Accept => "accept",
-        }
-    }
-}
 
 #[derive(Deserialize)]
 struct Ask {
@@ -78,7 +57,7 @@ pub async fn act(
     let row = pages::whole(env, &repo, id)
         .await?
         .ok_or_else(|| Refusal::new(404, "not found"))?;
-    let proof: Value = serde_json::from_str(&row.proof)
+    let proof: Proof = serde_json::from_str(&row.proof)
         .map_err(|e| worker::Error::RustError(format!("a stored proof does not read back: {e}")))?;
     let Some(pull) = row.pull.map(|n| n as u64) else {
         return Err(Refusal::new(
@@ -102,28 +81,22 @@ pub async fn act(
     waits(&proof, kind, ask.check.as_deref())?;
 
     let full = format!("{owner}/{name}");
-    let needs = match kind {
-        Kind::Approve => "write access to",
-        Kind::Accept => "admin rights on",
+    let Some(role) = github::permission(config, &full, &person.login, &person.token).await? else {
+        return Err(sign_in_again());
     };
-    let allowed = match github::permission(config, &full, &person.login, &person.token).await? {
-        Permission::Admin => true,
-        Permission::Write => kind == Kind::Approve,
-        Permission::Less => false,
-        Permission::BadToken => return Err(sign_in_again()),
-    };
-    if !allowed {
+    if !kind.allows(role) {
         return Err(Refusal::new(
             403,
             format!(
-                "@{} cannot {} here: that needs {needs} {full} on GitHub",
+                "@{} cannot {} here: that needs {} {full} on GitHub",
                 person.login,
-                kind.word()
+                kind.word(),
+                kind.needs_on()
             ),
         ));
     }
 
-    let head = proof["head"].as_str().unwrap_or_default();
+    let head = proof.head.as_str();
     let Some(now) = github::head(config, &full, pull, &person.token).await? else {
         return Err(sign_in_again());
     };
@@ -187,11 +160,10 @@ fn words(said: &str, kind: Kind) -> Result<String, Refusal> {
     }
     let words = said.split_whitespace().collect::<Vec<_>>().join(" ");
     if words.is_empty() {
-        let what = match kind {
-            Kind::Approve => "what you think of the pictures",
-            Kind::Accept => "why the weaker proof is right",
-        };
-        return Err(Refusal::new(400, format!("say {what}, in your own words")));
+        return Err(Refusal::new(
+            400,
+            format!("say {}, in your own words", kind.hint()),
+        ));
     }
     if words.chars().count() > MAX_WORDS {
         return Err(Refusal::new(
@@ -204,18 +176,12 @@ fn words(said: &str, kind: Kind) -> Result<String, Refusal> {
 
 /// Whether the proof shows something `kind` settles: pictures of `check` that changed, or a
 /// weakening that waits for an admin rather than failing the proof.
-fn waits(proof: &Value, kind: Kind, check: Option<&str>) -> Result<(), Refusal> {
+fn waits(proof: &Proof, kind: Kind, check: Option<&str>) -> Result<(), Refusal> {
+    let obligations = proof.obligations();
     match kind {
         Kind::Approve => {
             let check = check.unwrap_or_default();
-            let changed = proof["looks"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|look| look["check"] == check)
-                .flat_map(|look| look["items"].as_array().into_iter().flatten())
-                .any(|item| item["change"] != "same" && item["flaky"] != true);
-            if !changed {
+            if !obligations.checks().contains(&check) {
                 return Err(Refusal::new(
                     409,
                     format!("no changed pictures of `{check}` wait in this proof"),
@@ -223,8 +189,7 @@ fn waits(proof: &Value, kind: Kind, check: Option<&str>) -> Result<(), Refusal> 
             }
         }
         Kind::Accept => {
-            let weakened = proof["weakened"].as_array().is_some_and(|w| !w.is_empty());
-            if !weakened || proof["weakenings_wait"] != true {
+            if obligations.of(kind).next().is_none() {
                 return Err(Refusal::new(
                     409,
                     "no weakened proof waits for an accept in this proof",
@@ -237,9 +202,4 @@ fn waits(proof: &Value, kind: Kind, check: Option<&str>) -> Result<(), Refusal> 
 
 pub fn sign_in_again() -> Refusal {
     Refusal::new(401, "your GitHub sign in expired; sign in again")
-}
-
-/// A commit as people read it.
-fn short(sha: &str) -> &str {
-    sha.get(..7).unwrap_or(sha)
 }

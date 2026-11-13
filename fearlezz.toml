@@ -16,17 +16,18 @@ no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
 inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**", "README.md", ".github/workflows/proof.yml"]
 
 # The proof host in ee/ is a Cargo workspace of its own, built to wasm, so the rust piece's
-# checks at the root do not reach it. These read only ee/, so core edits never rerun them.
+# checks at the root do not reach it. These read ee/ and the proof bundle crate it shares with
+# the core, so other core edits never rerun them.
 [check.ee-fmt]
 run = "cargo fmt --manifest-path ee/Cargo.toml --all --check"
 stage = "working"
-inputs = ["ee/**"]
+inputs = ["ee/**", "crates/fearlezz-proof/**"]
 
 [check.ee-clippy]
 run = "cargo clippy --manifest-path ee/Cargo.toml --all-targets --quiet --message-format=json"
 stage = "working"
 findings = { read = "cargo", lints = ["clippy", "rustc"] }
-inputs = ["ee/**"]
+inputs = ["ee/**", "crates/fearlezz-proof/**"]
 
 # Builds the worker and drives it under wrangler dev against a fake GitHub.
 [check.ee-tests]
@@ -34,7 +35,7 @@ run = "cargo test --manifest-path ee/Cargo.toml --quiet"
 stage = "working"
 tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }
 test_files = ["ee/host-tests/tests/**"]
-inputs = ["ee/**"]
+inputs = ["ee/**", "crates/fearlezz-proof/**"]
 
 [check.actionlint]
 run = "actionlint"

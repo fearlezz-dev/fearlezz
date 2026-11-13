@@ -1818,12 +1818,8 @@ fn a_weakening_on_a_pull_request_waits_for_an_admin_without_failing_the_proof() 
     let w = waiting(&comment.body);
     assert_eq!(w["head"], head.as_str());
     assert_eq!(w["checks"], serde_json::json!([]));
-    assert!(
-        w["weakened"][0]
-            .as_str()
-            .is_some_and(|s| s.contains("tests") && s.contains("another command")),
-        "{w}"
-    );
+    assert_eq!(w["weakened"][0]["check"], "tests", "{w}");
+    assert_eq!(w["weakened"][0]["how"], "it runs another command", "{w}");
     let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
     assert!(status.description.contains("tests"), "{status:?}");

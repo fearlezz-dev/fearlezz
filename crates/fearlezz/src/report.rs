@@ -11,9 +11,9 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::Result;
+use fearlezz_proof::waits::Weakening;
 
 use crate::findings::Level;
-use crate::floor;
 use crate::look::{Change, Item, Look};
 use crate::media::{self, Box4, Comparison, Pair};
 use crate::page::esc;
@@ -893,15 +893,14 @@ fn top(html: &mut String, proof: &Proof) -> std::fmt::Result {
                 id = esc(&c.id)
             )?;
         }
-        for item in &proof.weakened {
-            let name = item.what.split('`').nth(1).unwrap_or("a check");
+        for w in &proof.weakened {
             write!(
                 html,
                 "<li class=\"wait\"><a href=\"#waits\">{} weaker</a></li>",
-                esc(name)
+                esc(w.part.name())
             )?;
         }
-        for look in proof.waits() {
+        for look in proof.pictures_to_approve() {
             write!(
                 html,
                 "<li class=\"wait\"><a href=\"#look-{c}\">{c} pictures</a></li>",
@@ -924,7 +923,7 @@ fn top(html: &mut String, proof: &Proof) -> std::fmt::Result {
 /// The verdict, one sentence on why, and its state: `bad` (something to fix), `wait` (a
 /// person decides) or `ok`.
 fn verdict(proof: &Proof) -> (String, String, &'static str) {
-    let waits = proof.waits();
+    let waits = proof.pictures_to_approve().count();
     if proof.checks.is_empty() {
         let need: usize = proof.looks.iter().map(Look::to_look_at).sum();
         let base = proof
@@ -952,7 +951,7 @@ fn verdict(proof: &Proof) -> (String, String, &'static str) {
         .filter(|c| c.outcome == Ran::Failed)
         .count();
     let fixes = proof.to_fix();
-    let person = proof.weakened.len() + waits.len();
+    let person = proof.weakened.len() + waits;
     let things = |n: usize| {
         if n == 1 {
             "1 thing".to_string()
@@ -970,7 +969,7 @@ fn verdict(proof: &Proof) -> (String, String, &'static str) {
     }
     if person > 0 {
         let mut what = Vec::new();
-        if !waits.is_empty() {
+        if waits > 0 {
             what.push("a person with write access approves changed pictures");
         }
         match proof.weakened.len() {
@@ -993,7 +992,7 @@ fn verdict(proof: &Proof) -> (String, String, &'static str) {
 
 /// What only a person can settle: a weaker check, and pictures to approve.
 fn waits(html: &mut String, proof: &Proof) -> std::fmt::Result {
-    let waits = proof.waits();
+    let waits: Vec<&Look> = proof.pictures_to_approve().collect();
     if proof.weakened.is_empty() && waits.is_empty() {
         return Ok(());
     }
@@ -1001,41 +1000,41 @@ fn waits(html: &mut String, proof: &Proof) -> std::fmt::Result {
         "<section class=\"part\" id=\"waits\"><h2>Waits for you</h2><div class=\"rows\">",
     );
     // One accept comment covers the whole weakened proof, so a waiting proof gets one row
-    // with every weakening and one Accept below them.
-    let rows: Vec<&[floor::Item]> = if proof.weakenings_wait {
-        vec![&proof.weakened[..]]
+    // with every weakening, what to do said once, and one Accept below them. Where it blocks,
+    // each weakening is a row of its own.
+    let (rows, fix): (Vec<&[Weakening]>, String) = if proof.weakenings_wait {
+        (
+            vec![proof.weakened.as_slice()],
+            Weakening::accept_fix(&proof.base),
+        )
     } else {
-        proof.weakened.chunks(1).collect()
+        (
+            proof.weakened.chunks(1).collect(),
+            Weakening::block_fix(&proof.base),
+        )
     };
-    for items in rows.into_iter().filter(|r| !r.is_empty()) {
+    let fix = prose(&sentence(&fix));
+    for weakened in rows.into_iter().filter(|r| !r.is_empty()) {
         html.push_str("<div class=\"row weak\">");
-        // What to do is the same for every weakening that waits: said once, above the Accept.
-        let once = proof.weakenings_wait && items.iter().all(|i| i.fix == items[0].fix);
-        for item in items {
+        for w in weakened {
             write!(
                 html,
                 "<div class=\"what\"><p class=\"title\"><b>{}</b><span class=\"word timing\">Weaker</span></p><p>{}</p>",
-                prose(&sentence(&item.what)),
-                prose(&sentence(&item.why)),
+                prose(&sentence(&w.what())),
+                prose(&sentence(&w.how)),
             )?;
-            if !once {
-                write!(html, "<p class=\"fix\">{}</p>", prose(&sentence(&item.fix)))?;
+            if !proof.weakenings_wait {
+                write!(html, "<p class=\"fix\">{fix}</p>")?;
             }
             html.push_str("</div>");
         }
-        if once {
-            write!(
-                html,
-                "<p class=\"fix\">{}</p>",
-                prose(&sentence(&items[0].fix))
-            )?;
-        }
         if proof.weakenings_wait {
-            accept(html, items.len())?;
+            write!(html, "<p class=\"fix\">{fix}</p>")?;
+            accept(html, weakened.len())?;
         }
         html.push_str("</div>");
     }
-    for look in &waits {
+    for look in waits {
         approve(html, look)?;
     }
     html.push_str("</div></section>");

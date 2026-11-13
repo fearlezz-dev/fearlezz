@@ -8,6 +8,8 @@ publish.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
+# The proof bundle, shared with the core: proof.json and what in it waits for a person.
+fearlezz-proof = { path = "../../crates/fearlezz-proof" }
 worker = { version = "0.9.0", features = ["d1"] }
 wasm-bindgen = "0.2.130"
 wasm-bindgen-futures = "0.4"

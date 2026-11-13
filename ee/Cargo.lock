@@ -263,6 +263,7 @@ name = "fearlezz-host"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "fearlezz-proof",
  "hex",
  "js-sys",
  "percent-encoding",
@@ -288,6 +289,13 @@ dependencies = [
  "sha2",
  "tempfile",
  "ureq",
+]
+
+[[package]]
+name = "fearlezz-proof"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

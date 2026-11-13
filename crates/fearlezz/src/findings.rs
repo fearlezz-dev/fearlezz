@@ -5,43 +5,13 @@
 //! break another.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
-/// How much a finding matters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Level {
-    /// Told to the agent only.
-    Hint,
-    /// Shown in status and the report; does not block.
-    Flag,
-    /// Fails the check.
-    Gate,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Finding {
-    /// Relative to the worktree root; empty when the tool named no file.
-    pub file: String,
-    pub line: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub end_line: Option<u32>,
-    pub level: Level,
-    #[serde(default)]
-    pub rule: String,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fix: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub why: Option<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub anywhere: bool,
-}
+pub(crate) use fearlezz_proof::findings::{Finding, Level};
 
 /// Where a check's findings come from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -277,41 +247,6 @@ pub(crate) fn judge(
         passed: !gated && (exit_ok || any),
         counted,
         elsewhere: other.len(),
-    }
-}
-
-impl Level {
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Level::Gate => "gate",
-            Level::Flag => "flag",
-            Level::Hint => "hint",
-        }
-    }
-}
-
-impl fmt::Display for Finding {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let level = self.level.name();
-        let place = if self.file.is_empty() {
-            "(no file)".to_string()
-        } else if self.line == 0 {
-            self.file.clone()
-        } else {
-            format!("{}:{}", self.file, self.line)
-        };
-        write!(f, "{level} {place}")?;
-        if !self.rule.is_empty() {
-            write!(f, "  {}", self.rule)?;
-        }
-        write!(f, "  {}", self.message)?;
-        if let Some(fix) = &self.fix {
-            write!(f, "\n    fix: {fix}")?;
-        }
-        if let Some(why) = &self.why {
-            write!(f, "\n    why: {why}")?;
-        }
-        Ok(())
     }
 }
 
