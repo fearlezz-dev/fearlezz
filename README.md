@@ -66,6 +66,8 @@ permissions:
   contents: write
   pull-requests: write
   statuses: write
+  # Only to send the proof page to the proof host, with its GitHub App installed.
+  id-token: write
 jobs:
   proof:
     runs-on: ubuntu-latest
@@ -82,6 +84,8 @@ jobs:
 ```
 
 The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. `edited` runs the proof again when the pull request is edited, since a title starting with `fix:` makes the change a fix that needs red before green, and another base is another comparison. Do not skip description edits with a job `if`: a required job that is skipped counts as passed. The action installs the release of its own tag (`version: v0.2.0` pins one), runs `fearlezz run --ci` and uploads the check logs. Set `devenv: true` when the checks run in a devenv shell. On GitHub Actions with a token (`GITHUB_TOKEN`), `fearlezz run --ci` does what the event asks through GitHub's API, so a workflow can also run it without the action: it keeps one status comment on the pull request, and when a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg into the runner's tool cache. The token is the workflow's or a GitHub App's; Fearlezz never takes a person's comment or status for its own. A run that finishes after a newer push leaves that push's comment and pictures alone.
+
+The proof page shows everything a run showed: every check and its findings, test cases, red before green, weakenings, and every picture and film with its comparison, what waits for a person on top. `fearlezz run --ci --proof <dir>` writes it as a folder (`index.html`, `proof.json`, outputs and media). To open it without the developer's machine, a repository installs the Fearlezz GitHub App and grants its proof job `id-token: write`: CI then sends the bundle to the proof host (`[host] url` in `fearlezz.toml`, default `https://fearlezz.seamlezz.com`; its protocol is in `ee/README.md`) and the status comment links to the page. People who can read the repository open it after signing in with GitHub; one with write access approves pictures there (and an admin accepts a weakening), which posts the same `/fearlezz approve` or `/fearlezz accept` comment as them, and makes share links that open the pull request's latest proof for anyone until revoked. Without the app or the permission, CI sends nothing.
 
 On another CI, `fearlezz run --ci --comment status.md` writes the same status comment to a file, for that CI to post on its merge request.
 

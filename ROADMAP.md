@@ -72,7 +72,8 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 ## Next
 
-1. The hosted parts in `ee/`: proof links and pages a team can open without the developer's machine.
+1. Deploy the proof host: the Cloudflare account, the GitHub App (Metadata read, Pull requests write), both domains and the D1 database; then grant `id-token: write` here and prove the page, approvals and share links against real GitHub in a real browser.
+2. The local final stage writes the whole proof page, not only the look report.
 
 ## Known problems
 

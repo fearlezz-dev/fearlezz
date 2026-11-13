@@ -11,9 +11,9 @@ no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
 # Checks without inputs are keyed on every file outside no_proof. The tests keep inputs, as a
 # speed hint: an edit to a workflow or install.sh would otherwise rerun the slowest check. They
 # read the embedded agent skill and pieces, the fixtures, the proof workflow and README.md,
-# which no_proof leaves out of the default key.
+# which no_proof leaves out of the default key. They leave out ee/, which has checks of its own.
 [check.tests]
-inputs = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**", "README.md", ".github/workflows/proof.yml"]
+inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**", "README.md", ".github/workflows/proof.yml"]
 
 # The proof host in ee/ is a Cargo workspace of its own, built to wasm, so the rust piece's
 # checks at the root do not reach it. These read only ee/, so core edits never rerun them.

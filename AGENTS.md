@@ -30,7 +30,9 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `env.rs`: the environment: preparing a fresh checkout (copy-on-write clones of ignored folders), and starting, reusing, resetting and stopping the services checks need.
 - `media.rs`: comparing two stills or films (stable states, time warping, blurred pixel diff).
 - `record.rs`: recording an app's window on macOS (ScreenCaptureKit through objc2): `fearlezz --still` and a check's `record` table; `record/place.rs` parks it off the developer's screens (`FEARLEZZ_OFF_SCREEN=1`), by AeroSpace when it runs, Accessibility otherwise, gives focus back, and puts back the window positions the app saved while parked.
-- `look.rs`: comparing a check's pictures with the same check run on the base commit; `report.rs`: the look report page.
+- `look.rs`: comparing a check's pictures with the same check run on the base commit.
+- `proof.rs`: the one proof model of a run (`proof.json`): every check, test, finding, weakening, red before green and look; the bundle `run --ci --proof` writes, which feeds the status comment, the check page, the proof page and the upload. `report.rs`: the proof page drawn from it, the same locally and on the proof host.
+- `host.rs`: sending the proof bundle to the proof host from GitHub Actions with an OIDC token (`[host] url`, default `https://fearlezz.seamlezz.com`); the host itself lives in `ee/host`.
 - `page.rs`: what the static pages share (colours, controls, motion); they fetch nothing.
 - `red.rs`: red before green, a check run on the base commit with the change's test files laid over it.
 - `hooks.rs`: agent hooks (Claude Code, Codex, Cursor): what `setup sync` writes into each agent's settings, and the answers of `fearlezz setup hook` that hold an agent to the proof while it works.
