@@ -24,6 +24,8 @@ pieces:
         evidence: ["spike worktree deleted after recording; numbers above"]
 
 decided:
+  - id: one-accept
+    what: "With several weakened checks, one Accept below the list."
   - id: accept-waits
     what: "A weakening waits like pictures: the proof passes, the waiting status goes pending until an admin accepts, and the status is renamed fearlezz/approval (breaking; rulesets requiring fearlezz/pictures must change)."
   - id: accept-comment
@@ -83,7 +85,7 @@ slices:
   - id: approve-on-page
     tests: [crates/fearlezz/tests/proof.rs the_page_lets_a_person_approve_in_their_own_words the_page_offers_an_accept_where_a_weakening_waits, ee/host-tests/tests/host.rs an_approval_on_the_page_* a_forks_approval_names_its_head an_admin_accepts_a_weakening_on_the_page accepting_* approving_* the_shell_sends_what_its_frame_asks_to_its_own_origin]
     status: done
-    note: "The page has an Approve button per waiting check and an Accept beside each waiting weakening (one accept covers them all), with the person's words required; framed it posts a message to its parent, locally it keeps the command or comment to copy. The shell takes messages only from its frame and FILES_ORIGIN, posts same origin JSON, shows the comment link or the refusal in a bar and tells the frame. The worker needs a session, Origin = APP_ORIGIN and JSON, the latest whole proof of the pull request with its head unmoved, something of the kind waiting, and write access (approve) or admin (accept) by GitHub's collaborator permission asked with the user token; it posts the comment with that token, a fork's approval naming its head. Open: the browser message flow is not driven in a real browser; never deployed; the app's pull requests write permission is documented, not yet set." 
+    note: "The page has an Approve button per waiting check and one Accept below every waiting weakening, since one accept comment covers them all ("Accept both", "Accept all N"), with the person's words required; framed it posts a message to its parent, locally it keeps the command or comment to copy. The shell takes messages only from its frame and FILES_ORIGIN, posts same origin JSON, shows the comment link or the refusal in a bar and tells the frame. The worker needs a session, Origin = APP_ORIGIN and JSON, the latest whole proof of the pull request with its head unmoved, something of the kind waiting, and write access (approve) or admin (accept) by GitHub's collaborator permission asked with the user token; it posts the comment with that token, a fork's approval naming its head. Open: the browser message flow is not driven in a real browser; never deployed; the app's pull requests write permission is documented, not yet set." 
   - id: share-links
     tests: []
     status: todo
