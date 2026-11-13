@@ -4,6 +4,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use fearlezz_proof::waits::Role;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use worker::{Fetch, Headers, Method, Request, RequestInit, Result};
@@ -150,34 +151,23 @@ pub async fn login(config: &Config, token: &str) -> Result<Option<String>> {
     Ok(reply.body["login"].as_str().map(str::to_owned))
 }
 
-/// What a person may do in a repository, as CI's judgment of an approval reads it.
-pub enum Permission {
-    Admin,
-    Write,
-    /// Read, or nothing.
-    Less,
-    /// The token no longer works.
-    BadToken,
-}
-
-/// The permission of `login` on `repo`, asked with their own token: the legacy role GitHub
-/// gives (`admin`, `write`, `read`, `none`), the one CI counts.
+/// The role of `login` on `repo`, asked with their own token: the legacy role GitHub gives
+/// (`admin`, `write`, `read`, `none`), the one CI counts. None when the token no longer works.
 pub async fn permission(
     config: &Config,
     repo: &str,
     login: &str,
     token: &str,
-) -> Result<Permission> {
+) -> Result<Option<Role>> {
     let url = format!(
         "{}/repos/{repo}/collaborators/{login}/permission",
         config.github_api
     );
     let reply = call(Method::Get, &url, Some(token), None).await?;
     Ok(match (reply.status, reply.body["permission"].as_str()) {
-        (401, _) => Permission::BadToken,
-        (200, Some("admin")) => Permission::Admin,
-        (200, Some("write")) => Permission::Write,
-        _ => Permission::Less,
+        (401, _) => None,
+        (200, Some(permission)) => Some(Role::of(permission)),
+        _ => Some(Role::Less),
     })
 }
 

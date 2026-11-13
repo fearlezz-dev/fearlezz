@@ -11,11 +11,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use crate::github::{self, Api, Approval, Kind, Pending, StatusComment, Verdict, short};
+use crate::github::{self, Api, Approval, Pending, StatusComment, Verdict, short};
+use fearlezz_proof::waits::{Kind, Obligation};
 
 /// The branch the changed pictures are pushed to, one folder per pull request.
 pub(crate) const BRANCH: &str = "fearlezz-pictures";
@@ -23,7 +24,94 @@ pub(crate) const BRANCH: &str = "fearlezz-pictures";
 /// Pushes that lose a race with another pull request's push start over this often.
 const ATTEMPTS: usize = 3;
 
-/// The workflow run Fearlezz runs in, as GitHub describes it to every step.
+/// What GitHub Actions tells every step of a run, read once from its environment and event
+/// file: the repository, the run's page and the event. Off GitHub every part is empty.
+#[derive(Clone)]
+pub(crate) struct Workflow {
+    /// `owner/name`.
+    pub repository: Option<String>,
+    /// The run's page.
+    pub run_url: Option<String>,
+    server: Option<String>,
+    name: Option<String>,
+    path: Option<String>,
+    /// The event, Null without one; why it could not be read, when it could not.
+    event: Result<Value, String>,
+}
+
+/// No workflow: proving off GitHub.
+impl Default for Workflow {
+    fn default() -> Workflow {
+        Workflow {
+            repository: None,
+            run_url: None,
+            server: None,
+            name: None,
+            path: None,
+            event: Ok(Value::Null),
+        }
+    }
+}
+
+impl Workflow {
+    /// The workflow GitHub's variables describe. An event file that cannot be read reads as
+    /// no event here; [`Actions::detect`] refuses it, since acting needs the event.
+    pub(crate) fn read() -> Workflow {
+        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        let path = var("GITHUB_EVENT_PATH");
+        let event = match &path {
+            None => Ok(Value::Null),
+            Some(path) => fs::read(path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+                .map_err(|e| format!("reading the event file {path}: {e}")),
+        };
+        let (server, repository) = (var("GITHUB_SERVER_URL"), var("GITHUB_REPOSITORY"));
+        let run_url = match (&server, &repository, var("GITHUB_RUN_ID")) {
+            (Some(server), Some(repo), Some(run)) => {
+                Some(format!("{server}/{repo}/actions/runs/{run}"))
+            }
+            _ => None,
+        };
+        Workflow {
+            repository,
+            run_url,
+            server,
+            name: var("GITHUB_EVENT_NAME"),
+            path,
+            event,
+        }
+    }
+
+    fn event(&self) -> &Value {
+        self.event.as_ref().unwrap_or(&Value::Null)
+    }
+
+    fn text(&self, pointer: &str) -> Option<&str> {
+        self.event().pointer(pointer).and_then(Value::as_str)
+    }
+
+    /// The pull request's title, when the event is one.
+    pub(crate) fn title(&self) -> Option<&str> {
+        self.text("/pull_request/title")
+    }
+
+    /// The pull request's head commit, when the event is one.
+    pub(crate) fn head(&self) -> Option<&str> {
+        self.text("/pull_request/head/sha")
+    }
+
+    /// The pull request a proof is for, as the proof names it, when the event is one.
+    pub(crate) fn pull(&self) -> Option<crate::proof::Pull> {
+        Some(crate::proof::Pull {
+            number: self.event().pointer("/pull_request/number")?.as_u64()?,
+            title: self.title()?.to_string(),
+            url: self.text("/pull_request/html_url").map(str::to_string),
+        })
+    }
+}
+
+/// The workflow run Fearlezz runs in, with a token to act on what its event asks.
 pub(crate) struct Actions {
     name: String,
     event: Value,
@@ -46,28 +134,28 @@ pub(crate) enum Task {
 
 impl Actions {
     /// The workflow run, when Fearlezz runs on GitHub Actions with a token; None elsewhere.
-    pub(crate) fn detect() -> Result<Option<Actions>> {
+    pub(crate) fn detect(workflow: &Workflow) -> Result<Option<Actions>> {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
         if var("GITHUB_ACTIONS").as_deref() != Some("true") {
             return Ok(None);
         }
-        let (Some(name), Some(path), Some(token), Some(repo)) = (
-            var("GITHUB_EVENT_NAME"),
-            var("GITHUB_EVENT_PATH"),
+        let (Some(name), Some(_), Some(token), Some(repo)) = (
+            workflow.name.clone(),
+            workflow.path.as_ref(),
             var("GITHUB_TOKEN").or_else(|| var("GH_TOKEN")),
-            var("GITHUB_REPOSITORY"),
+            workflow.repository.clone(),
         ) else {
             return Ok(None);
         };
-        let event = serde_json::from_slice(
-            &fs::read(&path).with_context(|| format!("reading the event file {path}"))?,
-        )
-        .with_context(|| format!("reading the event file {path}"))?;
+        let event = workflow.event.clone().map_err(|e| anyhow!(e))?;
         Ok(Some(Actions {
             name,
             event,
             api: Api::new(token, repo.clone()),
-            server: var("GITHUB_SERVER_URL").unwrap_or_else(|| "https://github.com".into()),
+            server: workflow
+                .server
+                .clone()
+                .unwrap_or_else(|| "https://github.com".into()),
             repo,
         }))
     }
@@ -206,24 +294,22 @@ impl Actions {
                 && s["target_url"] == url.as_str()
         });
         let taken_back = |short: &str, still: Option<&Approval>| -> Result<()> {
-            let how = match (action.as_str(), kind) {
-                ("deleted", _) => "deleted".to_string(),
-                (_, Kind::Approve) => "edited so it no longer approves".into(),
-                (_, Kind::Accept) => "edited so it no longer accepts".into(),
+            let how = match action.as_str() {
+                "deleted" => "deleted".to_string(),
+                _ => format!("edited so it no longer {}s", kind.word()),
             };
-            let noun = match kind {
-                Kind::Approve => "approval",
-                Kind::Accept => "accept",
-            };
+            let noun = kind.noun();
             let rest = match (still, kind) {
                 (Some(other), _) => format!("the {noun} by @{} still counts", other.by),
                 (None, Kind::Approve) => {
-                    format!("the pictures of {short} wait for `/fearlezz approve <words>` again")
+                    format!("the pictures of {short} wait for {} again", kind.asks())
                 }
-                (None, Kind::Accept) => format!(
-                    "the weakened proof of {short} waits for an admin's `/fearlezz accept \
-                     <words>` again"
-                ),
+                (None, Kind::Accept) => {
+                    format!(
+                        "the weakened proof of {short} waits for {} again",
+                        kind.asks()
+                    )
+                }
             };
             self.api.comment(
                 pr,
@@ -238,7 +324,7 @@ impl Actions {
                 if asked.is_some() {
                     self.api.comment(pr, &format!("@{who}, {why}."))?;
                 } else if green_by_it {
-                    taken_back(&short(&head), None)?;
+                    taken_back(short(&head), None)?;
                 }
                 println!("{why}");
                 return Ok(());
@@ -274,7 +360,7 @@ impl Actions {
             }
             // Deleted, or edited into something else.
             part if was && !counts => {
-                taken_back(&short, part.and_then(|p| p.as_ref().ok()))?;
+                taken_back(short, part.and_then(|p| p.as_ref().ok()))?;
             }
             _ if asked.is_some() => {
                 let why = match self
@@ -308,35 +394,34 @@ impl Actions {
         a: &Approval,
     ) -> Result<()> {
         let short = short(&pending.head);
-        let text = match kind {
-            Kind::Approve => format!(
-                "@{} approved {} at {short}:\n\n> {}\n\nA new push, or a run that shows other \
-                 pictures, needs a new approval; deleting the approval, or editing it so it no \
-                 longer approves, takes it back.",
-                a.by,
-                pending.what(kind),
-                a.said
-            ),
-            Kind::Accept => {
-                let covers: Vec<String> =
-                    pending.weakened.iter().map(|w| format!("- {w}")).collect();
-                format!(
-                    "@{} accepted the weakened proof at {short}:\n\n> {}\n\nIt covers:\n\n{}\n\n\
-                     A new push, or a run that weakens something else, needs a new accept; \
-                     deleting the accept, or editing it so it no longer accepts, takes it back.",
-                    a.by,
-                    a.said,
-                    covers.join("\n")
-                )
-            }
+        // An accept covers every weakening, so it says which.
+        let covers: String = pending
+            .obligations
+            .of(kind)
+            .filter_map(|o| match o {
+                Obligation::Weakened(w) => Some(format!("- {w}\n")),
+                Obligation::Pictures(_) | Obligation::Head(_) => None,
+            })
+            .collect();
+        let covers = if covers.is_empty() {
+            String::new()
+        } else {
+            format!("It covers:\n\n{covers}\n")
         };
+        let noun = kind.noun();
+        let text = format!(
+            "@{} {} {} at {short}:\n\n> {}\n\n{covers}A new push, or a run that {}, needs a \
+             new {noun}; deleting the {noun}, or editing it so it no longer {}s, takes it back.",
+            a.by,
+            kind.past(),
+            pending.obligations.covers(kind),
+            a.said,
+            kind.renewed_by(),
+            kind.word()
+        );
         self.api
             .comment(pr, &format!("{text}\n\n{}", pending.still(verdict)))?;
-        let did = match kind {
-            Kind::Approve => "approved",
-            Kind::Accept => "accepted",
-        };
-        println!("@{} {did} pull request {pr} at {short}", a.by);
+        println!("@{} {} pull request {pr} at {short}", a.by, kind.past());
         Ok(())
     }
 
@@ -440,7 +525,7 @@ impl Pull {
 
     /// Pushes the changed pictures in `dir`, writes the status comment and sets the status.
     /// GitHub refusing any of it is a warning: the proof stands on its own.
-    pub(crate) fn report(&self, comment: &StatusComment, checks: &[String], dir: Option<&Path>) {
+    pub(crate) fn report(&self, comment: &StatusComment, dir: Option<&Path>) {
         if self.fork {
             println!(
                 "::notice::this run of a fork's pull request has a read only token, so it writes \
@@ -450,7 +535,7 @@ impl Pull {
             );
             return;
         }
-        if let Err(e) = self.try_report(comment, checks, dir) {
+        if let Err(e) = self.try_report(comment, dir) {
             println!(
                 "::warning::could not report to pull request {}: {e:#}",
                 self.number
@@ -458,16 +543,15 @@ impl Pull {
         }
     }
 
-    fn try_report(
-        &self,
-        comment: &StatusComment,
-        checks: &[String],
-        dir: Option<&Path>,
-    ) -> Result<()> {
+    fn try_report(&self, comment: &StatusComment, dir: Option<&Path>) -> Result<()> {
         let (state, what) = match &comment.waiting {
             None => ("success", "nothing waits for approval".to_string()),
-            Some(w) => ("pending", github::waits_description(&w.checks, &w.weakened)),
+            Some(w) => ("pending", w.description()),
         };
+        let pictures = comment
+            .waiting
+            .as_ref()
+            .is_some_and(|w| !w.checks.is_empty());
         // A run that finishes after a newer push's run leaves that run's comment and pictures.
         let (now, _) = self.api.head(self.number)?;
         if now != self.head {
@@ -480,7 +564,7 @@ impl Pull {
         }
         let mut comment = comment.clone();
         let old = self.api.status_comment(self.number)?;
-        if let (Some(dir), false) = (dir, checks.is_empty()) {
+        if let (Some(dir), true) = (dir, pictures) {
             match self.publish(dir) {
                 Ok(()) => println!("pictures on {BRANCH} at pr-{}/{}", self.number, self.run),
                 Err(e) => {

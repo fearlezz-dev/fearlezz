@@ -1,7 +1,9 @@
 # Fearlezz hosted parts
 
 Hosted, paid parts of Fearlezz. The open core in `crates/` never depends on anything here; it
-only speaks the protocol below.
+only speaks the protocol below. The host reads `proof.json` through the core's own bundle
+model, the small crate `crates/fearlezz-proof` (serde types, what waits for a person, and who
+may settle it), so both always read one shape.
 
 ## Proof host
 
@@ -37,7 +39,8 @@ pull request, its `ref` (`refs/pull/<n>/merge`) must name the pull request the p
 
 A refusal answers `{"error": "<what to do>"}` with `401` for a token that does not pass, `403`
 for a repository without the app or a proof for another repository or pull request, `400` for
-a body the host cannot read (an unknown `proof.json` schema, bytes that do not hash to their
+a body the host cannot read (an unknown `proof.json` schema, a `proof.json` that is not one,
+bytes that do not hash to their
 name, a `Content-Length` other than the file's size), `404` for a proof of another
 repository, and `409` for a blob no proof of the repository names or `done` while a file is
 missing.

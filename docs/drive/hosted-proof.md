@@ -14,6 +14,7 @@ The hosted parts in `ee/`: proof links and pages a team can open without the dev
 - **Approve and Accept on the page.** The page asks its shell by message; the host checks the session, the latest proof and its head, and write access (approve) or admin rights (accept), then posts the same comment as the person.
 - **Share links.** A person with write access makes a link that opens the pull request's latest proof without signing in, view only, until revoked.
 - **Red before green for a new check** says there is nothing on the base to compare, instead of reading a base that cannot have the check.
+- **One model of what waits, shared by core and host.** `crates/fearlezz-proof` holds the bundle's serde types and `Obligations`: each thing that waits (a check's pictures, a fork's head, a weakening with its check and how), the `Kind` that settles it with its command word, wording and the role it needs. The status comment's hidden line, CI's settling, the headline, the page and the host's approve and accept all read that list. Weakenings are stored structured (`{"check": "tests", "how": "..."}`), never as prose to parse back; the hidden line keeps its `head`, `checks` and `pictures` fields, so comments of the released version still read.
 
 ## Decisions
 

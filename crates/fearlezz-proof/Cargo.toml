@@ -1,0 +1,22 @@
+[package]
+name = "fearlezz-proof"
+version = "0.1.0"
+edition = "2024"
+description = "The proof bundle of Fearlezz: proof.json and what in it waits for a person."
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Its behaviour is tested through its public API, in tests/.
+[lib]
+test = false
+bench = false
+
+# Only serde: the proof host builds this to wasm, where every dependency costs worker size.
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0.154"
+
+[lints]
+workspace = true

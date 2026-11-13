@@ -14,9 +14,11 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::floor;
+pub(crate) use fearlezz_proof::waits::short;
+use fearlezz_proof::waits::{Kind, Obligation, Obligations, Role, Weakening};
+
 use crate::look::{Change, Look};
-use crate::proof::Ran;
+use crate::proof::{Item, Ran};
 
 /// The first line of the status comment, so CI finds its own comment to replace.
 const COMMENT_MARKER: &str = "<!-- fearlezz -->";
@@ -287,18 +289,10 @@ impl Api {
         comment: &StatusComment,
     ) -> Result<String> {
         let body = comment.render();
-        let shown = |c: &StatusComment| {
-            c.waiting.as_ref().map(|w| {
-                (
-                    w.head.clone(),
-                    w.checks.clone(),
-                    w.pictures.clone(),
-                    w.weakened.clone(),
-                )
-            })
-        };
         let written = match old {
-            Some(found) if comment.waiting.is_none() || shown(&found.comment) == shown(comment) => {
+            Some(found)
+                if comment.waiting.is_none() || found.comment.waiting == comment.waiting =>
+            {
                 self.send(
                     "PATCH",
                     &format!("issues/comments/{}", found.id),
@@ -343,32 +337,6 @@ fn repository(remote: &str) -> Option<String> {
 
 // Approvals
 
-/// The two things a person says by comment: approving changed pictures, which needs write
-/// access, and accepting a weakened proof, which needs admin rights.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Kind {
-    Approve,
-    Accept,
-}
-
-impl Kind {
-    /// The command's word: `/fearlezz <word> <words>`.
-    pub(crate) fn word(self) -> &'static str {
-        match self {
-            Kind::Approve => "approve",
-            Kind::Accept => "accept",
-        }
-    }
-
-    /// What giving it is called in a reply.
-    fn noun(self) -> &'static str {
-        match self {
-            Kind::Approve => "approval",
-            Kind::Accept => "accept",
-        }
-    }
-}
-
 /// An approval or accept that counts: who gave it, in their own words, and where.
 pub(crate) struct Approval {
     pub by: String,
@@ -381,7 +349,7 @@ pub(crate) struct Approval {
 pub(crate) fn command(body: &str) -> Option<(Kind, String)> {
     let body = body.replace('\r', "");
     let first = body.lines().next().unwrap_or_default();
-    [Kind::Approve, Kind::Accept].into_iter().find_map(|kind| {
+    Kind::ALL.into_iter().find_map(|kind| {
         let start = format!("/fearlezz {}", kind.word());
         if first != start && !first.starts_with(&format!("{start} ")) {
             return None;
@@ -403,38 +371,30 @@ pub(crate) fn judge(api: &Api, comment: &Value) -> Result<Result<Approval, Strin
              <words>`."
         )));
     };
-    let what = match kind {
-        Kind::Approve => "approve pictures",
-        Kind::Accept => "accept a weakened proof",
-    };
+    let what = kind.act();
     if comment["user"]["type"] != "User" {
         return Ok(Err(format!("Only a person can {what}, not @{who}.")));
     }
-    let permission = match api.call("GET", &format!("collaborators/{who}/permission"), None)? {
-        (200, p) => p["permission"].as_str().unwrap_or_default().to_string(),
-        _ => String::new(),
-    };
-    let (allowed, needs) = match kind {
-        Kind::Approve => (
-            permission == "admin" || permission == "write",
-            "write access to",
+    let role = match api.call("GET", &format!("collaborators/{who}/permission"), None)? {
+        (200, p) => Role::of(
+            p.get("permission")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
         ),
-        Kind::Accept => (permission == "admin", "admin rights on"),
+        _ => Role::Less,
     };
-    if !allowed {
+    if !kind.allows(role) {
         return Ok(Err(format!(
-            "@{who} cannot {what}: that needs {needs} this repository."
+            "@{who} cannot {what}: that needs {} this repository.",
+            kind.needs_on()
         )));
     }
     if said.is_empty() {
-        let hint = match kind {
-            Kind::Approve => "what you think of the pictures",
-            Kind::Accept => "why the weaker proof is right",
-        };
         return Ok(Err(format!(
-            "@{who}, {}ing needs your own words: `/fearlezz {} <{hint}>`.",
+            "@{who}, {}ing needs your own words: `/fearlezz {} <{}>`.",
             kind.word().trim_end_matches('e'),
-            kind.word()
+            kind.word(),
+            kind.hint()
         )));
     }
     Ok(Ok(Approval {
@@ -450,87 +410,50 @@ pub(crate) fn judge(api: &Api, comment: &Value) -> Result<Result<Approval, Strin
 pub(crate) struct Pending {
     pub pr: u64,
     pub head: String,
-    /// The checks whose changed pictures wait; a fork's approval covers its whole head.
-    pub checks: Vec<String>,
-    /// What the change weakens about the proof, as the status comment showed it; it waits for
-    /// an admin's accept. A fork's run cannot hold it, so its weakening fails its proof.
-    pub weakened: Vec<String>,
-    pub fork: bool,
+    pub obligations: Obligations,
     /// The status comment that shows them; None for a fork.
     pub shown: Option<Found>,
 }
 
-/// What the comments on a pull request give what waits there: the newest approval of its
-/// changed pictures (or a fork's head) and the newest accept of its weakened proof, each None
-/// when it does not wait, or why none counts.
+/// What the comments on a pull request give each kind that settles something there: the
+/// newest that counts, or why none does.
 pub(crate) struct Verdict {
-    pub approve: Option<Result<Approval, String>>,
-    pub accept: Option<Result<Approval, String>>,
+    answers: Vec<(Kind, Result<Approval, String>)>,
 }
 
 impl Verdict {
     /// Everything that waits has what it needs.
     pub(crate) fn done(&self) -> bool {
-        [&self.approve, &self.accept]
-            .into_iter()
-            .all(|p| p.as_ref().is_none_or(Result::is_ok))
+        self.answers.iter().all(|(_, a)| a.is_ok())
     }
 
     pub(crate) fn of(&self, kind: Kind) -> Option<&Result<Approval, String>> {
-        match kind {
-            Kind::Approve => self.approve.as_ref(),
-            Kind::Accept => self.accept.as_ref(),
-        }
+        self.answers
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, a)| a)
+    }
+
+    /// Whether `kind` has what counts.
+    fn counts(&self, kind: Kind) -> bool {
+        matches!(self.of(kind), Some(Ok(_)))
+    }
+
+    /// The approval or accept the status links to once everything counts: the accept, which
+    /// needs more rights, when both count.
+    fn link(&self) -> Option<&Approval> {
+        [Kind::Accept, Kind::Approve]
+            .into_iter()
+            .find_map(|k| self.of(k)?.as_ref().ok())
     }
 
     /// Who gave what counts, for the status description.
     fn given(&self) -> Vec<String> {
-        let mut given = Vec::new();
-        if let Some(Ok(a)) = &self.approve {
-            given.push(format!("approved by {}", a.by));
-        }
-        if let Some(Ok(a)) = &self.accept {
-            given.push(format!("accepted by {}", a.by));
-        }
-        given
+        self.answers
+            .iter()
+            .filter_map(|(k, a)| Some(format!("{} by {}", k.past(), a.as_ref().ok()?.by)))
+            .collect()
     }
-}
-
-/// What still waits, as a status description names it: the changed pictures of `checks`
-/// unless approved, the `weakened` proof unless accepted.
-fn still_waits(
-    checks: &[String],
-    weakened: &[String],
-    approved: bool,
-    accepted: bool,
-) -> Vec<String> {
-    let mut waits = Vec::new();
-    if !checks.is_empty() && !approved {
-        waits.push(format!(
-            "changed pictures of {} wait for /fearlezz approve",
-            checks.join(", ")
-        ));
-    }
-    if !weakened.is_empty() && !accepted {
-        let mut names: Vec<&str> = weakened.iter().map(|w| named(w)).collect();
-        names.dedup();
-        waits.push(format!(
-            "weakened {} waits for an admin's /fearlezz accept",
-            names.join(", ")
-        ));
-    }
-    waits
-}
-
-/// The `fearlezz/approval` description while nothing that waits has what it needs.
-pub(crate) fn waits_description(checks: &[String], weakened: &[String]) -> String {
-    still_waits(checks, weakened, false, false).join("; ")
-}
-
-/// The name a weakening is about: the first part in backticks of what the status comment
-/// says weakened, such as `tests` in "check `tests` is weaker: ...".
-fn named(weakening: &str) -> &str {
-    weakening.split('`').nth(1).unwrap_or(weakening)
 }
 
 impl Pending {
@@ -540,15 +463,13 @@ impl Pending {
         if from != api.repo {
             return Ok(Ok(Pending {
                 pr,
+                obligations: [Obligation::Head(head.clone())].into_iter().collect(),
                 head,
-                checks: Vec::new(),
-                weakened: Vec::new(),
-                fork: true,
                 shown: None,
             }));
         }
         let found = api.status_comment(pr)?;
-        let Some(waits) = found.as_ref().and_then(|f| f.comment.waiting.clone()) else {
+        let Some(waits) = found.as_ref().and_then(|f| f.comment.waiting.as_ref()) else {
             return Ok(Err(format!(
                 "nothing waits for approval on pull request {pr}"
             )));
@@ -562,23 +483,9 @@ impl Pending {
         Ok(Ok(Pending {
             pr,
             head,
-            checks: waits.checks,
-            weakened: waits.weakened,
-            fork: false,
+            obligations: waits.obligations(),
             shown: found,
         }))
-    }
-
-    /// What an approval or accept covers, as a reply names it.
-    pub(crate) fn what(&self, kind: Kind) -> String {
-        match kind {
-            Kind::Approve if self.fork => "this fork's head".into(),
-            Kind::Approve => {
-                let checks: Vec<String> = self.checks.iter().map(|c| format!("`{c}`")).collect();
-                format!("the changed pictures of {}", checks.join(", "))
-            }
-            Kind::Accept => "the weakened proof".into(),
-        }
     }
 
     /// The `fearlezz/approval` description for `verdict`.
@@ -587,41 +494,21 @@ impl Pending {
         if verdict.done() {
             return given.join(", ");
         }
-        let waits = if self.fork {
-            vec![format!(
-                "this fork's head waits for /fearlezz approve {} <words>",
-                short(&self.head)
-            )]
-        } else {
-            still_waits(
-                &self.checks,
-                &self.weakened,
-                matches!(verdict.approve, Some(Ok(_))),
-                matches!(verdict.accept, Some(Ok(_))),
-            )
-        };
         given
             .into_iter()
-            .chain(waits)
+            .chain(self.obligations.still(|k| verdict.counts(k)))
             .collect::<Vec<_>>()
             .join("; ")
     }
 
     /// What still waits after `verdict`, in a sentence for a reply.
     pub(crate) fn still(&self, verdict: &Verdict) -> String {
-        let mut waits = Vec::new();
-        if let Some(Err(_)) = verdict.approve {
-            waits.push(format!(
-                "{} for `/fearlezz approve <words>`",
-                self.what(Kind::Approve)
-            ));
-        }
-        if let Some(Err(_)) = verdict.accept {
-            waits.push(format!(
-                "{} for an admin's `/fearlezz accept <words>`",
-                self.what(Kind::Accept)
-            ));
-        }
+        let waits: Vec<String> = verdict
+            .answers
+            .iter()
+            .filter(|(_, a)| a.is_err())
+            .map(|(k, _)| format!("{} for {}", self.obligations.covers(*k), k.asks()))
+            .collect();
         if waits.is_empty() {
             format!("Nothing else waits: `{CONTEXT}` is green.")
         } else {
@@ -639,30 +526,17 @@ impl Pending {
         let who = comment["user"]["login"].as_str().unwrap_or_default();
         let short = short(&self.head);
         if let Some((kind, said)) = command(comment["body"].as_str().unwrap_or_default()) {
-            match kind {
-                Kind::Approve if !self.fork && self.checks.is_empty() => {
-                    return Ok(Err(format!(
-                        "@{who}, no changed pictures wait for approval at {short}."
-                    )));
-                }
-                Kind::Accept if self.weakened.is_empty() => {
-                    return Ok(Err(format!(
-                        "@{who}, no weakened proof waits for an accept at {short}."
-                    )));
-                }
-                _ => {}
+            if self.obligations.of(kind).next().is_none() {
+                return Ok(Err(format!("@{who}, {} at {short}.", kind.nothing())));
             }
             if let Some(found) = &self.shown {
                 let written = comment["created_at"].as_str().unwrap_or_default();
                 if written <= found.created.as_str() {
-                    let shown = match kind {
-                        Kind::Approve => "its pictures",
-                        Kind::Accept => "what it weakens",
-                    };
                     return Ok(Err(format!(
-                        "@{who}, that {} was written before the proof of {short} showed \
-                         {shown}: look at them, then {} again.",
+                        "@{who}, that {} was written before the proof of {short} showed {}: \
+                         look at them, then {} again.",
                         kind.noun(),
+                        kind.shown(),
                         kind.word()
                     )));
                 }
@@ -672,7 +546,7 @@ impl Pending {
                     && w.chars().all(|c| c.is_ascii_hexdigit())
                     && self.head.starts_with(&w.to_ascii_lowercase())
             });
-            if self.fork && !named {
+            if self.obligations.fork_head().is_some() && !named {
                 return Ok(Err(format!(
                     "@{who}, a fork's pull request is approved by naming the head you looked at: \
                      `/fearlezz approve {short} <words>`, after looking at the pictures in the \
@@ -708,7 +582,7 @@ impl Pending {
             format!(
                 "nobody {}ed {} of {} on pull request {}, or the {} was deleted",
                 kind.word().trim_end_matches('e'),
-                self.what(kind),
+                self.obligations.covers(kind),
                 short(&self.head),
                 self.pr,
                 kind.noun()
@@ -724,13 +598,13 @@ impl Pending {
     /// What the comments on the pull request give what waits.
     pub(crate) fn verdict(&self, api: &Api) -> Result<Verdict> {
         let comments = api.comments(self.pr)?;
-        let approve = (self.fork || !self.checks.is_empty())
-            .then(|| self.newest(api, &comments, Kind::Approve))
-            .transpose()?;
-        let accept = (!self.weakened.is_empty())
-            .then(|| self.newest(api, &comments, Kind::Accept))
-            .transpose()?;
-        Ok(Verdict { approve, accept })
+        let answers = self
+            .obligations
+            .kinds()
+            .into_iter()
+            .map(|k| Ok((k, self.newest(api, &comments, k)?)))
+            .collect::<Result<_>>()?;
+        Ok(Verdict { answers })
     }
 }
 
@@ -759,9 +633,7 @@ pub(crate) fn settle(api: &Api, pr: u64) -> Result<Result<(Pending, Verdict), St
         let verdict = pending.verdict(api)?;
         let description = pending.description(&verdict);
         let (state, target) = if verdict.done() {
-            let by = [&verdict.accept, &verdict.approve]
-                .into_iter()
-                .find_map(|p| p.as_ref().and_then(|r| r.as_ref().ok()));
+            let by = verdict.link();
             ("success", by.map(|a| a.url.clone()).unwrap_or_default())
         } else {
             (
@@ -852,11 +724,12 @@ pub(crate) fn approval_of_commit(root: &Path, head: &str, check: &str) -> Result
     if pending.head != head {
         bail!("pull request {pr} moved on from {short}: pull its head, then run this again");
     }
-    if !pending.fork && !pending.checks.iter().any(|c| c == check) {
-        if pending.checks.is_empty() {
+    let checks = pending.obligations.checks();
+    if pending.obligations.fork_head().is_none() && !checks.contains(&check) {
+        if checks.is_empty() {
             bail!("no changed pictures wait on pull request {pr}, so there is nothing to approve");
         }
-        let checks: Vec<String> = pending.checks.iter().map(|c| format!("`{c}`")).collect();
+        let checks: Vec<String> = checks.iter().map(|c| format!("`{c}`")).collect();
         bail!(
             "the pictures waiting on pull request {pr} are those of {}, not of `{check}`: an \
              approval there covers only what the developer looked at",
@@ -868,16 +741,12 @@ pub(crate) fn approval_of_commit(root: &Path, head: &str, check: &str) -> Result
     })
 }
 
-/// The first seven characters of a commit, as people read it.
-pub(crate) fn short(sha: &str) -> String {
-    sha.chars().take(7).collect()
-}
-
 // The status comment
 
 /// What waits for a person on the pull request, as the status comment's hidden line holds it.
 /// The commit status cannot hold it: its description is short, and an approval replaces it.
-#[derive(Clone, Serialize, Deserialize)]
+/// Comments written before weakenings could wait hold only pictures, and read the same.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Waiting {
     /// The pull request's head commit the proof is for; an approval binds to it.
     pub head: String,
@@ -888,10 +757,37 @@ pub(crate) struct Waiting {
     /// keeps the comment, and with it an approval, and one that shows others writes a new one.
     #[serde(default)]
     pub pictures: String,
-    /// What the change weakens about the proof, each as `what: why`; it waits for an admin's
-    /// accept, and a run that weakens something else writes a new comment.
+    /// What the change weakens about the proof; it waits for an admin's accept, and a run that
+    /// weakens something else writes a new comment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub weakened: Vec<String>,
+    pub weakened: Vec<Weakening>,
+}
+
+impl Waiting {
+    fn new(head: &str, pictures: String, obligations: &Obligations) -> Waiting {
+        Waiting {
+            head: head.to_string(),
+            checks: obligations
+                .checks()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            pictures,
+            weakened: obligations.weakenings().into_iter().cloned().collect(),
+        }
+    }
+
+    /// What waits, as obligations: the pictures of each check, then each weakening.
+    pub(crate) fn obligations(&self) -> Obligations {
+        let pictures = self.checks.iter().cloned().map(Obligation::Pictures);
+        let weakened = self.weakened.iter().cloned().map(Obligation::Weakened);
+        pictures.chain(weakened).collect()
+    }
+
+    /// The `fearlezz/approval` description before anything that waits has what it needs.
+    pub(crate) fn description(&self) -> String {
+        self.obligations().still(|_| false).join("; ")
+    }
 }
 
 /// The status comment on a pull request: a fixed title, the headline, the rest of the body,
@@ -968,9 +864,9 @@ impl StatusComment {
 pub(crate) struct Report<'a> {
     proof: &'a crate::proof::Proof,
     /// What keeps the commit from being proven.
-    items: Vec<floor::Item>,
-    /// What the change weakens about the proof, waiting for an admin's accept.
-    weakened: Vec<floor::Item>,
+    items: Vec<Item>,
+    /// What waits for a person.
+    obligations: Obligations,
     notes: Vec<String>,
     /// Looks whose changed pictures wait for a person.
     waits: Vec<Look>,
@@ -992,9 +888,9 @@ impl<'a> Report<'a> {
         Report {
             proof,
             items: proof.blockers(),
-            weakened: proof.waiting_weakened().to_vec(),
+            obligations: proof.obligations(),
             notes: proof.notes(),
-            waits: proof.waits(),
+            waits: proof.pictures_to_approve().cloned().collect(),
             pictures_url,
             artifact,
             page,
@@ -1031,36 +927,13 @@ impl<'a> Report<'a> {
     /// never whether they have it: an approval sets the `fearlezz/approval` status, never the
     /// comment, so the comment says only what it can keep true.
     pub(crate) fn headline(&self) -> String {
-        let checks: Vec<String> = self
-            .waits
-            .iter()
-            .map(|w| format!("`{}`", w.check))
-            .collect();
         if !self.items.is_empty() {
             return self.counted("Not proven");
         }
-        let mut waits = Vec::new();
-        if !checks.is_empty() {
-            waits.push(format!(
-                "the changed pictures of {} need a person's approval",
-                checks.join(", ")
-            ));
+        match self.obligations.headline() {
+            None => self.counted("Proven"),
+            Some((word, needs)) => format!("{}; {}", self.counted(word), needs.join(" and ")),
         }
-        if !self.weakened.is_empty() {
-            waits.push("the weakened proof needs an admin's accept".to_string());
-        }
-        let word = match (checks.is_empty(), self.weakened.is_empty()) {
-            (true, true) => return self.counted("Proven"),
-            (false, true) => "Pictures need approval",
-            (true, false) => "Weakened proof needs an admin",
-            (false, false) => "Needs approval",
-        };
-        format!("{}; {}", self.counted(word), waits.join(" and "))
-    }
-
-    /// The checks whose pictures wait.
-    pub(crate) fn waiting_checks(&self) -> Vec<String> {
-        self.waits.iter().map(|w| w.check.clone()).collect()
     }
 
     /// The looks whose pictures wait.
@@ -1086,11 +959,12 @@ impl<'a> Report<'a> {
         if let Some(url) = &self.proof.run_url {
             writeln!(text, "[The check page]({url}) has each check's output.")?;
         }
-        let waiting = (!self.waits.is_empty() || !self.weakened.is_empty()).then(|| Waiting {
-            head: self.proof.head.clone(),
-            checks: self.waiting_checks(),
-            pictures: pictures_id(&self.waits),
-            weakened: self.weakened_lines(),
+        let waiting = (!self.obligations.is_empty()).then(|| {
+            Waiting::new(
+                &self.proof.head,
+                pictures_id(&self.waits),
+                &self.obligations,
+            )
         });
         Ok(StatusComment {
             headline: self.headline(),
@@ -1151,17 +1025,10 @@ impl<'a> Report<'a> {
         writeln!(text)
     }
 
-    /// What the change weakens about the proof, each as `what: why`.
-    pub(crate) fn weakened_lines(&self) -> Vec<String> {
-        self.weakened
-            .iter()
-            .map(|i| format!("{}: {}", i.what, i.why))
-            .collect()
-    }
-
     /// The weakened proof an admin should read, and how they accept it.
     fn weakened(&self, text: &mut String) -> std::fmt::Result {
-        if self.weakened.is_empty() {
+        let weakened = self.obligations.weakenings();
+        if weakened.is_empty() {
             return Ok(());
         }
         writeln!(
@@ -1170,13 +1037,14 @@ impl<'a> Report<'a> {
 "
         )?;
         writeln!(text, "| what | why | what to do |\n| --- | --- | --- |")?;
-        for item in &self.weakened {
+        let fix = Weakening::accept_fix(&self.proof.base);
+        for w in weakened {
             writeln!(
                 text,
                 "| {} | {} | {} |",
-                cell(&item.what),
-                cell(&item.why),
-                cell(&item.fix)
+                cell(&w.what()),
+                cell(&w.how),
+                cell(&fix)
             )?;
         }
         writeln!(
@@ -1462,7 +1330,10 @@ mod tests {
                 head: "abc".into(),
                 checks: vec!["ui".into()],
                 pictures: "p>".into(),
-                weakened: vec!["check `tests` is weaker: it runs another command".into()],
+                weakened: vec![Weakening {
+                    part: fearlezz_proof::waits::Part::Check("tests".into()),
+                    how: "it runs another command".into(),
+                }],
             }),
         };
         let back = StatusComment::parse(&comment.render()).unwrap();

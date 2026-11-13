@@ -4,6 +4,7 @@
 //! repository, people who may read it for a private one, and `404` for everyone else, so a
 //! private repository's name is not confirmed.
 
+use fearlezz_proof::waits::Role;
 use serde::Deserialize;
 use worker::{Env, Headers, Request, Response};
 
@@ -76,9 +77,8 @@ async fn shares(
     }
     let full = format!("{owner}/{name}");
     let writes = match github::permission(config, &full, &person.login, &person.token).await? {
-        github::Permission::Admin | github::Permission::Write => true,
-        github::Permission::Less => false,
-        github::Permission::BadToken => return Ok(false),
+        Some(role) => role >= Role::Write,
+        None => return Ok(false),
     };
     cache::put(env, &key, if writes { "yes" } else { "no" }, SIGHT_SECONDS).await?;
     Ok(writes)

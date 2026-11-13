@@ -1406,15 +1406,11 @@ fn waiting(repository: &str, pull: u64) -> Value {
         "base_commit": "def5678",
         "base_result": "passed",
         "items": [
-            {"name": "home.png", "change": "changed", "flaky": false},
-            {"name": "about.png", "change": "same", "flaky": false},
+            {"name": "home.png", "kind": "still", "change": "changed", "summary": "changed", "flaky": false},
+            {"name": "about.png", "kind": "still", "change": "same", "summary": "same", "flaky": false},
         ],
     }]);
-    proof["weakened"] = json!([{
-        "what": "check `tests` is weaker",
-        "why": "it runs another command",
-        "fix": "ask a person with admin rights",
-    }]);
+    proof["weakened"] = json!([{"check": "tests", "how": "it runs another command"}]);
     proof["weakenings_wait"] = json!(true);
     proof
 }
@@ -1504,7 +1500,7 @@ fn sign_with_kid(key: &RsaPrivateKey, kid: &str, claims: &Value) -> String {
     format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
 }
 
-/// A `proof.json` as CI writes it, cut to what the host reads.
+/// A `proof.json` as CI writes it, with no checks or pictures.
 fn proof(repository: &str, pull: u64) -> Value {
     json!({
         "schema": 1,

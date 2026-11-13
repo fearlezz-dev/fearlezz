@@ -268,6 +268,7 @@ dependencies = [
  "block2",
  "clap",
  "dispatch2",
+ "fearlezz-proof",
  "flate2",
  "globset",
  "hex",
@@ -288,6 +289,14 @@ dependencies = [
  "tempfile",
  "toml",
  "toml_edit",
+]
+
+[[package]]
+name = "fearlezz-proof"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

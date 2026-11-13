@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use fearlezz_proof::{Proof, SCHEMA};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use wasm_bindgen::JsValue;
@@ -10,9 +11,6 @@ use worker::{Data, Env, Request, Response};
 
 use crate::oidc::{self, Run};
 use crate::{Answer, Config, Refusal, crypto, github, now};
-
-/// The `proof.json` schema the host knows.
-const SCHEMA: u64 = 1;
 
 pub async fn installed(req: &Request, env: &Env, config: &Config) -> Answer {
     let run = oidc::check(req, env, config).await?;
@@ -35,17 +33,11 @@ struct File {
     size: u64,
 }
 
-/// What the host reads of `proof.json`; the rest is kept as sent.
+/// The version a `proof.json` says it is, read before the rest, which another version may
+/// shape otherwise.
 #[derive(Deserialize)]
-struct Proof {
-    schema: u64,
-    repository: Option<String>,
-    pull: Option<Pull>,
-}
-
-#[derive(Deserialize)]
-struct Pull {
-    number: u64,
+struct Version {
+    schema: u32,
 }
 
 pub async fn create(mut req: Request, env: &Env, config: &Config) -> Answer {
@@ -54,17 +46,19 @@ pub async fn create(mut req: Request, env: &Env, config: &Config) -> Answer {
         .json()
         .await
         .map_err(|_| Refusal::new(400, "send {\"proof\": <proof.json>, \"files\": {...}}"))?;
-    let proof: Proof = serde_json::from_value(upload.proof.clone())
-        .map_err(|_| Refusal::new(400, "proof is not a proof.json"))?;
-    if proof.schema != SCHEMA {
+    let not_proof = || Refusal::new(400, "proof is not a proof.json");
+    let version: Version = serde_json::from_value(upload.proof.clone()).map_err(|_| not_proof())?;
+    if version.schema != SCHEMA {
         return Err(Refusal::new(
             400,
             format!(
                 "proof.json schema {} is unknown here; this host reads {SCHEMA}",
-                proof.schema
+                version.schema
             ),
         ));
     }
+    // Kept as sent; read here only to refuse what is no proof.
+    let proof: Proof = serde_json::from_value(upload.proof.clone()).map_err(|_| not_proof())?;
     if let Some(repository) = &proof.repository
         && repository.to_lowercase() != run.repo()
     {

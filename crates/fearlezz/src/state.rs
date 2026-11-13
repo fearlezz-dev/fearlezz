@@ -414,7 +414,7 @@ fn compared(
 ) -> Result<Compared> {
     let against = crate::store::AgainstBase::of(run, &wt.base).unwrap_or_default();
     let look = match &against.look {
-        Some(crate::store::Looked::At(dir)) => crate::look::Look::at(dir),
+        Some(crate::store::Looked::At(dir)) => crate::look::saved(dir),
         _ => None,
     };
     let look_missing = match &against.look {

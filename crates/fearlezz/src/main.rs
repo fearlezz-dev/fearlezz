@@ -308,7 +308,8 @@ fn prepared() -> Result<Ctx> {
 /// proof also pushes its changed pictures, writes its status comment and sets its status; a
 /// comment, a closed pull request or the schedule need no checkout.
 fn ci_run(comment: Option<PathBuf>, proof: Option<PathBuf>) -> Result<bool> {
-    let actions = action::Actions::detect()?;
+    let workflow = action::Workflow::read();
+    let actions = action::Actions::detect(&workflow)?;
     if let Some(gh) = &actions {
         let task = gh.task();
         if task != action::Task::Prove {
@@ -346,6 +347,7 @@ fn ci_run(comment: Option<PathBuf>, proof: Option<PathBuf>) -> Result<bool> {
         proof,
         pictures,
         pull,
+        workflow,
     };
     run_checks(&ctx, journal, &[], true, out)
 }
@@ -573,7 +575,11 @@ fn setup(what: Setup) -> Result<bool> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&c)?);
             } else {
-                println!("{} ({:.1} s)", c.summary(), clock.elapsed().as_secs_f64());
+                println!(
+                    "{} ({:.1} s)",
+                    media::summary(&c),
+                    clock.elapsed().as_secs_f64()
+                );
                 println!(
                     "next: fearlezz run shows changes for the checks that record stills and films"
                 );
@@ -851,6 +857,8 @@ struct CiOut {
     pictures: Option<PathBuf>,
     /// The pull request on GitHub the proof reports to.
     pull: Option<action::Pull>,
+    /// What GitHub Actions says of the run: the pull request and pages the proof names.
+    workflow: action::Workflow,
 }
 
 impl CiOut {
@@ -861,22 +869,12 @@ impl CiOut {
     }
 }
 
-/// A field of the pull request GitHub Actions runs for, from its event file.
-pub(crate) fn pull_request(pointer: &str) -> Option<String> {
-    let path = std::env::var_os("GITHUB_EVENT_PATH")?;
-    let event: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    event
-        .pointer(&format!("/pull_request/{pointer}"))?
-        .as_str()
-        .map(str::to_string)
-}
-
 impl CommitReport {
     fn start(ctx: &Ctx, wt: &Worktree, to_run: usize, out: CiOut) -> Result<CommitReport> {
         let merge = ctx.git.head_short()?;
         // A pull request's run proves the merge GitHub made of its head into the base branch;
         // the head is the commit people know.
-        let full = pull_request("head/sha");
+        let full = out.workflow.head().map(str::to_string);
         let short = full.as_ref().map(|sha| {
             // A shallow checkout may lack the head itself.
             ctx.git
@@ -898,8 +896,14 @@ impl CommitReport {
             wt.changed.len(),
             ctx.config.checks.len()
         );
+        let proof = proof::Proof {
+            repository: out.workflow.repository.clone(),
+            pull: out.workflow.pull(),
+            run_url: out.workflow.run_url.clone(),
+            ..proof::Proof::new(commit, head, ctx.config.base.clone())
+        };
         Ok(CommitReport {
-            proof: proof::Proof::new(commit, head, ctx.config.base.clone()),
+            proof,
             host: ctx.config.host.clone(),
             out,
         })
@@ -923,7 +927,9 @@ impl CommitReport {
         };
         println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
         let failure = (result.outcome == Outcome::Failed).then(|| failure_item(result));
-        self.proof.ran(check, stage, result, failure);
+        self.proof
+            .checks
+            .push(proof::ran(check, stage, result, failure));
     }
 
     /// Writes the check page into the job summary GitHub Actions names, when it names one,
@@ -932,7 +938,7 @@ impl CommitReport {
         use std::io::Write as _;
         let waits = self.out.weakenings_wait();
         self.proof.weakenings_wait = waits;
-        self.proof.weakened = floor.items(&self.proof.base, waits);
+        self.proof.weakened.clone_from(&floor.weakened);
         // A host that cannot be reached never fails the proof: CI proved the commit anyway.
         let host = host::Host::from_actions(self.host.as_deref()).unwrap_or_else(|e| {
             println!("proof page not sent: {e:#}");
@@ -948,7 +954,7 @@ impl CommitReport {
             .clone()
             .or_else(|| temp.as_ref().map(|t| t.path().to_path_buf()));
         if let Some(dir) = &bundle {
-            self.proof.write(dir)?;
+            proof::write(&self.proof, dir)?;
         }
         let page = match (&host, &bundle) {
             (Some(host), Some(dir)) => match host.send(dir) {
@@ -993,11 +999,7 @@ impl CommitReport {
                 .with_context(|| format!("writing {}", path.display()))?;
         }
         if let Some(pull) = &self.out.pull {
-            pull.report(
-                &comment,
-                &report.waiting_checks(),
-                self.out.pictures.as_deref(),
-            );
+            pull.report(&comment, self.out.pictures.as_deref());
         }
         Ok(())
     }
@@ -1018,21 +1020,21 @@ fn install_fix(tool: &str) -> String {
     )
 }
 
-fn failure_item(f: &store::RunResult) -> floor::Item {
+fn failure_item(f: &store::RunResult) -> proof::Item {
     let what = format!("check `{}` failed", f.check);
     if let Some(tool) = f
         .not_found()
         .then(|| run::missing_command(&f.log))
         .flatten()
     {
-        return floor::Item {
+        return proof::Item {
             what,
             why: format!("{tool} was not found"),
             fix: install_fix(&tool),
         };
     }
     if let Some(found) = f.findings.iter().find(|x| x.level == findings::Level::Gate) {
-        return floor::Item {
+        return proof::Item {
             what,
             why: format!("blocking findings, such as {found}"),
             fix: "fix the findings; the check page lists them".into(),
@@ -1044,7 +1046,7 @@ fn failure_item(f: &store::RunResult) -> floor::Item {
             .first()
             .map(|e| format!(": {e}"))
             .unwrap_or_default();
-        return floor::Item {
+        return proof::Item {
             what,
             why: format!("it ran no tests, so it proves nothing{detail}"),
             fix: "make it run its tests, or give it the tests reader its runner needs".into(),
@@ -1053,7 +1055,7 @@ fn failure_item(f: &store::RunResult) -> floor::Item {
     let code = f
         .exit_code
         .map_or_else(|| "a signal".to_string(), |c| format!("exit code {c}"));
-    floor::Item {
+    proof::Item {
         what,
         why: format!("its command ended with {code}"),
         fix: "fix what it reports; the check page shows the end of its output".into(),
@@ -1160,7 +1162,9 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         {
             if let Some(r) = report.as_mut() {
                 println!("not run {}: {}", check.id, u.why);
-                r.proof.not_run(check, stages.name(check.stage), &u.why);
+                r.proof
+                    .checks
+                    .push(proof::not_run(check, stages.name(check.stage), &u.why));
                 not_run += 1;
             } else {
                 println!("fail {}: {}", check.id, u.why);
@@ -1320,102 +1324,36 @@ fn red_before_green(
         let mark = |unshown: Option<red::Unshown>| {
             store::AgainstBase::update(head, &wt.base, |a| a.red = Some(red::Mark { unshown }))
         };
-        let mut record = |shown: proof::Red| {
-            blocks |= shown.blocks;
+        let mut record = |red: proof::Red| {
+            for line in red.lines(id) {
+                println!("{line}");
+            }
+            blocks |= red.blocks;
             if let Some(c) = report.as_mut().and_then(|r| r.proof.check_mut(id)) {
-                c.red = Some(shown);
+                c.red = Some(red);
             }
         };
-        let red = match ran {
+        let mut red = match ran {
             Ok(Some(red)) => red,
             Ok(None) => continue,
             Err(e) => {
                 let why = format!("{e:#}");
-                println!("red before green {id} did not run: {why}");
                 mark(Some(red::Unshown::DidNotRun(why.clone())))?;
-                if fix {
-                    println!(
-                        "  fix: {}; a fix is not proven until its tests fail there",
-                        proof::DID_NOT_RUN_FIX
-                    );
-                }
                 record(proof::Red {
                     verdict: proof::Verdict::DidNotRun,
                     files: Vec::new(),
                     tests: Vec::new(),
                     why: Some(why.replace('\n', " ")),
                     blocks: fix,
+                    log: None,
                 });
                 continue;
             }
         };
-        mark(red.verdict.unshown())?;
-        let (what, fails, passes) = proof::Red::subject(&red.files);
-        let one = red.files.len() == 1;
-        let shown = |verdict, tests: &[String], blocks| proof::Red {
-            verdict,
-            files: red.files.clone(),
-            tests: tests.to_vec(),
-            why: None,
-            blocks,
-        };
-        match &red.verdict {
-            red::Verdict::Red { tests, log } => {
-                println!(
-                    "red before green {id}: {what} {fails} on the base commit and {passes} here"
-                );
-                if !tests.is_empty() {
-                    println!(
-                        "  failed on the base, passed here: {}",
-                        proof::test_names(tests, "")
-                    );
-                }
-                println!("  log on the base: {}", log.display());
-                record(shown(proof::Verdict::Red, tests, false));
-            }
-            red::Verdict::Unbuilt { log } => {
-                let build = if one {
-                    "does not build"
-                } else {
-                    "do not build"
-                };
-                println!(
-                    "red before green {id}: {what} {build} on the base commit, which counts as \
-                     failing, and {passes} here"
-                );
-                println!("  log on the base: {}", log.display());
-                record(shown(proof::Verdict::Unbuilt, &[], false));
-            }
-            red::Verdict::BaseFails { log } => {
-                println!(
-                    "red before green {id}: the base already fails without the change's test \
-                     files, so failing there shows nothing"
-                );
-                println!("  log on the base: {}", log.display());
-                record(shown(proof::Verdict::BaseFails, &[], false));
-            }
-            red::Verdict::New => {
-                println!(
-                    "red before green {id}: the check is new in this change, so the base commit \
-                     has nothing to compare"
-                );
-                record(shown(proof::Verdict::New, &[], false));
-            }
-            red::Verdict::NotRed { tests } => {
-                let it = if one { "it does" } else { "they do" };
-                println!(
-                    "not red before green {id}: {what} {passes} on the base commit too, so {it} \
-                     not show the fix"
-                );
-                if !tests.is_empty() {
-                    println!("  passed on both: {}", proof::test_names(tests, ""));
-                }
-                if fix {
-                    println!("  fix: {}", red::NEXT);
-                }
-                record(shown(proof::Verdict::NotRed, tests, fix));
-            }
-        }
+        mark(red::unshown(&red))?;
+        // Tests that pass on the base too show nothing of a fix.
+        red.blocks = fix && red.verdict == proof::Verdict::NotRed;
+        record(red);
     }
     Ok(blocks)
 }

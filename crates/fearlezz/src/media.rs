@@ -28,7 +28,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
-use serde::{Deserialize, Serialize};
 
 /// Gaussian blur sigma that removes codec noise before differencing.
 const BLUR_SIGMA: f32 = 1.0;
@@ -105,87 +104,34 @@ impl Film {
     }
 }
 
-/// A box in full resolution pixels: x0, y0, x1, y1 with x1 and y1 exclusive.
-pub(crate) type Box4 = [u32; 4];
+pub(crate) use fearlezz_proof::media::{Box4, Comparison, Moment, Pair, Verdict};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Verdict {
-    Same,
-    /// Same pictures, different timing.
-    Timing,
-    Changed,
-}
-
-/// A stretch of the films where the pictures differ.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Moment {
-    pub before: (f64, f64),
-    pub after: (f64, f64),
-    #[serde(rename = "box")]
-    pub area: Box4,
-    pub px: usize,
-}
-
-/// One matched pair of states.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Pair {
-    pub before: usize,
-    pub after: usize,
-    /// Frame index and start time, in seconds, of each state.
-    pub before_frame: usize,
-    pub after_frame: usize,
-    pub before_at: f64,
-    pub after_at: f64,
-    pub px: usize,
-    pub boxes: Vec<Box4>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Comparison {
-    pub verdict: Verdict,
-    pub still: bool,
-    pub size_before: (usize, usize),
-    pub size_after: (usize, usize),
-    pub total_before: f64,
-    pub total_after: f64,
-    /// The largest shift of a held state, in seconds, and where it is in the before film.
-    pub max_shift: f64,
-    pub max_shift_at: Option<f64>,
-    pub states_before: usize,
-    pub states_after: usize,
-    pub moments: Vec<Moment>,
-    pub pairs: Vec<Pair>,
-}
-
-impl Comparison {
-    /// One line for people and agents.
-    pub(crate) fn summary(&self) -> String {
-        match self.verdict {
-            Verdict::Same => "same".into(),
-            Verdict::Timing => format!(
-                "only timing: {:.2} s to {:.2} s, largest shift {:+.2} s at {:.2} s",
-                self.total_before,
-                self.total_after,
-                self.max_shift,
-                self.max_shift_at.unwrap_or(0.0)
-            ),
-            Verdict::Changed if self.size_before != self.size_after => format!(
-                "changed: size {}x{} to {}x{}",
-                self.size_before.0, self.size_before.1, self.size_after.0, self.size_after.1
-            ),
-            Verdict::Changed if self.still => {
-                let b = self.moments[0].area;
-                format!("changed: x {} to {}, y {} to {}", b[0], b[2], b[1], b[3])
-            }
-            Verdict::Changed => {
-                let at: Vec<String> = self
-                    .moments
-                    .iter()
-                    .map(|m| format!("{:.2} s", m.after.0))
-                    .collect();
-                format!("changed at {}", at.join(", "))
-            }
+/// A comparison in one line, for people and agents.
+pub(crate) fn summary(c: &Comparison) -> String {
+    match c.verdict {
+        Verdict::Same => "same".into(),
+        Verdict::Timing => format!(
+            "only timing: {:.2} s to {:.2} s, largest shift {:+.2} s at {:.2} s",
+            c.total_before,
+            c.total_after,
+            c.max_shift,
+            c.max_shift_at.unwrap_or(0.0)
+        ),
+        Verdict::Changed if c.size_before != c.size_after => format!(
+            "changed: size {}x{} to {}x{}",
+            c.size_before.0, c.size_before.1, c.size_after.0, c.size_after.1
+        ),
+        Verdict::Changed if c.still => {
+            let b = c.moments[0].area;
+            format!("changed: x {} to {}, y {} to {}", b[0], b[2], b[1], b[3])
+        }
+        Verdict::Changed => {
+            let at: Vec<String> = c
+                .moments
+                .iter()
+                .map(|m| format!("{:.2} s", m.after.0))
+                .collect();
+            format!("changed at {}", at.join(", "))
         }
     }
 }

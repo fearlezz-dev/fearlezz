@@ -7,12 +7,13 @@
 //! from the files origin under the same grant of one proof that expires within the hour; the
 //! link lives here, on the app origin, and never reaches the files origin.
 
+use fearlezz_proof::waits::Role;
 use serde::Deserialize;
 use serde_json::json;
 use worker::{Env, Request, Response};
 
 use crate::approve::{same_origin, sign_in_again};
-use crate::github::{self, Permission};
+use crate::github;
 use crate::session::{self, Session};
 use crate::{Answer, Config, Refusal, crypto, files, now, pages, repo_key};
 
@@ -186,15 +187,15 @@ async fn writer(
     }
     let full = format!("{owner}/{name}");
     match github::permission(config, &full, &person.login, &person.token).await? {
-        Permission::Admin | Permission::Write => Ok(person),
-        Permission::Less => Err(Refusal::new(
+        Some(role) if role >= Role::Write => Ok(person),
+        Some(_) => Err(Refusal::new(
             403,
             format!(
                 "@{} cannot {what} here: that needs write access to {full} on GitHub",
                 person.login
             ),
         )),
-        Permission::BadToken => Err(sign_in_again()),
+        None => Err(sign_in_again()),
     }
 }
 

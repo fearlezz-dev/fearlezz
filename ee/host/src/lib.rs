@@ -50,10 +50,12 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         ("GET", ["login"]) => session::login(&req, config).await,
         ("GET", ["callback"]) => session::callback(&req, env, config).await,
         ("GET", ["logout"]) => session::logout(&req, env).await,
-        ("POST", [owner, repo, "proofs", id, action]) => match approve::Kind::from_path(action) {
-            Some(kind) => approve::act(req, env, config, owner, repo, id, kind).await,
-            None => Err(Refusal::new(404, "not found")),
-        },
+        ("POST", [owner, repo, "proofs", id, action]) => {
+            match fearlezz_proof::waits::Kind::of(action) {
+                Some(kind) => approve::act(req, env, config, owner, repo, id, kind).await,
+                None => Err(Refusal::new(404, "not found")),
+            }
+        }
         ("POST", [owner, repo, "pull", number, "share"]) => {
             share::make(req, env, config, owner, repo, number).await
         }
