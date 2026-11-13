@@ -104,7 +104,8 @@ enum Cmd {
         no_run: bool,
         /// Prove this commit, for CI: every check, fresh, with no journal. On
         /// GitHub Actions with a token it also does what the event asks: a pull request gets
-        /// its pictures, status comment and status, `/fearlezz approve` is answered, and closed
+        /// its pictures, status comment and status, `/fearlezz approve` and `/fearlezz accept`
+        /// are answered, and closed
         /// pull requests lose their pictures.
         #[arg(long, conflicts_with_all = ["checks", "stage"])]
         ci: bool,
@@ -852,6 +853,14 @@ struct CiOut {
     pull: Option<action::Pull>,
 }
 
+impl CiOut {
+    /// Whether what the change weakens waits for an admin's accept rather than failing the
+    /// proof: only on a pull request whose run holds the `fearlezz/approval` status.
+    fn weakenings_wait(&self) -> bool {
+        self.pull.as_ref().is_some_and(action::Pull::holds)
+    }
+}
+
 /// A field of the pull request GitHub Actions runs for, from its event file.
 pub(crate) fn pull_request(pointer: &str) -> Option<String> {
     let path = std::env::var_os("GITHUB_EVENT_PATH")?;
@@ -921,7 +930,9 @@ impl CommitReport {
     /// and the status comment to the file and the pull request, when asked.
     fn finish(mut self, floor: &floor::Floor) -> Result<()> {
         use std::io::Write as _;
-        self.proof.weakened = floor.items(&self.proof.base);
+        let waits = self.out.weakenings_wait();
+        self.proof.weakenings_wait = waits;
+        self.proof.weakened = floor.items(&self.proof.base, waits);
         // A host that cannot be reached never fails the proof: CI proved the commit anyway.
         let host = host::Host::from_actions(self.host.as_deref()).unwrap_or_else(|e| {
             println!("proof page not sent: {e:#}");
@@ -1064,15 +1075,18 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
     } else {
         floor::Floor::default()
     };
-    let lines = floor.lines();
+    // On a pull request a weakening waits for an admin's accept; elsewhere it blocks.
+    let waits = out.weakenings_wait();
+    let lines = floor.lines(waits);
+    let floor_holds = floor.holds() || waits;
     let answers_for_work = !in_memory && ids.is_empty() && stage == final_stage;
     let settled = |view: &View| {
-        floor.holds() && (!answers_for_work || view.next == state::READY || view.checks.is_empty())
+        floor_holds && (!answers_for_work || view.next == state::READY || view.checks.is_empty())
     };
     let next_line = |view: &View| {
         if in_memory {
             state::COMMIT_PROVEN.to_string()
-        } else if !floor.holds() {
+        } else if !floor_holds {
             state::FLOOR_NEXT.to_string()
         } else {
             view.next.clone()
@@ -1107,7 +1121,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         }
         report.map_or(Ok(()), |r| r.finish(&floor))?;
         match &later {
-            Some((next_stage, _)) if floor.holds() => {
+            Some((next_stage, _)) if floor_holds => {
                 println!("next: fearlezz run --stage {next_stage}");
             }
             _ => println!("next: {}", next_line(&before)),

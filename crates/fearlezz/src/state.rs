@@ -153,8 +153,9 @@ pub(crate) const READY: &str = "all proof is in: ready to merge";
 
 /// The next line at the final stage when the change fails the floor of the base branch.
 pub(crate) const FLOOR_NEXT: &str = "the change takes away proof the base branch requires \
-                                     (above): restore it, or ask the developer whether to \
-                                     merge past CI: fearlezz say ask \"<question>\"";
+                                     (above): restore it, or ask the developer whether a \
+                                     person with admin rights should accept it on the pull \
+                                     request: fearlezz say ask \"<question>\"";
 
 /// The next line after proving a commit, where no work is being judged.
 pub(crate) const COMMIT_PROVEN: &str =

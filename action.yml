@@ -2,8 +2,8 @@ name: Fearlezz proof
 description: Prove a change with the checks in fearlezz.toml, and show the status and changed pictures on the pull request.
 
 # Installs Fearlezz and runs `fearlezz run --ci`, which does what the event asks: a pull request
-# or push is proven, a `/fearlezz approve` comment written, edited or deleted settles the
-# approval, and a closed pull request or the schedule cleans up the pictures branch.
+# or push is proven, a `/fearlezz approve` or `/fearlezz accept` comment written, edited or
+# deleted settles the approval, and a closed pull request or the schedule cleans up the pictures branch.
 inputs:
   version:
     description: >-
@@ -16,7 +16,7 @@ inputs:
     default: "false"
   token:
     description: >-
-      Token that writes the comment, the pictures status and the pictures branch: the
+      Token that writes the comment, the approval status and the pictures branch: the
       workflow's token or a GitHub App's. A personal token writes as a person, and Fearlezz
       never takes a person's comment or status for its own. Empty proves without writing to
       GitHub.
