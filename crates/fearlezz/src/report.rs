@@ -13,6 +13,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::findings::Level;
+use crate::floor;
 use crate::look::{Change, Item, Look};
 use crate::media::{self, Box4, Comparison, Pair};
 use crate::page::esc;
@@ -92,6 +93,8 @@ code { font: .9em ui-monospace, "SF Mono", Menlo, monospace; background: var(--s
 .row p { margin: 0; max-width: 70ch; }
 .weak .title { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 0 0 8px; font-size: 18px; }
 .weak .fix { margin-top: 6px; color: var(--quiet); }
+.weak .what + .what { margin-top: 18px; }
+.weak .what + .fix { margin-top: 14px; }
 .approve { display: grid; gap: 18px; transition: box-shadow .3s; }
 .ahead { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; }
 .ahead .what b { font-size: 18px; }
@@ -970,8 +973,10 @@ fn verdict(proof: &Proof) -> (String, String, &'static str) {
         if !waits.is_empty() {
             what.push("a person with write access approves changed pictures");
         }
-        if !proof.weakened.is_empty() {
-            what.push("a person with admin rights accepts a weaker check");
+        match proof.weakened.len() {
+            0 => {}
+            1 => what.push("a person with admin rights accepts a weaker check"),
+            _ => what.push("a person with admin rights accepts the weaker checks"),
         }
         return (
             format!("Not ready: {} wait for you", things(person)),
@@ -995,16 +1000,38 @@ fn waits(html: &mut String, proof: &Proof) -> std::fmt::Result {
     html.push_str(
         "<section class=\"part\" id=\"waits\"><h2>Waits for you</h2><div class=\"rows\">",
     );
-    for item in &proof.weakened {
-        write!(
-            html,
-            "<div class=\"row weak\"><div class=\"what\"><p class=\"title\"><b>{}</b><span class=\"word timing\">Weaker</span></p><p>{}</p><p class=\"fix\">{}</p></div>",
-            prose(&sentence(&item.what)),
-            prose(&sentence(&item.why)),
-            prose(&sentence(&item.fix))
-        )?;
+    // One accept comment covers the whole weakened proof, so a waiting proof gets one row
+    // with every weakening and one Accept below them.
+    let rows: Vec<&[floor::Item]> = if proof.weakenings_wait {
+        vec![&proof.weakened[..]]
+    } else {
+        proof.weakened.chunks(1).collect()
+    };
+    for items in rows.into_iter().filter(|r| !r.is_empty()) {
+        html.push_str("<div class=\"row weak\">");
+        // What to do is the same for every weakening that waits: said once, above the Accept.
+        let once = proof.weakenings_wait && items.iter().all(|i| i.fix == items[0].fix);
+        for item in items {
+            write!(
+                html,
+                "<div class=\"what\"><p class=\"title\"><b>{}</b><span class=\"word timing\">Weaker</span></p><p>{}</p>",
+                prose(&sentence(&item.what)),
+                prose(&sentence(&item.why)),
+            )?;
+            if !once {
+                write!(html, "<p class=\"fix\">{}</p>", prose(&sentence(&item.fix)))?;
+            }
+            html.push_str("</div>");
+        }
+        if once {
+            write!(
+                html,
+                "<p class=\"fix\">{}</p>",
+                prose(&sentence(&items[0].fix))
+            )?;
+        }
         if proof.weakenings_wait {
-            accept(html)?;
+            accept(html, items.len())?;
         }
         html.push_str("</div>");
     }
@@ -1018,11 +1045,16 @@ fn waits(html: &mut String, proof: &Proof) -> std::fmt::Result {
 /// Accepting a weakening that waits for an admin: their words, and the comment to copy, or,
 /// framed by the proof host, an Accept button that has the host post it as them. One accept
 /// covers the whole weakened proof.
-fn accept(html: &mut String) -> std::fmt::Result {
+fn accept(html: &mut String, count: usize) -> std::fmt::Result {
     let comment = "/fearlezz accept <why the weaker proof is right>";
+    let label = match count {
+        1 => "Accept".to_string(),
+        2 => "Accept both".to_string(),
+        n => format!("Accept all {n}"),
+    };
     write!(
         html,
-        "<div class=\"act\" data-post=\"accept\"><label class=\"said\"><span>Why it is right</span><input required maxlength=\"500\" placeholder=\"in your own words\" autocomplete=\"off\"></label><div class=\"go\"><button type=\"button\" class=\"primary copy-comment\" data-label=\"Copy accept comment\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy accept comment</span></button><button type=\"button\" class=\"primary send\" data-label=\"Accept\" disabled><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Accept</span></button></div></div><p class=\"cmd\">An admin comments on the pull request: {}</p><p class=\"posted\" role=\"status\" hidden></p>",
+        "<div class=\"act\" data-post=\"accept\"><label class=\"said\"><span>Why it is right</span><input required maxlength=\"500\" placeholder=\"in your own words\" autocomplete=\"off\"></label><div class=\"go\"><button type=\"button\" class=\"primary copy-comment\" data-label=\"Copy accept comment\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy accept comment</span></button><button type=\"button\" class=\"primary send\" data-label=\"{label}\" disabled><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>{label}</span></button></div></div><p class=\"cmd\">An admin comments on the pull request: {}</p><p class=\"posted\" role=\"status\" hidden></p>",
         esc(comment)
     )
 }

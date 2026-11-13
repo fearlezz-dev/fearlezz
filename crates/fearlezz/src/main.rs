@@ -1259,7 +1259,6 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
     // It marks each run, so `fearlezz` and the hooks hold the work to the same verdict.
     let red_blocks = (in_memory || stage == final_stage)
         && red_before_green(ctx, &wt, &green, &stage, report.as_mut())?;
-    prune_store(ctx);
     let not_run_text = if not_run > 0 {
         format!(", {not_run} not run")
     } else {
@@ -1275,6 +1274,9 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         println!("{line}");
     }
     report.map_or(Ok(()), |r| r.finish(&floor))?;
+    // Only now: the commit report reads this run's results, which no journal names in CI, so
+    // a check sharing its inputs with another could lose its output to the prune.
+    prune_store(ctx);
     let after = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
     if stage == final_stage
         && (after.next == state::READY || in_memory)

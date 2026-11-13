@@ -401,16 +401,19 @@ fn the_page_puts_weaker_checks_with_what_waits_for_a_person() {
     assert!(!html.contains("data-post=\"accept\""), "{html}");
 }
 
-#[test]
-fn the_page_offers_an_accept_where_a_weakening_waits() {
+/// The proof page of pull request 7 on GitHub Actions, after a commit that applies
+/// `weaken` to `fearlezz.toml`, and its `proof.json`.
+fn weakened_page(weaken: &[(&str, &str)]) -> (String, Value) {
     let repo = repo(CHECKS, &[("src/a.txt", "a\n")]);
     repo.branch("feat/x");
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
     repo.write(
         "fearlezz.toml",
-        &config.replace("echo looking; test ! -e src/broken", "true"),
+        &weaken
+            .iter()
+            .fold(config, |c, (from, to)| c.replace(from, to)),
     );
-    repo.commit("weaker lint");
+    repo.commit("weaker proof");
     let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
     let gh = common::github::FakeGitHub::start();
     gh.state().pulls.insert(7, (head.clone(), "open".into()));
@@ -446,7 +449,12 @@ fn the_page_offers_an_accept_where_a_weakening_waits() {
     );
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert_eq!(proof["weakenings_wait"], true, "{proof:#}");
-    let html = page(&dir);
+    (page(&dir), proof)
+}
+
+#[test]
+fn the_page_offers_an_accept_where_a_weakening_waits() {
+    let (html, _) = weakened_page(&[("echo looking; test ! -e src/broken", "true")]);
     let weak = html
         .find("Check <code>lint</code> is weaker")
         .expect("the weakening");
@@ -456,6 +464,25 @@ fn the_page_offers_an_accept_where_a_weakening_waits() {
     assert!(html.contains("/fearlezz accept &lt;why the weaker proof is right&gt;"));
     assert!(html.contains("<span>Accept</span>"), "{html}");
     assert!(html.contains("<span>Copy accept comment</span>"), "{html}");
+}
+
+#[test]
+fn one_accept_covers_every_weakening_on_the_page() {
+    let (html, _) = weakened_page(&[
+        ("echo looking; test ! -e src/broken", "true"),
+        ("echo all tests passed", "true"),
+    ]);
+    // One accept comment covers the whole weakened proof, so the page offers one, after
+    // every weakening it covers.
+    assert_eq!(html.matches("data-post=\"accept\"").count(), 1, "{html}");
+    let accept = html.find("data-post=\"accept\"").unwrap();
+    for check in ["lint", "tests"] {
+        let weak = html
+            .find(&format!("Check <code>{check}</code> is weaker"))
+            .expect("the weakening");
+        assert!(weak < accept, "the accept follows {check}");
+    }
+    assert!(html.contains("<span>Accept both</span>"), "{html}");
 }
 
 #[test]
