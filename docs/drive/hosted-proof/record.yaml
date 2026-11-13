@@ -24,6 +24,8 @@ pieces:
         evidence: ["spike worktree deleted after recording; numbers above"]
 
 decided:
+  - id: share-the-pull-request
+    what: "A share link opens the pull request: always its latest proof. Viewers never approve or accept."
   - id: one-accept
     what: "With several weakened checks, one Accept below the list."
   - id: accept-waits
