@@ -1,7 +1,8 @@
 //! GitHub Actions: what `fearlezz run --ci` does for the event a workflow runs on. A pull
 //! request is proven, its changed pictures pushed to the pictures branch, its status comment
-//! written and its `fearlezz/pictures` status set; a `/fearlezz approve <words>` comment
-//! written, edited or deleted settles that status again by the approval rule; a closed pull
+//! written and its `fearlezz/approval` status set; a `/fearlezz approve <words>` or
+//! `/fearlezz accept <words>` comment written, edited or deleted settles that status again by
+//! the approval rule; a closed pull
 //! request's pictures are removed; the schedule removes the pictures of every closed pull
 //! request. A fork's run has a read only token, so it writes nothing to GitHub.
 
@@ -14,7 +15,7 @@ use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use crate::github::{self, Api, Approval, Pending, StatusComment, short};
+use crate::github::{self, Api, Approval, Kind, Pending, StatusComment, Verdict, short};
 
 /// The branch the changed pictures are pushed to, one folder per pull request.
 pub(crate) const BRANCH: &str = "fearlezz-pictures";
@@ -35,11 +36,11 @@ pub(crate) struct Actions {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Task {
     Prove,
-    /// A `/fearlezz approve` comment was written, edited or deleted.
+    /// A `/fearlezz approve` or `/fearlezz accept` comment was written, edited or deleted.
     Settle,
     Clean,
     Squash,
-    /// A comment that is no approval and was none.
+    /// A comment that is no approval or accept and was none.
     Nothing,
 }
 
@@ -137,7 +138,9 @@ impl Actions {
                 self.squash(gone, true)?;
                 println!("removed the pictures of closed pull requests from {BRANCH}");
             }
-            Task::Nothing => println!("nothing to do: the comment is no /fearlezz approve"),
+            Task::Nothing => {
+                println!("nothing to do: the comment is no /fearlezz approve or /fearlezz accept");
+            }
             Task::Prove => bail!("proving needs the checkout"),
         }
         println!("next: nothing; the pull request shows what happened");
@@ -170,9 +173,10 @@ impl Actions {
         })
     }
 
-    /// Settles `fearlezz/pictures` after a `/fearlezz approve` comment was written, edited or
-    /// deleted, from what GitHub holds now rather than from the event, and answers the person:
-    /// their approval counts, why it does not, or that it was taken back.
+    /// Settles `fearlezz/approval` after a `/fearlezz approve` or `/fearlezz accept` comment
+    /// was written, edited or deleted, from what GitHub holds now rather than from the event,
+    /// and answers the person: what they gave counts, why it does not, or that it was taken
+    /// back, with what still waits.
     fn settle(&self) -> Result<()> {
         let pr = self
             .number("/issue/number")
@@ -181,50 +185,98 @@ impl Actions {
         let id = self.number("/comment/id").unwrap_or_default();
         let url = self.text("/comment/html_url");
         let action = self.text("/action");
-        let asks = action != "deleted" && github::command(&self.text("/comment/body")).is_some();
+        let body = self.text("/comment/body");
+        let asked = (action != "deleted")
+            .then(|| github::command(&body))
+            .flatten();
+        // What the comment said before this event, to tell whether it counted then.
+        let before = match action.as_str() {
+            "deleted" => Some(body.clone()),
+            "edited" => Some(self.text("/changes/body/from")),
+            _ => None,
+        };
+        let earlier = before.as_deref().and_then(github::command);
+        let Some(kind) = asked.as_ref().or(earlier.as_ref()).map(|(k, _)| *k) else {
+            return Ok(());
+        };
         let (head, _) = self.api.head(pr)?;
-        let was = self.api.latest_status(&head)?.is_some_and(|s| {
+        let green_by_it = self.api.latest_status(&head)?.is_some_and(|s| {
             s["state"] == "success"
                 && s["creator"]["type"] == "Bot"
                 && s["target_url"] == url.as_str()
         });
-        let taken_back = |short: &str| -> Result<()> {
-            let how = if action == "deleted" {
-                "deleted"
-            } else {
-                "edited so it no longer approves"
+        let taken_back = |short: &str, still: Option<&Approval>| -> Result<()> {
+            let how = match (action.as_str(), kind) {
+                ("deleted", _) => "deleted".to_string(),
+                (_, Kind::Approve) => "edited so it no longer approves".into(),
+                (_, Kind::Accept) => "edited so it no longer accepts".into(),
+            };
+            let noun = match kind {
+                Kind::Approve => "approval",
+                Kind::Accept => "accept",
+            };
+            let rest = match (still, kind) {
+                (Some(other), _) => format!("the {noun} by @{} still counts", other.by),
+                (None, Kind::Approve) => {
+                    format!("the pictures of {short} wait for `/fearlezz approve <words>` again")
+                }
+                (None, Kind::Accept) => format!(
+                    "the weakened proof of {short} waits for an admin's `/fearlezz accept \
+                     <words>` again"
+                ),
             };
             self.api.comment(
                 pr,
-                &format!(
-                    "The approval by @{who} was {how}, so it is taken back: the pictures of \
-                     {short} wait for `/fearlezz approve <words>` again."
-                ),
+                &format!("The {noun} by @{who} was {how}, so it is taken back: {rest}."),
             )?;
-            println!("took back the approval of pull request {pr} at {short}");
+            println!("took back the {noun} of pull request {pr} at {short}");
             Ok(())
         };
         let (pending, verdict) = match github::settle(&self.api, pr)? {
             Ok(settled) => settled,
             Err(why) => {
-                if asks {
+                if asked.is_some() {
                     self.api.comment(pr, &format!("@{who}, {why}."))?;
-                } else if was {
-                    taken_back(&short(&head))?;
+                } else if green_by_it {
+                    taken_back(&short(&head), None)?;
                 }
                 println!("{why}");
                 return Ok(());
             }
         };
         let short = short(&pending.head);
-        match &verdict {
-            Ok(a) if a.url == url => {
+        // It counted before this event when its earlier words count for what waits now.
+        let was = green_by_it
+            || match &before {
+                Some(old) if earlier.is_some() => {
+                    let mut comment = json!({
+                        "body": old,
+                        "html_url": url,
+                        "user": { "login": who, "type": self.text("/comment/user/type") },
+                    });
+                    match self
+                        .api
+                        .call("GET", &format!("issues/comments/{id}"), None)?
+                    {
+                        (200, now) => comment["created_at"] = now["created_at"].clone(),
+                        _ => comment["created_at"] = self.event["comment"]["created_at"].clone(),
+                    }
+                    pending.judge(&self.api, &comment)?.is_ok()
+                }
+                _ => false,
+            };
+        let counts = asked.as_ref().is_some_and(|(k, _)| *k == kind);
+        match verdict.of(kind) {
+            Some(Ok(a)) if a.url == url => {
                 if !was {
-                    self.reply_approved(pr, &pending, a)?;
+                    self.reply_counted(pr, kind, &pending, &verdict, a)?;
                 }
             }
-            Err(_) if was => taken_back(&short)?,
-            _ if asks => {
+            // Deleted, or edited into something else.
+            part if was && !counts => {
+                taken_back(&short, part.and_then(|p| p.as_ref().ok()))?;
+            }
+            _ if asked.is_some() => {
                 let why = match self
                     .api
                     .call("GET", &format!("issues/comments/{id}"), None)?
@@ -234,35 +286,57 @@ impl Actions {
                 };
                 if let Some(why) = why {
                     self.api.comment(pr, &why)?;
-                    println!("refused the approval of @{who}");
+                    println!("refused the {} of @{who}", kind.word());
                 }
             }
             _ => {}
         }
         println!(
-            "fearlezz/pictures of {short}: {}",
-            match &verdict {
-                Ok(a) => format!("approved by @{}", a.by),
-                Err(why) => format!("waiting ({why})"),
-            }
+            "{} of {short}: {}",
+            github::CONTEXT,
+            pending.description(&verdict)
         );
         Ok(())
     }
 
-    fn reply_approved(&self, pr: u64, pending: &Pending, a: &Approval) -> Result<()> {
+    fn reply_counted(
+        &self,
+        pr: u64,
+        kind: Kind,
+        pending: &Pending,
+        verdict: &Verdict,
+        a: &Approval,
+    ) -> Result<()> {
         let short = short(&pending.head);
-        self.api.comment(
-            pr,
-            &format!(
+        let text = match kind {
+            Kind::Approve => format!(
                 "@{} approved {} at {short}:\n\n> {}\n\nA new push, or a run that shows other \
                  pictures, needs a new approval; deleting the approval, or editing it so it no \
                  longer approves, takes it back.",
                 a.by,
-                pending.what(),
+                pending.what(kind),
                 a.said
             ),
-        )?;
-        println!("@{} approved pull request {pr} at {short}", a.by);
+            Kind::Accept => {
+                let covers: Vec<String> =
+                    pending.weakened.iter().map(|w| format!("- {w}")).collect();
+                format!(
+                    "@{} accepted the weakened proof at {short}:\n\n> {}\n\nIt covers:\n\n{}\n\n\
+                     A new push, or a run that weakens something else, needs a new accept; \
+                     deleting the accept, or editing it so it no longer accepts, takes it back.",
+                    a.by,
+                    a.said,
+                    covers.join("\n")
+                )
+            }
+        };
+        self.api
+            .comment(pr, &format!("{text}\n\n{}", pending.still(verdict)))?;
+        let did = match kind {
+            Kind::Approve => "approved",
+            Kind::Accept => "accepted",
+        };
+        println!("@{} {did} pull request {pr} at {short}", a.by);
         Ok(())
     }
 
@@ -357,6 +431,13 @@ pub(crate) struct Pull {
 }
 
 impl Pull {
+    /// Whether this run holds the `fearlezz/approval` status, so what waits for a person
+    /// (changed pictures, a weakened proof) waits there instead of failing the proof. A fork's
+    /// run writes nothing, so it cannot.
+    pub(crate) fn holds(&self) -> bool {
+        !self.fork
+    }
+
     /// Pushes the changed pictures in `dir`, writes the status comment and sets the status.
     /// GitHub refusing any of it is a warning: the proof stands on its own.
     pub(crate) fn report(&self, comment: &StatusComment, checks: &[String], dir: Option<&Path>) {
@@ -383,16 +464,9 @@ impl Pull {
         checks: &[String],
         dir: Option<&Path>,
     ) -> Result<()> {
-        let (state, what) = if checks.is_empty() {
-            ("success", "no changed pictures".to_string())
-        } else {
-            (
-                "pending",
-                format!(
-                    "changed pictures of {} wait for /fearlezz approve",
-                    checks.join(", ")
-                ),
-            )
+        let (state, what) = match &comment.waiting {
+            None => ("success", "nothing waits for approval".to_string()),
+            Some(w) => ("pending", github::waits_description(&w.checks, &w.weakened)),
         };
         // A run that finishes after a newer push's run leaves that run's comment and pictures.
         let (now, _) = self.api.head(self.number)?;
@@ -424,7 +498,7 @@ impl Pull {
         }
         self.api
             .write_status_comment(self.number, old.as_ref(), &comment)?;
-        if checks.is_empty() {
+        if comment.waiting.is_none() {
             return self.api.status(&self.head, state, &what, None);
         }
         if let Err(why) = github::settle(&self.api, self.number)? {

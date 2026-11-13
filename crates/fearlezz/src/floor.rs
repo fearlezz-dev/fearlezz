@@ -24,6 +24,11 @@ pub(crate) struct Item {
     pub fix: String,
 }
 
+/// How a weakening gets past where nothing can wait for an admin's accept.
+const PAST: &str = "when it must change, ask a person with admin rights: on a pull request \
+                    from this repository on GitHub they accept it with /fearlezz accept <words> \
+                    after reading why, elsewhere they merge past CI";
+
 impl Floor {
     /// Compares the change's config with the one on its base commit. Without a config there,
     /// there is no floor.
@@ -43,8 +48,9 @@ impl Floor {
         self.weakened.is_empty()
     }
 
-    /// What fails the floor, one item each, for a reader who sees nothing else.
-    pub(crate) fn items(&self, base: &str) -> Vec<Item> {
+    /// What fails the floor, one item each, for a reader who sees nothing else. When it
+    /// `waits` on a pull request, an admin's accept lets it through; elsewhere it blocks.
+    pub(crate) fn items(&self, base: &str, waits: bool) -> Vec<Item> {
         self.weakened
             .iter()
             .map(|(what, how)| Item {
@@ -54,27 +60,34 @@ impl Floor {
                     format!("check `{what}` is weaker")
                 },
                 why: how.clone(),
-                fix: format!(
-                    "keep the proof {base} requires; when it must change, a person with admin \
-                     rights merges past CI after reading this"
-                ),
+                fix: if waits {
+                    format!(
+                        "keep the proof {base} requires; when it must change, a person with admin \
+                         rights reads why and accepts it with `/fearlezz accept <words>`"
+                    )
+                } else {
+                    format!("keep the proof {base} requires; {PAST}")
+                },
             })
             .collect()
     }
 
-    /// The lines that say what fails the floor and how to get past it.
-    pub(crate) fn lines(&self) -> Vec<String> {
+    /// The lines that say what fails the floor and how to get past it; when it `waits` on a
+    /// pull request, that an admin's accept lets it through.
+    pub(crate) fn lines(&self, waits: bool) -> Vec<String> {
         let mut lines: Vec<String> = self
             .weakened
             .iter()
             .map(|(what, how)| format!("weakens {what}: {how}"))
             .collect();
         if !self.weakened.is_empty() {
-            lines.push(
-                "  fix: keep the proof the base branch requires; when it must change, a person \
-                 with admin rights merges past CI after reading this"
-                    .into(),
-            );
+            lines.push(if waits {
+                "  note: the proof passes; the fearlezz/approval status waits until a person with \
+                 admin rights reads why and comments /fearlezz accept <words>"
+                    .into()
+            } else {
+                format!("  fix: keep the proof the base branch requires; {PAST}")
+            });
         }
         lines
     }

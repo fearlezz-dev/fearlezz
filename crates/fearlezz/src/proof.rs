@@ -43,6 +43,10 @@ pub(crate) struct Proof {
     pub checks: Vec<Check>,
     /// What the change weakens about the proof, against the base branch's config.
     pub weakened: Vec<Item>,
+    /// Whether what it weakens waits for an admin's accept instead of keeping the commit from
+    /// being proven: on a pull request whose run holds the `fearlezz/approval` status.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub weakenings_wait: bool,
     /// Every comparison of pictures with the base commit, unchanged ones too.
     pub looks: Vec<Look>,
 }
@@ -172,6 +176,7 @@ impl Proof {
             run_url,
             checks: Vec::new(),
             weakened: Vec::new(),
+            weakenings_wait: false,
             looks: Vec::new(),
         }
     }
@@ -188,6 +193,7 @@ impl Proof {
             run_url: None,
             checks: Vec::new(),
             weakened: Vec::new(),
+            weakenings_wait: false,
             looks: vec![look],
         }
     }
@@ -257,7 +263,8 @@ impl Proof {
     }
 
     /// What keeps the commit from being proven: failed checks, unstable ones, what the change
-    /// weakens, and fixes its tests do not prove, in that order.
+    /// weakens (unless it waits for an admin's accept), and fixes its tests do not prove, in
+    /// that order.
     pub(crate) fn blockers(&self) -> Vec<Item> {
         let mut items: Vec<Item> = self
             .checks
@@ -269,7 +276,9 @@ impl Proof {
             why: "the same inputs gave passed and failed".into(),
             fix: "make it give one answer: a flaky test, or an input it does not declare".into(),
         }));
-        items.extend(self.weakened.iter().cloned());
+        if !self.weakenings_wait {
+            items.extend(self.weakened.iter().cloned());
+        }
         items.extend(
             self.checks
                 .iter()
@@ -296,6 +305,15 @@ impl Proof {
             .iter()
             .filter_map(|c| c.red.as_ref().map(|r| r.note(&c.id)));
         not_run.chain(red).collect()
+    }
+
+    /// What the change weakens, when it waits for an admin's accept rather than blocking.
+    pub(crate) fn waiting_weakened(&self) -> &[Item] {
+        if self.weakenings_wait {
+            &self.weakened
+        } else {
+            &[]
+        }
     }
 
     /// Looks whose changed pictures wait for a person.
