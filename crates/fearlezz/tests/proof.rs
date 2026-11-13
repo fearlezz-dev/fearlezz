@@ -323,10 +323,7 @@ fn the_page_leads_with_the_verdict_and_opens_what_broke() {
     repo.commit("break");
     let (_, dir, _) = prove(&repo, &[]);
     let html = page(&dir);
-    assert!(
-        html.contains("<h1>Not ready: 1 thing to fix</h1>"),
-        "{html}"
-    );
+    assert!(html.contains("Not ready: 1 thing to fix</h1>"), "{html}");
     assert!(html.contains("Did anything break?"), "{html}");
     // The failed check comes first and open, with why, what to do and its output.
     let lint = html.find("id=\"check-lint\" open").expect("lint open");
@@ -349,7 +346,7 @@ fn the_page_says_ready_when_everything_holds() {
     let (out, dir, _) = prove(&repo, &[]);
     assert!(out.ok, "{}", out.stdout);
     let html = page(&dir);
-    assert!(html.contains("<h1>Ready to merge</h1>"), "{html}");
+    assert!(html.contains("Ready to merge</h1>"), "{html}");
     assert!(!html.contains("Waits for you"), "{html}");
 }
 
@@ -373,7 +370,7 @@ fn the_page_names_the_pull_request_and_fetches_nothing() {
     let (_, dir, _) = prove(&repo, &[("GITHUB_EVENT_PATH", event.to_str().unwrap())]);
     let html = page(&dir);
     assert!(
-        html.contains("#17 feat: settings &lt;save&gt; on enter"),
+        html.contains("#17</span> feat: settings &lt;save&gt; on enter"),
         "escaped title: {html}"
     );
     assert!(!html.contains("src=\"http"), "{html}");

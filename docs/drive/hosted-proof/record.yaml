@@ -24,6 +24,10 @@ pieces:
         evidence: ["spike worktree deleted after recording; numbers above"]
 
 decided:
+  - id: opt-in-app
+    what: "Install the app: the Fearlezz GitHub App plus id-token write in the workflow; CI asks the service whether the repository is installed and uploads only on yes. A self hosted service adds an optional [host] url."
+  - id: page-polish
+    what: "A little bit lighter on the shadows, it is now very extreme. Use the frontend design skill. Most of it looks fine, but sloppy and boring; do a slightly better job."
   - id: one-proof-model
     what: "One proof model: proof.json feeds the comment, the check page, the proof page and the upload; it replaces CommitReport and the borrowed github::Proof."
   - id: worker-rust
@@ -66,4 +70,4 @@ slices:
     tests: []
     status: todo
 
-next: Show the real page to the developer; then the local final stage writes the proof page.
+next: Commit the page polish once proven; then build upload-and-view in ee/ (worker, content addressed blobs, OIDC, GitHub sign in) under wrangler dev with a stub GitHub.

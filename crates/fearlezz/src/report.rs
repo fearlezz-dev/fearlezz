@@ -40,74 +40,103 @@ const MODES: [(&str, &str); 5] = [
 ];
 
 const STYLE: &str = r#"
-main { max-width: 1180px; margin: 0 auto; padding: 44px 16px 120px; }
-a { color: inherit; text-underline-offset: 3px; }
-code { font: .92em ui-monospace, "SF Mono", Menlo, monospace; }
+main { max-width: 1080px; margin: 0 auto; padding: 56px 20px 120px; }
+a { color: inherit; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+code { font: .9em ui-monospace, "SF Mono", Menlo, monospace; background: var(--sunk); padding: 1px 5px;
+  border-radius: 5px; }
 .q { color: var(--quiet); }
 
-/* The top: what it is about, the verdict, and a meter of everything that counts. */
-.top { margin: 0 0 56px; max-width: 72ch; }
-.about-pr { margin: 0 0 14px; font-size: 18px; }
+/* The top: what it is about, the verdict with its mark, and what counted, by name. */
+.top { margin: 0 0 72px; }
+.about-pr { margin: 0 0 18px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; font-size: 17px; }
 .about-pr .repo { color: var(--quiet); }
-.about-pr a, .about-pr b { font-weight: 700; }
-h1 { font-size: clamp(32px, 6vw, 48px); margin: 0; }
-.line { margin: 12px 0 0; font-size: 19px; color: var(--quiet); }
-.meter { display: flex; gap: 5px; margin: 22px 0 0; max-width: 560px; }
-.meter span { flex: 1; height: 10px; border-radius: 5px; background: var(--ok); transform-origin: left;
-  animation: grow .55s var(--ease) both; }
-.meter span.bad { background: var(--changed); }
-.meter span.wait { background: var(--timing); }
-.meter span:nth-child(2) { animation-delay: 40ms; } .meter span:nth-child(3) { animation-delay: 80ms; }
-.meter span:nth-child(4) { animation-delay: 120ms; } .meter span:nth-child(n+5) { animation-delay: 160ms; }
-.commit { margin: 14px 0 0; font-size: 15px; color: var(--quiet); }
+.about-pr .pr { font-weight: 700; text-decoration: none; }
+.about-pr .pr:hover { text-decoration: underline; }
+.about-pr .n { color: var(--quiet); font-weight: 400; }
+.verdict { display: flex; align-items: center; gap: .32em; font-size: clamp(34px, 6.2vw, 54px); margin: 0;
+  letter-spacing: -0.02em; max-width: 22ch; }
+.verdict .seal { flex: none; width: .5em; height: .5em; border-radius: 50%; background: var(--ok);
+  box-shadow: 0 0 0 .14em color-mix(in srgb, var(--ok) 22%, transparent); }
+.verdict.bad .seal { background: var(--changed); box-shadow: 0 0 0 .14em color-mix(in srgb, var(--changed) 22%, transparent); }
+.verdict.wait .seal { background: var(--timing); box-shadow: 0 0 0 .14em color-mix(in srgb, var(--timing) 22%, transparent); }
+.line { margin: 14px 0 0; font-size: 20px; line-height: 1.45; color: var(--quiet); max-width: 54ch; }
+.strip { list-style: none; margin: 26px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.strip li { animation: pop-in .5s var(--ease) both; }
+.strip li:nth-child(2) { animation-delay: 35ms; } .strip li:nth-child(3) { animation-delay: 70ms; }
+.strip li:nth-child(4) { animation-delay: 105ms; } .strip li:nth-child(5) { animation-delay: 140ms; }
+.strip li:nth-child(n+6) { animation-delay: 175ms; }
+@keyframes pop-in { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
+.strip a { display: inline-flex; align-items: center; gap: 8px; padding: 5px 13px 5px 10px; border-radius: 999px;
+  background: var(--mat); box-shadow: var(--ring); font-size: 15px; text-decoration: none;
+  transition: box-shadow .2s, transform .15s var(--ease); }
+.strip a:hover { box-shadow: 0 0 0 1.5px var(--quiet); }
+.strip a:active { transform: scale(.96); }
+.strip a::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--ok); }
+.strip .bad a::before { background: var(--changed); }
+.strip .wait a::before { background: var(--timing); }
+.strip .bad a { color: var(--changed); font-weight: 700; }
+.commit { margin: 18px 0 0; font-size: 15px; color: var(--quiet); }
 
 /* A part of the page answers one question. */
-.part { margin: 0 0 64px; }
-.part > h2 { font-size: 28px; margin: 0 0 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.part > h2 .word { font-size: 16px; }
-.sum { margin: -6px 0 18px; color: var(--quiet); }
+.part { margin: 0 0 80px; scroll-margin-top: 24px; }
+.part > h2 { font-size: 30px; margin: 0 0 8px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.part > h2 .word { font-size: 15px; }
+.sum { margin: 0 0 22px; color: var(--quiet); }
+#waits > h2, #look > h2 { margin-bottom: 22px; }
 
 /* What waits for a person. */
-.rows { display: grid; gap: 16px; }
-.row { background: var(--mat); border-radius: 18px; padding: 20px 22px; box-shadow: var(--shadow); }
-.row .what p { margin: 6px 0 0; max-width: 72ch; }
-.row .fix { color: var(--quiet); }
-.approve { display: grid; gap: 14px 22px; grid-template-columns: auto 1fr auto; align-items: center;
-  transition: box-shadow .3s; }
-.peek { display: flex; gap: 8px; }
-.peek img { width: 96px; height: 64px; object-fit: cover; border-radius: 8px; background: var(--sunk);
-  box-shadow: 0 0 0 1px var(--line); }
-.approve .said { grid-column: 1 / 3; }
-.approve .cmd { grid-column: 1 / -1; }
+.rows { display: grid; gap: 14px; }
+.row { background: var(--mat); border-radius: 16px; padding: 22px 24px; box-shadow: var(--shadow); }
+.row p { margin: 0; max-width: 70ch; }
+.weak .title { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 0 0 8px; font-size: 18px; }
+.weak .fix { margin-top: 6px; color: var(--quiet); }
+.approve { display: grid; gap: 18px; transition: box-shadow .3s; }
+.ahead { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; }
+.ahead .what b { font-size: 18px; }
+.ahead .what p { margin-top: 4px; }
+.peek { display: flex; gap: 6px; }
+.peek img { width: 84px; height: 56px; object-fit: cover; border-radius: 8px; background: var(--sunk);
+  box-shadow: var(--ring); }
+.act { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center; }
+.act .said { flex: 1 1 280px; }
 
-/* Whether anything broke: one line per check, its details a click away. */
-.checks { background: var(--mat); border-radius: 18px; box-shadow: var(--shadow); padding: 8px 0; }
-.chk > summary:hover { background: color-mix(in srgb, var(--sunk) 45%, transparent); }
-.chk > summary { display: grid; grid-template-columns: 14px auto 1fr auto; gap: 14px; align-items: center;
-  padding: 14px 22px; color: var(--ink); }
+/* Whether anything broke: a ledger of checks, each opening to its details. */
+.checks { background: var(--mat); border-radius: 16px; box-shadow: var(--shadow); padding: 6px; }
+.chk { border-radius: 11px; }
+.chk[open] { background: color-mix(in srgb, var(--sunk) 38%, transparent); }
+.chk > summary { display: grid; grid-template-columns: 12px minmax(7ch, auto) 1fr auto 6ch; gap: 14px;
+  align-items: center; padding: 13px 16px; color: var(--ink); border-radius: 11px; }
 .chk > summary::before { display: none; }
-.chk > summary .meta { color: var(--quiet); }
-.badges { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--ok); }
-.dot.bad { background: var(--changed); } .dot.off { background: var(--line); }
-.chk .body { padding: 0 22px 20px 50px; display: grid; gap: 10px; animation: rise .3s var(--ease) both; }
-.chk .body p { margin: 0; max-width: 76ch; }
+.chk > summary:hover { background: color-mix(in srgb, var(--sunk) 55%, transparent); }
+.chk > summary .meta { color: var(--quiet); font-size: 15px; }
+.chk > summary .time { color: var(--quiet); font-size: 15px; text-align: right; }
+.badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.badges .word { font-size: 13px; padding: 0 8px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
+.dot.bad { background: var(--changed); box-shadow: 0 0 0 4px color-mix(in srgb, var(--changed) 20%, transparent); }
+.dot.off { background: transparent; box-shadow: inset 0 0 0 2px var(--line); }
+.chk .body { padding: 2px 16px 20px 42px; display: grid; gap: 12px; }
+.chk .body p { margin: 0; max-width: 72ch; }
 .chk .why { font-weight: 700; }
-.findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.chk .fix { color: var(--quiet); }
+.findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .findings li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-.cases ul { margin: 8px 0 0; padding-left: 20px; columns: 2 320px; font-size: 15px; }
+.findings .word { font-size: 13px; padding: 0 8px; }
+.cases ul { margin: 10px 0 0; padding-left: 20px; columns: 2 300px; column-gap: 32px; font-size: 15px; }
+.cases li { margin: 0 0 3px; }
 .cases li.failed { color: var(--changed); font-weight: 700; }
-.chk pre { margin: 8px 0 0; background: var(--sunk); border-radius: 10px; padding: 12px 14px; overflow-x: auto;
-  font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+.chk pre { margin: 10px 0 0; background: var(--mat); border-radius: 10px; padding: 14px 16px; overflow-x: auto;
+  box-shadow: var(--ring); font: 13px/1.55 ui-monospace, "SF Mono", Menlo, monospace; }
+.chk pre code { background: none; padding: 0; }
 .out p { margin: 8px 0 0; font-size: 15px; }
 
 /* Whether it looks right: one block per look. */
-.look { margin: 0 0 48px; }
-.look-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 18px; }
-.look-head h3 { font-size: 24px; margin: 0; }
+.look { margin: 0 0 56px; }
+.look-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin: 0 0 18px; }
+.look-head h3 { font-size: 22px; margin: 0; }
 .about { margin-left: auto; font-size: 15px; }
 .about p { margin: 8px 0 0; max-width: 56ch; color: var(--quiet); }
-
 .counts { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 18px; }
 .count { display: grid; grid-template-columns: auto auto; align-items: baseline; gap: 0 10px;
   min-width: 112px; padding: 10px 18px 12px; border-radius: 14px; background: var(--mat);
@@ -278,21 +307,21 @@ kbd { font: 14px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
   main { padding-top: 24px; }
   .stage.side { grid-template-columns: 1fr; }
   .card { padding: 16px; border-radius: 16px; }
-  .approve { grid-template-columns: 1fr; }
-  .approve .said { grid-column: auto; }
+  .ahead { grid-template-columns: 1fr; }
   .said span { display: none; }
   .go .second { display: none; }
   .cmd { display: none; }
-  .chk > summary { grid-template-columns: 14px 1fr auto; padding: 12px 16px; }
+  .chk > summary { grid-template-columns: 10px 1fr auto; gap: 10px 12px; padding: 12px; }
   .chk > summary .badges { grid-column: 2 / -1; justify-content: flex-start; }
-  .chk .body { padding: 0 16px 16px 44px; }
+  .chk > summary .time { display: none; }
+  .chk .body { padding: 0 12px 16px 34px; }
   .row { padding: 16px; }
   .decide .flake { margin-left: 0; }
   .about { margin-left: 0; flex-basis: 100%; }
   .count { min-width: 0; padding: 8px 14px 10px; }
   .count b { font-size: 26px; }
 }
-@media (prefers-reduced-motion: reduce) { .lane i, .mark, .meter span { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .lane i, .mark, .strip li { animation: none; } }
 "#;
 
 /// Everything on the page that moves or decides.
@@ -686,7 +715,6 @@ document.addEventListener('keydown', function (e) {
   }
 });
 
-riseIn(document.querySelectorAll('.top, .part > h2, .row, .card:not([hidden])'));
 })();
 "#;
 
@@ -740,38 +768,62 @@ fn page(dir: &Path, proof: &Proof) -> Result<String> {
 fn top(html: &mut String, proof: &Proof) -> std::fmt::Result {
     html.push_str("<header class=\"top\">");
     if let Some(pull) = &proof.pull {
-        let name = format!("#{} {}", pull.number, pull.title);
         html.push_str("<p class=\"about-pr\">");
         if let Some(repo) = &proof.repository {
-            write!(html, "<span class=\"repo\">{}</span> ", esc(repo))?;
+            write!(html, "<span class=\"repo\">{}</span>", esc(repo))?;
         }
+        let name = format!(
+            "<span class=\"n num\">#{}</span> {}",
+            pull.number,
+            esc(&pull.title)
+        );
         match &pull.url {
-            Some(url) => write!(html, "<a href=\"{}\">{}</a>", esc(url), esc(&name))?,
-            None => write!(html, "<b>{}</b>", esc(&name))?,
+            Some(url) => write!(html, "<a class=\"pr\" href=\"{}\">{name}</a>", esc(url))?,
+            None => write!(html, "<b class=\"pr\">{name}</b>")?,
         }
         html.push_str("</p>");
     }
-    let (verdict, line) = verdict(proof);
-    write!(html, "<h1>{}</h1>", esc(&verdict))?;
+    let (verdict, line, state) = verdict(proof);
+    write!(
+        html,
+        "<h1 class=\"verdict {state}\"><span class=\"seal\" aria-hidden=\"true\"></span>{}</h1>",
+        esc(&verdict)
+    )?;
     if !line.is_empty() {
         write!(html, "<p class=\"line\">{}</p>", esc(&line))?;
     }
+    // Everything that counts, by name: each check, then each thing a person settles.
     let ran: Vec<&Check> = proof.ran_here().collect();
-    let waiting = proof.weakened.len() + proof.waits().len();
     if !ran.is_empty() {
-        html.push_str("<div class=\"meter\" aria-hidden=\"true\">");
+        html.push_str("<ol class=\"strip\" aria-label=\"What counts\">");
         for c in &ran {
             let class = if c.outcome == Ran::Failed || c.unstable {
                 "bad"
             } else {
                 "ok"
             };
-            write!(html, "<span class=\"{class}\"></span>")?;
+            write!(
+                html,
+                "<li class=\"{class}\"><a href=\"#check-{id}\">{id}</a></li>",
+                id = esc(&c.id)
+            )?;
         }
-        for _ in 0..waiting {
-            html.push_str("<span class=\"wait\"></span>");
+        for item in &proof.weakened {
+            let name = item.what.split('`').nth(1).unwrap_or("a check");
+            write!(
+                html,
+                "<li class=\"wait\"><a href=\"#waits\">{} weaker</a></li>",
+                esc(name)
+            )?;
         }
-        html.push_str("</div>");
+        for look in proof.waits() {
+            write!(
+                html,
+                "<li class=\"wait\"><a href=\"#look-{c}\">{c} pictures</a></li>",
+                c = esc(&look.check)
+            )?;
+        }
+        html.push_str("</ol>");
     }
     if !proof.commit.is_empty() {
         write!(
@@ -784,8 +836,9 @@ fn top(html: &mut String, proof: &Proof) -> std::fmt::Result {
     Ok(())
 }
 
-/// The verdict and one sentence on why.
-fn verdict(proof: &Proof) -> (String, String) {
+/// The verdict, one sentence on why, and its state: `bad` (something to fix), `wait` (a
+/// person decides) or `ok`.
+fn verdict(proof: &Proof) -> (String, String, &'static str) {
     let waits = proof.waits();
     if proof.checks.is_empty() {
         let need: usize = proof.looks.iter().map(Look::to_look_at).sum();
@@ -805,7 +858,8 @@ fn verdict(proof: &Proof) -> (String, String) {
             1 => "1 picture to look at".to_string(),
             n => format!("{n} pictures to look at"),
         };
-        return (title, base);
+        let state = if need == 0 { "ok" } else { "wait" };
+        return (title, base, state);
     }
     let ran = proof.ran_here().count();
     let failed = proof
@@ -827,7 +881,7 @@ fn verdict(proof: &Proof) -> (String, String) {
         } else {
             "Every check passed, but the proof does not hold yet.".to_string()
         };
-        return (format!("Not ready: {} to fix", things(fixes)), line);
+        return (format!("Not ready: {} to fix", things(fixes)), line, "bad");
     }
     if person > 0 {
         let mut what = Vec::new();
@@ -843,11 +897,13 @@ fn verdict(proof: &Proof) -> (String, String) {
                 "Every check passed. A person with write access has to {}.",
                 what.join(" and ")
             ),
+            "wait",
         );
     }
     (
         "Ready to merge".to_string(),
         format!("All {ran} checks passed and no picture waits for a person."),
+        "ok",
     )
 }
 
@@ -863,10 +919,10 @@ fn waits(html: &mut String, proof: &Proof) -> std::fmt::Result {
     for item in &proof.weakened {
         write!(
             html,
-            "<div class=\"row weak\"><div class=\"what\"><b>{}</b> <span class=\"word timing\">Weaker</span><p>{}</p><p class=\"fix\">{}</p></div></div>",
-            prose(&capital(&item.what)),
-            prose(&capital(&item.why)),
-            prose(&capital(&item.fix))
+            "<div class=\"row weak\"><div class=\"what\"><p class=\"title\"><b>{}</b><span class=\"word timing\">Weaker</span></p><p>{}</p><p class=\"fix\">{}</p></div></div>",
+            prose(&sentence(&item.what)),
+            prose(&sentence(&item.why)),
+            prose(&sentence(&item.fix))
         )?;
     }
     for look in &waits {
@@ -883,7 +939,7 @@ fn approve(html: &mut String, look: &Look) -> std::fmt::Result {
     let check = esc(&look.check);
     write!(
         html,
-        "<div class=\"row approve\" data-for=\"{check}\"><div class=\"peek\">"
+        "<div class=\"row approve\" data-for=\"{check}\"><div class=\"ahead\"><div class=\"peek\">"
     )?;
     if let Some(item) = look
         .items
@@ -905,7 +961,7 @@ fn approve(html: &mut String, look: &Look) -> std::fmt::Result {
     let command = format!("fearlezz say approve {} --said \"looks good\"", look.check);
     write!(
         html,
-        "</div><div class=\"what\"><b>Pictures of <code>{check}</code></b> <span class=\"q\">{}</span><p><a href=\"#look-{check}\">Look at them</a></p></div><div class=\"progress\"><svg class=\"ring\" viewBox=\"0 0 38 38\" aria-hidden=\"true\"><circle class=\"track\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/><circle class=\"fill\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/></svg><span><span class=\"num seen\">0</span> of <span class=\"num need\">{need}</span> looked at</span></div><label class=\"said\"><span>In your words</span><input value=\"looks good\" autocomplete=\"off\"></label><div class=\"go\"><button type=\"button\" class=\"primary copy\" data-copy=\"{cmd}\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy approve command</span></button><button type=\"button\" class=\"second copy2\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy as message</span></button></div><p class=\"cmd\">{cmd}</p></div>",
+        "</div><div class=\"what\"><b>Pictures of <code>{check}</code></b><p class=\"q\">{}. <a href=\"#look-{check}\">Look at them</a></p></div><div class=\"progress\"><svg class=\"ring\" viewBox=\"0 0 38 38\" aria-hidden=\"true\"><circle class=\"track\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/><circle class=\"fill\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/></svg><span><span class=\"num seen\">0</span> of <span class=\"num need\">{need}</span> looked at</span></div></div><div class=\"act\"><label class=\"said\"><span>In your words</span><input value=\"looks good\" autocomplete=\"off\"></label><div class=\"go\"><button type=\"button\" class=\"primary copy\" data-copy=\"{cmd}\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy approve command</span></button><button type=\"button\" class=\"second copy2\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy as message</span></button></div></div><p class=\"cmd\">{cmd}</p></div>",
         esc(&look.counts()),
         cmd = esc(&command)
     )
@@ -975,7 +1031,7 @@ fn check(html: &mut String, dir: &Path, c: &Check, open: bool) -> Result<()> {
         (Ran::NotRun, _) => html.push_str("not run"),
         (_, Some(1)) => html.push_str("1 test"),
         (_, Some(n)) => write!(html, "{n} tests")?,
-        (_, None) => html.push_str(&duration(c.seconds)),
+        (_, None) => {}
     }
     html.push_str("</span><span class=\"badges\">");
     if c.outcome == Ran::Failed {
@@ -1009,17 +1065,21 @@ fn check(html: &mut String, dir: &Path, c: &Check, open: bool) -> Result<()> {
             "<span class=\"word timing num\">{flags} to read</span>"
         )?;
     }
+    html.push_str("</span><span class=\"time num\">");
+    if c.outcome != Ran::NotRun {
+        html.push_str(&duration(c.seconds));
+    }
     html.push_str("</span></summary><div class=\"body\">");
     if let Some(f) = &c.failure {
         write!(
             html,
             "<p class=\"why\">{}</p><p class=\"fix\">{}</p>",
-            prose(&capital(&f.why)),
-            prose(&capital(&f.fix))
+            prose(&sentence(&f.why)),
+            prose(&sentence(&f.fix))
         )?;
     }
     if let Some(why) = &c.not_run {
-        write!(html, "<p class=\"why\">{}</p>", prose(&capital(why)))?;
+        write!(html, "<p class=\"why\">{}</p>", prose(&sentence(why)))?;
     }
     if let Some(red) = &c.red {
         write!(html, "<p>{}</p>", prose(&red.note(&c.id)))?;
@@ -1170,6 +1230,15 @@ fn prose(text: &str) -> String {
         } else {
             out.push_str(&esc(part));
         }
+    }
+    out
+}
+
+/// A message as a sentence: a capital first and a full stop last.
+fn sentence(text: &str) -> String {
+    let mut out = capital(text.trim_end());
+    if !out.ends_with(['.', '!', '?']) {
+        out.push('.');
     }
     out
 }
