@@ -30,6 +30,9 @@ The hosted parts in `ee/`: proof links and pages a team can open without the dev
 - **Weakenings are accepted by an admin's comment** and wait like pictures, under one status renamed `fearlezz/approval`. This is breaking for rulesets that required `fearlezz/pictures`; Fearlezz is still at v0.
 - **One Accept below the list,** since one accept comment covers every weakening.
 - **A share link opens the pull request,** always its latest proof; viewers never approve or accept.
+- **Approvals were going to be free by an admin's bypass and paid by a host signed approval** (carried over from the CI proof loop). Superseded by approve and accept as comments, which keep one rule in CI; the paid value is the page.
+- **The bar above the page owns Approve and Accept** (after the review found that a proof page, written by anyone with write access, could post as whoever opened it). The page's buttons only fill in words and point to the bar.
+- **One model of what waits for a person, shared by core and host** through a small library crate, in this change.
 - **Red before green for checks a change adds:** fix the wording in this change, rather than leave it to fix itself once the check is on the base branch.
 
 ## Dropped tries
@@ -42,4 +45,7 @@ The hosted parts in `ee/`: proof links and pages a team can open without the dev
 ## Not proven yet
 
 - Nothing is deployed: no Cloudflare account, GitHub App, domains or D1 database id yet. The page to shell messages are not driven in a real browser.
+- The local final stage does not write the whole proof page yet; only `run --ci --proof` does.
+- Share link tokens are stored as they are, not hashed, like session ids, so the list can show a link to copy again.
+- The host's secrets are set with `wrangler secret put`; declaring them in SecretSpec comes with the deploy.
 - Revoking a share link stops new loads at once; a page already open keeps loading files until its grant expires, up to an hour.
