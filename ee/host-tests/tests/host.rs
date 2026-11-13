@@ -1,7 +1,8 @@
 //! The proof host, driven over HTTP as CI and people use it: the upload protocol with its OIDC
 //! check, the pages with their files and ranges, and who may see them. One worker under
 //! `wrangler dev --local` and one fake GitHub serve every test; each test uses its own pull
-//! request numbers and file bytes, so they run side by side.
+//! request numbers and file bytes, so they run side by side. The worker answers on two origins,
+//! the app origin and the files origin, under two host names for the same local port.
 
 // Beside this file, not in tests/, where cargo would take each for a test of its own.
 #[path = "host/github.rs"]
@@ -23,7 +24,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use github::FakeGitHub;
-use worker::{AUDIENCE, INSTALL_URL, ISSUER, Worker};
+use worker::{AUDIENCE, INSTALL_URL, ISSUER, SIGNING_KEY, Worker};
 
 struct World {
     worker: Worker,
@@ -46,12 +47,34 @@ fn world() -> &'static World {
         // GitHub hands out app keys as PKCS#1 PEM; the host takes them as they come.
         let pem = app.to_pkcs1_pem(rsa::pkcs8::LineEnding::LF).unwrap();
         let worker = Worker::start(&github.url, &pem);
-        World {
+        let world = World {
             worker,
             github,
             oidc,
             stranger,
+        };
+        // Fills the host's JWKS cache before any test runs, so the only fetches of GitHub's keys
+        // after this are the refetches a test asks for.
+        let auth = format!("Bearer {}", sign(&world.oidc, &claims("owner/repo", 1)));
+        let headers = [("Authorization", auth.as_str())];
+        let answer = request_to(
+            &world.worker.url,
+            "GET",
+            "/api/v1/installed",
+            &headers,
+            None,
+        );
+        if answer.status != 200 {
+            // The world never gets stored, so main cannot stop the worker: stop it here.
+            world.worker.stop();
+            panic!(
+                "warming the JWKS cache answered {}: {}\nwrangler dev said:\n{}",
+                answer.status,
+                answer.text(),
+                world.worker.log()
+            );
         }
+        world
     })
 }
 
@@ -125,6 +148,34 @@ fn main() {
         ),
         ("a_film_is_served_in_ranges", a_film_is_served_in_ranges),
         (
+            "the_app_origin_never_serves_bundle_files",
+            the_app_origin_never_serves_bundle_files,
+        ),
+        (
+            "the_shell_frames_the_files_origin_in_a_sandbox",
+            the_shell_frames_the_files_origin_in_a_sandbox,
+        ),
+        (
+            "the_files_origin_refuses_a_missing_grant",
+            the_files_origin_refuses_a_missing_grant,
+        ),
+        (
+            "the_files_origin_refuses_a_tampered_grant",
+            the_files_origin_refuses_a_tampered_grant,
+        ),
+        (
+            "the_files_origin_refuses_an_expired_grant",
+            the_files_origin_refuses_an_expired_grant,
+        ),
+        (
+            "the_files_origin_refuses_a_grant_for_another_proof",
+            the_files_origin_refuses_a_grant_for_another_proof,
+        ),
+        (
+            "the_files_origin_ignores_cookies_and_sets_none",
+            the_files_origin_ignores_cookies_and_sets_none,
+        ),
+        (
             "a_proof_shows_nothing_before_done",
             a_proof_shows_nothing_before_done,
         ),
@@ -157,6 +208,22 @@ fn main() {
             sign_in_refuses_a_state_it_did_not_give,
         ),
         ("logout_ends_the_session", logout_ends_the_session),
+        (
+            "the_session_cookie_holds_only_a_random_id",
+            the_session_cookie_holds_only_a_random_id,
+        ),
+        (
+            "a_second_view_does_not_ask_github_who_may_read",
+            a_second_view_does_not_ask_github_who_may_read,
+        ),
+        (
+            "a_second_view_does_not_ask_github_whether_public",
+            a_second_view_does_not_ask_github_whether_public,
+        ),
+        (
+            "an_unknown_key_id_refetches_the_jwks_once",
+            an_unknown_key_id_refetches_the_jwks_once,
+        ),
     ];
     let trials = tests
         .iter()
@@ -366,7 +433,17 @@ fn a_public_proof_shows_to_anyone() {
     );
     let folder = format!("/owner/repo/proofs/{id}/");
 
+    // The app origin answers with its own shell; the bundle's page comes from the files origin.
     let answer = get(&folder, &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert!(
+        answer
+            .header("content-type")
+            .unwrap()
+            .starts_with("text/html")
+    );
+    let frame = frame_url(&answer);
+    let answer = get_url(&frame, &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(answer.body, page);
     assert!(
@@ -376,12 +453,14 @@ fn a_public_proof_shows_to_anyone() {
             .starts_with("text/html")
     );
 
-    let answer = get(&format!("{folder}media/after.png"), &[]);
+    // The page's relative links resolve beside it, on the files origin.
+    let base = frame.strip_suffix("index.html").unwrap();
+    let answer = get_url(&format!("{base}media/after.png"), &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(answer.body, picture);
     assert_eq!(answer.header("content-type").unwrap(), "image/png");
 
-    assert_eq!(get(&format!("{folder}media/none.png"), &[]).status, 404);
+    assert_eq!(get_url(&format!("{base}media/none.png"), &[]).status, 404);
 
     // Relative links need the folder's slash.
     let answer = get(&format!("/owner/repo/proofs/{id}"), &[]);
@@ -396,9 +475,9 @@ fn a_film_is_served_in_ranges() {
         21,
         &[("index.html", b"<p>film</p>"), ("media/run.mp4", film)],
     );
-    let path = format!("/owner/repo/proofs/{id}/media/run.mp4");
+    let path = format!("{}media/run.mp4", files_base("owner/repo", &id, &[]));
 
-    let answer = get(&path, &[("Range", "bytes=2-5")]);
+    let answer = get_url(&path, &[("Range", "bytes=2-5")]);
     assert_eq!(answer.status, 206, "{}", answer.text());
     assert_eq!(answer.body, b"2345");
     assert_eq!(
@@ -407,17 +486,163 @@ fn a_film_is_served_in_ranges() {
     );
     assert_eq!(answer.header("content-type").unwrap(), "video/mp4");
 
-    let answer = get(&path, &[("Range", "bytes=-5")]);
+    let answer = get_url(&path, &[("Range", "bytes=-5")]);
     assert_eq!(answer.status, 206, "{}", answer.text());
     assert_eq!(answer.body, &film[film.len() - 5..]);
 
-    let answer = get(&path, &[("Range", "bytes=40-")]);
+    let answer = get_url(&path, &[("Range", "bytes=40-")]);
     assert_eq!(answer.status, 206, "{}", answer.text());
     assert_eq!(answer.body, &film[40..]);
 
-    let answer = get(&path, &[]);
+    let answer = get_url(&path, &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(answer.header("accept-ranges").unwrap(), "bytes");
+}
+
+// The files origin.
+
+fn the_app_origin_never_serves_bundle_files() {
+    let page: &[u8] = b"<script>steal(document.cookie)</script>";
+    let id = upload(
+        "owner/repo",
+        25,
+        &[("index.html", page), ("media/after.png", b"a picture")],
+    );
+    let folder = format!("/owner/repo/proofs/{id}/");
+    let shell = get(&folder, &[]);
+    assert_eq!(shell.status, 200, "{}", shell.text());
+    assert!(!shell.text().contains("steal"), "{}", shell.text());
+    for path in ["index.html", "media/after.png"] {
+        let answer = get(&format!("{folder}{path}"), &[]);
+        assert_eq!(answer.status, 404, "{path}: {}", answer.text());
+    }
+    // Nor does the files origin answer the app's paths.
+    for path in [folder.as_str(), "/login", "/owner/repo/pull/25"] {
+        let answer = get_url(&format!("{}{path}", world().worker.files), &[]);
+        assert_eq!(answer.status, 404, "{path}: {}", answer.text());
+    }
+}
+
+fn the_shell_frames_the_files_origin_in_a_sandbox() {
+    let id = upload("owner/repo", 26, &[("index.html", b"<p>framed</p>")]);
+    let shell = get(&format!("/owner/repo/proofs/{id}/"), &[]);
+    assert_eq!(shell.status, 200, "{}", shell.text());
+    let html = shell.text();
+    let frame = frame_url(&shell);
+    assert!(
+        frame.starts_with(&format!("{}/", world().worker.files)),
+        "{frame}"
+    );
+    assert!(frame.ends_with("/index.html"), "{frame}");
+    let sandbox = attribute(&html, "sandbox").unwrap_or_else(|| panic!("no sandbox: {html}"));
+    let tokens: Vec<&str> = sandbox.split_whitespace().collect();
+    assert!(tokens.contains(&"allow-scripts"), "{sandbox}");
+    assert!(tokens.contains(&"allow-same-origin"), "{sandbox}");
+    assert!(
+        !tokens.iter().any(|t| t.starts_with("allow-top-navigation")),
+        "{sandbox}"
+    );
+    // The shell holds a grant, so it is never cached, and nobody frames the app origin.
+    assert_eq!(shell.header("cache-control").unwrap(), "no-store");
+    let policy = shell.header("content-security-policy").unwrap();
+    assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
+    assert!(
+        policy.contains(&format!("frame-src {}", world().worker.files)),
+        "{policy}"
+    );
+
+    // Only the app origin may frame the files.
+    let answer = get_url(&frame, &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let policy = answer.header("content-security-policy").unwrap();
+    assert!(
+        policy.contains(&format!("frame-ancestors {}", world().worker.url)),
+        "{policy}"
+    );
+    assert!(answer.header("x-frame-options").is_some());
+}
+
+fn the_files_origin_refuses_a_missing_grant() {
+    let id = upload("owner/repo", 27, &[("index.html", b"<p>granted</p>")]);
+    let files = &world().worker.files;
+    for path in [
+        "/index.html".to_owned(),
+        format!("/{id}/index.html"),
+        format!("/owner/repo/proofs/{id}/index.html"),
+    ] {
+        let answer = get_url(&format!("{files}{path}"), &[]);
+        assert_eq!(answer.status, 404, "{path}: {}", answer.text());
+    }
+}
+
+fn the_files_origin_refuses_a_tampered_grant() {
+    let id = upload("owner/repo", 28, &[("index.html", b"<p>tamper</p>")]);
+    let frame = frame_url(&get(&format!("/owner/repo/proofs/{id}/"), &[]));
+    assert_eq!(get_url(&frame, &[]).status, 200);
+    let files = &world().worker.files;
+    let grant = frame
+        .strip_prefix(&format!("{files}/"))
+        .unwrap()
+        .strip_suffix("/index.html")
+        .unwrap();
+    let (payload, mac) = grant.split_once('.').unwrap();
+
+    // A later expiry under the old seal.
+    let decoded = URL_SAFE_NO_PAD.decode(payload).unwrap();
+    let mut claims: Value = serde_json::from_slice(&decoded).unwrap();
+    claims["exp"] = json!(claims["exp"].as_i64().unwrap() + 86400);
+    let longer = URL_SAFE_NO_PAD.encode(claims.to_string());
+    let answer = get_url(&format!("{files}/{longer}.{mac}/index.html"), &[]);
+    assert_eq!(answer.status, 404, "{}", answer.text());
+
+    // A seal changed by one character.
+    let mut mac = mac.to_owned();
+    let last = mac.pop().unwrap();
+    mac.push(if last == 'A' { 'B' } else { 'A' });
+    let answer = get_url(&format!("{files}/{payload}.{mac}/index.html"), &[]);
+    assert_eq!(answer.status, 404, "{}", answer.text());
+}
+
+fn the_files_origin_refuses_an_expired_grant() {
+    let id = upload("owner/repo", 29, &[("index.html", b"<p>expiry</p>")]);
+    // A grant sealed with the host's key is good until its expiry, and not after.
+    let fresh = files_base("owner/repo", &id, &[]);
+    assert_eq!(get_url(&format!("{fresh}index.html"), &[]).status, 200);
+    let expired = files_base("owner/repo", &id, &[("exp", json!(now() - 1))]);
+    let answer = get_url(&format!("{expired}index.html"), &[]);
+    assert_eq!(answer.status, 404, "{}", answer.text());
+}
+
+fn the_files_origin_refuses_a_grant_for_another_proof() {
+    let mine = upload("owner/repo", 34, &[("index.html", b"<p>mine</p>")]);
+    let theirs = upload("owner/secret", 34, &[("index.html", b"<p>theirs</p>")]);
+    // The grant for one proof shows that proof, not another.
+    let frame = frame_url(&get(&format!("/owner/repo/proofs/{mine}/"), &[]));
+    assert_eq!(get_url(&frame, &[]).body, b"<p>mine</p>");
+    // A grant naming a proof of another repository than its own opens nothing.
+    let crossed = files_base("owner/repo", &theirs, &[]);
+    let answer = get_url(&format!("{crossed}index.html"), &[]);
+    assert_eq!(answer.status, 404, "{}", answer.text());
+    // Nor does a grant for a proof that does not exist.
+    let unknown = files_base("owner/repo", "0123456789abcdef0123456789abcdef", &[]);
+    assert_eq!(get_url(&format!("{unknown}index.html"), &[]).status, 404);
+}
+
+fn the_files_origin_ignores_cookies_and_sets_none() {
+    let id = upload("owner/secret", 35, &[("index.html", b"<p>cookies</p>")]);
+    let path = format!("/owner/secret/proofs/{id}/");
+    let session = sign_in("reader-code", &path);
+    // A session is no grant on the files origin.
+    let files = &world().worker.files;
+    let answer = get_url(&format!("{files}{path}index.html"), &[("Cookie", &session)]);
+    assert_eq!(answer.status, 404, "{}", answer.text());
+    let frame = frame_url(&get(&path, &[("Cookie", &session)]));
+    let answer = get_url(&frame, &[("Cookie", &session)]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert!(answer.header("set-cookie").is_none());
+    let answer = get_url(&frame, &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert!(answer.header("set-cookie").is_none());
 }
 
 fn a_proof_shows_nothing_before_done() {
@@ -466,6 +691,8 @@ fn a_reader_signs_in_and_sees_a_private_proof() {
     let path = format!("/owner/secret/proofs/{id}/");
     let session = sign_in("reader-code", &path);
     let answer = get(&path, &[("Cookie", &session)]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let answer = get_url(&frame_url(&answer), &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(answer.body, page);
 
@@ -520,11 +747,95 @@ fn sign_in_refuses_a_state_it_did_not_give() {
 }
 
 fn logout_ends_the_session() {
-    let session = sign_in("reader-code", "/");
+    let id = upload("owner/secret", 36, &[("index.html", b"<p>logout</p>")]);
+    let path = format!("/owner/secret/proofs/{id}/");
+    let session = sign_in("reader-code", &path);
+    assert_eq!(get(&path, &[("Cookie", &session)]).status, 200);
     let answer = get("/logout", &[("Cookie", &session)]);
     assert_eq!(answer.status, 302, "{}", answer.text());
     let cleared = cookie_set(&answer, "session").unwrap();
     assert!(cleared.contains("Max-Age=0"), "{cleared}");
+    // The host forgot the session: the old cookie, sent again, is no sign in.
+    let answer = get(&path, &[("Cookie", &session)]);
+    assert_eq!(answer.status, 302, "{}", answer.text());
+    let location = answer.header("location").unwrap();
+    assert!(location.starts_with("/login?"), "{location}");
+}
+
+fn the_session_cookie_holds_only_a_random_id() {
+    let answer = sign_in_answer("reader-code", "/");
+    let set = cookie_set(&answer, "session").unwrap();
+    for attribute in ["HttpOnly", "Secure", "SameSite=Lax"] {
+        assert!(set.contains(attribute), "{set}");
+    }
+    let session = cookie(&answer, "session").unwrap();
+    let value = session.strip_prefix("session=").unwrap();
+    // 128 random bits or more, and nothing else: no login, no GitHub token.
+    assert!(value.len() >= 32, "{value}");
+    assert!(value.bytes().all(|b| b.is_ascii_hexdigit()), "{value}");
+    // Each sign in gets its own.
+    let again = sign_in("reader-code", "/");
+    assert_ne!(again, session);
+}
+
+// Caching GitHub's answers.
+
+fn a_second_view_does_not_ask_github_who_may_read() {
+    let id = upload("owner/cached", 37, &[("index.html", b"<p>cached</p>")]);
+    let path = format!("/owner/cached/proofs/{id}/");
+    let session = sign_in("reader-code", &path);
+    let github = &world().github;
+    let before = github.asked("GET", "/repos/owner/cached");
+    assert_eq!(get(&path, &[("Cookie", &session)]).status, 200);
+    assert_eq!(get(&path, &[("Cookie", &session)]).status, 200);
+    let answer = get("/owner/cached/pull/37", &[("Cookie", &session)]);
+    assert_eq!(answer.status, 302, "{}", answer.text());
+    assert_eq!(github.asked("GET", "/repos/owner/cached"), before + 1);
+}
+
+fn a_second_view_does_not_ask_github_whether_public() {
+    let id = upload("owner/open", 38, &[("index.html", b"<p>open</p>")]);
+    let path = format!("/owner/open/proofs/{id}/");
+    let github = &world().github;
+    let installation = "/repos/owner/open/installation";
+    let (repo, install) = (
+        github.asked("GET", "/repos/owner/open"),
+        github.asked("GET", installation),
+    );
+    assert_eq!(get(&path, &[]).status, 200);
+    assert_eq!(get(&path, &[]).status, 200);
+    assert_eq!(github.asked("GET", "/repos/owner/open"), repo + 1);
+    assert_eq!(github.asked("GET", installation), install + 1);
+}
+
+fn an_unknown_key_id_refetches_the_jwks_once() {
+    let github = &world().github;
+    let jwks = "/.well-known/jwks";
+    let before = github.asked("GET", jwks);
+    // Known keys come from the cache.
+    for _ in 0..2 {
+        let answer = api("GET", "/api/v1/installed", &ci("owner/repo", 1), None);
+        assert_eq!(answer.status, 200, "{}", answer.text());
+    }
+    assert_eq!(github.asked("GET", jwks), before);
+
+    // A key id GitHub never published: one refetch, then refused.
+    let mut rng = rand::thread_rng();
+    let rotated = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+    let token = sign_with_kid(&rotated, "rotated-key", &claims("owner/repo", 1));
+    let answer = api("GET", "/api/v1/installed", &token, None);
+    assert_eq!(answer.status, 401, "{}", answer.text());
+    assert_eq!(github.asked("GET", jwks), before + 1);
+
+    // Once GitHub publishes it, the next token naming it refetches and passes, and later ones
+    // find it in the cache.
+    github.publish("rotated-key", RsaPublicKey::from(&rotated));
+    let answer = api("GET", "/api/v1/installed", &token, None);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(github.asked("GET", jwks), before + 2);
+    let answer = api("GET", "/api/v1/installed", &token, None);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(github.asked("GET", jwks), before + 2);
 }
 
 // Helpers.
@@ -555,7 +866,11 @@ fn oidc(claims: &Value) -> String {
 }
 
 fn sign(key: &RsaPrivateKey, claims: &Value) -> String {
-    let header = json!({"alg": "RS256", "typ": "JWT", "kid": github::KID});
+    sign_with_kid(key, github::KID, claims)
+}
+
+fn sign_with_kid(key: &RsaPrivateKey, kid: &str, claims: &Value) -> String {
+    let header = json!({"alg": "RS256", "typ": "JWT", "kid": kid});
     let signed = format!(
         "{}.{}",
         URL_SAFE_NO_PAD.encode(header.to_string()),
@@ -624,6 +939,11 @@ fn upload(repository: &str, pull: u64, files: &[(&str, &[u8])]) -> String {
 
 /// Signs in with a GitHub OAuth code, starting from `next`; the session cookie.
 fn sign_in(code: &str, next: &str) -> String {
+    cookie(&sign_in_answer(code, next), "session").unwrap()
+}
+
+/// Signs in with a GitHub OAuth code, starting from `next`; the callback's answer.
+fn sign_in_answer(code: &str, next: &str) -> Answer {
     let answer = get(&format!("/login?next={}", next.replace('/', "%2F")), &[]);
     assert_eq!(answer.status, 302, "{}", answer.text());
     let authorize = answer.header("location").unwrap().to_owned();
@@ -648,7 +968,41 @@ fn sign_in(code: &str, next: &str) -> String {
     );
     assert_eq!(answer.status, 302, "{}", answer.text());
     assert_eq!(answer.header("location").unwrap(), next);
-    cookie(&answer, "session").unwrap()
+    answer
+}
+
+/// The `src` of the frame in a proof's shell page.
+fn frame_url(shell: &Answer) -> String {
+    let html = shell.text();
+    let frame = &html[html
+        .find("<iframe")
+        .unwrap_or_else(|| panic!("no frame: {html}"))..];
+    attribute(frame, "src")
+        .unwrap_or_else(|| panic!("no src: {html}"))
+        .replace("&amp;", "&")
+}
+
+/// The value of the first `name="..."` attribute in some HTML.
+fn attribute(html: &str, name: &str) -> Option<String> {
+    let start = html.find(&format!(" {name}=\""))? + name.len() + 3;
+    let end = html[start..].find('"')?;
+    Some(html[start..start + end].to_owned())
+}
+
+/// The folder of a proof on the files origin under a grant sealed here with the host's key, as
+/// the host seals them: `base64url(json).base64url(HMAC-SHA256("grant." + payload))`. `changes`
+/// overrides its claims.
+fn files_base(repo: &str, proof: &str, changes: &[(&str, Value)]) -> String {
+    use hmac::Mac as _;
+    let mut claims = json!({"repo": repo, "proof": proof, "exp": now() + 3600});
+    for (name, value) in changes {
+        claims[*name] = value.clone();
+    }
+    let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(SIGNING_KEY.as_bytes()).unwrap();
+    mac.update(format!("grant.{payload}").as_bytes());
+    let mac = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    format!("{}/{payload}.{mac}/", world().worker.files)
 }
 
 struct Answer {
@@ -699,7 +1053,17 @@ pub fn agent() -> ureq::Agent {
 }
 
 fn request(method: &str, path: &str, headers: &[(&str, &str)], body: Option<Vec<u8>>) -> Answer {
-    let url = format!("{}{path}", world().worker.url);
+    request_to(&world().worker.url, method, path, headers, body)
+}
+
+fn request_to(
+    origin: &str,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: Option<Vec<u8>>,
+) -> Answer {
+    let url = format!("{origin}{path}");
     let mut builder = ureq::http::Request::builder().method(method).uri(url);
     for (name, value) in headers {
         builder = builder.header(*name, *value);
@@ -737,6 +1101,11 @@ fn api(method: &str, path: &str, token: &str, body: Option<Vec<u8>>) -> Answer {
 
 fn get(path: &str, headers: &[(&str, &str)]) -> Answer {
     request("GET", path, headers, None)
+}
+
+/// A GET of a whole URL, such as one on the files origin.
+fn get_url(url: &str, headers: &[(&str, &str)]) -> Answer {
+    request_to(url, "GET", "", headers, None)
 }
 
 fn sha256(bytes: &[u8]) -> String {

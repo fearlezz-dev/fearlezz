@@ -13,9 +13,14 @@ pub const AUDIENCE: &str = "https://proof.test";
 /// The issuer of Actions OIDC tokens.
 pub const ISSUER: &str = "https://token.actions.githubusercontent.com";
 pub const INSTALL_URL: &str = "https://github.com/apps/fearlezz/installations/new";
+/// Signs the sign in cookie and the grants of the files origin.
+pub const SIGNING_KEY: &str = "a signing key only the tests know";
 
 pub struct Worker {
+    /// The app origin, where people sign in and CI uploads.
     pub url: String,
+    /// The files origin: the same worker under another host name, as a browser sees another site.
+    pub files: String,
     /// wrangler, the leader of a process group that holds workerd too.
     child: Mutex<Child>,
     state: tempfile::TempDir,
@@ -46,7 +51,11 @@ impl Worker {
         );
 
         let port = free_port();
+        let url = format!("http://127.0.0.1:{port}");
+        let files = format!("http://localhost:{port}");
         let vars = [
+            ("APP_ORIGIN", url.clone()),
+            ("FILES_ORIGIN", files.clone()),
             ("AUDIENCE", AUDIENCE.to_owned()),
             ("OIDC_ISSUER", ISSUER.to_owned()),
             ("OIDC_JWKS", format!("{github}/.well-known/jwks")),
@@ -59,10 +68,7 @@ impl Worker {
                 crate::github::CLIENT_SECRET.to_owned(),
             ),
             ("GITHUB_APP_KEY", app_key_pem.to_owned()),
-            (
-                "SESSION_KEY",
-                "a session key only the tests know".to_owned(),
-            ),
+            ("SIGNING_KEY", SIGNING_KEY.to_owned()),
         ];
         let mut cmd = wrangler(&host);
         cmd.args([
@@ -85,7 +91,8 @@ impl Worker {
             .spawn()
             .unwrap();
         let worker = Worker {
-            url: format!("http://127.0.0.1:{port}"),
+            url,
+            files,
             child: Mutex::new(child),
             state,
         };

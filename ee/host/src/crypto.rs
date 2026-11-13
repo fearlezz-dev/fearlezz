@@ -1,5 +1,5 @@
 //! Web Crypto, the runtime's own: RS256 to check OIDC tokens and sign the app's JWTs, HMAC for
-//! the session cookie, and random ids. No crypto crate is compiled into the worker.
+//! the sign in cookie and the grants of the files origin, and random ids. No crypto crate is compiled into the worker.
 
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast as _, JsValue};
@@ -112,7 +112,40 @@ pub async fn hmac_verify(secret: &str, data: &[u8], mac: &[u8]) -> Result<bool> 
         == 0)
 }
 
-/// 128 random bits as hex: proof ids and sign in states.
+/// A value sealed for one purpose: `base64url(json).base64url(hmac)`, where the HMAC covers
+/// `<purpose>.<payload>` so a value sealed for one purpose never passes as another.
+pub async fn seal<T: serde::Serialize>(secret: &str, purpose: &str, value: &T) -> Result<String> {
+    use base64::Engine as _;
+    let base64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let payload = base64.encode(serde_json::to_vec(value)?);
+    let mac = hmac_sign(secret, format!("{purpose}.{payload}").as_bytes()).await?;
+    Ok(format!("{payload}.{}", base64.encode(mac)))
+}
+
+/// A sealed value, if its seal holds for this purpose.
+pub async fn unseal<T: serde::de::DeserializeOwned>(
+    secret: &str,
+    purpose: &str,
+    sealed: &str,
+) -> Result<Option<T>> {
+    use base64::Engine as _;
+    let base64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let Some((payload, mac)) = sealed.split_once('.') else {
+        return Ok(None);
+    };
+    let Ok(mac) = base64.decode(mac) else {
+        return Ok(None);
+    };
+    if !hmac_verify(secret, format!("{purpose}.{payload}").as_bytes(), &mac).await? {
+        return Ok(None);
+    }
+    let Ok(json) = base64.decode(payload) else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_slice(&json).ok())
+}
+
+/// 128 random bits as hex: proof ids, sign in states and session ids.
 pub fn random_id() -> Result<String> {
     let mut bytes = [0u8; 16];
     crypto()?.get_random_values_with_u8_array(&mut bytes)?;

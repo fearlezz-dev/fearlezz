@@ -12,6 +12,8 @@ harness = false
 
 [dev-dependencies]
 base64 = "0.22"
+# Seals grants the way the host does, to prove it refuses an expired one.
+hmac = "0.12"
 libtest-mimic = "0.8"
 rand = "0.8"
 rsa = { version = "0.9", features = ["sha2"] }

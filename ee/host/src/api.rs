@@ -9,13 +9,13 @@ use wasm_bindgen::JsValue;
 use worker::{Data, Env, Request, Response};
 
 use crate::oidc::{self, Run};
-use crate::{Answer, Config, Refusal, crypto, github, now, origin};
+use crate::{Answer, Config, Refusal, crypto, github, now};
 
 /// The `proof.json` schema the host knows.
 const SCHEMA: u64 = 1;
 
-pub async fn installed(req: &Request, config: &Config) -> Answer {
-    let run = oidc::check(req, config).await?;
+pub async fn installed(req: &Request, env: &Env, config: &Config) -> Answer {
+    let run = oidc::check(req, env, config).await?;
     let answer = match github::installation(config, &run.repo()).await? {
         Some(_) => json!({"installed": true}),
         None => json!({"installed": false, "install": config.install_url}),
@@ -49,7 +49,7 @@ struct Pull {
 }
 
 pub async fn create(mut req: Request, env: &Env, config: &Config) -> Answer {
-    let run = oidc::check(&req, config).await?;
+    let run = oidc::check(&req, env, config).await?;
     let upload: Upload = req
         .json()
         .await
@@ -141,13 +141,13 @@ pub async fn create(mut req: Request, env: &Env, config: &Config) -> Answer {
         .map(|f| f.sha256.as_str())
         .filter(|sha| !held.contains(*sha))
         .collect();
-    let url = page_url(&req, &run, &id)?;
+    let url = page_url(config, &run, &id);
     let answer = json!({"id": id, "url": url, "missing": missing});
     Ok(Response::from_json(&answer)?.with_status(201))
 }
 
 pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Answer {
-    let run = oidc::check(&req, config).await?;
+    let run = oidc::check(&req, env, config).await?;
     if !is_sha256(sha256) {
         return Err(Refusal::new(
             400,
@@ -212,7 +212,7 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
 }
 
 pub async fn done(req: &Request, env: &Env, config: &Config, id: &str) -> Answer {
-    let run = oidc::check(req, config).await?;
+    let run = oidc::check(req, env, config).await?;
     let db = env.d1("DB")?;
     let repo = run.repo();
     #[derive(Deserialize)]
@@ -257,7 +257,7 @@ pub async fn done(req: &Request, env: &Env, config: &Config, id: &str) -> Answer
     }
     db.batch(statements).await?;
     Ok(Response::from_json(
-        &json!({"url": page_url(req, &run, id)?}),
+        &json!({"url": page_url(config, &run, id)}),
     )?)
 }
 
@@ -275,8 +275,8 @@ fn refuse_other_pull(run: &Run, pull: Option<u64>) -> Result<(), Refusal> {
     }
 }
 
-fn page_url(req: &Request, run: &Run, id: &str) -> worker::Result<String> {
-    Ok(format!("{}/{}/proofs/{id}/", origin(req)?, run.repository))
+fn page_url(config: &Config, run: &Run, id: &str) -> String {
+    format!("{}/{}/proofs/{id}/", config.app_origin, run.repository)
 }
 
 fn is_sha256(text: &str) -> bool {
