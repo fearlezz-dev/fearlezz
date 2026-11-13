@@ -17,7 +17,7 @@ pub(crate) struct Floor {
 }
 
 /// One thing that keeps a commit from being proven: what, why, and what to do about it.
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Item {
     pub what: String,
     pub why: String,

@@ -1,0 +1,69 @@
+# docs/drive/hosted-proof/record.yaml: the working state of one piece of work.
+goal: "The hosted parts in ee/: proof links and pages a team can open without the developer's machine."
+
+pieces:
+  - id: what-is-hosted
+    status: figuring-out
+    open: "The page itself. Evidence: CI today publishes only changed before and after files; index.html, look.json, frames, findings beyond one example, full outputs and JUnit cases reach no page."
+    tries:
+      - id: two-questions-mock
+        what: "Verdict sentence, what waits for you with approve buttons, then 'Did anything break?' (checks, tests, red before green, findings, outputs) and 'Does it look right to you?' (pictures, compare modes, film lanes)."
+        state: picked
+        why: "Order and style approved; density to refine while building."
+        evidence: [scratchpad mock shown in chat 2026-11-13]
+  - id: access
+    status: building
+  - id: stack
+    status: building
+    tries:
+      - id: workers-rs-spike
+        what: "Throwaway Rust worker (worker 0.9.0) under wrangler dev --local: R2, D1, OIDC RS256 check, GitHub sign in against a stub."
+        taught: "All four work. R2: streaming PUT needs Content-Length (FixedLengthStream), Range gives 206 with matching bytes. D1: prepared statements and serde rows are fine; bools come back 0/1, bind takes JsValues. OIDC: SubtleCrypto through web-sys (JWK import, verify) refuses wrong aud, expired and bad signature; no crypto crate or getrandom needed, about 30 lines of untyped js_sys::Reflect glue. Sign in: session cookie as base64(json).HMAC-SHA256 through SubtleCrypto; a user without access gets 404. Response::redirect() has immutable headers, so a cookie on it fails at runtime: build the 302 by hand. JS interop errors show only at runtime, so integration tests under wrangler dev matter. Keep worker, worker-build and wasm-bindgen in lockstep. Release wasm 211 KB gzip (free plan limit 3 MB); cold build 46 s, incremental 9 s. Needs its own [workspace] table and the wasm32-unknown-unknown target. Miniflare not checked against production."
+        state: picked
+        why: "Rust wasm is good enough for this service."
+        evidence: ["spike worktree deleted after recording; numbers above"]
+
+decided:
+  - id: one-proof-model
+    what: "One proof model: proof.json feeds the comment, the check page, the proof page and the upload; it replaces CommitReport and the borrowed github::Proof."
+  - id: worker-rust
+    what: "The Cloudflare Worker is Rust (wasm), workers-rs."
+  - id: layout-and-density
+    what: "The order feels very right, and this is the style I like. Think about content density: clustered together it becomes visually noisy and the important stuff is hard to see. Keep all of the information, but direct my attention to where it matters most, and let me still find what matters less when I am curious or want to double check."
+  - id: pr-title-and-judgment
+    what: "Capture at least the PR title, so I know which page belongs to which PR; not the full body. I know what the thing is for. Looking at it I want to see: did anything break? Did it actually implement it correctly? Correctly is just my judgment; that is why the page exists."
+  - id: core-draws
+    what: "The core draws the page: CI sends a bundle with the page; the service stores, gates and approves. The same page shows locally."
+  - id: cloudflare
+    what: "The service runs on Cloudflare (Workers, R2, D1)."
+  - id: access
+    what: "Mirror GitHub plus share links: sign in with GitHub, read access sees, write access approves, public repos open to anyone; a person with write access can make a link anyone can open, until revoked."
+  - id: full-page-first
+    what: "Both B and C: a full page with every check, all of the findings, all of the pictures, all of the video analysis, the before and after, the comparison, approvals at the top, things that need to be weakened. Not half done: the best possible version, where it is trivial to see whether the PR is ready, and that what I expected as the human who prompted it did happen."
+  - id: approvals-free-and-paid
+    what: "Free: the admin bypass, fewer guarantees. Paid: a separate approval page with much more detail, behind its own sign in, which CI checks."
+    why: "Carried over from docs/drive/ci-proof-loop/record.yaml."
+
+open: []
+
+slices:
+  - id: proof-bundle
+    tests: [crates/fearlezz/tests/proof.rs]
+    status: done
+    note: "proof.json with every check, test, finding, weakening and picture, plus media and full outputs"
+  - id: proof-page
+    tests: []
+    status: todo
+    note: "the core draws the page from the bundle; locally it replaces the look report"
+  - id: upload-and-view
+    tests: []
+    status: todo
+    note: "ee/ worker: OIDC upload, R2, GitHub sign in, link in the PR comment"
+  - id: approve-on-page
+    tests: []
+    status: todo
+  - id: share-links
+    tests: []
+    status: todo
+
+next: Build proof-page: the core draws the full page from proof.json, locally and in CI.

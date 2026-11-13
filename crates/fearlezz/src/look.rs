@@ -73,7 +73,13 @@ pub(crate) struct Look {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     pub items: Vec<Item>,
+    /// The report page on this machine; empty in a proof bundle.
+    #[serde(default, skip_serializing_if = "no_path")]
     pub report: PathBuf,
+}
+
+fn no_path(path: &Path) -> bool {
+    path.as_os_str().is_empty()
 }
 
 impl Look {

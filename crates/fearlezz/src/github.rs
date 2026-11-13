@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use crate::floor;
 use crate::look::{Change, Look};
-use crate::store::RunResult;
+use crate::proof::Ran;
 
 /// The first line of the status comment, so CI finds its own comment to replace.
 const COMMENT_MARKER: &str = "<!-- fearlezz -->";
@@ -739,44 +739,47 @@ impl StatusComment {
 
 // What a proof shows
 
-/// One check in the report.
-pub(crate) struct Row {
-    pub id: String,
-    pub outcome: &'static str,
-    /// How many tests ran, for a check that counts them.
-    pub tests: Option<u64>,
-    pub secs: f64,
-    /// The first line of the command, marked when there is more.
-    pub run: String,
-}
-
-/// What proving one commit shows on GitHub: the status comment and the check page.
-pub(crate) struct Proof<'a> {
-    /// The commit as people read it, with the merge it proved.
-    pub commit: &'a str,
-    /// The full head commit an approval binds to.
-    pub head: &'a str,
-    pub rows: &'a [Row],
+/// What proving one commit shows on GitHub, drawn from its proof: the status comment and the
+/// check page.
+pub(crate) struct Report<'a> {
+    proof: &'a crate::proof::Proof,
     /// What keeps the commit from being proven.
-    pub items: &'a [floor::Item],
-    pub notes: &'a [String],
+    items: Vec<floor::Item>,
+    notes: Vec<String>,
     /// Looks whose changed pictures wait for a person.
-    pub waits: &'a [Look],
+    waits: Vec<Look>,
     /// The URL the pictures folder is served at, when CI publishes it.
-    pub pictures_url: Option<&'a str>,
+    pictures_url: Option<&'a str>,
     /// CI keeps the pictures folder as the `fearlezz-pictures` artifact.
-    pub artifact: bool,
-    /// The run's page, with each check's output.
-    pub run_url: Option<String>,
+    artifact: bool,
 }
 
-impl Proof<'_> {
+impl<'a> Report<'a> {
+    pub(crate) fn new(
+        proof: &'a crate::proof::Proof,
+        pictures_url: Option<&'a str>,
+        artifact: bool,
+    ) -> Report<'a> {
+        Report {
+            proof,
+            items: proof.blockers(),
+            notes: proof.notes(),
+            waits: proof.waits(),
+            pictures_url,
+            artifact,
+        }
+    }
+
     fn counted(&self, word: &str) -> String {
-        let passed = self.rows.iter().filter(|r| r.outcome == "passed").count();
+        let ran = self.proof.ran_here().count();
+        let passed = self
+            .proof
+            .ran_here()
+            .filter(|c| c.outcome == Ran::Passed)
+            .count();
         format!(
-            "**{word}**: commit {}, {passed} of {} checks passed",
-            self.commit,
-            self.rows.len()
+            "**{word}**: commit {}, {passed} of {ran} checks passed",
+            self.proof.commit
         )
     }
 
@@ -806,6 +809,11 @@ impl Proof<'_> {
         self.waits.iter().map(|w| w.check.clone()).collect()
     }
 
+    /// The looks whose pictures wait.
+    pub(crate) fn waits(&self) -> &[Look] {
+        &self.waits
+    }
+
     /// The status comment: the headline, what blocks it, the pictures to look at, the checks
     /// folded away, and a link to the check page.
     pub(crate) fn comment(&self) -> Result<StatusComment> {
@@ -813,22 +821,19 @@ impl Proof<'_> {
         self.blockers(&mut text)?;
         self.notes(&mut text)?;
         self.pictures(&mut text)?;
-        if !self.rows.is_empty() {
-            writeln!(
-                text,
-                "<details><summary>{} checks</summary>\n",
-                self.rows.len()
-            )?;
+        let ran = self.proof.ran_here().count();
+        if ran > 0 {
+            writeln!(text, "<details><summary>{ran} checks</summary>\n")?;
             self.table(&mut text)?;
             writeln!(text, "\n</details>\n")?;
         }
-        if let Some(url) = &self.run_url {
+        if let Some(url) = &self.proof.run_url {
             writeln!(text, "[The check page]({url}) has each check's output.")?;
         }
         let waiting = (!self.waits.is_empty()).then(|| Waiting {
-            head: self.head.to_string(),
+            head: self.proof.head.clone(),
             checks: self.waiting_checks(),
-            pictures: pictures_id(self.waits),
+            pictures: pictures_id(&self.waits),
         });
         Ok(StatusComment {
             headline: self.headline(),
@@ -839,23 +844,29 @@ impl Proof<'_> {
 
     /// The check page: the headline, what blocks it, every check, and the end of each failing
     /// output.
-    pub(crate) fn page(&self, failures: &[RunResult]) -> Result<String, std::fmt::Error> {
+    pub(crate) fn page(&self) -> Result<String, std::fmt::Error> {
         let mut text = String::new();
         writeln!(text, "{TITLE}\n\n{}\n", self.headline())?;
         self.blockers(&mut text)?;
         self.notes(&mut text)?;
         self.pictures(&mut text)?;
         self.table(&mut text)?;
-        if self.rows.is_empty() {
+        if self.proof.ran_here().next().is_none() {
             writeln!(text, "\nNo check reads what this commit changed.")?;
         }
-        for f in failures {
+        for check in self
+            .proof
+            .checks
+            .iter()
+            .filter(|c| c.outcome == Ran::Failed)
+        {
+            let Some(log) = &check.log else { continue };
             writeln!(
                 text,
                 "\n<details><summary>The end of what {} printed</summary>\n\n```",
-                cell(&f.check)
+                cell(&check.id)
             )?;
-            for line in crate::run::tail(&f.log, 40) {
+            for line in crate::run::tail(log, 40) {
                 writeln!(text, "{}", line.replace("```", "'''"))?;
             }
             writeln!(text, "```\n\n</details>")?;
@@ -869,7 +880,7 @@ impl Proof<'_> {
             return Ok(());
         }
         writeln!(text, "| what | why | what to do |\n| --- | --- | --- |")?;
-        for item in self.items {
+        for item in &self.items {
             writeln!(
                 text,
                 "| {} | {} | {} |",
@@ -882,7 +893,7 @@ impl Proof<'_> {
     }
 
     fn notes(&self, text: &mut String) -> std::fmt::Result {
-        for note in self.notes {
+        for note in &self.notes {
             writeln!(text, "{note}\n")?;
         }
         Ok(())
@@ -891,15 +902,19 @@ impl Proof<'_> {
     fn table(&self, text: &mut String) -> std::fmt::Result {
         writeln!(text, "| check | result | tests | time | command |")?;
         writeln!(text, "| --- | --- | --- | --- | --- |")?;
-        for row in self.rows {
-            let tests = row.tests.map(|n| n.to_string()).unwrap_or_default();
+        for check in self.proof.ran_here() {
+            let tests = check.tests.map(|n| n.to_string()).unwrap_or_default();
+            let run = match check.run.split_once('\n') {
+                Some((first, _)) => format!("{first} ..."),
+                None => check.run.clone(),
+            };
             writeln!(
                 text,
                 "| {} | {} | {tests} | {:.1} s | `{}` |",
-                cell(&row.id),
-                row.outcome,
-                row.secs,
-                code(&row.run)
+                cell(&check.id),
+                check.outcome.word(),
+                check.seconds,
+                code(&run)
             )?;
         }
         Ok(())
@@ -914,7 +929,7 @@ impl Proof<'_> {
         writeln!(text, "#### Pictures to look at\n")?;
         let mut left = SHOWN;
         let mut hidden = 0;
-        for look in self.waits {
+        for look in &self.waits {
             let why = look
                 .no_before
                 .as_ref()

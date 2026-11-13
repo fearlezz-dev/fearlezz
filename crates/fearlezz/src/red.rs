@@ -48,16 +48,6 @@ pub(crate) enum Verdict {
     NotRed { tests: Vec<String> },
 }
 
-impl Red {
-    /// `tests/a.sh` or `2 test files`, with the verbs agreeing.
-    pub(crate) fn subject(&self) -> (String, &'static str, &'static str) {
-        match self.files.as_slice() {
-            [one] => (one.clone(), "fails", "passes"),
-            many => (format!("{} test files", many.len()), "fail", "pass"),
-        }
-    }
-}
-
 /// The change's test files for `check`, by `test_files` alone: its inputs only decide reuse.
 pub(crate) fn test_files(check: &Check, wt: &Worktree) -> Vec<String> {
     wt.changed
