@@ -1,5 +1,6 @@
-# The proof host. Secrets (GITHUB_CLIENT_SECRET, GITHUB_APP_KEY, SESSION_KEY) are set with
-# `wrangler secret put`; the tests pass every setting with `wrangler dev --var`.
+# The proof host. Secrets (GITHUB_CLIENT_SECRET, GITHUB_APP_KEY, SIGNING_KEY) are set with
+# `wrangler secret put`; the tests pass every setting with `wrangler dev --var`. The worker
+# answers on both origins below, so both route to it.
 name = "fearlezz-host"
 main = "build/index.js"
 compatibility_date = "2026-10-01"
@@ -8,8 +9,12 @@ compatibility_date = "2026-10-01"
 command = "worker-build --release"
 
 [vars]
-# The host's origin, which CI asks its OIDC token for.
-AUDIENCE = "https://proof.fearlezz.dev"
+# Where people sign in and CI uploads.
+APP_ORIGIN = "https://fearlezz.seamlezz.com"
+# Where proof files are served: another site, so a proof's page cannot use the sign in.
+FILES_ORIGIN = "https://fearlezz.seamlezz.net"
+# The host's origin, which CI asks its OIDC token for: APP_ORIGIN, the default host of the core.
+AUDIENCE = "https://fearlezz.seamlezz.com"
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 OIDC_JWKS = "https://token.actions.githubusercontent.com/.well-known/jwks"
 GITHUB_API = "https://api.github.com"

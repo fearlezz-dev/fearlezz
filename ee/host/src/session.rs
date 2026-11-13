@@ -1,13 +1,11 @@
-//! GitHub sign in and the session it leaves: a cookie holding the person's login and GitHub
-//! token, signed with HMAC so the host can trust it without storing sessions.
+//! GitHub sign in and the session it leaves: a row in D1 holding the person's login and GitHub
+//! token, and a cookie holding only the row's random id, so the token never leaves the host and
+//! logging out ends the session for good.
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use worker::{Headers, Request, Response, Url};
+use worker::{Env, Headers, Request, Response, Url};
 
-use crate::{Answer, Config, Refusal, crypto, github, now, origin};
+use crate::{Answer, Config, Refusal, crypto, github, now};
 
 const SESSION: &str = "session";
 /// The sign in in flight: its state and where to go after.
@@ -16,11 +14,10 @@ const SIGNIN: &str = "signin";
 const SESSION_SECONDS: i64 = 8 * 3600;
 const SIGNIN_SECONDS: i64 = 600;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 pub struct Session {
     pub login: String,
     pub token: String,
-    exp: i64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -30,10 +27,16 @@ struct Signin {
     exp: i64,
 }
 
-/// The signed in person, if the request carries a valid session.
-pub async fn read(req: &Request, config: &Config) -> worker::Result<Option<Session>> {
-    let session: Option<Session> = cookie(req, SESSION, config).await?;
-    Ok(session.filter(|s| s.exp > now()))
+/// The signed in person, if the request carries the id of a session that has not expired.
+pub async fn read(req: &Request, env: &Env) -> worker::Result<Option<Session>> {
+    let Some(id) = cookie(req, SESSION)? else {
+        return Ok(None);
+    };
+    env.d1("DB")?
+        .prepare("SELECT login, token FROM sessions WHERE id = ?1 AND expires > ?2")
+        .bind(&[id.into(), (now() as f64).into()])?
+        .first(None)
+        .await
 }
 
 pub async fn login(req: &Request, config: &Config) -> Answer {
@@ -50,49 +53,71 @@ pub async fn login(req: &Request, config: &Config) -> Answer {
     authorize
         .query_pairs_mut()
         .append_pair("client_id", &config.client_id)
-        .append_pair("redirect_uri", &format!("{}/callback", origin(req)?))
+        .append_pair("redirect_uri", &callback_url(config))
         .append_pair("state", &state);
     let signin = Signin {
         state,
         next,
         exp: now() + SIGNIN_SECONDS,
     };
-    let cookie = set_cookie(SIGNIN, &seal(&signin, config).await?, SIGNIN_SECONDS);
+    let sealed = crypto::seal(&config.signing_key, SIGNIN, &signin).await?;
+    let cookie = set_cookie(SIGNIN, &sealed, SIGNIN_SECONDS);
     Ok(redirect(authorize.as_str(), &[cookie])?)
 }
 
-pub async fn callback(req: &Request, config: &Config) -> Answer {
+pub async fn callback(req: &Request, env: &Env, config: &Config) -> Answer {
     let url = req.url()?;
     let query = |name: &str| {
         url.query_pairs()
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.into_owned())
     };
-    let signin: Option<Signin> = cookie(req, SIGNIN, config).await?;
+    let signin: Option<Signin> = match cookie(req, SIGNIN)? {
+        Some(sealed) => crypto::unseal(&config.signing_key, SIGNIN, &sealed).await?,
+        None => None,
+    };
     let signin = signin
         .filter(|s| s.exp > now() && query("state").as_deref() == Some(s.state.as_str()))
         .ok_or_else(|| Refusal::new(400, "this sign in was not started here; sign in again"))?;
     let code = query("code").ok_or_else(|| Refusal::new(400, "GitHub sent no code"))?;
-    let redirect_uri = format!("{}/callback", origin(req)?);
-    let token = github::exchange(config, &code, &redirect_uri)
+    let token = github::exchange(config, &code, &callback_url(config))
         .await?
         .ok_or_else(|| Refusal::new(400, "GitHub refused the sign in; sign in again"))?;
     let login = github::login(config, &token)
         .await?
         .ok_or_else(|| Refusal::new(400, "GitHub did not say who signed in"))?;
-    let session = Session {
-        login,
-        token,
-        exp: now() + SESSION_SECONDS,
-    };
+
+    let id = crypto::random_id()?;
+    let db = env.d1("DB")?;
+    // Sessions nobody logged out of would pile up; each sign in sweeps the expired ones.
+    db.prepare("DELETE FROM sessions WHERE expires <= ?1")
+        .bind(&[(now() as f64).into()])?
+        .run()
+        .await?;
+    db.prepare("INSERT INTO sessions (id, login, token, expires) VALUES (?1, ?2, ?3, ?4)")
+        .bind(&[
+            id.as_str().into(),
+            login.into(),
+            token.into(),
+            ((now() + SESSION_SECONDS) as f64).into(),
+        ])?
+        .run()
+        .await?;
     let cookies = [
-        set_cookie(SESSION, &seal(&session, config).await?, SESSION_SECONDS),
+        set_cookie(SESSION, &id, SESSION_SECONDS),
         set_cookie(SIGNIN, "", 0),
     ];
     Ok(redirect(&signin.next, &cookies)?)
 }
 
-pub fn logout() -> Answer {
+pub async fn logout(req: &Request, env: &Env) -> Answer {
+    if let Some(id) = cookie(req, SESSION)? {
+        env.d1("DB")?
+            .prepare("DELETE FROM sessions WHERE id = ?1")
+            .bind(&[id.into()])?
+            .run()
+            .await?;
+    }
     Ok(redirect("/", &[set_cookie(SESSION, "", 0)])?)
 }
 
@@ -112,6 +137,10 @@ pub fn redirect(location: &str, cookies: &[String]) -> worker::Result<Response> 
     Ok(Response::empty()?.with_status(302).with_headers(headers))
 }
 
+fn callback_url(config: &Config) -> String {
+    format!("{}/callback", config.app_origin)
+}
+
 /// Only a path on this host, so sign in cannot send anyone elsewhere.
 fn is_local(next: &str) -> bool {
     next.starts_with('/') && !next.starts_with("//") && !next.contains('\\')
@@ -121,39 +150,12 @@ fn set_cookie(name: &str, value: &str, max_age: i64) -> String {
     format!("{name}={value}; Max-Age={max_age}; Path=/; HttpOnly; Secure; SameSite=Lax")
 }
 
-/// `base64url(json).base64url(hmac)`.
-async fn seal<T: Serialize>(value: &T, config: &Config) -> worker::Result<String> {
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(value)?);
-    let mac = crypto::hmac_sign(&config.session_key, payload.as_bytes()).await?;
-    Ok(format!("{payload}.{}", URL_SAFE_NO_PAD.encode(mac)))
-}
-
-/// A sealed cookie's value, if it is there and its seal holds.
-async fn cookie<T: DeserializeOwned>(
-    req: &Request,
-    name: &str,
-    config: &Config,
-) -> worker::Result<Option<T>> {
+/// A cookie's value, as the request sent it.
+fn cookie(req: &Request, name: &str) -> worker::Result<Option<String>> {
     let header = req.headers().get("Cookie")?.unwrap_or_default();
-    let Some(sealed) = header
+    Ok(header
         .split(';')
         .filter_map(|pair| pair.trim().split_once('='))
         .find(|(n, _)| *n == name)
-        .map(|(_, v)| v)
-    else {
-        return Ok(None);
-    };
-    let Some((payload, mac)) = sealed.split_once('.') else {
-        return Ok(None);
-    };
-    let Ok(mac) = URL_SAFE_NO_PAD.decode(mac) else {
-        return Ok(None);
-    };
-    if !crypto::hmac_verify(&config.session_key, payload.as_bytes(), &mac).await? {
-        return Ok(None);
-    }
-    let Ok(json) = URL_SAFE_NO_PAD.decode(payload) else {
-        return Ok(None);
-    };
-    Ok(serde_json::from_slice(&json).ok())
+        .map(|(_, v)| v.to_owned()))
 }

@@ -37,14 +37,18 @@ pub struct State {
     pub codes: BTreeMap<String, String>,
     /// Person tokens and their login.
     pub tokens: BTreeMap<String, String>,
+    /// The Actions OIDC keys GitHub publishes, by key id; a test can rotate one in.
+    pub oidc_keys: Vec<(String, RsaPublicKey)>,
+    /// Every request asked, as method and path, so a test can count what the host asks.
+    pub asked: Vec<(String, String)>,
 }
 
 pub struct FakeGitHub {
     pub url: String,
+    state: Arc<Mutex<State>>,
 }
 
 struct Keys {
-    oidc: RsaPublicKey,
     app: RsaPublicKey,
 }
 
@@ -61,18 +65,23 @@ impl FakeGitHub {
                 ("owner/secret".to_owned(), repo(true, Some(2), &["reader"])),
                 ("owner/bare".to_owned(), repo(false, None, &[])),
                 ("other/repo".to_owned(), repo(false, Some(3), &[])),
+                // Only the caching tests view these, so they can count what the host asks.
+                ("owner/cached".to_owned(), repo(true, Some(4), &["reader"])),
+                ("owner/open".to_owned(), repo(false, Some(5), &[])),
             ]),
             codes: BTreeMap::from([
                 ("reader-code".to_owned(), "reader".to_owned()),
                 ("stranger-code".to_owned(), "stranger".to_owned()),
             ]),
             tokens: BTreeMap::new(),
+            oidc_keys: vec![(KID.to_owned(), oidc)],
+            asked: Vec::new(),
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let state = Arc::new(Mutex::new(state));
-        let keys = Arc::new(Keys { oidc, app });
-        let shared = state;
+        let keys = Arc::new(Keys { app });
+        let shared = Arc::clone(&state);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 let state = Arc::clone(&shared);
@@ -80,7 +89,23 @@ impl FakeGitHub {
                 std::thread::spawn(move || serve(stream, &state, &keys));
             }
         });
-        FakeGitHub { url }
+        FakeGitHub { url, state }
+    }
+
+    /// How many times the host asked for this method and path.
+    pub fn asked(&self, method: &str, path: &str) -> usize {
+        let state = self.state.lock().unwrap();
+        state
+            .asked
+            .iter()
+            .filter(|(m, p)| m == method && p == path)
+            .count()
+    }
+
+    /// Publishes another Actions OIDC key, as GitHub does when it rotates them.
+    pub fn publish(&self, kid: &str, key: RsaPublicKey) {
+        let mut state = self.state.lock().unwrap();
+        state.oidc_keys.push((kid.to_owned(), key));
     }
 }
 
@@ -140,9 +165,17 @@ fn answer(
     body: &Value,
 ) -> (u16, Value) {
     let path = path.split('?').next().unwrap_or_default();
+    state.asked.push((method.to_owned(), path.to_owned()));
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
     match (method, segments.as_slice()) {
-        ("GET", [".well-known", "jwks"]) => (200, json!({"keys": [jwk(&keys.oidc)]})),
+        ("GET", [".well-known", "jwks"]) => {
+            let keys: Vec<Value> = state
+                .oidc_keys
+                .iter()
+                .map(|(kid, key)| jwk(kid, key))
+                .collect();
+            (200, json!({ "keys": keys }))
+        }
         ("GET", ["repos", owner, name, "installation"]) => {
             if !app_jwt_valid(token, &keys.app) {
                 return (
@@ -215,12 +248,12 @@ fn answer(
 }
 
 /// A public key as a JWKS entry, the way GitHub publishes its Actions keys.
-fn jwk(key: &RsaPublicKey) -> Value {
+fn jwk(kid: &str, key: &RsaPublicKey) -> Value {
     json!({
         "kty": "RSA",
         "alg": "RS256",
         "use": "sig",
-        "kid": KID,
+        "kid": kid,
         "n": URL_SAFE_NO_PAD.encode(key.n().to_bytes_be()),
         "e": URL_SAFE_NO_PAD.encode(key.e().to_bytes_be()),
     })

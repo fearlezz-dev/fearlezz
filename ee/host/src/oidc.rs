@@ -6,9 +6,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use serde_json::Value;
-use worker::{Fetch, Request, Url};
+use worker::{Env, Fetch, Request, Url};
 
-use crate::{Config, Refusal, crypto, now};
+use crate::{Config, Refusal, cache, crypto, now};
 
 /// What a token says about the run that holds it.
 pub struct Run {
@@ -35,7 +35,7 @@ fn refused(why: &str) -> Refusal {
 }
 
 /// The run a request's token speaks for, or a refusal with `401`.
-pub async fn check(req: &Request, config: &Config) -> Result<Run, Refusal> {
+pub async fn check(req: &Request, env: &Env, config: &Config) -> Result<Run, Refusal> {
     let header = req.headers().get("Authorization")?.unwrap_or_default();
     let token = header
         .strip_prefix("Bearer ")
@@ -56,7 +56,7 @@ pub async fn check(req: &Request, config: &Config) -> Result<Run, Refusal> {
     if header.alg != "RS256" {
         return Err(refused("not signed with RS256"));
     }
-    let key = key(config, &header.kid).await?;
+    let key = key(env, config, &header.kid).await?;
     let signed = format!("{head}.{body}");
     if !crypto::rs256_verify(&key, &decode(signature)?, signed.as_bytes()).await? {
         return Err(refused("bad signature"));
@@ -103,30 +103,48 @@ struct Claims {
     git_ref: String,
 }
 
-/// GitHub's published key with this id.
-async fn key(config: &Config, kid: &str) -> Result<web_sys::CryptoKey, Refusal> {
-    #[derive(Deserialize)]
-    struct Jwks {
-        keys: Vec<Jwk>,
+/// GitHub keeps its keys for months and publishes a new one before signing with it.
+const JWKS_SECONDS: i64 = 3600;
+const JWKS: &str = "jwks";
+
+#[derive(Deserialize)]
+struct Jwks {
+    keys: Vec<Jwk>,
+}
+
+#[derive(Deserialize)]
+struct Jwk {
+    #[serde(default)]
+    kid: String,
+    kty: String,
+    n: Option<String>,
+    e: Option<String>,
+}
+
+/// GitHub's published key with this id: from the cached key set, or, when the cache lacks it
+/// because GitHub rotated its keys, from one fresh fetch.
+async fn key(env: &Env, config: &Config, kid: &str) -> Result<web_sys::CryptoKey, Refusal> {
+    let cached = cache::get(env, JWKS).await?;
+    let mut jwk = cached.as_deref().and_then(|jwks| find(jwks, kid));
+    if jwk.is_none() {
+        let url = Url::parse(&config.oidc_jwks).map_err(worker::Error::from)?;
+        let mut response = Fetch::Url(url).send().await?;
+        let jwks = response.text().await?;
+        if response.status_code() == 200 && serde_json::from_str::<Jwks>(&jwks).is_ok() {
+            cache::put(env, JWKS, &jwks, JWKS_SECONDS).await?;
+        }
+        jwk = find(&jwks, kid);
     }
-    #[derive(Deserialize)]
-    struct Jwk {
-        #[serde(default)]
-        kid: String,
-        kty: String,
-        n: Option<String>,
-        e: Option<String>,
-    }
-    let url = Url::parse(&config.oidc_jwks).map_err(worker::Error::from)?;
-    let mut response = Fetch::Url(url).send().await?;
-    let jwks: Jwks = response.json().await?;
+    let (n, e) = jwk.ok_or_else(|| refused("signed by a key GitHub does not publish"))?;
+    Ok(crypto::rsa_public_key(&n, &e).await?)
+}
+
+/// The `n` and `e` of the RSA key with this id in a key set.
+fn find(jwks: &str, kid: &str) -> Option<(String, String)> {
+    let jwks: Jwks = serde_json::from_str(jwks).ok()?;
     let jwk = jwks
         .keys
         .into_iter()
-        .find(|jwk| jwk.kid == kid && jwk.kty == "RSA")
-        .ok_or_else(|| refused("signed by a key GitHub does not publish"))?;
-    let (Some(n), Some(e)) = (jwk.n, jwk.e) else {
-        return Err(refused("signed by a key GitHub does not publish"));
-    };
-    Ok(crypto::rsa_public_key(&n, &e).await?)
+        .find(|jwk| jwk.kid == kid && jwk.kty == "RSA")?;
+    Some((jwk.n?, jwk.e?))
 }

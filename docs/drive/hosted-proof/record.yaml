@@ -75,7 +75,7 @@ slices:
   - id: upload-and-view
     tests: [crates/fearlezz/tests/host.rs, ee/host-tests/tests/host.rs]
     status: building
-    note: "done: the CI client (host.rs) and the ee/host worker (protocol v1 under wrangler dev --local against a fake GitHub: OIDC check, installed, content addressed blobs checked by R2's sha256, done, pages with ranges, pull redirect, sign in, access). Open: same origin HTML, the token in the session cookie, no caching of JWKS and access."
+    note: "done: the CI client (host.rs) and the ee/host worker (protocol v1 under wrangler dev --local against a fake GitHub: OIDC check, installed, content addressed blobs checked by R2's sha256, done, pull redirect, sign in, access). Hardened: bundle files only on the files origin (FILES_ORIGIN, routed by host in the same worker) at /<grant>/<path>, with an HMAC grant for one proof that expires in an hour; the app origin serves a shell that frames it in a sandbox without top navigation, and frame-ancestors lets only the app frame the files; sessions in D1 with a random id in the cookie, deleted on logout; who may read and whether public cached 5 minutes and the JWKS an hour in D1, refetched once for an unknown key id. Open: never deployed; the tests run both origins as 127.0.0.1 and localhost over plain HTTP."
   - id: accept-weakening
     tests: [crates/fearlezz/tests/ci.rs]
     status: done
@@ -87,4 +87,4 @@ slices:
     tests: []
     status: todo
 
-next: "Two slices run in their own worktrees: harden the host (ee/), and accept weakenings under fearlezz/approval (core). Then approve and accept on the hosted page by posting the comment as the signed in person."
+next: "Approve and accept on the hosted page: post the comment as the signed in person."
