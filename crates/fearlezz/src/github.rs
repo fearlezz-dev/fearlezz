@@ -752,6 +752,8 @@ pub(crate) struct Report<'a> {
     pictures_url: Option<&'a str>,
     /// CI keeps the pictures folder as the `fearlezz-pictures` artifact.
     artifact: bool,
+    /// The proof page on the proof host, when it took the bundle.
+    page: Option<String>,
 }
 
 impl<'a> Report<'a> {
@@ -759,6 +761,7 @@ impl<'a> Report<'a> {
         proof: &'a crate::proof::Proof,
         pictures_url: Option<&'a str>,
         artifact: bool,
+        page: Option<String>,
     ) -> Report<'a> {
         Report {
             proof,
@@ -767,6 +770,19 @@ impl<'a> Report<'a> {
             waits: proof.waits(),
             pictures_url,
             artifact,
+            page,
+        }
+    }
+
+    /// The link to the proof page, when there is one.
+    fn page_link(&self, text: &mut String) -> std::fmt::Result {
+        match &self.page {
+            Some(url) => writeln!(
+                text,
+                "[The proof page]({url}) shows everything this run showed: every check, its \
+                 tests, findings and output, and every picture.\n"
+            ),
+            None => Ok(()),
         }
     }
 
@@ -818,6 +834,7 @@ impl<'a> Report<'a> {
     /// folded away, and a link to the check page.
     pub(crate) fn comment(&self) -> Result<StatusComment> {
         let mut text = String::new();
+        self.page_link(&mut text)?;
         self.blockers(&mut text)?;
         self.notes(&mut text)?;
         self.pictures(&mut text)?;
@@ -847,6 +864,7 @@ impl<'a> Report<'a> {
     pub(crate) fn page(&self) -> Result<String, std::fmt::Error> {
         let mut text = String::new();
         writeln!(text, "{TITLE}\n\n{}\n", self.headline())?;
+        self.page_link(&mut text)?;
         self.blockers(&mut text)?;
         self.notes(&mut text)?;
         self.pictures(&mut text)?;

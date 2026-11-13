@@ -17,7 +17,7 @@ installed before it sends anything.
 ### Protocol, version 1
 
 Every API call from CI carries `Authorization: Bearer <token>`: a GitHub Actions OIDC token
-whose `aud` is the host's origin (for example `https://proof.fearlezz.dev`). The host checks
+whose `aud` is the host's origin (for example `https://fearlezz.seamlezz.com`, the default). The host checks
 its signature against GitHub's keys, its issuer, audience and expiry, and takes the
 repository from its `repository` claim. A token only ever acts for its own repository. For a
 pull request, its `ref` (`refs/pull/<n>/merge`) must name the pull request the proof is for.

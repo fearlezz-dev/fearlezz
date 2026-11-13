@@ -24,6 +24,8 @@ pieces:
         evidence: ["spike worktree deleted after recording; numbers above"]
 
 decided:
+  - id: default-host
+    what: "For now, fearlezz.seamlezz.com is the default proof host."
   - id: opt-in-app
     what: "Install the app: the Fearlezz GitHub App plus id-token write in the workflow; CI asks the service whether the repository is installed and uploads only on yes. A self hosted service adds an optional [host] url."
   - id: page-polish
@@ -60,9 +62,9 @@ slices:
     status: building
     note: "done: report.rs draws one page from a Proof (verdict, waits for you with the approve command inline, did anything break, does it look right); --proof writes it as index.html; a look alone gets the same page. Open: the local final stage writes the whole proof page too."
   - id: upload-and-view
-    tests: []
-    status: todo
-    note: "ee/ worker: OIDC upload, R2, GitHub sign in, link in the PR comment"
+    tests: [crates/fearlezz/tests/host.rs]
+    status: building
+    note: "done: the CI client (host.rs): on GitHub Actions with id-token, asks installed, sends proof JSON and missing blobs by sha256, links the page in the comment; never fails the proof. Building in a subagent worktree: the ee/ worker (ee/README.md protocol)."
   - id: approve-on-page
     tests: []
     status: todo

@@ -9,6 +9,7 @@ mod floor;
 mod git;
 mod github;
 mod hooks;
+mod host;
 mod init;
 mod journal;
 mod lints;
@@ -831,6 +832,8 @@ fn print_failure(f: &store::RunResult) {
 /// whose work they judge cannot change them.
 struct CommitReport {
     proof: proof::Proof,
+    /// The proof host the config names, when it is not the default one.
+    host: Option<String>,
     /// Where the short status, the bundle and the changed pictures go, when asked.
     out: CiOut,
 }
@@ -888,6 +891,7 @@ impl CommitReport {
         );
         Ok(CommitReport {
             proof: proof::Proof::new(commit, head, ctx.config.base.clone()),
+            host: ctx.config.host.clone(),
             out,
         })
     }
@@ -918,13 +922,48 @@ impl CommitReport {
     fn finish(mut self, floor: &floor::Floor) -> Result<()> {
         use std::io::Write as _;
         self.proof.weakened = floor.items(&self.proof.base);
-        if let Some(dir) = &self.out.proof {
+        // A host that cannot be reached never fails the proof: CI proved the commit anyway.
+        let host = host::Host::from_actions(self.host.as_deref()).unwrap_or_else(|e| {
+            println!("proof page not sent: {e:#}");
+            None
+        });
+        let temp = match (&self.out.proof, &host) {
+            (None, Some(_)) => Some(tempfile::tempdir()?),
+            _ => None,
+        };
+        let bundle = self
+            .out
+            .proof
+            .clone()
+            .or_else(|| temp.as_ref().map(|t| t.path().to_path_buf()));
+        if let Some(dir) = &bundle {
             self.proof.write(dir)?;
         }
+        let page = match (&host, &bundle) {
+            (Some(host), Some(dir)) => match host.send(dir) {
+                Ok(host::Sent::Page(url)) => {
+                    println!("proof page: {url}");
+                    Some(url)
+                }
+                Ok(host::Sent::NotInstalled(install)) => {
+                    println!(
+                        "proof page: the Fearlezz app is not installed on this repository, so \
+                         nothing was sent; install it to get the page: {install}"
+                    );
+                    None
+                }
+                Err(e) => {
+                    println!("proof page not sent: {e:#}");
+                    None
+                }
+            },
+            _ => None,
+        };
         let report = github::Report::new(
             &self.proof,
             self.out.pull.as_ref().and_then(|p| p.url.as_deref()),
             self.out.pictures.is_some(),
+            page,
         );
         if let Some(dir) = &self.out.pictures {
             github::copy_pictures(report.waits(), dir)?;

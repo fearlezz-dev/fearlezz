@@ -5,6 +5,7 @@
 #![allow(dead_code, reason = "each test file uses only some of the helpers")]
 
 pub(crate) mod github;
+pub(crate) mod host;
 
 use std::fs;
 use std::path::{Path, PathBuf};

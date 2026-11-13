@@ -30,6 +30,8 @@ pub(crate) struct Config {
     /// Globs of files that need no proof, such as prose. A change cannot add to them for
     /// itself: CI reads them from the base branch.
     pub no_proof: Globs,
+    /// The proof host CI sends its bundle to, when it is not the default one.
+    pub host: Option<String>,
 }
 
 /// What makes a checkout usable and runs its services. Every part is optional; a project
@@ -359,6 +361,13 @@ struct RawConfig {
     rule: Option<BTreeMap<String, toml::Table>>,
     #[serde(default)]
     no_proof: Vec<String>,
+    host: Option<RawHost>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHost {
+    url: String,
 }
 
 #[derive(Deserialize)]
@@ -623,6 +632,7 @@ impl Config {
             checks,
             base: raw.base.unwrap_or_else(|| "main".into()),
             env,
+            host: raw.host.map(|h| h.url),
         })
     }
 
