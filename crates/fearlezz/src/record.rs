@@ -525,7 +525,7 @@ const PARK_EVERY: Duration = Duration::from_millis(100);
 /// AeroSpace learns of windows on its own schedule, which took over 2 s on a loaded machine.
 /// Short in unit tests, whose scripted screen never picks some windows up.
 const PICK_UP: Duration = if cfg!(test) {
-    Duration::from_secs(1)
+    Duration::from_secs(2)
 } else {
     Duration::from_secs(10)
 };
@@ -547,6 +547,21 @@ pub(crate) struct Recorder<'a, S> {
     parked: bool,
     /// How each film went, for the machine's film log.
     films: Vec<FilmOutcome>,
+    /// Parking and focus still going on, off screen.
+    tend: Option<Tend>,
+}
+
+/// Parking a window and giving focus back while it is recorded.
+struct Tend {
+    window: WindowInfo,
+    /// When parking started.
+    since: Instant,
+    /// When parking was last asked.
+    tried: Option<Instant>,
+    /// Until when focus is still watched, once parking ended.
+    settled_at: Option<Instant>,
+    /// Whether giving focus back was told in the log.
+    told: bool,
 }
 
 impl<'a, S: Screen> Recorder<'a, S> {
@@ -565,6 +580,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
             developer,
             parked: false,
             films: Vec::new(),
+            tend: None,
         })
     }
 
@@ -667,7 +683,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 && !film.ended()
                 && deadline.is_none_or(|d| Instant::now() < d)
             {
-                std::thread::sleep(POLL);
+                self.pause(POLL, log)?;
             }
             let secs = recording.elapsed().as_secs_f64();
             let error = match film.stop() {
@@ -698,9 +714,9 @@ impl<'a, S: Screen> Recorder<'a, S> {
         Ok(Recorded { ended, recorded })
     }
 
-    /// Gives a window that just appeared [`SETTLE`] to draw its first frame. Off screen, it is
-    /// parked first, and while it settles the developer's app gets focus back whenever the
-    /// window's app takes it; focus the developer moved elsewhere stays there.
+    /// Gives a window that just appeared [`SETTLE`] to draw its first frame. Off screen, it
+    /// starts parking the window and giving focus back, which go on while it is recorded
+    /// (see [`Recorder::pause`]): where the window is changes nothing in a window capture.
     fn settle(&mut self, window: &WindowInfo, log: &mut impl Write) -> Result<()> {
         if self.place == Place::Stay {
             writeln!(
@@ -708,45 +724,75 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 "record: the window stays on your screen; FEARLEZZ_OFF_SCREEN=1 in your \
                  environment parks recorded windows off screen"
             )?;
-            std::thread::sleep(SETTLE);
-            return Ok(());
-        }
-        if let Some(Err(why)) = &self.developer {
-            writeln!(log, "record: focus is not given back: {why}")?;
-            self.developer = None;
-        }
-        let mut told = false;
-        let since = Instant::now();
-        // Settling starts once parking ended; until then the window manager may still have
-        // to pick the window up, and focus goes back all the while.
-        let mut settled_at = None;
-        let mut tried: Option<Instant> = None;
-        while settled_at.is_none_or(|at| Instant::now() < at) {
-            self.give_back(window, &mut told, log)?;
-            if settled_at.is_none() && tried.is_none_or(|t| t.elapsed() >= PARK_EVERY) {
-                tried = Some(Instant::now());
-                let failed = match self.screen.park(window.id) {
-                    Ok(Parking::Parked(how)) => {
-                        self.parked = true;
-                        writeln!(log, "record: parked the window off screen {how}")?;
-                        None
-                    }
-                    Ok(Parking::NotYet(why)) if since.elapsed() >= PICK_UP => {
-                        Some(format!("{why} after {PICK_UP:?}"))
-                    }
-                    Ok(Parking::NotYet(_)) => {
-                        std::thread::sleep(FOCUS_POLL);
-                        continue;
-                    }
-
-                    Err(e) => Some(format!("{e:#}")),
-                };
-                if let Some(e) = failed {
-                    writeln!(log, "record: could not park the window off screen: {e}")?;
-                }
-                settled_at = Some(Instant::now() + SETTLE);
+        } else {
+            if let Some(Err(why)) = &self.developer {
+                writeln!(log, "record: focus is not given back: {why}")?;
+                self.developer = None;
             }
-            std::thread::sleep(FOCUS_POLL);
+            self.tend = Some(Tend {
+                window: window.clone(),
+                since: Instant::now(),
+                tried: None,
+                settled_at: None,
+                told: false,
+            });
+        }
+        self.pause(SETTLE, log)
+    }
+
+    /// Waits `time`, parking the window and giving focus back meanwhile while that goes on.
+    fn pause(&mut self, time: Duration, log: &mut impl Write) -> Result<()> {
+        let until = Instant::now() + time;
+        loop {
+            self.tend(log)?;
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(());
+            }
+            let step = if self.tend.is_some() {
+                FOCUS_POLL
+            } else {
+                left
+            };
+            std::thread::sleep(step.min(left));
+        }
+    }
+
+    /// One step of parking and focus: focus goes back whenever the window's app takes it,
+    /// parking is asked every [`PARK_EVERY`] until the window is parked or [`PICK_UP`]
+    /// passed, and focus is watched for [`SETTLE`] after that.
+    fn tend(&mut self, log: &mut impl Write) -> Result<()> {
+        let Some(mut tend) = self.tend.take() else {
+            return Ok(());
+        };
+        self.give_back(&tend.window, &mut tend.told, log)?;
+        if tend.settled_at.is_none() && tend.tried.is_none_or(|t| t.elapsed() >= PARK_EVERY) {
+            tend.tried = Some(Instant::now());
+            let ended = match self.screen.park(tend.window.id) {
+                Ok(Parking::Parked(how)) => {
+                    self.parked = true;
+                    writeln!(log, "record: parked the window off screen {how}")?;
+                    true
+                }
+                Ok(Parking::NotYet(why)) if tend.since.elapsed() >= PICK_UP => {
+                    writeln!(
+                        log,
+                        "record: could not park the window off screen: {why} after {PICK_UP:?}"
+                    )?;
+                    true
+                }
+                Ok(Parking::NotYet(_)) => false,
+                Err(e) => {
+                    writeln!(log, "record: could not park the window off screen: {e:#}")?;
+                    true
+                }
+            };
+            if ended {
+                tend.settled_at = Some(Instant::now() + SETTLE);
+            }
+        }
+        if tend.settled_at.is_none_or(|at| Instant::now() < at) {
+            self.tend = Some(tend);
         }
         Ok(())
     }
@@ -877,7 +923,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                             log,
                             "record: listing the windows failed, trying again: {e:#}"
                         )?;
-                        std::thread::sleep(POLL);
+                        self.pause(POLL, log)?;
                         continue;
                     }
                     Err(e) => return Err(e),
@@ -907,7 +953,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                     return Ok(Ended::WaitedTooLong);
                 }
             }
-            std::thread::sleep(POLL);
+            self.pause(POLL, log)?;
         }
     }
 }
@@ -1480,14 +1526,14 @@ mod tests {
     }
 
     #[test]
-    fn off_screen_gives_focus_back_while_parking_waits_for_the_window_manager() {
+    fn off_screen_records_at_once_and_parks_once_the_window_manager_picked_the_window_up() {
         let run = at_desk(
             "film = \"home\"",
             vec![shown(7, CHILD, 0.1, 60.0)],
             "sleep 2.5",
             Desk {
                 place: Place::OffScreen,
-                park_from: 1.0,
+                park_from: 1.5,
                 fronts: vec![(0.0, EDITOR), (0.5, CHILD)],
                 ..Desk::default()
             },
@@ -1495,7 +1541,7 @@ mod tests {
         assert!(run.recorded.passed(), "{}", run.log);
         assert_eq!(
             run.events,
-            [&format!("front {EDITOR}"), "park 7", "film 7", "put back"],
+            [&format!("front {EDITOR}"), "film 7", "park 7", "put back"],
             "{}",
             run.log
         );

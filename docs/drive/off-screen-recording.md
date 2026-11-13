@@ -20,6 +20,7 @@ A recorded app should not take over the developer's screen while a check films i
 - **Your machine.** One environment variable for every project, set by the developer, never by an agent.
 - **Fast watch for all.** CGWindowList finds new windows for every recording; ScreenCaptureKit only captures.
 - **Reliable under load.** "Assume that very often my system is very loaded." AeroSpace gets up to 10 s to pick up a window, and tools get a 5 s timeout.
+- **Record now, park later.** At load 100 to 150 a short demo app closed before AeroSpace picked its window up, failing the run. Recording now starts once the window settled, and parking goes on while it records; the film is the same wherever the window is.
 - **Restore after run, only parked positions.** macOS saves a window frame on every move, so a parked app reopened in the corner. Only a saved frame that is mostly off its screen is repaired: to its value from before when that was not parked, removed otherwise. The developer's own moves and a parallel recording stay; a killed run's leftover is cleared by the next run.
 - **No AGENTS.md lines** for loaded machines, env var switches or recorder unit tests.
 
@@ -31,10 +32,11 @@ A recorded app should not take over the developer's screen while a check films i
 - **Posting input to the app's pid.** A background Flutter app ignored the events; out of scope after the no-input decision.
 - **A macOS VM.** Full isolation and real input, but minutes to boot, toolchains inside the guest, and at most two per Mac.
 - **ScreenCaptureKit for watching.** About 70 ms a listing, so the window showed far longer.
+- **Giving focus back as the cause of slow pick up.** A window that never got focus was picked up after 20 to 52 s, but one that got focus and lost it at once took 1.5 to 1.8 s, the same as one that kept it.
 - **CFPreferences for saved frames.** It cannot reach a sandboxed app's container and reads a stale cache by path; the `defaults` tool can.
 
 ## Left open
 
-- Films fail machine wide after many recordings until `replayd` restarts; reproduced on `main`, listed in ROADMAP Known problems.
+- Films fail machine wide after many recordings until `replayd` restarts; reproduced on `main`, listed in ROADMAP Known problems. Every film now goes into the machine's film log (`films.jsonl` in the cache folder) to count it.
 - With AeroSpace on and Accessibility off, giving focus back is unproven on a real machine.
 - When a command exits while the app it started keeps running, the app may save its parked position after the put back.
