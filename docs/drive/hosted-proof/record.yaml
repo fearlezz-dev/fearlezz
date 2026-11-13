@@ -24,6 +24,8 @@ pieces:
         evidence: ["spike worktree deleted after recording; numbers above"]
 
 decided:
+  - id: accept-waits
+    what: "A weakening waits like pictures: the proof passes, the waiting status goes pending until an admin accepts, and the status is renamed fearlezz/approval (breaking; rulesets requiring fearlezz/pictures must change)."
   - id: accept-comment
     what: "A weakened check is let through by an accept comment: the page posts `/fearlezz accept <words>` next to the weakening; CI counts it only from an admin. One rule for every approval; the paid value is the page."
   - id: approve-posts-comment
