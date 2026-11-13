@@ -15,10 +15,13 @@ use serde_json::{Value, json};
 /// The host a project sends to unless its config names another.
 pub(crate) const DEFAULT: &str = "https://fearlezz.seamlezz.com";
 
-/// The host and a token for it.
+/// The host, and how to ask GitHub Actions for a token whose audience it is.
 pub(crate) struct Host {
     url: String,
-    token: String,
+    /// The job's OIDC token endpoint, with the host as audience.
+    ask: String,
+    /// The job's token for asking.
+    request: String,
 }
 
 /// What sending a bundle came to.
@@ -31,30 +34,30 @@ pub(crate) enum Sent {
 
 impl Host {
     /// On GitHub Actions, when the job may request an OIDC token (`id-token: write`): the host
-    /// `url` (the default without one) with a token whose audience is that host. None
-    /// elsewhere, so nothing is asked of anyone.
-    pub(crate) fn from_actions(url: Option<&str>) -> Result<Option<Host>> {
+    /// `url` (the default without one), asked for a token whose audience is that host on
+    /// every call. None elsewhere, so nothing is asked of anyone.
+    pub(crate) fn from_actions(url: Option<&str>) -> Option<Host> {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
         let (Some(ask), Some(request)) = (
             var("ACTIONS_ID_TOKEN_REQUEST_URL"),
             var("ACTIONS_ID_TOKEN_REQUEST_TOKEN"),
         ) else {
-            return Ok(None);
+            return None;
         };
         let url = url.unwrap_or(DEFAULT).trim_end_matches('/').to_string();
         let join = if ask.contains('?') { '&' } else { '?' };
-        let (status, answer) = curl(
-            "GET",
-            &format!("{ask}{join}audience={}", encode(&url)),
-            &request,
-            Body::None,
-        )?;
-        let token = answer["value"]
+        let ask = format!("{ask}{join}audience={}", encode(&url));
+        Some(Host { url, ask, request })
+    }
+
+    /// A fresh OIDC token: one lives minutes, and sending films can take longer.
+    fn token(&self) -> Result<String> {
+        let (status, answer) = curl("GET", &self.ask, &self.request, Body::None)?;
+        Ok(answer["value"]
             .as_str()
             .filter(|_| status == 200)
             .with_context(|| format!("GitHub gave no OIDC token ({status})"))?
-            .to_string();
-        Ok(Some(Host { url, token }))
+            .to_string())
     }
 
     /// Sends the bundle in `dir`, when the host says the repository installed the app.
@@ -111,7 +114,7 @@ impl Host {
     }
 
     fn call(&self, method: &str, path: &str, body: Body<'_>) -> Result<(u16, Value)> {
-        curl(method, &format!("{}{path}", self.url), &self.token, body)
+        curl(method, &format!("{}{path}", self.url), &self.token()?, body)
     }
 }
 

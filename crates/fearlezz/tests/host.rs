@@ -189,3 +189,18 @@ fn a_host_that_fails_never_fails_the_proof() {
     );
     assert!(!text.contains("The proof page"), "{text}");
 }
+
+#[test]
+fn every_call_to_the_host_asks_for_a_fresh_token() {
+    // An OIDC token lives minutes; sending large films can take longer, so no call reuses one.
+    let host = FakeHost::start();
+    let repo = repo(&host);
+    let (out, _) = ci(&repo, &host.token_env());
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let tokens = host
+        .requests()
+        .iter()
+        .filter(|r| r.path.starts_with("/token"))
+        .count();
+    assert_eq!(tokens, host.api().len(), "one token for each call");
+}

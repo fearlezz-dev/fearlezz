@@ -934,10 +934,7 @@ impl CommitReport {
         self.proof.weakenings_wait = waits;
         self.proof.weakened = floor.items(&self.proof.base, waits);
         // A host that cannot be reached never fails the proof: CI proved the commit anyway.
-        let host = host::Host::from_actions(self.host.as_deref()).unwrap_or_else(|e| {
-            println!("proof page not sent: {e:#}");
-            None
-        });
+        let host = host::Host::from_actions(self.host.as_deref());
         let temp = match (&self.out.proof, &host) {
             (None, Some(_)) => Some(tempfile::tempdir()?),
             _ => None,
