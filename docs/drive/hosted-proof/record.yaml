@@ -76,6 +76,10 @@ slices:
     tests: [crates/fearlezz/tests/host.rs, ee/host-tests/tests/host.rs]
     status: building
     note: "done: the CI client (host.rs) and the ee/host worker (protocol v1 under wrangler dev --local against a fake GitHub: OIDC check, installed, content addressed blobs checked by R2's sha256, done, pages with ranges, pull redirect, sign in, access). Open: same origin HTML, the token in the session cookie, no caching of JWKS and access."
+  - id: accept-weakening
+    tests: [crates/fearlezz/tests/ci.rs]
+    status: done
+    note: "On CI a weakening waits in fearlezz/approval until an admin comments `/fearlezz accept <words>`; a fork's weakening still fails its proof, since its run cannot record what waits."
   - id: approve-on-page
     tests: []
     status: todo
