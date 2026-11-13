@@ -24,6 +24,9 @@ pieces:
         evidence: ["spike worktree deleted after recording; numbers above"]
 
 decided:
+  - id: approve-posts-comment
+    what: "Approve on the hosted page posts the `/fearlezz approve <words>` comment on the pull request as the signed in person; CI judges it exactly as today."
+    why: "No new trust in CI and the pull request keeps the record; a signed approval from the host would be a second way in."
   - id: files-origin
     what: "Separate domain for proof files; for now fearlezz.seamlezz.net. The files stay in the hosted service; only the address the browser loads them from differs, so a bad proof page cannot use the sign in of fearlezz.seamlezz.com."
   - id: sessions-in-d1
