@@ -372,6 +372,12 @@ pub(crate) fn front() -> Result<i32> {
     }
 }
 
+/// Whether [`front`] reads through Accessibility, in process, rather than asking AeroSpace.
+pub(crate) fn reads_front_cheaply() -> bool {
+    // SAFETY: reads this process's trust; never prompts.
+    unsafe { AXIsProcessTrusted() }
+}
+
 /// Brings the app of `pid` to the front, as the developer had it.
 pub(crate) fn bring_front(pid: i32) -> Result<()> {
     let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
@@ -449,14 +455,16 @@ pub(crate) fn put_back(saved: &Saved) -> Result<usize> {
     Ok(repairs.len())
 }
 
-/// What to do to each saved position that is parked `now`: write back its value from
+/// What to do to each saved position that is parked `now` and changed during the run: write back its value from
 /// `before`, or remove it (`None`) when it had none that was not parked. A position that is
 /// not parked is left alone, whoever saved it: the developer moving the app's windows, or
 /// another recording that put its own back first. A parked value in `before` (from another
 /// recording still running, or one that was killed) is never written back.
 fn repairs(before: &[(String, String)], now: &[(String, String)]) -> Vec<(String, Option<String>)> {
     now.iter()
-        .filter(|(_, frame)| looks_parked(frame))
+        .filter(|(key, frame)| {
+            looks_parked(frame) && !before.iter().any(|(k, was)| k == key && was == frame)
+        })
         .map(|(key, _)| {
             let was = before
                 .iter()
@@ -489,6 +497,7 @@ mod tests {
     const HOME: &str = "19 5 1489 939 0 0 1512 948 ";
     const MOVED: &str = "300 200 1489 939 0 0 1512 948 ";
     const PARKED: &str = "1472 -907 1489 939 0 0 1512 948 ";
+    const PARKED_ELSEWHERE: &str = "1511 -907 1474 939 0 0 1512 948 ";
 
     fn saved(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
@@ -506,11 +515,17 @@ mod tests {
 
     #[test]
     fn only_parked_positions_are_put_back_and_never_to_a_parked_value() {
-        let before = saved(&[("main", HOME), ("mine", HOME), ("other", PARKED)]);
+        let before = saved(&[
+            ("main", HOME),
+            ("mine", HOME),
+            ("other", PARKED),
+            ("hidden", PARKED),
+        ]);
         let now = saved(&[
             ("main", PARKED),
             ("mine", MOVED),
-            ("other", PARKED),
+            ("other", PARKED_ELSEWHERE),
+            ("hidden", PARKED),
             ("new", PARKED),
         ]);
         assert_eq!(

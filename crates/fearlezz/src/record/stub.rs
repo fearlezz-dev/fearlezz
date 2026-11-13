@@ -75,3 +75,7 @@ pub(crate) fn capture_service() -> Option<u32> {
 pub(crate) fn load() -> Option<f64> {
     None
 }
+
+pub(crate) fn reads_front_cheaply() -> bool {
+    true
+}

@@ -173,6 +173,9 @@ pub(crate) struct System {
     apps: std::collections::HashMap<i32, String>,
     /// The window positions the parked window's app had saved.
     saved: Option<place::Saved>,
+    /// The app in front as last read through AeroSpace, which is asked at most every
+    /// [`PARK_EVERY`]: it answers on the thread that picks new windows up.
+    front: Option<(Instant, i32)>,
 }
 
 impl System {
@@ -210,7 +213,17 @@ impl Screen for System {
     }
 
     fn front(&mut self) -> Result<i32> {
-        place::front()
+        if place::reads_front_cheaply() {
+            return place::front();
+        }
+        if let Some((at, pid)) = self.front
+            && at.elapsed() < PARK_EVERY
+        {
+            return Ok(pid);
+        }
+        let pid = place::front()?;
+        self.front = Some((Instant::now(), pid));
+        Ok(pid)
     }
 
     fn bring_front(&mut self, pid: i32) -> Result<()> {
@@ -521,6 +534,14 @@ const FOCUS_POLL: Duration = Duration::from_millis(20);
 /// How often parking is asked again while the window manager has not picked the window up:
 /// each ask is a query to AeroSpace, which answers on the same thread that picks windows up.
 const PARK_EVERY: Duration = Duration::from_millis(100);
+/// How long recording waits for parking, so a film starts on the window's final size when
+/// the window manager is on time (AeroSpace tiles a window it picks up, then parking floats
+/// it, and both can resize it); a short app is recorded even when it is not.
+const PARK_WAIT: Duration = if cfg!(test) {
+    Duration::from_millis(1500)
+} else {
+    Duration::from_secs(3)
+};
 /// How long a window manager gets to pick up a new window before it can be parked:
 /// AeroSpace learns of windows on its own schedule, which took over 2 s on a loaded machine.
 /// Short in unit tests, whose scripted screen never picks some windows up.
@@ -562,6 +583,8 @@ struct Tend {
     settled_at: Option<Instant>,
     /// Whether giving focus back was told in the log.
     told: bool,
+    /// The window's size when recording started, once it has.
+    filmed: Option<(f64, f64)>,
 }
 
 impl<'a, S: Screen> Recorder<'a, S> {
@@ -641,6 +664,9 @@ impl<'a, S: Screen> Recorder<'a, S> {
             .into_iter()
             .find(|w| w.id == window.id)
             .unwrap_or(window);
+        if let Some(tend) = &mut self.tend {
+            tend.filmed = Some((window.width, window.height));
+        }
         let recording = Instant::now();
         // A deadline past what an Instant holds is no deadline.
         let deadline = spec.seconds().and_then(|s| recording.checked_add(s));
@@ -735,9 +761,20 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 tried: None,
                 settled_at: None,
                 told: false,
+                filmed: None,
             });
         }
-        self.pause(SETTLE, log)
+        self.pause(SETTLE, log)?;
+        let since = Instant::now() - SETTLE;
+        while self.parking() && since.elapsed() < PARK_WAIT {
+            self.pause(FOCUS_POLL, log)?;
+        }
+        Ok(())
+    }
+
+    /// Whether the window is still being parked.
+    fn parking(&self) -> bool {
+        self.tend.as_ref().is_some_and(|t| t.settled_at.is_none())
     }
 
     /// Waits `time`, parking the window and giving focus back meanwhile while that goes on.
@@ -772,6 +809,20 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 Ok(Parking::Parked(how)) => {
                     self.parked = true;
                     writeln!(log, "record: parked the window off screen {how}")?;
+                    if let Some((width, height)) = tend.filmed {
+                        let now = self.screen.windows().ok().and_then(|windows| {
+                            windows.into_iter().find(|w| w.id == tend.window.id)
+                        });
+                        if let Some(now) = now.filter(|n| (n.width, n.height) != (width, height)) {
+                            writeln!(
+                                log,
+                                "record: the window changed size from {width}x{height} to {}x{} \
+                                 while it was filmed, as the window manager picked it up late; \
+                                 the film may be cut or padded",
+                                now.width, now.height
+                            )?;
+                        }
+                    }
                     true
                 }
                 Ok(Parking::NotYet(why)) if tend.since.elapsed() >= PICK_UP => {
@@ -1150,6 +1201,10 @@ mod tests {
         /// Parking waits until this many seconds after the screen was made, as AeroSpace
         /// does until it picks up a new window.
         park_from: f64,
+        /// Whether parking makes the window wider, as AeroSpace's tiling and floating can.
+        park_resizes: bool,
+        /// Whether the window was parked.
+        parked: bool,
         /// Why the app in front cannot be read, when it cannot.
         front_fails: Option<&'static str>,
         /// Why saved window positions cannot be put back, when they cannot.
@@ -1204,6 +1259,9 @@ mod tests {
                     if w.pid == CHILD {
                         w.pid = self.child;
                     }
+                    if self.parked && self.park_resizes {
+                        w.width += 100.0;
+                    }
                     w
                 })
                 .collect())
@@ -1223,6 +1281,7 @@ mod tests {
                 return Ok(Parking::NotYet("the script has not picked it up".into()));
             }
             self.events.push(format!("park {window}"));
+            self.parked = true;
             Ok(Parking::Parked("by script".into()))
         }
 
@@ -1327,6 +1386,7 @@ mod tests {
         place: Place,
         park_fails: Option<&'static str>,
         park_from: f64,
+        park_resizes: bool,
         front_fails: Option<&'static str>,
         put_back_fails: Option<&'static str>,
         film_fails: Option<&'static str>,
@@ -1339,6 +1399,7 @@ mod tests {
                 place: Place::Stay,
                 park_fails: None,
                 park_from: 0.0,
+                park_resizes: false,
                 front_fails: None,
                 put_back_fails: None,
                 film_fails: None,
@@ -1374,6 +1435,8 @@ mod tests {
             failures,
             park_fails: desk.park_fails,
             park_from: desk.park_from,
+            park_resizes: desk.park_resizes,
+            parked: false,
             front_fails: desk.front_fails,
             put_back_fails: desk.put_back_fails,
             film_fails: desk.film_fails,
@@ -1530,10 +1593,10 @@ mod tests {
         let run = at_desk(
             "film = \"home\"",
             vec![shown(7, CHILD, 0.1, 60.0)],
-            "sleep 2.5",
+            "sleep 3",
             Desk {
                 place: Place::OffScreen,
-                park_from: 1.5,
+                park_from: 1.9,
                 fronts: vec![(0.0, EDITOR), (0.5, CHILD)],
                 ..Desk::default()
             },
@@ -1542,6 +1605,45 @@ mod tests {
         assert_eq!(
             run.events,
             [&format!("front {EDITOR}"), "film 7", "park 7", "put back"],
+            "{}",
+            run.log
+        );
+    }
+
+    #[test]
+    fn off_screen_waits_a_little_for_parking_so_the_film_starts_on_its_final_size() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 3",
+            Desk {
+                place: Place::OffScreen,
+                park_from: 1.2,
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert_eq!(run.events, ["park 7", "film 7", "put back"], "{}", run.log);
+    }
+
+    #[test]
+    fn a_window_parked_while_it_is_filmed_says_when_its_size_changed() {
+        let run = at_desk(
+            "film = \"home\"",
+            vec![shown(7, CHILD, 0.1, 60.0)],
+            "sleep 3",
+            Desk {
+                place: Place::OffScreen,
+                park_from: 1.9,
+                park_resizes: true,
+                ..Desk::default()
+            },
+        );
+        assert!(run.recorded.passed(), "{}", run.log);
+        assert!(
+            run.log.contains(
+                "record: the window changed size from 800x600 to 900x600 while it was filmed"
+            ),
             "{}",
             run.log
         );

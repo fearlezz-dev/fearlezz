@@ -20,7 +20,7 @@ A recorded app should not take over the developer's screen while a check films i
 - **Your machine.** One environment variable for every project, set by the developer, never by an agent.
 - **Fast watch for all.** CGWindowList finds new windows for every recording; ScreenCaptureKit only captures.
 - **Reliable under load.** "Assume that very often my system is very loaded." AeroSpace gets up to 10 s to pick up a window, and tools get a 5 s timeout.
-- **Record now, park later.** At load 100 to 150 a short demo app closed before AeroSpace picked its window up, failing the run. Recording now starts once the window settled, and parking goes on while it records; the film is the same wherever the window is.
+- **Wait up to 3 s, then record anyway.** At load 100 to 150 a short demo app closed before AeroSpace picked its window up when recording waited 10 s for parking, failing the run. Recording at once instead let AeroSpace tile and float the window during the film, changing its size under a capture of fixed size. So recording waits for parking up to 3 s, then records anyway while parking goes on, and the log says when the size changed during the film. Passed 3 of 3 at load 400 to 560.
 - **Restore after run, only parked positions.** macOS saves a window frame on every move, so a parked app reopened in the corner. Only a saved frame that is mostly off its screen is repaired: to its value from before when that was not parked, removed otherwise. The developer's own moves and a parallel recording stay; a killed run's leftover is cleared by the next run.
 - **No AGENTS.md lines** for loaded machines, env var switches or recorder unit tests.
 
