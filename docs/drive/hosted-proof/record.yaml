@@ -24,6 +24,10 @@ pieces:
         evidence: ["spike worktree deleted after recording; numbers above"]
 
 decided:
+  - id: files-origin
+    what: "Separate domain for proof files; for now fearlezz.seamlezz.net. The files stay in the hosted service; only the address the browser loads them from differs, so a bad proof page cannot use the sign in of fearlezz.seamlezz.com."
+  - id: sessions-in-d1
+    what: "Sessions in D1: the cookie holds a random id; the GitHub token stays on the server."
   - id: default-host
     what: "For now, fearlezz.seamlezz.com is the default proof host."
   - id: opt-in-app
@@ -72,4 +76,4 @@ slices:
     tests: []
     status: todo
 
-next: Commit the page polish once proven; then build upload-and-view in ee/ (worker, content addressed blobs, OIDC, GitHub sign in) under wrangler dev with a stub GitHub.
+next: Harden the host (files origin with signed links in a frame, sessions in D1, cached JWKS and access) in a subagent worktree.
