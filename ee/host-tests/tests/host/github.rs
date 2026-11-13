@@ -1,0 +1,259 @@
+//! A fake GitHub on a local port: the parts the proof host asks (the Actions OIDC keys, the app's
+//! installation on a repository and its installation tokens, a repository as a token sees it,
+//! the OAuth code exchange and the signed in user), kept in memory. It checks the app's JWT with
+//! the app's public key, so a test proves the host signs it as GitHub expects.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
+
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use rsa::RsaPublicKey;
+use rsa::pkcs1v15::{Signature, VerifyingKey};
+use rsa::signature::Verifier as _;
+use rsa::traits::PublicKeyParts as _;
+use serde_json::{Value, json};
+use sha2::Sha256;
+
+/// The GitHub App's client id, which also names it in its JWTs.
+pub const CLIENT_ID: &str = "Iv1.fearlezz";
+pub const CLIENT_SECRET: &str = "client-secret";
+/// The key id of the Actions OIDC signing key.
+pub const KID: &str = "actions-key";
+
+pub struct Repo {
+    pub private: bool,
+    /// The app's installation on it, if any.
+    pub installation: Option<u64>,
+    /// Logins with at least read access.
+    pub readers: BTreeSet<String>,
+}
+
+pub struct State {
+    pub repos: BTreeMap<String, Repo>,
+    /// OAuth codes and the login each signs in.
+    pub codes: BTreeMap<String, String>,
+    /// Person tokens and their login.
+    pub tokens: BTreeMap<String, String>,
+}
+
+pub struct FakeGitHub {
+    pub url: String,
+}
+
+struct Keys {
+    oidc: RsaPublicKey,
+    app: RsaPublicKey,
+}
+
+impl FakeGitHub {
+    pub fn start(oidc: RsaPublicKey, app: RsaPublicKey) -> FakeGitHub {
+        let repo = |private: bool, installation: Option<u64>, readers: &[&str]| Repo {
+            private,
+            installation,
+            readers: readers.iter().map(|r| (*r).to_owned()).collect(),
+        };
+        let state = State {
+            repos: BTreeMap::from([
+                ("owner/repo".to_owned(), repo(false, Some(1), &["reader"])),
+                ("owner/secret".to_owned(), repo(true, Some(2), &["reader"])),
+                ("owner/bare".to_owned(), repo(false, None, &[])),
+                ("other/repo".to_owned(), repo(false, Some(3), &[])),
+            ]),
+            codes: BTreeMap::from([
+                ("reader-code".to_owned(), "reader".to_owned()),
+                ("stranger-code".to_owned(), "stranger".to_owned()),
+            ]),
+            tokens: BTreeMap::new(),
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let state = Arc::new(Mutex::new(state));
+        let keys = Arc::new(Keys { oidc, app });
+        let shared = state;
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let state = Arc::clone(&shared);
+                let keys = Arc::clone(&keys);
+                std::thread::spawn(move || serve(stream, &state, &keys));
+            }
+        });
+        FakeGitHub { url }
+    }
+}
+
+fn serve(stream: TcpStream, state: &Mutex<State>, keys: &Keys) {
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let mut parts = line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_owned();
+    let path = parts.next().unwrap_or_default().to_owned();
+    let mut length = 0;
+    let mut auth = String::new();
+    loop {
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        let header = header.trim_end();
+        if header.is_empty() {
+            break;
+        }
+        let (name, value) = header.split_once(':').unwrap();
+        match name.to_ascii_lowercase().as_str() {
+            "content-length" => length = value.trim().parse().unwrap(),
+            "authorization" => value.trim().clone_into(&mut auth),
+            _ => {}
+        }
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let token = auth
+        .strip_prefix("Bearer ")
+        .or_else(|| auth.strip_prefix("token "))
+        .unwrap_or_default();
+    let (status, answer) = answer(
+        &mut state.lock().unwrap(),
+        keys,
+        &method,
+        &path,
+        token,
+        &body,
+    );
+    let answer = answer.to_string();
+    let mut stream = stream;
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+        answer.len()
+    );
+}
+
+fn answer(
+    state: &mut State,
+    keys: &Keys,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: &Value,
+) -> (u16, Value) {
+    let path = path.split('?').next().unwrap_or_default();
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match (method, segments.as_slice()) {
+        ("GET", [".well-known", "jwks"]) => (200, json!({"keys": [jwk(&keys.oidc)]})),
+        ("GET", ["repos", owner, name, "installation"]) => {
+            if !app_jwt_valid(token, &keys.app) {
+                return (
+                    401,
+                    json!({"message": "A JSON web token could not be decoded"}),
+                );
+            }
+            match state
+                .repos
+                .get(&format!("{owner}/{name}"))
+                .and_then(|r| r.installation)
+            {
+                Some(id) => (200, json!({"id": id})),
+                None => (404, json!({"message": "Not Found"})),
+            }
+        }
+        ("POST", ["app", "installations", id, "access_tokens"]) => {
+            if !app_jwt_valid(token, &keys.app) {
+                return (
+                    401,
+                    json!({"message": "A JSON web token could not be decoded"}),
+                );
+            }
+            (201, json!({"token": format!("installation-{id}")}))
+        }
+        ("GET", ["repos", owner, name]) => {
+            let full = format!("{owner}/{name}");
+            let Some(repo) = state.repos.get(&full) else {
+                return (404, json!({"message": "Not Found"}));
+            };
+            let installation = token
+                .strip_prefix("installation-")
+                .and_then(|id| id.parse::<u64>().ok());
+            let person = state.tokens.get(token);
+            let reads = match (installation, person) {
+                (Some(id), _) => repo.installation == Some(id),
+                (None, Some(login)) => repo.readers.contains(login),
+                (None, None) => false,
+            };
+            if repo.private && !reads {
+                return (404, json!({"message": "Not Found"}));
+            }
+            (
+                200,
+                json!({
+                    "full_name": full,
+                    "private": repo.private,
+                    "permissions": {"admin": false, "push": false, "pull": reads},
+                }),
+            )
+        }
+        ("POST", ["login", "oauth", "access_token"]) => {
+            let field = |name: &str| body.get(name).and_then(Value::as_str).unwrap_or_default();
+            if field("client_id") != CLIENT_ID || field("client_secret") != CLIENT_SECRET {
+                return (200, json!({"error": "incorrect_client_credentials"}));
+            }
+            let Some(login) = state.codes.get(field("code")).cloned() else {
+                return (200, json!({"error": "bad_verification_code"}));
+            };
+            let token = format!("person-{login}");
+            state.tokens.insert(token.clone(), login);
+            (200, json!({"access_token": token, "token_type": "bearer"}))
+        }
+        ("GET", ["user"]) => match state.tokens.get(token) {
+            Some(login) => (200, json!({"login": login})),
+            None => (401, json!({"message": "Bad credentials"})),
+        },
+        _ => (404, json!({"message": "Not Found"})),
+    }
+}
+
+/// A public key as a JWKS entry, the way GitHub publishes its Actions keys.
+fn jwk(key: &RsaPublicKey) -> Value {
+    json!({
+        "kty": "RSA",
+        "alg": "RS256",
+        "use": "sig",
+        "kid": KID,
+        "n": URL_SAFE_NO_PAD.encode(key.n().to_bytes_be()),
+        "e": URL_SAFE_NO_PAD.encode(key.e().to_bytes_be()),
+    })
+}
+
+/// Whether a token is a JWT the app signed, naming it and not expired, as GitHub requires.
+fn app_jwt_valid(token: &str, key: &RsaPublicKey) -> bool {
+    let mut parts = token.split('.');
+    let (Some(header), Some(claims), Some(signature)) = (parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let Ok(signature) = URL_SAFE_NO_PAD.decode(signature) else {
+        return false;
+    };
+    let Ok(signature) = Signature::try_from(signature.as_slice()) else {
+        return false;
+    };
+    let signed = format!("{header}.{claims}");
+    if VerifyingKey::<Sha256>::new(key.clone())
+        .verify(signed.as_bytes(), &signature)
+        .is_err()
+    {
+        return false;
+    }
+    let Ok(claims) = URL_SAFE_NO_PAD.decode(claims) else {
+        return false;
+    };
+    let claims: Value = serde_json::from_slice(&claims).unwrap_or(Value::Null);
+    let now = crate::now();
+    claims["iss"] == CLIENT_ID
+        && claims["exp"]
+            .as_i64()
+            .is_some_and(|exp| exp > now && exp <= now + 600)
+        && claims["iat"].as_i64().is_some_and(|iat| iat <= now)
+}

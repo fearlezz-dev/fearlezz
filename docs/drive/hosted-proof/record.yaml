@@ -62,9 +62,9 @@ slices:
     status: building
     note: "done: report.rs draws one page from a Proof (verdict, waits for you with the approve command inline, did anything break, does it look right); --proof writes it as index.html; a look alone gets the same page. Open: the local final stage writes the whole proof page too."
   - id: upload-and-view
-    tests: [crates/fearlezz/tests/host.rs]
+    tests: [crates/fearlezz/tests/host.rs, ee/host-tests/tests/host.rs]
     status: building
-    note: "done: the CI client (host.rs): on GitHub Actions with id-token, asks installed, sends proof JSON and missing blobs by sha256, links the page in the comment; never fails the proof. Building in a subagent worktree: the ee/ worker (ee/README.md protocol)."
+    note: "done: the CI client (host.rs) and the ee/host worker (protocol v1 under wrangler dev --local against a fake GitHub: OIDC check, installed, content addressed blobs checked by R2's sha256, done, pages with ranges, pull redirect, sign in, access). Open: same origin HTML, the token in the session cookie, no caching of JWKS and access."
   - id: approve-on-page
     tests: []
     status: todo

@@ -3,3 +3,6 @@ target/
 .devenv.flake.nix
 devenv.lock.bak
 .DS_Store
+# The proof host's wasm build and wrangler's local state.
+ee/host/build/
+ee/host/.wrangler/
