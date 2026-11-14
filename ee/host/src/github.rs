@@ -77,8 +77,19 @@ pub async fn installation(config: &Config, repo: &str) -> Result<Option<u64>> {
 /// Whether anyone may read a repository. Only the app can tell for someone without a session;
 /// a repository it is not installed on counts as private.
 pub async fn public(config: &Config, repo: &str) -> Result<bool> {
-    let Some(installation) = installation(config, repo).await? else {
+    let Some(token) = installation_token(config, repo).await? else {
         return Ok(false);
+    };
+    let url = format!("{}/repos/{repo}", config.github_api);
+    let reply = call(Method::Get, &url, Some(&token), None).await?;
+    Ok(reply.status == 200 && reply.body["private"] == false)
+}
+
+/// A token of the app's installation on a repository, to ask GitHub as the app; None when the
+/// app is not installed there.
+pub async fn installation_token(config: &Config, repo: &str) -> Result<Option<String>> {
+    let Some(installation) = installation(config, repo).await? else {
+        return Ok(None);
     };
     let jwt = app_jwt(config).await?;
     let url = format!(
@@ -86,15 +97,13 @@ pub async fn public(config: &Config, repo: &str) -> Result<bool> {
         config.github_api
     );
     let reply = call(Method::Post, &url, Some(&jwt), Some(&json!({}))).await?;
-    let Some(token) = reply.body["token"].as_str() else {
-        return Err(worker::Error::RustError(format!(
+    match reply.body["token"].as_str() {
+        Some(token) => Ok(Some(token.to_owned())),
+        None => Err(worker::Error::RustError(format!(
             "GitHub answered {} for an installation token",
             reply.status
-        )));
-    };
-    let url = format!("{}/repos/{repo}", config.github_api);
-    let reply = call(Method::Get, &url, Some(token), None).await?;
-    Ok(reply.status == 200 && reply.body["private"] == false)
+        ))),
+    }
 }
 
 /// What a person's token sees of a repository.
@@ -177,7 +186,8 @@ pub struct Head {
     pub from: String,
 }
 
-/// The head of pull request `number`, or None when the token no longer works.
+/// The head of pull request `number`, asked with a person's token or the app's installation
+/// token, or None when the token no longer works.
 pub async fn head(config: &Config, repo: &str, number: u64, token: &str) -> Result<Option<Head>> {
     let url = format!("{}/repos/{repo}/pulls/{number}", config.github_api);
     let reply = call(Method::Get, &url, Some(token), None).await?;

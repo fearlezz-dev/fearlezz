@@ -321,7 +321,17 @@ fn answer(
         }
         ("GET", ["repos", owner, name, "pulls", number]) => {
             let full = format!("{owner}/{name}");
-            if !state.tokens.contains_key(token) {
+            // A person's token, or the token of the app's installation on this repository.
+            let installed = token
+                .strip_prefix("installation-")
+                .and_then(|id| id.parse::<u64>().ok())
+                .is_some_and(|id| {
+                    state
+                        .repos
+                        .get(&full)
+                        .is_some_and(|r| r.installation == Some(id))
+                });
+            if !installed && !state.tokens.contains_key(token) {
                 return (401, json!({"message": "Bad credentials"}));
             }
             let Ok(number) = number.parse::<u64>() else {

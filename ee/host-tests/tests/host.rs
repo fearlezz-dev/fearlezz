@@ -184,6 +184,10 @@ fn main() {
             pull_leads_to_the_latest_whole_proof,
         ),
         (
+            "an_older_head_finishing_last_keeps_the_newer_proof_latest",
+            an_older_head_finishing_last_keeps_the_newer_proof_latest,
+        ),
+        (
             "a_private_proof_sends_a_stranger_to_sign_in",
             a_private_proof_sends_a_stranger_to_sign_in,
         ),
@@ -763,6 +767,36 @@ fn pull_leads_to_the_latest_whole_proof() {
         format!("/owner/repo/proofs/{second}/")
     );
     assert_eq!(get("/owner/repo/pull/24", &[]).status, 404);
+}
+
+fn an_older_head_finishing_last_keeps_the_newer_proof_latest() {
+    // GitHub says the pull request is at HEAD; a slow run of an earlier push finishes last.
+    let mut older = proof("owner/repo", 83);
+    older["head"] = json!("0ld0000aaaa0000aaaa0000aaaa0000aaaa0000a");
+    let newer = start_upload("owner/repo", 83, &proof("owner/repo", 83), b"<p>newer</p>");
+    let late = start_upload("owner/repo", 83, &older, b"<p>older</p>");
+    finish_upload("owner/repo", 83, &newer);
+    finish_upload("owner/repo", 83, &late);
+    let answer = get("/owner/repo/pull/83", &[]);
+    assert_eq!(answer.status, 302, "{}", answer.text());
+    assert_eq!(
+        answer.header("location").unwrap(),
+        format!("/owner/repo/proofs/{newer}/"),
+        "the proof of the current head stays the latest"
+    );
+    // The older proof is still whole at its own address.
+    assert_eq!(get(&format!("/owner/repo/proofs/{late}/"), &[]).status, 200);
+
+    // An older head that finishes while nothing newer is whole is the latest there is.
+    let mut older = proof("owner/repo", 84);
+    older["head"] = json!("0ld0000aaaa0000aaaa0000aaaa0000aaaa0000a");
+    let late = start_upload("owner/repo", 84, &older, b"<p>alone</p>");
+    finish_upload("owner/repo", 84, &late);
+    let answer = get("/owner/repo/pull/84", &[]);
+    assert_eq!(
+        answer.header("location").unwrap(),
+        format!("/owner/repo/proofs/{late}/")
+    );
 }
 
 // Who sees a page.
@@ -1540,6 +1574,22 @@ fn upload_proof(repository: &str, pull: u64, proof: &Value) -> String {
 }
 
 fn upload_with(repository: &str, pull: u64, proof: &Value, files: &[(&str, &[u8])]) -> String {
+    let id = start_upload_with(repository, pull, proof, files);
+    finish_upload(repository, pull, &id);
+    id
+}
+
+/// An upload with every file sent but not yet done, with `page` as its page; the proof's id.
+fn start_upload(repository: &str, pull: u64, proof: &Value, page: &[u8]) -> String {
+    start_upload_with(repository, pull, proof, &[("index.html", page)])
+}
+
+fn start_upload_with(
+    repository: &str,
+    pull: u64,
+    proof: &Value,
+    files: &[(&str, &[u8])],
+) -> String {
     let token = ci(repository, pull);
     let body = upload_body(proof, files);
     let answer = api("POST", "/api/v1/proofs", &token, Some(body));
@@ -1561,10 +1611,16 @@ fn upload_with(repository: &str, pull: u64, proof: &Value, files: &[(&str, &[u8]
         );
         assert_eq!(answer.status, 204, "{}", answer.text());
     }
+    id
+}
+
+/// Marks an upload done, as CI does once every file is sent.
+fn finish_upload(repository: &str, pull: u64, id: &str) {
+    let token = ci(repository, pull);
     let answer = api("POST", &format!("/api/v1/proofs/{id}/done"), &token, None);
     assert_eq!(answer.status, 200, "{}", answer.text());
-    assert_eq!(answer.json()["url"], created["url"]);
-    id
+    let url = format!("{}/{repository}/proofs/{id}/", world().worker.url);
+    assert_eq!(answer.json()["url"], json!(url));
 }
 
 /// Signs in with a GitHub OAuth code, starting from `next`; the session cookie.

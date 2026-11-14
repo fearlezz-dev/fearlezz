@@ -35,7 +35,7 @@ pull request, its `ref` (`refs/pull/<n>/merge`) must name the pull request the p
 | `GET /api/v1/installed` | `200 {"installed": true}`, or `200 {"installed": false, "install": "<url>"}`. Asks GitHub whether the app is installed on the token's repository. |
 | `POST /api/v1/proofs` | Body `{"proof": <proof.json>, "files": {"<path>": {"sha256": "<hex>", "size": <bytes>}}}`, every file of the bundle but `proof.json` (so `index.html` too). Refused unless installed. `201 {"id": "<id>", "url": "<page url>", "missing": ["<sha256>", ...]}`: the files the host does not hold yet. |
 | `PUT /api/v1/blobs/<sha256>` | The bytes of one missing file, with `Content-Length`. Stored by content, per repository, so a picture that did not change is sent once. Refused when the bytes do not hash to the name. `204`. |
-| `POST /api/v1/proofs/<id>/done` | Refused while a file is missing. Marks the proof whole and makes it the latest of its pull request. `200 {"url": "<page url>"}`. |
+| `POST /api/v1/proofs/<id>/done` | Refused while a file is missing. Marks the proof whole. It becomes the latest of its pull request when its `head` is the pull request's head as GitHub says now (asked as the app), or when the pull request has no latest yet; so runs finishing out of order never replace the proof of the current head with an older one. `200 {"url": "<page url>"}`. |
 
 A refusal answers `{"error": "<what to do>"}` with `401` for a token that does not pass, `403`
 for a repository without the app or a proof for another repository or pull request, `400` for
