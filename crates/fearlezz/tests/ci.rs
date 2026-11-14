@@ -1998,6 +1998,28 @@ fn the_approval_status_is_green_only_when_everything_that_waits_has_what_it_need
 }
 
 #[test]
+fn an_accept_answered_after_a_later_approve_still_gets_its_reply() {
+    let (gh, _repo, head) = pictures_and_weakening_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    gh.state()
+        .permissions
+        .insert("owner".into(), "admin".into());
+    let accept = comment_event(&gh, "owner", "/fearlezz accept look is enough");
+    let approve = comment_event(&gh, "lead", "/fearlezz approve blue is right");
+    // The approve's run finishes first and turns the status green for both.
+    let reply = answer(&gh, &approve);
+    assert!(reply.starts_with("@lead approved"), "{reply}");
+    assert_eq!(
+        gh.state().status(&head, "fearlezz/approval").unwrap().state,
+        "success"
+    );
+    // The accept's own run still says it counted, quoting its words.
+    let reply = answer(&gh, &accept);
+    assert!(reply.starts_with("@owner accepted"), "{reply}");
+    assert!(reply.contains("> look is enough"), "{reply}");
+}
+
+#[test]
 fn an_accept_comment_settles_the_status() {
     let (gh, _repo, head) = pictures_and_weakening_on_actions();
     gh.state()

@@ -331,8 +331,10 @@ impl Actions {
             }
         };
         let short = short(&pending.head);
-        // It counted before this event when its earlier words count for what waits now.
-        let was = green_by_it
+        // It counted before this event when its earlier words count for what waits now. A comment
+        // just written never did, even when another comment's run already turned the status
+        // green linked to it.
+        let was = (action != "created" && green_by_it)
             || match &before {
                 Some(old) if earlier.is_some() => {
                     let mut comment = json!({
