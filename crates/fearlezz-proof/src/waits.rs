@@ -180,9 +180,8 @@ impl Part {
 }
 
 /// How a weakening gets past where nothing can wait for an admin's accept.
-pub const PAST: &str = "when it must change, ask a person with admin rights: on a pull request \
-                        from this repository on GitHub they accept it with /fearlezz accept \
-                        <words> after reading why, elsewhere they merge past CI";
+pub const PAST: &str = "when it must change, a person with admin rights reads why and merges \
+                        past the required check";
 
 impl Weakening {
     /// What weakened, for a reader: ``check `tests` is weaker``.

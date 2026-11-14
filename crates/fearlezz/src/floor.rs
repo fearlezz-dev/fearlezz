@@ -36,22 +36,17 @@ impl Floor {
         self.weakened.is_empty()
     }
 
-    /// The lines a run prints: what fails the floor and how to get past it; when it `waits`
-    /// on a pull request, that an admin's accept lets it through.
-    pub(crate) fn lines(&self, waits: bool) -> Vec<String> {
+    /// The lines a run prints: what fails the floor and how to get past it.
+    pub(crate) fn lines(&self) -> Vec<String> {
         let mut lines: Vec<String> = self
             .weakened
             .iter()
             .map(|w| format!("weakens {}: {}", w.part.name(), w.how))
             .collect();
         if !self.weakened.is_empty() {
-            lines.push(if waits {
-                "  note: the proof passes; the fearlezz/approval status waits until a person with \
-                 admin rights reads why and comments /fearlezz accept <words>"
-                    .into()
-            } else {
-                format!("  fix: keep the proof the base branch requires; {PAST}")
-            });
+            lines.push(format!(
+                "  fix: keep the proof the base branch requires; {PAST}"
+            ));
         }
         lines
     }

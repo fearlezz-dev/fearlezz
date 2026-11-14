@@ -45,9 +45,15 @@ const SHOWS_IT: &str = "test \"$(cat src/value)\" = 2\n";
 /// A test that passes on the base commit too.
 const PASSES_ANYWAY: &str = "test -e src/value\n";
 
+/// `fearlezz run --ci`, and the job summary it wrote.
 fn ci(repo: &Repo) -> (common::Output, String) {
-    let path = repo.path(".runs/comment.md");
-    let out = repo.fz(&["run", "--ci", "--comment", path.to_str().unwrap()]);
+    let path = repo.path(".runs/summary.md");
+    // The summary is appended to, as on GitHub; each run here reads its own.
+    let _ = std::fs::remove_file(&path);
+    let out = repo.fz_env(
+        &["run", "--ci"],
+        &[("GITHUB_STEP_SUMMARY", path.to_str().unwrap())],
+    );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{}", out.stdout));
     (out, text)
 }

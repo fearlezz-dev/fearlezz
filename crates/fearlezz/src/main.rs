@@ -7,7 +7,6 @@ mod env;
 mod findings;
 mod floor;
 mod git;
-mod github;
 mod hooks;
 mod host;
 mod init;
@@ -15,13 +14,10 @@ mod journal;
 mod lints;
 mod look;
 mod media;
-mod overview;
-mod page;
 mod presets;
 mod proof;
 mod record;
 mod red;
-mod report;
 mod rules;
 mod run;
 mod settings;
@@ -76,9 +72,6 @@ struct See {
     /// The latest result of a check in this journal, as JSON.
     #[arg(long, value_name = "CHECK")]
     check: Option<String>,
-    /// Write the overview page of every journal.
-    #[arg(long)]
-    page: bool,
     /// A still of a running app's window, to look at while working (macOS): a pid, bundle
     /// id, app name or part of the window title. Prints the PNG's path.
     #[arg(long, value_name = "WINDOW")]
@@ -102,23 +95,17 @@ enum Cmd {
         /// Only move the stage, such as going back to fix something first.
         #[arg(long, requires = "stage")]
         no_run: bool,
-        /// Prove this commit, for CI: every check, fresh, with no journal. On
-        /// GitHub Actions with a token it also does what the event asks: a pull request gets
-        /// its pictures, status comment and status, `/fearlezz approve` and `/fearlezz accept`
-        /// are answered, and closed
-        /// pull requests lose their pictures.
+        /// Prove this commit, for CI: every check, fresh, with no journal. It writes nothing
+        /// to GitHub; on GitHub Actions it writes the job summary, and sends the proof to the
+        /// proof host when the job may ask for an OIDC token.
         #[arg(long, conflicts_with_all = ["checks", "stage"])]
         ci: bool,
-        /// With --ci: also write the status comment (Markdown) to this file, for a CI other
-        /// than GitHub Actions to post on its merge request.
-        #[arg(long, value_name = "PATH", requires = "ci")]
-        comment: Option<PathBuf>,
         /// With --ci: also write everything the run showed into this folder: `proof.json`
-        /// with each check's output and every picture beside it, for a page to show.
+        /// with each check's output and every picture beside it, before and after.
         #[arg(long, value_name = "DIR", requires = "ci")]
         proof: Option<PathBuf>,
     },
-    /// Tell: record what only you know, such as a note, a question, or an approval.
+    /// Tell: record what only you know, such as a note or a question.
     Say {
         #[command(subcommand)]
         what: Say,
@@ -136,16 +123,6 @@ enum Say {
     Note { text: String },
     /// Ask the developer something and wait for them.
     Ask { question: String },
-    /// Record that the developer agreed with a check's changed stills and films.
-    Approve {
-        check: String,
-        /// The developer's own words, quoted.
-        #[arg(long, required_unless_present = "github", conflicts_with = "github")]
-        said: Option<String>,
-        /// Read the approval a person gave on the pull request with `/fearlezz approve`.
-        #[arg(long)]
-        github: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -304,20 +281,12 @@ fn prepared() -> Result<Ctx> {
     Ok(ctx)
 }
 
-/// Proves this commit for CI. On GitHub Actions it does what the event asks: a pull request's
-/// proof also pushes its changed pictures, writes its status comment and sets its status; a
-/// comment, a closed pull request or the schedule need no checkout.
-fn ci_run(comment: Option<PathBuf>, proof: Option<PathBuf>) -> Result<bool> {
+/// Proves this commit for CI. On GitHub Actions it installs ffmpeg when checks take pictures
+/// and names the pull request the event is for; it writes nothing to GitHub.
+fn ci_run(proof: Option<PathBuf>) -> Result<bool> {
     let workflow = action::Workflow::read();
-    let actions = action::Actions::detect(&workflow)?;
-    if let Some(gh) = &actions {
-        let task = gh.task();
-        if task != action::Task::Prove {
-            return gh.act(&task);
-        }
-    }
     let ctx = prepared()?;
-    if actions.is_some()
+    if workflow.actions
         && needs_ffmpeg(&ctx.config)
         && let Some(dir) = action::install_ffmpeg()?
     {
@@ -334,22 +303,10 @@ fn ci_run(comment: Option<PathBuf>, proof: Option<PathBuf>) -> Result<bool> {
             std::env::set_var("PATH", path);
         }
     }
-    let pull = actions.as_ref().and_then(action::Actions::pull);
-    // The action keeps this folder as the run's `fearlezz-pictures` artifact.
-    let pictures = actions.as_ref().and_then(|_| {
-        std::env::var_os("RUNNER_TEMP").map(|t| PathBuf::from(t).join("fearlezz-pictures"))
-    });
     let mut journal = Journal::in_memory("ci");
     let to = ctx.config.stages.name(ctx.config.stages.last()).to_string();
     journal.append(ctx.now, Event::Stage { to, reason: None })?;
-    let out = CiOut {
-        comment,
-        proof,
-        pictures,
-        pull,
-        workflow,
-    };
-    run_checks(&ctx, journal, &[], true, out)
+    run_checks(&ctx, journal, &[], true, Some(CiOut { proof, workflow }))
 }
 
 /// Whether a check takes pictures, which needs ffmpeg.
@@ -366,11 +323,10 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
             reason,
             no_run,
             ci,
-            comment,
             proof,
         } => {
             if ci {
-                return ci_run(comment, proof);
+                return ci_run(proof);
             }
             let ctx = prepared()?;
             if let Some(name) = stage {
@@ -380,7 +336,7 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
                     return Ok(true);
                 }
             }
-            run_checks(&ctx, ctx.journal()?, &checks, fresh, CiOut::default())
+            run_checks(&ctx, ctx.journal()?, &checks, fresh, None)
         }
         Cmd::Say { what } => say(&prepared()?, what),
         Cmd::Setup { what } => setup(what),
@@ -422,46 +378,6 @@ fn hook_answer(event: hooks::Event, input: &hooks::Input) -> Result<hooks::Answe
 
 fn say(ctx: &Ctx, what: Say) -> Result<bool> {
     match what {
-        Say::Approve {
-            check,
-            github: true,
-            ..
-        } => approve_from_github(ctx, &check)?,
-        Say::Approve { check, said, .. } => {
-            let said = said.unwrap_or_default().trim().to_string();
-            if said.is_empty() {
-                bail!("approving needs the developer's own words: --said \"<what they said>\"");
-            }
-            let mut j = ctx.journal()?;
-            let v = ctx.view(&j)?;
-            let view = v.checks.iter().find(|c| c.id == check).with_context(|| {
-                format!(
-                    "nothing to approve: {check} has not run in journal {}",
-                    j.name
-                )
-            })?;
-            let look = match (&view.state, &view.look) {
-                (CheckState::Ok | CheckState::NeedsFresh, Some(l)) if l.to_look_at() > 0 => {
-                    l.clone()
-                }
-                _ => bail!(
-                    "nothing to approve: {check} has no changed stills or films on the current inputs"
-                ),
-            };
-            let key = ctx.worktree()?.inputs(ctx.config.check(&check)?)?.key;
-            j.append(
-                ctx.now,
-                Event::Approve {
-                    check: check.clone(),
-                    key,
-                    said: said.clone(),
-                    by: None,
-                    url: None,
-                },
-            )?;
-            println!("approved {check}: {} (\"{said}\")", look.counts());
-            println!("next: {}", ctx.view(&j)?.next);
-        }
         Say::Ask { question } => {
             let mut j = ctx.journal()?;
             j.append(
@@ -481,39 +397,6 @@ fn say(ctx: &Ctx, what: Say) -> Result<bool> {
         }
     }
     Ok(true)
-}
-
-/// Records the approval given on the pull request for the commit checked out here, by the
-/// rule CI settles the status with (`github::Pending`), for a check whose pictures waited.
-fn approve_from_github(ctx: &Ctx, check: &str) -> Result<()> {
-    let config = ctx.config.check(check)?;
-    let mut wt = ctx.worktree()?;
-    if !wt.committed {
-        bail!(
-            "an approval on the pull request is for a commit: commit and push the work, wait for \
-             its proof, then run this again"
-        );
-    }
-    let head = ctx.git.head()?;
-    let approval = github::approval_of_commit(&ctx.git.root, &head, check)?;
-    let key = wt.inputs(config)?.key;
-    let mut j = ctx.journal()?;
-    j.append(
-        ctx.now,
-        Event::Approve {
-            check: check.to_string(),
-            key,
-            said: approval.said.clone(),
-            by: Some(approval.by.clone()),
-            url: Some(approval.url),
-        },
-    )?;
-    println!(
-        "approved {check} on GitHub by @{} (\"{}\")",
-        approval.by, approval.said
-    );
-    println!("next: {}", ctx.view(&j)?.next);
-    Ok(())
 }
 
 /// Writes the starter config and says what it found.
@@ -711,15 +594,6 @@ fn see(see: &See) -> Result<bool> {
             .get(key, id)
             .context("the result is missing from the store")?;
         println!("{}", serde_json::to_string_pretty(&result)?);
-    } else if see.page {
-        let views = ctx.all_views()?;
-        let html = overview::render(&ctx.config, &views, ctx.now)?;
-        let dir = ctx.git.common.join("fearlezz");
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join("overview.html");
-        std::fs::write(&path, html)?;
-        println!("wrote {}", path.display());
-        println!("next: open it in a browser");
     } else {
         let j = ctx.journal()?;
         print_status(&ctx, &ctx.view(&j)?);
@@ -834,41 +708,22 @@ fn print_failure(f: &store::RunResult) {
 }
 
 /// What proving a commit shows besides the usual lines, so a reader can tell the checks ran:
-/// the commit and each check with its command and time, and for GitHub the check page (the
-/// job summary) and the short status for the pull request. Only CI writes these, so the agent
-/// whose work they judge cannot change them.
+/// the commit and each check with its command and time, and on GitHub Actions the job summary.
+/// Only CI writes these, so the agent whose work they judge cannot change them.
 struct CommitReport {
     proof: proof::Proof,
     /// The proof host the config names, when it is not the default one.
     host: Option<String>,
-    /// Where the short status, the bundle and the changed pictures go, when asked.
-    out: CiOut,
+    /// A folder for the proof bundle, when asked.
+    bundle: Option<PathBuf>,
 }
 
-/// What proving a commit writes for CI besides its output, when asked.
-#[derive(Default)]
+/// What proving a commit for CI takes besides the checks.
 struct CiOut {
-    /// A file for the status comment, for a CI other than GitHub Actions.
-    comment: Option<PathBuf>,
     /// A folder for the proof bundle.
     proof: Option<PathBuf>,
-    /// On GitHub Actions: a folder for the before and after of each changed picture, kept as
-    /// the run's artifact.
-    pictures: Option<PathBuf>,
-    /// The pull request on GitHub the proof reports to.
-    pull: Option<action::Pull>,
     /// What GitHub Actions says of the run: the pull request and pages the proof names.
     workflow: action::Workflow,
-}
-
-impl CiOut {
-    /// Whether what the change weakens waits for an admin's accept rather than failing the
-    /// proof: only on a pull request from the repository itself, whose `fearlezz/approval`
-    /// status makes it wait. A run of it without a token (another job of the same pull request)
-    /// waits too, since the run with the token holds that status; a fork's run cannot.
-    fn weakenings_wait(&self) -> bool {
-        self.workflow.own_pull_request()
-    }
 }
 
 impl CommitReport {
@@ -907,7 +762,7 @@ impl CommitReport {
         Ok(CommitReport {
             proof,
             host: ctx.config.host.clone(),
-            out,
+            bundle: out.proof,
         })
     }
 
@@ -934,22 +789,19 @@ impl CommitReport {
             .push(proof::ran(check, stage, result, failure));
     }
 
-    /// Writes the check page into the job summary GitHub Actions names, when it names one,
-    /// and the status comment to the file and the pull request, when asked.
+    /// Writes the bundle when asked, sends it to the proof host from GitHub Actions, and
+    /// writes the job summary GitHub Actions names, when it names one.
     fn finish(mut self, floor: &floor::Floor) -> Result<()> {
         use std::io::Write as _;
-        let waits = self.out.weakenings_wait();
-        self.proof.weakenings_wait = waits;
         self.proof.weakened.clone_from(&floor.weakened);
         // A host that cannot be reached never fails the proof: CI proved the commit anyway.
         let host = host::Host::from_actions(self.host.as_deref());
-        let temp = match (&self.out.proof, &host) {
+        let temp = match (&self.bundle, &host) {
             (None, Some(_)) => Some(tempfile::tempdir()?),
             _ => None,
         };
         let bundle = self
-            .out
-            .proof
+            .bundle
             .clone()
             .or_else(|| temp.as_ref().map(|t| t.path().to_path_buf()));
         if let Some(dir) = &bundle {
@@ -975,36 +827,18 @@ impl CommitReport {
             },
             _ => None,
         };
-        let report = github::Report::new(
-            &self.proof,
-            self.out.pull.as_ref().and_then(|p| p.url.as_deref()),
-            self.out.pictures.is_some(),
-            page,
-        );
-        if let Some(dir) = &self.out.pictures {
-            github::copy_pictures(report.waits(), dir)?;
-        }
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-            let page = report.page()?;
+            let summary = action::summary(&self.proof, page.as_deref())?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(Path::new(&path))?
-                .write_all(page.as_bytes())?;
-        }
-        let comment = report.comment()?;
-        if let Some(path) = &self.out.comment {
-            std::fs::write(path, comment.render())
-                .with_context(|| format!("writing {}", path.display()))?;
-        }
-        if let Some(pull) = &self.out.pull {
-            pull.report(&comment, self.out.pictures.as_deref());
+                .write_all(summary.as_bytes())?;
         }
         Ok(())
     }
 }
 
-/// A failed check as a blocker, for a reader who sees neither the agent nor the logs.
 /// How to make a missing tool reachable for checks.
 fn install_fix(tool: &str) -> String {
     let nix = if run::NIX_TOOLS.contains(&tool) {
@@ -1061,7 +895,15 @@ fn failure_item(f: &store::RunResult) -> proof::Item {
     }
 }
 
-fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut) -> Result<bool> {
+/// Runs the checks `ids` names, or those the stage needs, and says what is next. `out` is
+/// given when proving a commit for CI.
+fn run_checks(
+    ctx: &Ctx,
+    mut j: Journal,
+    ids: &[String],
+    fresh: bool,
+    out: Option<CiOut>,
+) -> Result<bool> {
     let mut wt = ctx.worktree()?;
     let before = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
     let stages = &ctx.config.stages;
@@ -1076,10 +918,8 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
     } else {
         floor::Floor::default()
     };
-    // On a pull request a weakening waits for an admin's accept; elsewhere it blocks.
-    let waits = out.weakenings_wait();
-    let lines = floor.lines(waits);
-    let floor_holds = floor.holds() || waits;
+    let lines = floor.lines();
+    let floor_holds = floor.holds();
     let answers_for_work = !in_memory && ids.is_empty() && stage == final_stage;
     let settled = |view: &View| {
         floor_holds && (!answers_for_work || view.next == state::READY || view.checks.is_empty())
@@ -1093,8 +933,8 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
             view.next.clone()
         }
     };
-    let mut report = in_memory
-        .then(|| CommitReport::start(ctx, &wt, targets.len(), out))
+    let mut report = out
+        .map(|out| CommitReport::start(ctx, &wt, targets.len(), out))
         .transpose()?;
     if targets.is_empty() {
         // Every check waits in a later stage: say where.
@@ -1288,6 +1128,9 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         env.state.stop(env.cfg, &wt.git.root)?;
         println!("services stopped: all proof is in");
     }
+    if let Some(line) = after.pictures_to_review(&ctx.config) {
+        println!("{line}");
+    }
     if cannot_record > 0 {
         println!("next: give the recorder its permission (fix: above), then fearlezz run");
     } else {
@@ -1393,7 +1236,7 @@ fn look_at_media(
             Ok(look::LookOutcome::NoMedia | look::LookOutcome::SameInputs) => {
                 Some(store::Looked::Nothing)
             }
-            Ok(look::LookOutcome::Done(l)) => Some(store::Looked::At(l.dir().to_path_buf())),
+            Ok(look::LookOutcome::Done(l)) => Some(store::Looked::At(l.dir.clone())),
             Err(_) => None,
         };
         if let Some(looked) = looked {
@@ -1413,7 +1256,9 @@ fn look_at_media(
                 if let Some(note) = &l.note {
                     println!("  note: {note}");
                 }
-                println!("  report: {}", l.report.display());
+                for line in look::lines(&l) {
+                    println!("{line}");
+                }
                 looks.push(l);
             }
             Err(e) => println!("look {} failed: {e:#}", check.id),
@@ -1463,19 +1308,16 @@ fn print_status(ctx: &Ctx, v: &View) {
             println!("  {f}");
         }
     }
-    for c in &v.checks {
-        if let Some(l) = c.look.as_ref().filter(|l| l.to_look_at() > 0) {
-            let verdict = match &c.approved {
-                Some(a) => a.label(),
-                None => "needs the developer's approval".to_string(),
-            };
-            println!(
-                "look {}: {}, {verdict}  {}",
-                l.check,
-                l.counts(),
-                l.report.display()
-            );
+    for l in v.checks.iter().filter_map(|c| c.look.as_ref()) {
+        if l.items.iter().any(|i| i.change != look::Change::Same) {
+            println!("look {}: {}", l.check, l.counts());
+            for line in look::lines(l) {
+                println!("{line}");
+            }
         }
+    }
+    if let Some(line) = v.pictures_to_review(&ctx.config) {
+        println!("{line}");
     }
     let stale = v.checks.iter().filter_map(|c| match &c.state {
         CheckState::Stale(why) => Some((&c.id, why)),
@@ -1509,13 +1351,6 @@ fn since(ctx: &Ctx, when: &str) -> Result<()> {
                     None => println!("  stage {to}"),
                 },
                 Event::Retired => {}
-                Event::Approve {
-                    check,
-                    said,
-                    by: Some(by),
-                    ..
-                } => println!("  approved {check} on GitHub by @{by}: \"{said}\""),
-                Event::Approve { check, said, .. } => println!("  approved {check}: \"{said}\""),
                 Event::Ran { outcome, .. } => {
                     runs += 1;
                     red += usize::from(*outcome == Outcome::Failed);

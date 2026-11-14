@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::github::{APP_TOKEN, FORK_TOKEN, FakeGitHub, WORKFLOW_TOKEN};
+use common::github::FakeGitHub;
 use common::{Repo, runs};
 
 /// `tests` fails while `src/broken` exists. Each check appends a line to `.runs/<name>`.
@@ -199,42 +199,46 @@ fn the_job_summary_shows_the_end_of_a_failing_output() {
     assert!(text.contains("boom-output"), "{text}");
 }
 
-// The status comment on the pull request
+// The job summary
 
-/// The variables GitHub Actions sets, so the comment can link the run.
+/// The variables GitHub Actions sets, so the summary can link the run.
 const GITHUB: [(&str, &str); 3] = [
     ("GITHUB_SERVER_URL", "https://github.com"),
     ("GITHUB_REPOSITORY", "owner/repo"),
     ("GITHUB_RUN_ID", "42"),
 ];
 
-fn comment(repo: &Repo) -> (common::Output, String) {
-    let path = repo.path(".runs/comment.md");
-    let out = repo.fz_env(
-        &["run", "--ci", "--comment", path.to_str().unwrap()],
-        &GITHUB,
-    );
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{}", out.stdout));
+/// `fearlezz run --ci` with the variables GitHub Actions sets and `env`, and the job summary
+/// it wrote.
+fn summary_with(repo: &Repo, env: &[(&str, &str)]) -> (common::Output, String) {
+    let path = repo.path(".runs/summary.md");
+    // The summary is appended to, as on GitHub; each run here reads its own.
+    let _ = std::fs::remove_file(&path);
+    let mut all = GITHUB.to_vec();
+    all.push(("GITHUB_STEP_SUMMARY", path.to_str().unwrap()));
+    all.extend_from_slice(env);
+    let out = repo.fz_env(&["run", "--ci"], &all);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("{}\n{}", out.stdout, out.stderr));
     (out, text)
 }
 
+fn summary(repo: &Repo) -> (common::Output, String) {
+    summary_with(repo, &[])
+}
+
 #[test]
-fn the_status_comment_says_proven_and_lists_the_checks() {
+fn the_job_summary_says_proven_and_lists_the_checks() {
     let repo = branch_with_change();
-    let (out, text) = comment(&repo);
+    let (out, text) = summary(&repo);
     assert!(out.ok, "{}", out.stdout);
-    assert!(text.starts_with("<!-- fearlezz -->"), "{text}");
     assert!(text.contains("**Proven**"), "{text}");
     assert!(text.contains("| tests | passed |"), "{text}");
-    assert!(
-        text.contains("https://github.com/owner/repo/actions/runs/42"),
-        "{text}"
-    );
     assert!(!text.contains("| what |"), "{text}");
 }
 
 #[test]
-fn the_status_comment_names_each_blocker_and_what_to_do() {
+fn the_job_summary_names_each_blocker_and_what_to_do() {
     let repo = branch_with_change();
     repo.write("src/broken", "x\n");
     repo.commit("break");
@@ -242,13 +246,19 @@ fn the_status_comment_names_each_blocker_and_what_to_do() {
         &repo,
         &CHECKS.replace("[check.e2e]\n", "[check.e2e]\noff = true\n"),
     );
-    let (out, text) = comment(&repo);
+    let (out, text) = summary(&repo);
     assert!(!out.ok, "{}", out.stdout);
     assert!(text.contains("**Not proven**"), "{text}");
     assert!(text.contains("| what | why | what to do |"), "{text}");
     assert!(text.contains("| check `tests` failed |"), "{text}");
     assert!(text.contains("| check `e2e` is weaker |"), "{text}");
     assert!(text.contains("it is gone"), "{text}");
+}
+
+#[test]
+fn the_status_comment_is_gone() {
+    let repo = branch_with_change();
+    assert!(!repo.fz(&["run", "--ci", "--comment", "x.md"]).ok);
 }
 
 // The base branch is the floor
@@ -848,7 +858,7 @@ fn the_final_run_of_the_work_reports_a_weakening_too() {
 }
 
 #[test]
-fn the_status_comment_names_the_pull_requests_head_not_the_merge_commit() {
+fn the_job_summary_names_the_pull_requests_head_not_the_merge_commit() {
     let repo = branch_with_change();
     let head = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
     let short = repo
@@ -870,11 +880,7 @@ fn the_status_comment_names_the_pull_requests_head_not_the_merge_commit() {
         format!(r#"{{"pull_request": {{"head": {{"sha": "{head}"}}}}}}"#),
     )
     .unwrap();
-    let path = repo.path(".runs/comment.md");
-    let mut env = GITHUB.to_vec();
-    env.push(("GITHUB_EVENT_PATH", event.to_str().unwrap()));
-    let out = repo.fz_env(&["run", "--ci", "--comment", path.to_str().unwrap()], &env);
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{}", out.stdout));
+    let (_, text) = summary_with(&repo, &[("GITHUB_EVENT_PATH", event.to_str().unwrap())]);
     assert!(
         text.contains(&format!("commit {short} (merged with main as {merge})")),
         "{text}"
@@ -924,22 +930,26 @@ fn screens_main() -> Repo {
     repo
 }
 
-/// `fearlezz run --ci` with the status written to a file, as on a CI other than GitHub Actions.
-fn ci_with_comment(repo: &Repo) -> (common::Output, String) {
-    let comment = repo.path(".runs/comment.md");
-    let out = repo.fz_env(
-        &["run", "--ci", "--comment", comment.to_str().unwrap()],
-        &GITHUB,
+#[test]
+fn changed_pictures_are_listed_and_neither_block_nor_wait() {
+    let repo = screens_branch("blue");
+    let (out, text) = summary(&repo);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(text.contains("**Proven**"), "{text}");
+    assert!(text.contains("#### Changed pictures"), "{text}");
+    assert!(
+        text.contains("A person reviews them on the pull request."),
+        "{text}"
     );
-    let text = std::fs::read_to_string(&comment)
-        .unwrap_or_else(|_| panic!("{}\n{}", out.stdout, out.stderr));
-    (out, text)
+    assert!(!text.contains("/fearlezz"), "{text}");
+    assert!(!text.contains("<!--"), "{text}");
+    assert!(out.stdout.contains("look screens: 1 changed, 1 same"), "{}", out.stdout);
 }
 
 #[test]
-fn the_comment_file_names_the_changed_pictures() {
+fn the_job_summary_lists_the_changed_pictures() {
     let repo = screens_branch("blue");
-    let (out, text) = ci_with_comment(&repo);
+    let (out, text) = summary(&repo);
     assert!(out.ok, "{}", out.stdout);
     assert!(!text.contains("<img"), "nothing serves them: {text}");
     assert!(text.contains("**home.png** changed"), "{text}");
@@ -947,7 +957,7 @@ fn the_comment_file_names_the_changed_pictures() {
 }
 
 #[test]
-fn the_comment_marks_flaky_pictures() {
+fn the_job_summary_marks_flaky_pictures() {
     let record = RECORD.replace("still about white", "still about \"$(cat src/about.txt)\"");
     let repo = Repo::new(
         &format!("{SCREENS}flaky = [\"about.png\"]\n"),
@@ -963,11 +973,11 @@ fn the_comment_marks_flaky_pictures() {
     repo.write("src/color.txt", "blue");
     repo.write("src/about.txt", "black");
     repo.commit("colors");
-    let (out, text) = ci_with_comment(&repo);
+    let (out, text) = summary(&repo);
     assert!(out.ok, "{}", out.stdout);
     assert!(text.contains("**home.png** changed:"), "{text}");
     assert!(
-        text.contains("**about.png** changed (flaky, never blocks)"),
+        text.contains("**about.png** changed (flaky)"),
         "{text}"
     );
 }
@@ -983,7 +993,7 @@ fn markdown_in_names_cannot_break_the_tables() {
         ),
     );
     // A new command weakens the check, which is beside the point here.
-    let (_, text) = ci_with_comment(&repo);
+    let (_, text) = summary(&repo);
     assert!(text.contains("| `echo '<b>\\|x' >/dev/null; "), "{text}");
 }
 
@@ -992,14 +1002,14 @@ fn pictures_that_stay_the_same_leave_the_commit_proven() {
     let repo = screens_main();
     repo.write("src/other.txt", "b");
     repo.commit("other");
-    let (out, text) = ci_with_comment(&repo);
+    let (out, text) = summary(&repo);
     assert!(out.ok, "{}", out.stdout);
     assert!(text.contains("**Proven**"), "{text}");
-    assert!(!text.contains("fearlezz-pictures"), "{text}");
+    assert!(!text.contains("Changed pictures"), "{text}");
 }
 
 #[test]
-fn a_failing_check_stays_not_proven_with_pictures_waiting() {
+fn a_failing_check_stays_not_proven_with_changed_pictures() {
     let repo = screens_branch("blue");
     repo.write(
         "fearlezz.toml",
@@ -1008,7 +1018,7 @@ fn a_failing_check_stays_not_proven_with_pictures_waiting() {
         )),
     );
     repo.commit("unit");
-    let (out, text) = ci_with_comment(&repo);
+    let (out, text) = summary(&repo);
     assert!(!out.ok, "{}", out.stdout);
     assert!(text.contains("**Not proven**"), "{text}");
     assert!(!text.contains("**Proven**:"), "{text}");
@@ -1022,51 +1032,42 @@ fn the_hidden_setup_needs_command_is_gone() {
     assert!(!repo.fz(&["run", "--ci", "--pictures", "x"]).ok);
 }
 
-// On GitHub Actions: what the event asks, against a fake GitHub API
+// On GitHub Actions: CI proves and writes nothing to GitHub
 
 /// A workflow's run of `fearlezz run --ci` for `event` (written to the event file), in `dir`,
-/// talking to the fake API with the workflow token.
+/// with a workflow token and the fake API, and the job summary it wrote.
 fn on_actions(
     gh: &FakeGitHub,
     dir: &std::path::Path,
     name: &str,
     event: &serde_json::Value,
-    run: &str,
-) -> common::Output {
-    on_actions_with(gh, dir, name, event, run, WORKFLOW_TOKEN)
-}
-
-/// `on_actions` with another token.
-fn on_actions_with(
-    gh: &FakeGitHub,
-    dir: &std::path::Path,
-    name: &str,
-    event: &serde_json::Value,
-    run: &str,
-    token: &str,
-) -> common::Output {
+) -> (common::Output, String) {
     let temp = tempfile::tempdir().unwrap();
     let file = temp.path().join("event.json");
     std::fs::write(&file, event.to_string()).unwrap();
+    let summary = temp.path().join("summary.md");
     let temp_dir = temp.path().to_str().unwrap();
     let graphql = format!("{}/graphql", gh.url);
-    common::fz_at_env(
+    let out = common::fz_at_env(
         dir,
         &["run", "--ci"],
         &[
             ("GITHUB_ACTIONS", "true"),
             ("GITHUB_EVENT_NAME", name),
             ("GITHUB_EVENT_PATH", file.to_str().unwrap()),
-            ("GITHUB_TOKEN", token),
+            ("GITHUB_TOKEN", "token"),
             ("GITHUB_API_URL", &gh.url),
             ("GITHUB_GRAPHQL_URL", &graphql),
             ("GITHUB_SERVER_URL", "https://github.com"),
             ("GITHUB_REPOSITORY", "owner/repo"),
-            ("GITHUB_RUN_ID", run),
+            ("GITHUB_RUN_ID", "42"),
             ("GITHUB_RUN_ATTEMPT", "1"),
+            ("GITHUB_STEP_SUMMARY", summary.to_str().unwrap()),
             ("RUNNER_TEMP", temp_dir),
         ],
-    )
+    );
+    let text = std::fs::read_to_string(&summary).unwrap_or_default();
+    (out, text)
 }
 
 /// The event of pull request 7 at `head`, opened from `from` (this repository or a fork).
@@ -1076,6 +1077,7 @@ fn pull_request(head: &str, from: &str) -> serde_json::Value {
         "number": 7,
         "pull_request": {
             "number": 7,
+            "title": "feat: a change",
             "head": { "sha": head, "repo": { "full_name": from } },
         },
         "repository": { "full_name": "owner/repo" },
@@ -1086,30 +1088,49 @@ fn head_of(repo: &Repo) -> String {
     repo.git(&["rev-parse", "HEAD"]).trim().to_string()
 }
 
+#[test]
+fn on_a_pull_request_ci_proves_and_writes_nothing_to_github() {
+    let gh = FakeGitHub::start();
+    let repo = screens_branch("blue");
+    let event = pull_request(&head_of(&repo), "owner/repo");
+    let (out, text) = on_actions(&gh, &repo.root, "pull_request", &event);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(text.contains("**Proven**"), "{text}");
+    assert!(text.contains("**home.png** changed"), "{text}");
+    assert!(gh.writes().is_empty(), "{:?}", gh.writes());
+}
+
+#[test]
+fn a_weakening_fails_a_pull_request_and_writes_nothing_to_github() {
+    for from in ["owner/repo", "someone/repo"] {
+        let gh = FakeGitHub::start();
+        let repo = branch_with_change();
+        with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
+        let event = pull_request(&head_of(&repo), from);
+        let (out, text) = on_actions(&gh, &repo.root, "pull_request", &event);
+        assert!(!out.ok, "{from}: {}\n{}", out.stdout, out.stderr);
+        assert!(
+            out.stdout
+                .contains("weakens tests: it runs another command"),
+            "{from}: {}",
+            out.stdout
+        );
+        assert!(text.contains("**Not proven**"), "{from}: {text}");
+        assert!(text.contains("check `tests` is weaker"), "{from}: {text}");
+        assert!(gh.writes().is_empty(), "{from}: {:?}", gh.writes());
+    }
+}
+
 // A weakened proof fails everywhere
 
 #[test]
 fn a_weakening_still_fails_a_ci_run_outside_a_pull_request() {
     let repo = branch_with_change();
     with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
-    let (out, text) = comment(&repo);
+    let (out, text) = summary(&repo);
     assert!(!out.ok, "{}", out.stdout);
     assert!(text.contains("**Not proven**"), "{text}");
-    assert!(text.contains("merge past CI"), "{text}");
-}
-
-#[test]
-fn a_forks_weakening_fails_its_proof() {
-    let gh = FakeGitHub::start();
-    let repo = branch_with_change();
-    with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
-    let head = head_of(&repo);
-    gh.state().pulls.insert(7, (head.clone(), "open".into()));
-    gh.state().forks.insert(7);
-    let event = pull_request(&head, "someone/repo");
-    let out = on_actions_with(&gh, &repo.root, "pull_request", &event, "42", FORK_TOKEN);
-    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
-    assert!(out.stdout.contains("weakens tests"), "{}", out.stdout);
+    assert!(text.contains("merges past the required check"), "{text}");
 }
 
 // ffmpeg on the runner
@@ -1118,7 +1139,9 @@ fn a_forks_weakening_fails_its_proof() {
 fn pushed(repo: &Repo) -> common::Output {
     let gh = FakeGitHub::start();
     let event = serde_json::json!({ "ref": "refs/heads/main" });
-    on_actions(&gh, &repo.root, "push", &event, "80")
+    let (out, _) = on_actions(&gh, &repo.root, "push", &event);
+    assert!(gh.writes().is_empty(), "{:?}", gh.writes());
+    out
 }
 
 /// In CI the pull request title decides whether a change is a fix, so the proof runs again

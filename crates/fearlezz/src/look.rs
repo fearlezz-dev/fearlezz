@@ -20,10 +20,31 @@ pub(crate) const BASE_JOURNAL: &str = "(base)";
 
 pub(crate) use fearlezz_proof::look::{Change, Item, Look};
 
-/// The look saved in the folder `dir`, if any.
+/// The look saved in the folder `dir`, if any. Its pictures are relative to that folder,
+/// wherever it was when the look was written.
 pub(crate) fn saved(dir: &Path) -> Option<Look> {
     let text = fs::read_to_string(dir.join("look.json")).ok()?;
-    serde_json::from_str(&text).ok()
+    let look: Look = serde_json::from_str(&text).ok()?;
+    Some(Look {
+        dir: dir.to_path_buf(),
+        ..look
+    })
+}
+
+/// What a person reviews of `look`: each picture that is not the same as on the base, with
+/// the summary of its comparison and the before and after files to open, one per line.
+pub(crate) fn lines(look: &Look) -> Vec<String> {
+    let mut lines = Vec::new();
+    for item in look.items.iter().filter(|i| i.change != Change::Same) {
+        let flaky = if item.flaky { " (flaky)" } else { "" };
+        lines.push(format!("  {}{flaky}: {}", item.name, item.summary));
+        for (side, rel) in [("before", &item.before), ("after", &item.after)] {
+            if let Some(rel) = rel {
+                lines.push(format!("    {side}: {}", look.dir.join(rel).display()));
+            }
+        }
+    }
+    lines
 }
 
 pub(crate) enum LookOutcome {
@@ -208,9 +229,7 @@ pub(crate) fn look(
         return without_before(check, result, &base.wt.git.common, &reason).map(LookOutcome::Done);
     }
     let dir = look_dir(&base.wt.git.common, check, &before.id, &result.id);
-    let saved: Option<Look> = fs::read_to_string(dir.join("look.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok());
+    let saved = saved(&dir);
     // A base run that passes without any picture usually means it could not reach what it
     // records, or the recording is new in this change.
     let note = (!has_media(&before)).then(|| {
@@ -228,7 +247,7 @@ pub(crate) fn look(
     Ok(LookOutcome::Done(look))
 }
 
-/// The look when there is no before: every picture is new and needs approval, so a missing
+/// The look when there is no before: every picture is new and shows as such, so a missing
 /// base never lets changed pictures through unseen.
 pub(crate) fn without_before(
     check: &Check,
@@ -433,16 +452,15 @@ fn build(
     }
     items.sort_by(|a, b| a.change.cmp(&b.change).then(a.name.cmp(&b.name)));
 
-    let mut look = Look {
+    let look = Look {
         check: check.id.clone(),
         base_commit: base_commit.to_string(),
         base_result: before.map(|b| b.id.clone()).unwrap_or_default(),
         no_before,
         note,
         items,
-        report: dir.join("index.html"),
+        dir: dir.to_path_buf(),
     };
-    crate::report::write(dir, &mut look)?;
     // Whole or not at all: a reader never sees a look written in part.
     let part = dir.join("look.json.part");
     fs::write(&part, serde_json::to_string_pretty(&look)?)?;

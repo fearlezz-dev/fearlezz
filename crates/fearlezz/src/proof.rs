@@ -1,6 +1,6 @@
 //! What one proving run showed: the bundle model lives in `fearlezz-proof`, shared with the
 //! proof host. This adds what only the machine that ran the checks knows: each check's entry
-//! from its run, and writing the bundle (`proof.json` with outputs, media and the page).
+//! from its run, and writing the bundle (`proof.json` with outputs and media) for the host.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -66,7 +66,7 @@ pub(crate) fn not_run(check: &crate::config::Check, stage: &str, why: &str) -> C
 }
 
 /// Writes `proof.json` into `dir` with every check's output and every picture's media beside
-/// it, named relative to `dir`, and the page that shows it as `index.html`.
+/// it, named relative to `dir`. Only the proof host draws a page from it.
 pub(crate) fn write(proof: &Proof, dir: &Path) -> Result<()> {
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let mut out = proof.clone();
@@ -77,7 +77,7 @@ pub(crate) fn write(proof: &Proof, dir: &Path) -> Result<()> {
         check.output = Some(rel);
     }
     for look in &mut out.looks {
-        let from = look.dir().to_path_buf();
+        let from = look.dir.clone();
         let folder = from
             .file_name()
             .map_or_else(|| look.check.clone(), |f| f.to_string_lossy().to_string());
@@ -88,13 +88,12 @@ pub(crate) fn write(proof: &Proof, dir: &Path) -> Result<()> {
                 *rel = to;
             }
         }
-        // The report page of this machine means nothing in the bundle.
-        look.report = PathBuf::new();
+        // The folder of this machine means nothing in the bundle.
+        look.dir = PathBuf::new();
     }
     let path = dir.join("proof.json");
     fs::write(&path, serde_json::to_string_pretty(&out)?)
-        .with_context(|| format!("writing {}", path.display()))?;
-    crate::report::write_proof(dir, &out)
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 fn copy(from: &Path, to: &Path) -> Result<()> {

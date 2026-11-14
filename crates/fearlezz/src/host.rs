@@ -1,16 +1,15 @@
 //! The proof host from CI (`ee/README.md`): a GitHub Actions job that may request an OIDC
 //! token asks the host whether its repository installed the app, and only then sends its
 //! proof bundle: the proof as JSON, then each file the host does not hold yet, by content.
-//! Talks through the one curl client in `github.rs`.
+//! Talks through curl, which every runner has.
 
 use std::fs;
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
-
-use crate::github::{Body, curl};
 
 /// The host a project sends to unless its config names another.
 pub(crate) const DEFAULT: &str = "https://fearlezz.seamlezz.com";
@@ -185,4 +184,81 @@ fn encode(text: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+/// What a request sends.
+pub(crate) enum Body<'a> {
+    None,
+    Json(&'a Value),
+    /// A file's bytes, as they are.
+    File(&'a Path),
+}
+
+/// One request through curl with a bearer token, for the proof host and GitHub's OIDC token
+/// endpoint: the status code and the answer, `null` when empty and a string when it is not JSON. The token
+/// goes to curl on stdin, never in its arguments, and a large body goes at once, not after a
+/// 100 Continue.
+pub(crate) fn curl(
+    method: &str,
+    url: &str,
+    token: &str,
+    headers: &[&str],
+    body: Body<'_>,
+) -> Result<(u16, Value)> {
+    let mut cmd = Command::new("curl");
+    cmd.args(["-sS", "-K", "-", "-X", method, "-w", "\n%{http_code}"])
+        .args(["-H", "User-Agent: fearlezz", "-H", "Expect:"]);
+    for header in headers {
+        cmd.args(["-H", header]);
+    }
+    let json = match body {
+        Body::None => None,
+        Body::Json(value) => {
+            let mut file = tempfile::NamedTempFile::new()?;
+            serde_json::to_writer(&mut file, value)?;
+            file.flush()?;
+            cmd.args(["-H", "Content-Type: application/json", "--data-binary"])
+                .arg(format!("@{}", file.path().display()));
+            Some(file)
+        }
+        Body::File(path) => {
+            cmd.args([
+                "-H",
+                "Content-Type: application/octet-stream",
+                "--data-binary",
+            ])
+            .arg(format!("@{}", path.display()));
+            None
+        }
+    };
+    let mut child = cmd
+        .arg(url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("talking to the proof host needs curl")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        writeln!(stdin, "header = \"Authorization: Bearer {token}\"")?;
+    }
+    let out = child.wait_with_output()?;
+    drop(json);
+    if !out.status.success() {
+        bail!(
+            "{method} {url} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (answer, code) = text.rsplit_once('\n').unwrap_or(("", &text));
+    let code: u16 = code
+        .trim()
+        .parse()
+        .with_context(|| format!("{method} {url} gave no status code"))?;
+    let answer = if answer.trim().is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str(answer).unwrap_or_else(|_| Value::String(answer.to_string()))
+    };
+    Ok((code, answer))
 }

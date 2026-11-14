@@ -1,94 +1,63 @@
-//! GitHub Actions: what `fearlezz run --ci` does for the event a workflow runs on. A pull
-//! request is proven, its changed pictures pushed to the pictures branch, its status comment
-//! written and its `fearlezz/approval` status set; a `/fearlezz approve <words>` or
-//! `/fearlezz accept <words>` comment written, edited or deleted settles that status again by
-//! the approval rule; a closed pull
-//! request's pictures are removed; the schedule removes the pictures of every closed pull
-//! request. A fork's run has a read only token, so it writes nothing to GitHub.
+//! GitHub Actions: what `fearlezz run --ci` reads of the workflow it runs in (the repository,
+//! the run's page and the pull request its event names), the job summary it writes on the
+//! run's page, and the pinned ffmpeg it installs when checks take pictures. It writes nothing
+//! to GitHub: a person reviews the pull request there as usual, and the proof host (`host.rs`)
+//! is the only place with a page.
 
-use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context as _, Result, anyhow, bail};
-use serde_json::{Value, json};
+use anyhow::{Context as _, Result, bail};
+use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
-use crate::github::{self, Api, Approval, Pending, StatusComment, Verdict, short};
-use fearlezz_proof::waits::{Kind, Obligation};
+use crate::look::{Change, Item as Picture};
+use crate::proof::{Proof, Ran};
 
-/// The branch the changed pictures are pushed to, one folder per pull request.
-pub(crate) const BRANCH: &str = "fearlezz-pictures";
-
-/// Pushes that lose a race with another pull request's push start over this often.
-const ATTEMPTS: usize = 3;
+/// Pictures listed in the job summary at most, so it stays readable.
+const SHOWN: usize = 20;
 
 /// What GitHub Actions tells every step of a run, read once from its environment and event
 /// file: the repository, the run's page and the event. Off GitHub every part is empty.
 #[derive(Clone)]
 pub(crate) struct Workflow {
+    /// Whether Fearlezz runs on GitHub Actions.
+    pub actions: bool,
     /// `owner/name`.
     pub repository: Option<String>,
     /// The run's page.
     pub run_url: Option<String>,
-    server: Option<String>,
-    name: Option<String>,
-    path: Option<String>,
-    /// The event, Null without one; why it could not be read, when it could not.
-    event: Result<Value, String>,
-}
-
-/// No workflow: proving off GitHub.
-impl Default for Workflow {
-    fn default() -> Workflow {
-        Workflow {
-            repository: None,
-            run_url: None,
-            server: None,
-            name: None,
-            path: None,
-            event: Ok(Value::Null),
-        }
-    }
+    /// The event, Null without one or when its file cannot be read.
+    event: Value,
 }
 
 impl Workflow {
-    /// The workflow GitHub's variables describe. An event file that cannot be read reads as
-    /// no event here; [`Actions::detect`] refuses it, since acting needs the event.
+    /// The workflow GitHub's variables describe.
     pub(crate) fn read() -> Workflow {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
-        let path = var("GITHUB_EVENT_PATH");
-        let event = match &path {
-            None => Ok(Value::Null),
-            Some(path) => fs::read(path)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
-                .map_err(|e| format!("reading the event file {path}: {e}")),
-        };
-        let (server, repository) = (var("GITHUB_SERVER_URL"), var("GITHUB_REPOSITORY"));
-        let run_url = match (&server, &repository, var("GITHUB_RUN_ID")) {
+        let event = var("GITHUB_EVENT_PATH")
+            .and_then(|path| fs::read(path).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or(Value::Null);
+        let repository = var("GITHUB_REPOSITORY");
+        let run_url = match (var("GITHUB_SERVER_URL"), &repository, var("GITHUB_RUN_ID")) {
             (Some(server), Some(repo), Some(run)) => {
                 Some(format!("{server}/{repo}/actions/runs/{run}"))
             }
             _ => None,
         };
         Workflow {
+            actions: var("GITHUB_ACTIONS").as_deref() == Some("true"),
             repository,
             run_url,
-            server,
-            name: var("GITHUB_EVENT_NAME"),
-            path,
             event,
         }
     }
 
-    fn event(&self) -> &Value {
-        self.event.as_ref().unwrap_or(&Value::Null)
-    }
-
     fn text(&self, pointer: &str) -> Option<&str> {
-        self.event().pointer(pointer).and_then(Value::as_str)
+        self.event.pointer(pointer).and_then(Value::as_str)
     }
 
     /// The pull request's title, when the event is one.
@@ -101,649 +70,162 @@ impl Workflow {
         self.text("/pull_request/head/sha")
     }
 
-    /// Whether the event is a pull request from this repository itself, not a fork. Its
-    /// `fearlezz/approval` status, held by the run of it that has a token, is where what waits
-    /// for a person waits; any run of it can tell, with a token or without.
-    pub(crate) fn own_pull_request(&self) -> bool {
-        self.event().pointer("/pull_request/number").is_some()
-            && self.repository.is_some()
-            && self.text("/pull_request/head/repo/full_name") == self.repository.as_deref()
-    }
-
     /// The pull request a proof is for, as the proof names it, when the event is one.
     pub(crate) fn pull(&self) -> Option<crate::proof::Pull> {
         Some(crate::proof::Pull {
-            number: self.event().pointer("/pull_request/number")?.as_u64()?,
+            number: self.event.pointer("/pull_request/number")?.as_u64()?,
             title: self.title()?.to_string(),
             url: self.text("/pull_request/html_url").map(str::to_string),
         })
     }
 }
 
-/// The workflow run Fearlezz runs in, with a token to act on what its event asks.
-pub(crate) struct Actions {
-    name: String,
-    event: Value,
-    api: Api,
-    server: String,
-    repo: String,
-}
-
-/// What the event asks for.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Task {
-    Prove,
-    /// A `/fearlezz approve` or `/fearlezz accept` comment was written, edited or deleted.
-    Settle,
-    Clean,
-    Squash,
-    /// A comment that is no approval or accept and was none.
-    Nothing,
-}
-
-impl Actions {
-    /// The workflow run, when Fearlezz runs on GitHub Actions with a token; None elsewhere.
-    pub(crate) fn detect(workflow: &Workflow) -> Result<Option<Actions>> {
-        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
-        if var("GITHUB_ACTIONS").as_deref() != Some("true") {
-            return Ok(None);
-        }
-        let (Some(name), Some(_), Some(token), Some(repo)) = (
-            workflow.name.clone(),
-            workflow.path.as_ref(),
-            var("GITHUB_TOKEN").or_else(|| var("GH_TOKEN")),
-            workflow.repository.clone(),
-        ) else {
-            return Ok(None);
-        };
-        let event = workflow.event.clone().map_err(|e| anyhow!(e))?;
-        Ok(Some(Actions {
-            name,
-            event,
-            api: Api::new(token, repo.clone()),
-            server: workflow
-                .server
-                .clone()
-                .unwrap_or_else(|| "https://github.com".into()),
-            repo,
-        }))
+/// The job summary of a proof: whether the commit is proven, what keeps it from being proven
+/// and what to do, what a reader should know, the changed pictures for a person to review on
+/// the pull request, every check, and the end of each failing output. `page` is the proof
+/// host's page of it, when the host took the bundle.
+pub(crate) fn summary(proof: &Proof, page: Option<&str>) -> Result<String, std::fmt::Error> {
+    let mut text = String::new();
+    let blockers = proof.blockers();
+    let ran = proof.ran_here().count();
+    let passed = proof
+        .ran_here()
+        .filter(|c| c.outcome == Ran::Passed)
+        .count();
+    let word = if blockers.is_empty() {
+        "Proven"
+    } else {
+        "Not proven"
+    };
+    writeln!(
+        text,
+        "### Fearlezz\n\n**{word}**: commit {}, {passed} of {ran} checks passed\n",
+        proof.commit
+    )?;
+    if let Some(url) = page {
+        writeln!(
+            text,
+            "[The proof page]({url}) shows everything this run showed: every check, its tests, \
+             findings and output, and every picture.\n"
+        )?;
     }
-
-    fn text(&self, pointer: &str) -> String {
-        self.event
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    }
-
-    fn number(&self, pointer: &str) -> Option<u64> {
-        self.event.pointer(pointer).and_then(Value::as_u64)
-    }
-
-    pub(crate) fn task(&self) -> Task {
-        match self.name.as_str() {
-            "issue_comment" => {
-                let command = |p: &str| github::command(&self.text(p)).is_some();
-                if self.event.pointer("/issue/pull_request").is_some()
-                    && (command("/comment/body") || command("/changes/body/from"))
-                {
-                    Task::Settle
-                } else {
-                    Task::Nothing
-                }
-            }
-            "pull_request" | "pull_request_target" if self.text("/action") == "closed" => {
-                Task::Clean
-            }
-            "schedule" => Task::Squash,
-            _ => Task::Prove,
-        }
-    }
-
-    /// Does what the event asks, except proving, which needs the checkout.
-    pub(crate) fn act(&self, task: &Task) -> Result<bool> {
-        match task {
-            Task::Settle => self.settle()?,
-            Task::Clean => {
-                let Some(pr) = self.number("/pull_request/number") else {
-                    bail!("the event file names no pull request to clean up after");
-                };
-                let dir = format!("pr-{pr}");
-                if self.squash(|entry| Ok(entry == dir), false)? {
-                    println!("removed the pictures of pull request {pr} from {BRANCH}");
-                } else {
-                    println!("pull request {pr} has no pictures on {BRANCH}");
-                }
-            }
-            Task::Squash => {
-                // Only a pull request GitHub says is closed, or no longer knows, loses its
-                // pictures; any other answer stops the squash.
-                let gone = |entry: &str| -> Result<bool> {
-                    let Some(n) = entry.strip_prefix("pr-") else {
-                        return Ok(false);
-                    };
-                    match self.api.call("GET", &format!("pulls/{n}"), None)? {
-                        (200, pull) => Ok(pull["state"] != "open"),
-                        (404, _) => Ok(true),
-                        (code, _) => bail!(
-                            "GitHub answered {code} to reading pull request {n}, so no pictures \
-                             were removed; the next scheduled run tries again"
-                        ),
-                    }
-                };
-                self.squash(gone, true)?;
-                println!("removed the pictures of closed pull requests from {BRANCH}");
-            }
-            Task::Nothing => {
-                println!("nothing to do: the comment is no /fearlezz approve or /fearlezz accept");
-            }
-            Task::Prove => bail!("proving needs the checkout"),
-        }
-        println!("next: nothing; the pull request shows what happened");
-        Ok(true)
-    }
-
-    /// The pull request a proof is for, when the event is one.
-    pub(crate) fn pull(&self) -> Option<Pull> {
-        let number = self.number("/pull_request/number")?;
-        let head = self.text("/pull_request/head/sha");
-        let fork = self.text("/pull_request/head/repo/full_name") != self.repo;
-        let run = format!(
-            "{}-{}",
-            std::env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "0".into()),
-            std::env::var("GITHUB_RUN_ATTEMPT").unwrap_or_else(|_| "1".into())
-        );
-        let url = (!fork).then(|| {
-            format!(
-                "{}/{}/raw/{BRANCH}/pr-{number}/{run}",
-                self.server, self.repo
-            )
-        });
-        Some(Pull {
-            api: self.api.clone(),
-            number,
-            head,
-            run,
-            fork,
-            url,
-        })
-    }
-
-    /// Settles `fearlezz/approval` after a `/fearlezz approve` or `/fearlezz accept` comment
-    /// was written, edited or deleted, from what GitHub holds now rather than from the event,
-    /// and answers the person: what they gave counts, why it does not, or that it was taken
-    /// back, with what still waits.
-    fn settle(&self) -> Result<()> {
-        let pr = self
-            .number("/issue/number")
-            .context("the event file names no pull request")?;
-        let who = self.text("/comment/user/login");
-        let id = self.number("/comment/id").unwrap_or_default();
-        let url = self.text("/comment/html_url");
-        let action = self.text("/action");
-        let body = self.text("/comment/body");
-        let asked = (action != "deleted")
-            .then(|| github::command(&body))
-            .flatten();
-        // What the comment said before this event, to tell whether it counted then.
-        let before = match action.as_str() {
-            "deleted" => Some(body.clone()),
-            "edited" => Some(self.text("/changes/body/from")),
-            _ => None,
-        };
-        let earlier = before.as_deref().and_then(github::command);
-        let Some(kind) = asked.as_ref().or(earlier.as_ref()).map(|(k, _)| *k) else {
-            return Ok(());
-        };
-        let (head, _) = self.api.head(pr)?;
-        let green_by_it = self.api.latest_status(&head)?.is_some_and(|s| {
-            s["state"] == "success"
-                && s["creator"]["type"] == "Bot"
-                && s["target_url"] == url.as_str()
-        });
-        let taken_back = |short: &str, still: Option<&Approval>| -> Result<()> {
-            let how = match action.as_str() {
-                "deleted" => "deleted".to_string(),
-                _ => format!("edited so it no longer {}s", kind.word()),
-            };
-            let noun = kind.noun();
-            let rest = match (still, kind) {
-                (Some(other), _) => format!("the {noun} by @{} still counts", other.by),
-                (None, Kind::Approve) => {
-                    format!("the pictures of {short} wait for {} again", kind.asks())
-                }
-                (None, Kind::Accept) => {
-                    format!(
-                        "the weakened proof of {short} waits for {} again",
-                        kind.asks()
-                    )
-                }
-            };
-            self.api.comment(
-                pr,
-                &format!("The {noun} by @{who} was {how}, so it is taken back: {rest}."),
+    if !blockers.is_empty() {
+        writeln!(text, "| what | why | what to do |\n| --- | --- | --- |")?;
+        for item in &blockers {
+            writeln!(
+                text,
+                "| {} | {} | {} |",
+                cell(&item.what),
+                cell(&item.why),
+                cell(&item.fix)
             )?;
-            println!("took back the {noun} of pull request {pr} at {short}");
-            Ok(())
+        }
+        writeln!(text)?;
+    }
+    for note in proof.notes() {
+        writeln!(text, "{note}\n")?;
+    }
+    pictures(proof, &mut text)?;
+    writeln!(text, "| check | result | tests | time | command |")?;
+    writeln!(text, "| --- | --- | --- | --- | --- |")?;
+    for check in proof.ran_here() {
+        let tests = check.tests.map(|n| n.to_string()).unwrap_or_default();
+        let run = match check.run.split_once('\n') {
+            Some((first, _)) => format!("{first} ..."),
+            None => check.run.clone(),
         };
-        let (pending, verdict) = match github::settle(&self.api, pr)? {
-            Ok(settled) => settled,
-            Err(why) => {
-                if asked.is_some() {
-                    self.api.comment(pr, &format!("@{who}, {why}."))?;
-                } else if green_by_it {
-                    taken_back(short(&head), None)?;
-                }
-                println!("{why}");
-                return Ok(());
-            }
-        };
-        let short = short(&pending.head);
-        // It counted before this event when its earlier words count for what waits now. A comment
-        // just written never did, even when another comment's run already turned the status
-        // green linked to it.
-        let was = (action != "created" && green_by_it)
-            || match &before {
-                Some(old) if earlier.is_some() => {
-                    let mut comment = json!({
-                        "body": old,
-                        "html_url": url,
-                        "user": { "login": who, "type": self.text("/comment/user/type") },
-                    });
-                    match self
-                        .api
-                        .call("GET", &format!("issues/comments/{id}"), None)?
-                    {
-                        (200, now) => comment["created_at"] = now["created_at"].clone(),
-                        _ => comment["created_at"] = self.event["comment"]["created_at"].clone(),
-                    }
-                    pending.judge(&self.api, &comment)?.is_ok()
-                }
-                _ => false,
-            };
-        let counts = asked.as_ref().is_some_and(|(k, _)| *k == kind);
-        match verdict.of(kind) {
-            Some(Ok(a)) if a.url == url => {
-                if !was {
-                    self.reply_counted(pr, id, kind, &pending, &verdict, a)?;
-                }
-            }
-            // Deleted, or edited into something else.
-            part if was && !counts => {
-                taken_back(short, part.and_then(|p| p.as_ref().ok()))?;
-            }
-            _ if asked.is_some() => {
-                let why = match self
-                    .api
-                    .call("GET", &format!("issues/comments/{id}"), None)?
-                {
-                    (200, comment) => pending.judge(&self.api, &comment)?.err(),
-                    _ => None,
-                };
-                if let Some(why) = why {
-                    self.api.comment(pr, &why)?;
-                    println!("refused the {} of @{who}", kind.word());
-                }
-            }
-            _ => {}
-        }
-        println!(
-            "{} of {short}: {}",
-            github::CONTEXT,
-            pending.description(&verdict)
-        );
-        Ok(())
+        writeln!(
+            text,
+            "| {} | {} | {tests} | {:.1} s | `{}` |",
+            cell(&check.id),
+            check.outcome.word(),
+            check.seconds,
+            code(&run)
+        )?;
     }
-
-    /// Says that comment `id` counts, quoting its words, once: a run of the same event again (a
-    /// re-run, or GitHub delivering it twice) finds its reply and stays silent. The reply names
-    /// the comment in a hidden line, so new words in an edited comment get a reply of their own.
-    fn reply_counted(
-        &self,
-        pr: u64,
-        id: u64,
-        kind: Kind,
-        pending: &Pending,
-        verdict: &Verdict,
-        a: &Approval,
-    ) -> Result<()> {
-        let short = short(&pending.head);
-        // An accept covers every weakening, so it says which.
-        let covers: String = pending
-            .obligations
-            .of(kind)
-            .filter_map(|o| match o {
-                Obligation::Weakened(w) => Some(format!("- {w}\n")),
-                Obligation::Pictures(_) | Obligation::Head(_) => None,
-            })
-            .collect();
-        let covers = if covers.is_empty() {
-            String::new()
-        } else {
-            format!("It covers:\n\n{covers}\n")
-        };
-        let noun = kind.noun();
-        let text = format!(
-            "@{} {} {} at {short}:\n\n> {}\n\n{covers}A new push, or a run that {}, needs a \
-             new {noun}; deleting the {noun}, or editing it so it no longer {}s, takes it back.",
-            a.by,
-            kind.past(),
-            pending.obligations.covers(kind),
-            a.said,
-            kind.renewed_by(),
-            kind.word()
-        );
-        let mark = format!("<!-- fearlezz-reply {id} -->");
-        let replied = self.api.comments(pr)?.iter().any(|c| {
-            c["user"]["type"] == "Bot"
-                && c["body"]
-                    .as_str()
-                    .is_some_and(|b| b.contains(&mark) && b.contains(&text))
-        });
-        if replied {
-            println!("comment {id} already has its reply");
-            return Ok(());
-        }
-        self.api
-            .comment(pr, &format!("{text}\n\n{}\n{mark}", pending.still(verdict)))?;
-        println!("@{} {} pull request {pr} at {short}", a.by, kind.past());
-        Ok(())
+    if ran == 0 {
+        writeln!(text, "\nNo check reads what this commit changed.")?;
     }
-
-    /// Removes the top folders `gone` picks from the pictures branch and makes it a single
-    /// commit again, so it never grows with the history of every run; the branch goes when
-    /// nothing stays. With `always` false it changes nothing when nothing is gone. The update
-    /// is atomic: a push in between makes it start over, so no push is lost. Returns whether
-    /// anything was removed.
-    fn squash(&self, gone: impl Fn(&str) -> Result<bool>, always: bool) -> Result<bool> {
-        let mut decided: BTreeSet<String> = BTreeSet::new();
-        for _ in 0..ATTEMPTS {
-            let Some(old) = tip(&self.api)? else {
-                return Ok(false);
-            };
-            let mut root = Vec::new();
-            let mut removed = false;
-            for entry in root_of(&self.api, &old)? {
-                let path = entry["path"].as_str().unwrap_or_default().to_string();
-                if decided.contains(&path) || gone(&path)? {
-                    decided.insert(path);
-                    removed = true;
-                } else {
-                    root.push(entry);
-                }
-            }
-            if !removed && !always {
-                return Ok(false);
-            }
-            let new = if root.is_empty() {
-                None
-            } else {
-                let tree = self
-                    .api
-                    .send("POST", "git/trees", &json!({ "tree": root }))?["sha"]
-                    .clone();
-                let commit = self.api.send(
-                    "POST",
-                    "git/commits",
-                    &json!({ "message": "Pictures of open pull requests", "tree": tree, "parents": [] }),
-                )?;
-                commit["sha"].as_str().map(str::to_string)
-            };
-            if self.update_ref(&old, new.as_deref())? {
-                return Ok(removed);
-            }
-            println!("{BRANCH} moved while squashing; trying again");
+    for check in proof.checks.iter().filter(|c| c.outcome == Ran::Failed) {
+        let Some(log) = &check.log else { continue };
+        writeln!(
+            text,
+            "\n<details><summary>The end of what {} printed</summary>\n\n```",
+            cell(&check.id)
+        )?;
+        for line in crate::run::tail(log, 40) {
+            writeln!(text, "{}", line.replace("```", "'''"))?;
         }
-        println!("::warning::could not squash {BRANCH}: it kept moving");
-        Ok(false)
+        writeln!(text, "```\n\n</details>")?;
     }
-
-    /// Points the pictures branch at `new` (or deletes it), only while it is still at `old`,
-    /// in one step on GitHub's side. False when it moved.
-    fn update_ref(&self, old: &str, new: Option<&str>) -> Result<bool> {
-        let id = self.api.get(&format!("/repos/{}", self.repo))?["node_id"].clone();
-        let zero = "0".repeat(40);
-        let answer = self.api.graphql(
-            "mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }",
-            &json!({ "input": {
-                "repositoryId": id,
-                "refUpdates": [{
-                    "name": format!("refs/heads/{BRANCH}"),
-                    "beforeOid": old,
-                    "afterOid": new.unwrap_or(&zero),
-                    "force": true,
-                }],
-            }}),
-        );
-        match answer {
-            Ok(_) => Ok(true),
-            // Whether the branch moved is read again rather than guessed from the message.
-            Err(e) if tip(&self.api)?.as_deref() != Some(old) => {
-                println!("{BRANCH} moved: {e:#}");
-                Ok(false)
-            }
-            Err(e) => Err(e),
-        }
-    }
+    Ok(text)
 }
 
-/// The pull request a proof runs for.
-pub(crate) struct Pull {
-    api: Api,
-    number: u64,
-    head: String,
-    /// This run's folder on the pictures branch: run id and attempt.
-    run: String,
-    /// A fork's run has a read only token.
-    fork: bool,
-    /// Where this run's pictures are served once pushed; None for a fork.
-    pub url: Option<String>,
-}
-
-impl Pull {
-    /// Pushes the changed pictures in `dir`, writes the status comment and sets the status.
-    /// GitHub refusing any of it is a warning: the proof stands on its own.
-    pub(crate) fn report(&self, comment: &StatusComment, dir: Option<&Path>) {
-        if self.fork {
-            println!(
-                "::notice::this run of a fork's pull request has a read only token, so it writes \
-                 nothing to the pull request: the check page has its status and the \
-                 fearlezz-pictures artifact its changed pictures; a person with write access \
-                 approves its head with /fearlezz approve <words>"
-            );
-            return;
-        }
-        if let Err(e) = self.try_report(comment, dir) {
-            println!(
-                "::warning::could not report to pull request {}: {e:#}",
-                self.number
-            );
-        }
+/// The pictures that differ from the base, each check with its counts and then each picture,
+/// for a person to review on the pull request. They never keep the commit from being proven.
+fn pictures(proof: &Proof, text: &mut String) -> std::fmt::Result {
+    let looks: Vec<_> = proof.looks.iter().filter(|l| l.to_look_at() > 0).collect();
+    if looks.is_empty() {
+        return Ok(());
     }
-
-    fn try_report(&self, comment: &StatusComment, dir: Option<&Path>) -> Result<()> {
-        let (state, what) = match &comment.waiting {
-            None => ("success", "nothing waits for approval".to_string()),
-            Some(w) => ("pending", w.description()),
-        };
-        let pictures = comment
-            .waiting
+    writeln!(
+        text,
+        "#### Changed pictures\n\nA person reviews them on the pull request. `fearlezz run --ci \
+         --proof <dir>` writes every picture, before and after, into a folder; the Fearlezz \
+         action keeps it as an artifact of the run (`fearlezz-proof-<job>`).\n"
+    )?;
+    let mut left = SHOWN;
+    let mut hidden = 0;
+    for look in looks {
+        let why = look
+            .no_before
             .as_ref()
-            .is_some_and(|w| !w.checks.is_empty());
-        // A run that finishes after a newer push's run leaves that run's comment and pictures.
-        let (now, _) = self.api.head(self.number)?;
-        if now != self.head {
-            println!(
-                "pull request {} moved on to {}; this run leaves its comment and pictures alone",
-                self.number,
-                now.chars().take(7).collect::<String>()
-            );
-            return self.api.status(&self.head, state, &what, None);
-        }
-        let mut comment = comment.clone();
-        let old = self.api.status_comment(self.number)?;
-        if let (Some(dir), true) = (dir, pictures) {
-            match self.publish(dir) {
-                Ok(()) => println!("pictures on {BRANCH} at pr-{}/{}", self.number, self.run),
-                Err(e) => {
-                    println!(
-                        "::warning::could not push the pictures to {BRANCH}; the workflow needs \
-                         contents: write ({e:#})"
-                    );
-                    comment.note(&format!(
-                        "The pictures could not be put on the `{BRANCH}` branch, so they do not \
-                         show above. {}",
-                        github::ARTIFACT
-                    ));
-                }
-            }
-        }
-        self.api
-            .write_status_comment(self.number, old.as_ref(), &comment)?;
-        if comment.waiting.is_none() {
-            return self.api.status(&self.head, state, &what, None);
-        }
-        if let Err(why) = github::settle(&self.api, self.number)? {
-            println!("{why}");
-        }
-        Ok(())
-    }
-
-    /// Puts the pictures in `dir` on the pictures branch as this run's folder of the pull
-    /// request, in place of its earlier runs, as a fast forward: a push in between makes it
-    /// start over.
-    fn publish(&self, dir: &Path) -> Result<()> {
-        let mut entries = Vec::new();
-        for (rel, path) in files(dir)? {
-            let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-            let blob = self.api.send(
-                "POST",
-                "git/blobs",
-                &json!({ "content": base64(&bytes), "encoding": "base64" }),
-            )?;
-            entries.push(json!({
-                "path": format!("{}/{rel}", self.run),
-                "mode": "100644",
-                "type": "blob",
-                "sha": blob["sha"],
-            }));
-        }
-        if entries.is_empty() {
-            return Ok(());
-        }
-        let folder = self
-            .api
-            .send("POST", "git/trees", &json!({ "tree": entries }))?["sha"]
-            .clone();
-        let name = format!("pr-{}", self.number);
-        let message = format!("Pictures of pull request {}, run {}", self.number, self.run);
-        for _ in 0..ATTEMPTS {
-            let old = tip(&self.api)?;
-            let mut root = match &old {
-                Some(commit) => root_of(&self.api, commit)?,
-                None => Vec::new(),
-            };
-            root.retain(|e| e["path"] != name.as_str());
-            root.push(json!({ "path": name, "mode": "040000", "type": "tree", "sha": folder }));
-            let tree = self
-                .api
-                .send("POST", "git/trees", &json!({ "tree": root }))?["sha"]
-                .clone();
-            let parents: Vec<&String> = old.iter().collect();
-            let commit = self.api.send(
-                "POST",
-                "git/commits",
-                &json!({ "message": message, "tree": tree, "parents": parents }),
-            )?["sha"]
-                .clone();
-            let (code, _) = match old {
-                Some(_) => self.api.call(
-                    "PATCH",
-                    &format!("git/refs/heads/{BRANCH}"),
-                    Some(&json!({ "sha": commit, "force": false })),
-                )?,
-                None => self.api.call(
-                    "POST",
-                    "git/refs",
-                    Some(&json!({ "ref": format!("refs/heads/{BRANCH}"), "sha": commit })),
-                )?,
-            };
-            match code {
-                200..=299 => return Ok(()),
-                422 => println!("pushing the pictures lost a race; trying again"),
-                _ => bail!("GitHub answered {code} to updating {BRANCH}"),
-            }
-        }
-        bail!("every push lost a race with another")
-    }
-}
-
-/// The pictures branch's tip, or None when it does not exist.
-fn tip(api: &Api) -> Result<Option<String>> {
-    match api.call("GET", &format!("git/ref/heads/{BRANCH}"), None)? {
-        (200, answer) => Ok(answer["object"]["sha"].as_str().map(str::to_string)),
-        (404, _) => Ok(None),
-        (code, _) => bail!("GitHub answered {code} to reading {BRANCH}"),
-    }
-}
-
-/// The top folder entries of `commit`, as a new tree takes them.
-fn root_of(api: &Api, commit: &str) -> Result<Vec<Value>> {
-    let tree = api.get(&format!("git/commits/{commit}"))?["tree"]["sha"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let tree = api.get(&format!("git/trees/{tree}"))?;
-    Ok(tree["tree"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(
-            |e| json!({ "path": e["path"], "mode": e["mode"], "type": e["type"], "sha": e["sha"] }),
-        )
-        .collect())
-}
-
-/// Every file below `dir`, with its path relative to it, in a stable order.
-fn files(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
-    let mut found = Vec::new();
-    let mut todo = vec![dir.to_path_buf()];
-    while let Some(here) = todo.pop() {
-        let Ok(read) = fs::read_dir(&here) else {
-            continue;
-        };
-        for entry in read {
-            let path = entry?.path();
-            if path.is_dir() {
-                todo.push(path);
-            } else if let Ok(rel) = path.strip_prefix(dir) {
-                found.push((rel.to_string_lossy().replace('\\', "/"), path.clone()));
-            }
-        }
-    }
-    found.sort();
-    Ok(found)
-}
-
-/// Bytes as base64, as GitHub takes a blob.
-fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = chunk
+            .map(|w| format!(" (no before: {})", cell(w)))
+            .unwrap_or_default();
+        writeln!(
+            text,
+            "**`{}`**: {}{why}\n",
+            code(&look.check),
+            look.counts()
+        )?;
+        let items: Vec<&Picture> = look
+            .items
             .iter()
-            .enumerate()
-            .fold(0usize, |n, (i, b)| n | (usize::from(*b) << (16 - 8 * i)));
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(char::from(ALPHABET[(n >> (18 - 6 * i)) & 63]));
-            } else {
-                out.push('=');
-            }
+            .filter(|i| i.change != Change::Same)
+            .collect();
+        let take = items.len().min(left);
+        hidden += items.len() - take;
+        left -= take;
+        for item in items.iter().take(take) {
+            let flaky = if item.flaky { " (flaky)" } else { "" };
+            writeln!(
+                text,
+                "- **{}** {}{flaky}: {}",
+                cell(&item.name),
+                item.change.label(),
+                cell(&item.summary)
+            )?;
         }
+        writeln!(text)?;
     }
-    out
+    if hidden > 0 {
+        writeln!(text, "And {hidden} more.\n")?;
+    }
+    Ok(())
+}
+
+/// Text for a table cell.
+fn cell(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('|', "\\|")
+        .replace('\n', " ")
+}
+
+/// Text for a code span in a table cell, where HTML entities would show as typed.
+fn code(s: &str) -> String {
+    s.replace('`', "'").replace('|', "\\|").replace('\n', " ")
 }
 
 /// The ffmpeg Fearlezz installs on a runner when a check needs it: John Van Sickle's static
@@ -846,19 +328,4 @@ fn fetch(url: &str, sum: &str, target: &Path) -> Result<()> {
     }
     fs::rename(&partial, target)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn base64_pads_like_the_standard() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
-        assert_eq!(base64(&[0xff, 0xfe, 0x00]), "//4A");
-    }
 }

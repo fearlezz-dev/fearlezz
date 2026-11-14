@@ -1,9 +1,10 @@
 name: Fearlezz proof
-description: Prove a change with the checks in fearlezz.toml, and show the status and changed pictures on the pull request.
+description: Prove a change with the checks in fearlezz.toml, with the result in the job summary and the proof bundle as an artifact.
 
-# Installs Fearlezz and runs `fearlezz run --ci`, which does what the event asks: a pull request
-# or push is proven, a `/fearlezz approve` or `/fearlezz accept` comment written, edited or
-# deleted settles the approval, and a closed pull request or the schedule cleans up the pictures branch.
+# Installs Fearlezz and runs `fearlezz run --ci`, which proves the commit: every check, fresh,
+# against the base branch's config. It writes nothing to GitHub. The job summary lists each
+# check and the changed pictures, which a person reviews on the pull request; the proof bundle
+# (every check's output and every picture, before and after) is kept as an artifact.
 inputs:
   version:
     description: >-
@@ -14,13 +15,6 @@ inputs:
   devenv:
     description: Install Nix and devenv first, for projects whose checks run in a devenv shell.
     default: "false"
-  token:
-    description: >-
-      Token that writes the comment, the approval status and the pictures branch: the
-      workflow's token or a GitHub App's. A personal token writes as a person, and Fearlezz
-      never takes a person's comment or status for its own. Empty proves without writing to
-      GitHub.
-    default: ${{ github.token }}
 
 runs:
   using: composite
@@ -62,15 +56,13 @@ runs:
         key: fearlezz-ffmpeg-b6.1.1-${{ runner.os }}-${{ runner.arch }}
     - name: Fearlezz
       shell: bash
-      env:
-        GITHUB_TOKEN: ${{ inputs.token }}
-      run: fearlezz run --ci
-    - name: Keep the changed pictures
+      run: fearlezz run --ci --proof "$RUNNER_TEMP/fearlezz-proof"
+    - name: Keep the proof bundle
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: fearlezz-pictures
-        path: ${{ runner.temp }}/fearlezz-pictures
+        name: fearlezz-proof-${{ github.job }}
+        path: ${{ runner.temp }}/fearlezz-proof
         if-no-files-found: ignore
     - name: Keep the output of every check
       if: always()

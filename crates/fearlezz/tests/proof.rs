@@ -1,7 +1,7 @@
 //! The proof bundle: `fearlezz run --ci --proof <dir>` writes everything one proving run
 //! showed (each check with its output, tests and findings, what the change weakens, red before
-//! green, and every picture with its media) as `proof.json` beside the files it names, so a
-//! page can show all of it without the machine that ran it.
+//! green, and every picture with its media) as `proof.json` beside the files it names, so the
+//! proof host can show all of it without the machine that ran it. Only the host has a page.
 
 // Clippy applies its test allowances (unwrap, expect, panic) only to cfg(test) code.
 #![cfg(test)]
@@ -80,6 +80,7 @@ fn a_ci_run_writes_every_check_with_its_output() {
     assert_eq!(lint["outcome"], "failed", "{proof:#}");
     assert_eq!(lint["exit_code"], 1, "{proof:#}");
     assert!(file(&dir, &lint["output"]).contains("looking"));
+    assert!(!dir.join("index.html").exists(), "only the host has a page");
 }
 
 #[test]

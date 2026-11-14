@@ -1,7 +1,7 @@
 //! The proof host: on GitHub Actions, a job that may request an OIDC token sends its proof
 //! bundle to the host (`ee/README.md`), when the host says the repository installed the app,
-//! and the status comment links the page. Nothing leaves CI otherwise, and a host that fails
-//! never fails the proof.
+//! and the log and the job summary link the page. Nothing leaves CI otherwise, and a host
+//! that fails never fails the proof.
 
 // Clippy applies its test allowances (unwrap, expect, panic) only to cfg(test) code.
 #![cfg(test)]
@@ -32,14 +32,17 @@ fn repo(host: &FakeHost) -> Repo {
     repo
 }
 
-/// `fearlezz run --ci` with the status comment in a file, and `env` besides.
+/// `fearlezz run --ci` with the job summary in a file, and `env` besides.
 fn ci(repo: &Repo, env: &[(String, String)]) -> (common::Output, String) {
-    let comment = repo.path(".runs/comment.md");
+    let summary = repo.path(".runs/summary.md");
+    // The summary is appended to, as on GitHub; each run here reads its own.
+    let _ = std::fs::remove_file(&summary);
     let mut all: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-    let path = comment.to_str().unwrap().to_string();
+    let path = summary.to_str().unwrap().to_string();
     all.push(("GITHUB_REPOSITORY", "owner/repo"));
-    let out = repo.fz_env(&["run", "--ci", "--comment", &path], &all);
-    let text = std::fs::read_to_string(&comment)
+    all.push(("GITHUB_STEP_SUMMARY", &path));
+    let out = repo.fz_env(&["run", "--ci"], &all);
+    let text = std::fs::read_to_string(&summary)
         .unwrap_or_else(|_| panic!("{}\n{}", out.stdout, out.stderr));
     (out, text)
 }
@@ -50,7 +53,7 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn the_bundle_goes_to_the_host_and_the_comment_links_its_page() {
+fn the_bundle_goes_to_the_host_and_the_summary_links_its_page() {
     let host = FakeHost::start();
     let repo = repo(&host);
     let (out, text) = ci(&repo, &host.token_env());
@@ -89,7 +92,7 @@ fn the_bundle_goes_to_the_host_and_the_comment_links_its_page() {
     assert_eq!(sent["proof"]["schema"], 1, "{sent:#}");
     assert_eq!(sent["proof"]["checks"][0]["id"], "tests", "{sent:#}");
     let files = sent["files"].as_object().unwrap();
-    assert!(files.contains_key("index.html"), "{sent:#}");
+    assert!(!files.contains_key("index.html"), "only the host has a page: {sent:#}");
     assert!(files.contains_key("outputs/tests.log"), "{sent:#}");
     assert!(
         !files.contains_key("proof.json"),
@@ -103,12 +106,12 @@ fn the_bundle_goes_to_the_host_and_the_comment_links_its_page() {
         assert_eq!(sha256(bytes), sha, "{path}");
         assert_eq!(file["size"], bytes.len(), "{path}");
     }
+    let page = format!("{}/owner/repo/proofs/p1/", host.url);
+    assert!(text.contains(&format!("[The proof page]({page})")), "{text}");
     assert!(
-        text.contains(&format!(
-            "[The proof page]({}/owner/repo/proofs/p1/)",
-            host.url
-        )),
-        "{text}"
+        out.stdout.contains(&format!("proof page: {page}")),
+        "{}",
+        out.stdout
     );
 }
 

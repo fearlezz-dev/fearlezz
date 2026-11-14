@@ -81,9 +81,10 @@ pub struct Look {
     pub note: Option<String>,
     /// Every picture.
     pub items: Vec<Item>,
-    /// The report page on this machine; empty in a proof bundle.
+    /// The folder it is saved in on this machine, which its pictures are relative to; empty
+    /// in a proof bundle, whose pictures are relative to the bundle.
     #[serde(default, skip_serializing_if = "no_path")]
-    pub report: PathBuf,
+    pub dir: PathBuf,
 }
 
 fn no_path(path: &Path) -> bool {
@@ -121,10 +122,5 @@ impl Look {
             .iter()
             .filter(|i| i.change != Change::Same && !i.flaky)
             .count()
-    }
-
-    /// The folder it is saved in.
-    pub fn dir(&self) -> &Path {
-        self.report.parent().unwrap_or(&self.report)
     }
 }

@@ -1,5 +1,5 @@
 //! The core loop through the CLI: config, run and result store, journal, plan, stages and
-//! claims, status, overview. Every test drives a real git repository.
+//! claims, status, the overview of every journal. Every test drives a real git repository.
 
 // Clippy applies its test allowances (unwrap, expect, panic) only to cfg(test) code.
 #![cfg(test)]
@@ -173,7 +173,6 @@ fn every_command_ends_with_a_next_line() {
         vec!["--since", "1h"],
         vec!["setup", "sync"],
         vec!["setup", "down"],
-        vec!["--page"],
         vec!["say", "ask", "ready?"],
     ] {
         let out = repo.fz(&args);
@@ -525,6 +524,28 @@ fn a_journal_from_before_claims_were_removed_still_reads() {
 }
 
 #[test]
+fn a_journal_from_before_approvals_were_removed_still_reads() {
+    let repo = committed_change();
+    repo.fz(&["say", "note", "first"]);
+    let events = repo.path(".git/fearlezz/journals/feat%2Fx/events.jsonl");
+    let mut text = std::fs::read_to_string(&events).unwrap();
+    for line in [
+        r#"{"at":"2026-01-01T00:00:00Z","type":"approve","check":"tests","key":"k","said":"ship it"}"#,
+        r#"{"at":"2026-01-01T00:00:00Z","type":"approve","check":"tests","key":"k","said":"ok","by":"lead","url":"https://github.com/o/r/pull/7#issuecomment-1"}"#,
+    ] {
+        text.push_str(line);
+        text.push('\n');
+    }
+    std::fs::write(&events, text).unwrap();
+    let out = repo.fz(FINAL);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+    assert_eq!(out.last_line(), READY);
+    let since = repo.fz_env(&["--since", "1000d"], &[]);
+    assert!(!since.stdout.contains("approved"), "{}", since.stdout);
+}
+
+#[test]
 fn say_has_no_claims_anymore() {
     let repo = committed_change();
     for args in [
@@ -664,6 +685,23 @@ fn since_shows_what_happened_after_a_moment() {
 }
 
 // Overview
+
+#[test]
+fn the_overview_of_every_journal_is_text_and_writes_no_page() {
+    let repo = repo();
+    repo.fz(&["say", "note", "main work"]);
+    let other = repo.worktree("feat/waiting");
+    other.fz(&["say", "ask", "Pick a variant"]);
+    let out = repo.fz(&["--all"]);
+    assert!(out.ok, "{}", out.stderr);
+    assert!(out.stdout.contains("feat/x"), "{}", out.stdout);
+    assert!(out.stdout.contains("feat/waiting"), "{}", out.stdout);
+    assert!(out.stdout.contains("Pick a variant"), "{}", out.stdout);
+    assert!(!out.stdout.contains("wrote"), "{}", out.stdout);
+    assert!(!repo.path(".git/fearlezz/overview.html").exists());
+    // Only the host has a page.
+    assert!(!repo.fz(&["--page"]).ok);
+}
 
 #[test]
 fn a_detached_head_needs_a_journal_name() {

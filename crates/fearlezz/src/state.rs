@@ -73,40 +73,13 @@ pub(crate) struct CheckView {
     pub id: String,
     pub stage: Stage,
     pub state: CheckState,
-    /// How its stills and films compare with the base, for a passing run.
+    /// How its stills and films compare with the base, for a passing run. A person reviews
+    /// what changed on the pull request; it never holds the work.
     pub look: Option<crate::look::Look>,
-    /// The approval of its pictures as they are now.
-    pub approved: Option<Approved>,
     /// The findings in scope of its latest run on these inputs.
     pub findings: Vec<crate::findings::Finding>,
     /// What red before green found for its passing run on these inputs, against this base.
     pub red: Option<crate::red::Mark>,
-}
-
-/// An approval of a check's changed pictures.
-#[derive(Clone, Debug)]
-pub(crate) struct Approved {
-    /// The developer's words.
-    pub said: String,
-    /// Who approved on the pull request, as CI checked; none when the agent reported it.
-    pub by: Option<String>,
-}
-
-impl Approved {
-    /// For example `approved on GitHub by @lead ("ship it")`.
-    pub(crate) fn label(&self) -> String {
-        match &self.by {
-            Some(by) => format!("approved on GitHub by @{by} (\"{}\")", self.said),
-            None => format!("approved (\"{}\")", self.said),
-        }
-    }
-}
-
-impl CheckView {
-    /// Changed pictures nobody approved yet.
-    pub(crate) fn needs_approval(&self) -> bool {
-        self.approved.is_none() && self.look.as_ref().is_some_and(|l| l.to_look_at() > 0)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -135,6 +108,32 @@ pub(crate) struct View {
     pub next: String,
 }
 
+impl View {
+    /// At the final stage, how many pictures differ from the base and in which checks, for a
+    /// person to review on the pull request. They never hold the work, so this only informs.
+    /// Flaky pictures do not count. None at other stages or when nothing changed.
+    pub(crate) fn pictures_to_review(&self, config: &Config) -> Option<String> {
+        if self.stage != config.stages.last() {
+            return None;
+        }
+        let looks: Vec<&crate::look::Look> = self
+            .checks
+            .iter()
+            .filter_map(|c| c.look.as_ref())
+            .filter(|l| l.to_look_at() > 0)
+            .collect();
+        let count: usize = looks.iter().map(|l| l.to_look_at()).sum();
+        let checks: Vec<&str> = looks.iter().map(|l| l.check.as_str()).collect();
+        let noun = if count == 1 { "picture" } else { "pictures" };
+        (count > 0).then(|| {
+            format!(
+                "{count} {noun} changed ({}): a person reviews them on the pull request",
+                checks.join(", ")
+            )
+        })
+    }
+}
+
 impl Group {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -154,8 +153,8 @@ pub(crate) const READY: &str = "all proof is in: ready to merge";
 /// The next line at the final stage when the change fails the floor of the base branch.
 pub(crate) const FLOOR_NEXT: &str = "the change takes away proof the base branch requires \
                                      (above): restore it, or ask the developer whether a \
-                                     person with admin rights should accept it on the pull \
-                                     request: fearlezz say ask \"<question>\"";
+                                     person with admin rights should merge past the required \
+                                     check: fearlezz say ask \"<question>\"";
 
 /// The next line after proving a commit, where no work is being judged.
 pub(crate) const COMMIT_PROVEN: &str =
@@ -173,8 +172,6 @@ pub(crate) fn view(
     let mut went_back = None;
     let mut waiting = None;
     let mut last_note = None;
-    let mut approvals: std::collections::BTreeMap<String, (String, Approved)> =
-        std::collections::BTreeMap::default();
     for entry in &journal.entries {
         match &entry.event {
             Event::Stage { to, reason } => {
@@ -185,28 +182,6 @@ pub(crate) fn view(
                 waiting = None;
             }
             Event::Ran { .. } => waiting = None,
-            Event::Approve {
-                check,
-                key,
-                said,
-                by,
-                ..
-            } => {
-                let approved = Approved {
-                    said: said.clone(),
-                    by: by.clone(),
-                };
-                // The agent's report of what the developer said never replaces an approval
-                // a person gave on the pull request for the same inputs.
-                let weaker = by.is_none()
-                    && approvals
-                        .get(check)
-                        .is_some_and(|(k, a)| k == key && a.by.is_some());
-                if !weaker {
-                    approvals.insert(check.clone(), (key.clone(), approved));
-                }
-                waiting = None;
-            }
             Event::Wait { question } => waiting = Some(question.clone()),
             Event::Note { text } => last_note = Some((entry.at, text.clone())),
             Event::Retired => {}
@@ -271,16 +246,11 @@ pub(crate) fn view(
                     }
                 }
             };
-            let approved = approvals
-                .get(&check.id)
-                .filter(|(key, _)| *key == inputs.key)
-                .map(|(_, approved)| approved.clone());
             checks.push(CheckView {
                 id: check.id.clone(),
                 stage: check.stage,
                 state,
                 look: compared.look,
-                approved,
                 findings,
                 red: compared.red,
             });
@@ -299,7 +269,6 @@ pub(crate) fn view(
                         Outcome::Failed => CheckState::Failed,
                     },
                     look: None,
-                    approved: None,
                     findings: Vec::new(),
                     red: None,
                 });
@@ -433,7 +402,7 @@ fn compared(
     Ok(Compared {
         look,
         // A look recorded but gone or unreadable is missing, so the next run makes it again
-        // rather than the check reading ok with nothing to approve.
+        // rather than the check reading ok with no pictures to show.
         missing: (wants_look && look_missing) || wants_red,
         red: against.red,
     })
@@ -506,20 +475,6 @@ fn next(
     }
     if v.checks.is_empty() {
         return "make a change; fearlezz --plan shows the proof it will need".into();
-    }
-    if let Some(l) = due
-        .iter()
-        .find(|c| c.needs_approval())
-        .and_then(|c| c.look.as_ref())
-    {
-        return format!(
-            "look at {0} ({1}): {2}; when the developer agrees: fearlezz say approve {0} --said \
-             \"<their words>\", or once they approved on the pull request: fearlezz say approve \
-             {0} --github",
-            l.check,
-            l.counts(),
-            l.report.display(),
-        );
     }
     if let Some(line) = red {
         return line.to_string();

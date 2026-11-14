@@ -5,6 +5,8 @@
 
 mod common;
 
+use std::path::PathBuf;
+
 use common::{Repo, runs};
 
 const RECORD: &str = r#"set -e
@@ -44,8 +46,29 @@ fn repo() -> (Repo, String) {
     (repo, counter)
 }
 
+/// The before and after files a run or status names for picture `name`, when it names them.
+fn files_of(out: &common::Output, name: &str) -> (Option<PathBuf>, Option<PathBuf>) {
+    let lines = out.lines();
+    let at = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with(&format!("{name}:")))
+        .unwrap_or_else(|| panic!("no line for {name}: {}", out.stdout));
+    let mut files = (None, None);
+    for line in lines.iter().skip(at + 1) {
+        let line = line.trim();
+        if let Some(path) = line.strip_prefix("before: ") {
+            files.0 = Some(PathBuf::from(path));
+        } else if let Some(path) = line.strip_prefix("after: ") {
+            files.1 = Some(PathBuf::from(path));
+        } else {
+            break;
+        }
+    }
+    files
+}
+
 #[test]
-fn run_compares_stills_with_the_base_and_writes_a_report() {
+fn run_compares_stills_with_the_base_and_names_their_files() {
     let (repo, counter) = repo();
     let out = repo.fz_env(&["run"], &[("COUNTER", &counter)]);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
@@ -55,18 +78,19 @@ fn run_compares_stills_with_the_base_and_writes_a_report() {
         "{}",
         out.stdout
     );
-    let report = out
-        .lines()
-        .iter()
-        .find_map(|l| l.trim().strip_prefix("report: "))
-        .map(std::path::PathBuf::from)
-        .expect("a report line");
-    let html = std::fs::read_to_string(&report).unwrap();
-    assert!(html.contains("home") && html.contains("extra"), "{html}");
-    assert!(
-        html.contains("class=\"mark\""),
-        "the changed area is outlined"
-    );
+    assert!(out.stdout.contains("home.png: changed"), "{}", out.stdout);
+    let (before, after) = files_of(&out, "home.png");
+    let (before, after) = (before.expect("a before"), after.expect("an after"));
+    assert!(before.is_file() && after.is_file(), "{}", out.stdout);
+    assert_ne!(std::fs::read(&before).unwrap(), std::fs::read(&after).unwrap());
+    let (none, extra) = files_of(&out, "extra.png");
+    assert!(none.is_none(), "a new picture has no before: {}", out.stdout);
+    assert!(extra.unwrap().is_file(), "{}", out.stdout);
+    // Pictures that stay the same are counted, not listed.
+    assert!(!out.stdout.contains("about.png:"), "{}", out.stdout);
+    // Only the host has a page.
+    assert!(!out.stdout.contains("report"), "{}", out.stdout);
+    assert!(!after.parent().unwrap().parent().unwrap().join("index.html").exists());
     // The check ran once here and once on the base.
     assert_eq!(runs(std::path::Path::new(&counter)), 2);
 }
@@ -88,14 +112,9 @@ fn the_base_run_and_the_comparison_are_reused() {
 fn a_broken_look_needs_a_new_comparison_instead_of_reading_ok() {
     let (repo, counter) = repo();
     let out = repo.fz_env(&["run"], &[("COUNTER", &counter)]);
-    let report = out
-        .lines()
-        .iter()
-        .find_map(|l| l.trim().strip_prefix("report: "))
-        .map(std::path::PathBuf::from)
-        .expect("a report line");
+    let after = files_of(&out, "home.png").1.expect("an after");
     // A look written in part, as a crash while writing it leaves it.
-    let look = report.parent().unwrap().join("look.json");
+    let look = after.parent().unwrap().parent().unwrap().join("look.json");
     std::fs::write(&look, "{\"check\":").unwrap();
     let status = repo.fz_env(&[], &[("COUNTER", &counter)]);
     assert!(
@@ -114,30 +133,68 @@ fn a_broken_look_needs_a_new_comparison_instead_of_reading_ok() {
 }
 
 #[test]
-fn status_and_next_point_at_the_report() {
+fn status_names_the_changed_pictures_with_their_files() {
     let (repo, counter) = repo();
     repo.fz_env(&["run"], &[("COUNTER", &counter)]);
     let status = repo.fz_env(&[], &[("COUNTER", &counter)]);
     assert!(
-        status.stdout.contains("look screens: 1 changed"),
+        status.stdout.contains("look screens: 1 changed, 1 new, 1 same"),
         "{}",
         status.stdout
     );
+    let (before, after) = files_of(&status, "home.png");
+    assert!(before.unwrap().is_file(), "{}", status.stdout);
+    assert!(after.unwrap().is_file(), "{}", status.stdout);
+    assert!(!status.stdout.contains("approv"), "{}", status.stdout);
+    assert_eq!(
+        status.last_line(),
+        "next: when ready: fearlezz run --stage merge",
+        "{}",
+        status.stdout
+    );
+}
+
+#[test]
+fn the_final_stage_is_ready_with_changed_pictures_and_names_them() {
+    let (repo, counter) = repo();
+    repo.commit("blue");
+    ran(&repo, &counter, &["run", "--stage", "merge", "--no-run"]);
+    let out = ran(&repo, &counter, &["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
-        status.last_line().starts_with("next: look at screens"),
+        out.stdout.contains(
+            "2 pictures changed (screens): a person reviews them on the pull request"
+        ),
         "{}",
-        status.stdout
+        out.stdout
     );
+    assert_eq!(
+        out.last_line(),
+        "next: all proof is in: ready to merge",
+        "{}",
+        out.stdout
+    );
+    let status = ran(&repo, &counter, &[]);
     assert!(
-        status.last_line().contains("fearlezz say approve screens"),
+        status.stdout.contains(
+            "2 pictures changed (screens): a person reviews them on the pull request"
+        ),
         "{}",
         status.stdout
     );
-    assert!(
-        status.stdout.contains("needs the developer's approval"),
-        "{}",
-        status.stdout
-    );
+    assert_eq!(status.last_line(), "next: all proof is in: ready to merge");
+}
+
+#[test]
+fn say_approve_is_gone() {
+    let (repo, counter) = repo();
+    ran(&repo, &counter, &["run"]);
+    for args in [
+        vec!["say", "approve", "screens", "--said", "looks good"],
+        vec!["say", "approve", "screens", "--github"],
+    ] {
+        assert!(!ran(&repo, &counter, &args).ok, "{args:?}");
+    }
 }
 
 #[test]
@@ -166,11 +223,9 @@ fn a_check_that_fails_on_the_base_says_there_is_no_before() {
     // Without a before every picture is new, so nobody merges them unseen.
     assert!(out.stdout.contains("2 new"), "{}", out.stdout);
     let status = repo.fz_env(&[], &[("COUNTER", &counter)]);
-    assert!(
-        status.last_line().starts_with("next: look at screens"),
-        "{}",
-        status.stdout
-    );
+    let (before, after) = files_of(&status, "home.png");
+    assert!(before.is_none(), "{}", status.stdout);
+    assert!(after.unwrap().is_file(), "{}", status.stdout);
 }
 
 fn ran(repo: &Repo, counter: &str, args: &[&str]) -> common::Output {
@@ -315,7 +370,7 @@ films = "films/**/*.gif"
 }
 
 #[test]
-fn flaky_pictures_are_shown_but_never_wait_for_approval() {
+fn flaky_pictures_are_shown_apart() {
     let repo = Repo::new(
         &format!("{CONFIG}flaky = [\"home.png\"]\n"),
         &[
@@ -336,6 +391,12 @@ fn flaky_pictures_are_shown_but_never_wait_for_approval() {
         "{}",
         out.stdout
     );
+    assert!(
+        out.stdout.contains("home.png (flaky): changed"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("pictures changed"), "{}", out.stdout);
     assert_eq!(
         out.last_line(),
         "next: all proof is in: ready to merge",
@@ -511,11 +572,9 @@ fn a_change_that_removes_every_picture_shows_them_gone() {
         out.stdout
     );
     let status = repo.fz(&[]);
-    assert!(
-        status.last_line().starts_with("next: look at screens"),
-        "{}",
-        status.stdout
-    );
+    let (before, after) = files_of(&status, "desktop/home");
+    assert!(before.unwrap().is_file(), "{}", status.stdout);
+    assert!(after.is_none(), "{}", status.stdout);
 }
 
 #[test]
