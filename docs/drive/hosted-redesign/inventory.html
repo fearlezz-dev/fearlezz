@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hosted redesign inventory</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:var(--secondary,#EEF1F5); --panel:var(--card,#fff); --ink:var(--foreground,#18212E); --soft:var(--muted-foreground,#5A6577); --line:var(--border,#D5DBE4);
+  --keep:var(--success,#1E7A52); --host:var(--info,#2D55C8); --gone:var(--destructive,#B53A26); --new:var(--chart-4,#7442B8); --wait:var(--warning,#A86410);
+  --keep-bg:color-mix(in srgb,var(--keep) 14%,transparent); --host-bg:color-mix(in srgb,var(--host) 14%,transparent);
+  --gone-bg:color-mix(in srgb,var(--gone) 14%,transparent); --new-bg:color-mix(in srgb,var(--new) 14%,transparent);
+  --wait-bg:color-mix(in srgb,var(--wait) 16%,transparent);
+}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);font:16px/1.55 "IBM Plex Sans",system-ui,sans-serif}
+main{max-width:980px;margin:0 auto;padding:16px 0 48px}
+h1,h2,h3{font-family:"Bricolage Grotesque",sans-serif;line-height:1.1;margin:0}
+h1{font-size:clamp(2rem,5vw,3.1rem);font-weight:700;letter-spacing:-.02em;max-width:18ch}
+h2{font-size:1.6rem;font-weight:700;margin:72px 0 18px}
+h3{font-size:1.1rem;font-weight:500;margin:0 0 8px}
+p{margin:0 0 12px;max-width:68ch}
+.lead{font-size:1.15rem;margin-top:18px}
+code,pre{font-family:"IBM Plex Mono",monospace;font-size:.86rem}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:760px){.grid2{grid-template-columns:1fr}}
+ul{margin:0;padding-left:20px}
+li{margin:4px 0}
+b{font-weight:600}
+.tag{display:inline-block;font-size:.78rem;font-weight:600;padding:2px 9px;border-radius:99px;white-space:nowrap}
+.keep{color:var(--keep);background:var(--keep-bg)}
+.host{color:var(--host);background:var(--host-bg)}
+.gone{color:var(--gone);background:var(--gone-bg)}
+.new{color:var(--new);background:var(--new-bg)}
+.wait{color:var(--wait);background:var(--wait-bg)}
+table{width:100%;border-collapse:collapse;font-size:.94rem}
+th{text-align:left;font-weight:600;color:var(--soft);padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.tablewrap{overflow-x:auto}
+details{border:1px solid var(--line);border-radius:12px;background:var(--panel);margin:10px 0}
+summary{cursor:pointer;padding:14px 18px;font-weight:500;list-style:none;display:flex;gap:12px;align-items:center;justify-content:space-between}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";font-family:"IBM Plex Mono";color:var(--soft);transition:transform .2s}
+details[open] summary::after{transform:rotate(45deg)}
+details > div{padding:0 18px 16px}
+.verdict{margin-top:34px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media (max-width:760px){.verdict{grid-template-columns:1fr}}
+.verdict .panel h3{font-size:1rem}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
+svg text{font-family:"IBM Plex Sans",sans-serif}
+.flow{width:100%;height:auto;display:block}
+.mock{display:grid;grid-template-columns:1.25fr 1fr;gap:16px;align-items:start}
+@media (max-width:760px){.mock{grid-template-columns:1fr}}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-x:auto;margin:0;line-height:1.5}
+.q{border:2px solid var(--host);}
+.opt{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:14px 0 0}
+.opt .tag{align-self:start;margin-top:2px}
+.rec{outline:2px solid var(--keep);outline-offset:4px;border-radius:12px}
+@media (prefers-reduced-motion:no-preference){
+  .region{animation:draw 1.2s .4s ease-out both}
+  @keyframes draw{from{stroke-dashoffset:520}to{stroke-dashoffset:0}}
+}
+</style>
+</head>
+<body>
+<main>
+
+<h1>The host should own the review. CI should only prove.</h1>
+<p class="lead">Today <b>CI owns everything a person sees</b>: the page, the PR comment, the pictures and the approval state. The host is a <b>file server with a bar on top</b>. That is why the page cannot be live and feedback has nowhere to go.</p>
+
+<div class="verdict">
+  <div class="panel"><h3>What I found</h3><p>The page URL already comes from the host. The real problem is that <b>CI writes the HTML</b>, so the host can only frame it.</p></div>
+  <div class="panel"><h3>What I propose</h3><p>CI sends <b>data and progress</b>. The host draws a <b>live page</b>, records approvals and notes, and sets the GitHub check itself.</p></div>
+  <div class="panel"><h3>What you decide first</h3><p>Whether <b>free CI keeps approvals at all</b>. It decides how much of the core gets deleted. <a href="#decide">Jump to it</a>.</p></div>
+</div>
+
+<h2>Today versus proposed</h2>
+<div class="grid2">
+  <div class="panel">
+    <h3>Today</h3>
+    <svg class="flow" viewBox="0 0 420 300" role="img" aria-label="Today: CI writes the page, comment, pictures branch and status; the host frames the page; approvals go through PR comments and a second workflow.">
+      <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+      <g fill="none" stroke="var(--line)" stroke-width="1.5">
+        <rect x="10" y="20" width="120" height="56" rx="10" fill="var(--wait-bg)" stroke="var(--wait)"/>
+        <rect x="290" y="20" width="120" height="56" rx="10" fill="var(--panel)"/>
+        <rect x="290" y="130" width="120" height="56" rx="10" fill="var(--panel)"/>
+        <rect x="10" y="130" width="120" height="56" rx="10" fill="var(--panel)"/>
+        <rect x="150" y="230" width="120" height="56" rx="10" fill="var(--gone-bg)" stroke="var(--gone)"/>
+      </g>
+      <g font-size="13" fill="var(--ink)" text-anchor="middle">
+        <text x="70" y="44" font-weight="600">CI run</text><text x="70" y="62" fill="var(--soft)">writes HTML</text>
+        <text x="350" y="44" font-weight="600">Host</text><text x="350" y="62" fill="var(--soft)">frames it</text>
+        <text x="350" y="154" font-weight="600">GitHub PR</text><text x="350" y="172" fill="var(--soft)">comment, status</text>
+        <text x="70" y="154" font-weight="600">pictures branch</text><text x="70" y="172" fill="var(--soft)">for the comment</text>
+        <text x="210" y="254" font-weight="600">2nd workflow</text><text x="210" y="272" fill="var(--soft)">parses comments</text>
+      </g>
+      <g stroke="var(--soft)" stroke-width="1.5" fill="none" color="var(--soft)">
+        <path d="M130 48H286" marker-end="url(#a1)"/>
+        <path d="M110 76L300 132" marker-end="url(#a1)"/>
+        <path d="M70 76V126" marker-end="url(#a1)"/>
+        <path d="M350 76V126" marker-end="url(#a1)" stroke-dasharray="4 4"/>
+        <path d="M330 186L250 228" marker-end="url(#a1)"/>
+        <path d="M200 230L310 188" marker-end="url(#a1)"/>
+      </g>
+      <g font-size="11" fill="var(--soft)">
+        <text x="160" y="40">bundle + index.html</text>
+        <text x="356" y="106">posts /fearlezz approve</text>
+      </g>
+    </svg>
+    <p><b>Four writers</b> to the PR, state hidden in a comment, a second workflow to react.</p>
+  </div>
+  <div class="panel">
+    <h3>Proposed</h3>
+    <svg class="flow" viewBox="0 0 420 300" role="img" aria-label="Proposed: CI streams progress and data to the host; the host draws the live page, writes the check run and the one PR comment; the agent reads notes from the host.">
+      <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+      <g fill="none" stroke="var(--line)" stroke-width="1.5">
+        <rect x="10" y="20" width="120" height="56" rx="10" fill="var(--panel)"/>
+        <rect x="150" y="122" width="120" height="64" rx="10" fill="var(--host-bg)" stroke="var(--host)"/>
+        <rect x="290" y="20" width="120" height="56" rx="10" fill="var(--panel)"/>
+        <rect x="290" y="230" width="120" height="56" rx="10" fill="var(--panel)"/>
+        <rect x="10" y="230" width="120" height="56" rx="10" fill="var(--new-bg)" stroke="var(--new)"/>
+      </g>
+      <g font-size="13" fill="var(--ink)" text-anchor="middle">
+        <text x="70" y="44" font-weight="600">CI run</text><text x="70" y="62" fill="var(--soft)">proves, sends data</text>
+        <text x="210" y="150" font-weight="600">Host</text><text x="210" y="168" fill="var(--soft)">owns the review</text>
+        <text x="350" y="44" font-weight="600">GitHub PR</text><text x="350" y="62" fill="var(--soft)">one check, one comment</text>
+        <text x="350" y="254" font-weight="600">Live page</text><text x="350" y="272" fill="var(--soft)">approve, annotate</text>
+        <text x="70" y="254" font-weight="600">Agent CLI</text><text x="70" y="272" fill="var(--soft)">reads notes</text>
+      </g>
+      <g stroke="var(--soft)" stroke-width="1.5" fill="none" color="var(--soft)">
+        <path d="M90 76L170 120" marker-end="url(#a2)"/>
+        <path d="M250 120L320 78" marker-end="url(#a2)"/>
+        <path d="M250 186L315 228" marker-end="url(#a2)"/>
+        <path d="M320 230L262 188" marker-end="url(#a2)" stroke-dasharray="4 4"/>
+        <path d="M160 186L100 228" marker-end="url(#a2)"/>
+      </g>
+      <g font-size="11" fill="var(--soft)">
+        <text x="40" y="104">progress, data, media</text>
+        <text x="282" y="110">check run as the app</text>
+        <text x="300" y="212">live</text>
+      </g>
+    </svg>
+    <p><b>One writer</b> to the PR (the app). CI needs only <code>id-token: write</code> in hosted mode.</p>
+  </div>
+</div>
+
+<h2>What hurts today</h2>
+<div class="grid2">
+  <div class="panel"><h3>The page is frozen</h3><p>CI writes <code>index.html</code> once, at the end. The host has <b>no running or waiting state</b>: a proof row is hidden until CI says done. No push, no poll anywhere.</p></div>
+  <div class="panel"><h3>Shell and frame fight</h3><p>The page comes from CI, so it is untrusted. The bar above it must own every button; the page can only <b>prefill words by postMessage</b>. Two halves of one screen.</p></div>
+  <div class="panel"><h3>Approval is a comment</h3><p>The host posts <code>/fearlezz approve</code> as you. A second workflow parses it, re-reads GitHub up to 4 times, guards ordering, and replies. Its state hides in a <b>comment's hidden line</b>.</p></div>
+  <div class="panel"><h3>No feedback channel</h3><p>The only thing the agent can read back is an approval (<code>say approve --github</code>). <b>No notes, no regions, no "not yet"</b>. Locally it is clipboard text.</p></div>
+</div>
+<details><summary>Evidence, with file and line</summary><div><ul>
+  <li>Host has no live state: no Durable Object, queue or cron in <code>ee/host/wrangler.toml</code>; proofs hidden until done (<code>ee/host/src/api.rs:208</code>).</li>
+  <li>Page HTML built in CI as one string with inline script: <code>crates/fearlezz/src/report.rs:825</code>; prefill message: <code>report.rs:751</code>.</li>
+  <li>Shell frames the files origin: <code>ee/host/src/pages.rs:413</code>; view token: <code>ee/host/src/approve.rs:151</code>.</li>
+  <li>Hidden waiting line in the status comment: <code>crates/fearlezz/src/github.rs:908</code>; settle with retries: <code>github.rs:581</code>; ordering guard: <code>github.rs:494</code>.</li>
+  <li>Pictures branch, built by URL in the CLI: <code>crates/fearlezz/src/action.rs:257</code>, pushed at <code>action.rs:613</code>, squashed weekly at <code>action.rs:459</code>. The same pictures already go to the host.</li>
+  <li>Only read path for the agent: <code>github.rs:666</code>.</li>
+  <li>Host pain: head check and latest write not atomic (<code>api.rs:251</code>), shell HTML and JS as hand escaped Rust strings (<code>pages.rs:358</code>), nothing is ever deleted.</li>
+</ul></div></details>
+
+<h2>Inventory, piece by piece</h2>
+<div class="legend">
+  <span class="tag keep">keep in free</span>
+  <span class="tag host">moves to host</span>
+  <span class="tag gone">delete</span>
+  <span class="tag new">new, hosted</span>
+</div>
+
+<div class="panel tablewrap">
+<table>
+<thead><tr><th>Piece</th><th>Today</th><th>Proposed</th></tr></thead>
+<tbody>
+<tr><td><b>Checks, journal, local page</b></td><td>Core, local</td><td><span class="tag keep">keep in free</span></td></tr>
+<tr><td><b>Prove the commit in CI</b> (<code>run --ci</code>, exit code, floor, red before green)</td><td>Core</td><td><span class="tag keep">keep in free</span></td></tr>
+<tr><td><b>Step summary</b> on the run page</td><td>Core, needs no permission</td><td><span class="tag keep">keep in free</span> becomes the free report</td></tr>
+<tr><td><b>Status comment</b> on the PR</td><td>CLI writes it (<code>github.rs</code>)</td><td><span class="tag host">moves to host</span> written by the app</td></tr>
+<tr><td><b><code>fearlezz/approval</code> status</b></td><td>CLI and 2nd workflow</td><td><span class="tag host">moves to host</span> a check run, with a link to the live page</td></tr>
+<tr><td><b>Pictures branch</b> (push, squash, cleanup)</td><td>CLI via git data API</td><td><span class="tag gone">delete</span> host serves pictures</td></tr>
+<tr><td><b>2nd workflow</b> (<code>pictures.yml</code>)</td><td>Reacts to comments</td><td><span class="tag gone">delete</span></td></tr>
+<tr><td><b>Approve and accept by comment</b> (hidden line, replies, ordering, retries)</td><td>Core</td><td><span class="tag gone">delete</span> depends on your choice below</td></tr>
+<tr><td><b><code>say approve --github</code></b></td><td>Reads comments</td><td><span class="tag gone">delete</span> replaced by reading the host</td></tr>
+<tr><td><b>Proof bundle with <code>index.html</code></b></td><td>CI writes, uploads at end</td><td><span class="tag host">moves to host</span> data and media only, sent as the run goes</td></tr>
+<tr><td><b>OIDC upload, blobs by content</b></td><td>Host</td><td><span class="tag keep">keep</span> grows into run events</td></tr>
+<tr><td><b>Shell, frame, postMessage, view token</b></td><td>Host</td><td><span class="tag gone">delete</span> host draws the page itself</td></tr>
+<tr><td><b>Host posts comments as you</b></td><td>Host</td><td><span class="tag gone">delete</span> host records the approval</td></tr>
+<tr><td><b>Files origin and grants</b></td><td>Serves the whole page</td><td><span class="tag keep">keep</span> only for pictures and films</td></tr>
+<tr><td><b>Sign in, sessions, access mirrors GitHub, share links</b></td><td>Host</td><td><span class="tag keep">keep</span></td></tr>
+<tr><td><b>Live run status</b> (waiting, running, check by check)</td><td>None</td><td><span class="tag new">new</span> GitHub webhooks plus CI events</td></tr>
+<tr><td><b>Review per picture</b> (looks right, needs change)</td><td>Only in browser storage, locally</td><td><span class="tag new">new</span> stored on the host</td></tr>
+<tr><td><b>Notes with regions</b> on before, after or both, and film time</td><td>None</td><td><span class="tag new">new</span></td></tr>
+<tr><td><b>Agent reads notes</b> with the pictures marked</td><td>None</td><td><span class="tag new">new</span> through <code>fearlezz</code></td></tr>
+</tbody>
+</table>
+</div>
+<details><summary>How much code this touches (measured line counts)</summary><div>
+<table>
+<tr><th>File</th><th>Lines</th><th>What happens</th></tr>
+<tr><td><code>crates/fearlezz/src/github.rs</code></td><td>1381</td><td>Mostly deleted: comment, hidden line, settle, approval rule</td></tr>
+<tr><td><code>crates/fearlezz/src/action.rs</code></td><td>864</td><td>Shrinks: pictures branch, squash, settle tasks go</td></tr>
+<tr><td><code>crates/fearlezz/src/report.rs</code></td><td>1874</td><td>Keeps the local page; framing and prefill go</td></tr>
+<tr><td><code>ee/host/src/pages.rs</code></td><td>750</td><td>Replaced by the live app</td></tr>
+<tr><td><code>ee/host/src/approve.rs</code></td><td>253</td><td>Replaced by approvals stored on the host</td></tr>
+<tr><td><code>.github/workflows/pictures.yml</code></td><td>whole file</td><td>Deleted</td></tr>
+</table>
+</div></details>
+
+<h2>The feedback loop</h2>
+<p>A person marks a region on the new side, the old side or both. The agent gets the words and the picture with the region drawn on it.</p>
+<div class="mock">
+  <div class="panel">
+    <svg viewBox="0 0 520 250" class="flow" role="img" aria-label="Mock of a note: before and after card pictures side by side, a region drawn on the after picture around cut off button text, with the note text below.">
+      <g font-size="12" fill="var(--soft)"><text x="10" y="18">before</text><text x="270" y="18">after</text></g>
+      <rect x="10" y="28" width="240" height="150" rx="10" fill="var(--bg)" stroke="var(--line)"/>
+      <rect x="270" y="28" width="240" height="150" rx="10" fill="var(--bg)" stroke="var(--line)"/>
+      <g fill="var(--line)">
+        <rect x="30" y="48" width="140" height="14" rx="4"/><rect x="30" y="72" width="190" height="9" rx="4"/><rect x="30" y="88" width="170" height="9" rx="4"/>
+        <rect x="30" y="134" width="96" height="28" rx="8" fill="var(--keep)"/>
+        <rect x="290" y="48" width="140" height="14" rx="4"/><rect x="290" y="72" width="190" height="9" rx="4"/><rect x="290" y="88" width="170" height="9" rx="4"/>
+        <rect x="290" y="134" width="58" height="28" rx="8" fill="var(--keep)"/>
+      </g>
+      <text x="44" y="153" font-size="12" fill="#fff" font-weight="600">Continue</text>
+      <text x="300" y="153" font-size="12" fill="#fff" font-weight="600">Contin</text>
+      <rect class="region" x="282" y="126" width="120" height="44" rx="6" fill="none" stroke="var(--gone)" stroke-width="2.5" stroke-dasharray="520" />
+      <rect x="10" y="194" width="500" height="46" rx="10" fill="var(--panel)" stroke="var(--line)"/>
+      <circle cx="32" cy="217" r="10" fill="var(--host-bg)"/><text x="27" y="221" font-size="11" fill="var(--host)" font-weight="600">G</text>
+      <text x="52" y="213" font-size="13" fill="var(--ink)" font-weight="600">Needs change</text>
+      <text x="52" y="230" font-size="13" fill="var(--ink)">The button text is cut off. It should fit like before.</text>
+    </svg>
+  </div>
+  <div>
+<pre>$ fearlezz
+...
+waits  PR #24: 1 picture needs change
+       demo-card  card/dark.png  after
+       "The button text is cut off.
+        It should fit like before."
+next: fearlezz --notes  saves each note's
+      pictures with the region drawn</pre>
+  </div>
+</div>
+<details><summary>A note as data</summary><div>
+<pre>{
+  "id": "n_7f2a",
+  "head": "87c65fe",
+  "check": "demo-card",
+  "picture": "card/dark.png",
+  "side": "after",               // before | after | both
+  "region": { "x": 0.05, "y": 0.66, "w": 0.46, "h": 0.29 },
+  "at": null,                    // seconds, for a film
+  "words": "The button text is cut off. It should fit like before.",
+  "by": "gabber235",
+  "state": "open"                // open | resolved
+}</pre>
+<p>Regions in fractions of the picture, so they hold at any size. On the next proof the page shows the old note next to the new picture, and the person resolves it.</p>
+</div></details>
+
+<h2>What others do</h2>
+<div class="panel tablewrap">
+<table>
+<tr><th>Tool</th><th>Lesson for us</th></tr>
+<tr><td><b>Argos</b></td><td>MIT core plus hosted SaaS, CLI can review. Closest to our split.</td></tr>
+<tr><td><b>Chromatic, Percy</b></td><td>Approval lives in their dashboard, mirrored as a GitHub check plus one PR comment. Nobody approves by typing a comment.</td></tr>
+<tr><td><b>Vercel comments</b></td><td>Agents read threads by CLI with JSON and by MCP, and can reply. Feedback is DOM based (selector, x, y).</td></tr>
+<tr><td><b>Region notes on before and after</b></td><td>No precedent found. This is our own ground.</td></tr>
+<tr><td><b>GitHub check runs</b></td><td>Only apps can write them. They link to our page and can carry up to 3 buttons.</td></tr>
+</table>
+</div>
+<details><summary>Risks I see</summary><div><ul>
+  <li><b>Forks</b> get no OIDC token on <code>pull_request</code>. Hosted proof of a fork needs a follow up run or a maintainer step, same as today.</li>
+  <li><b>Live transport</b> on Cloudflare means Durable Objects (one per PR) with hibernating WebSockets. New to this codebase; needs a spike.</li>
+  <li><b>The UI stack.</b> A live page with drawing wants a real frontend, not Rust strings. Separate decision, after the split.</li>
+  <li><b>Approvals by the host</b> reverse an earlier decision ("no new trust in CI, the PR keeps the record"). The app's check run and comment keep a record; the trust moves to the host, which already holds the sign in.</li>
+</ul></div></details>
+
+<h2 id="decide">Decide first: does free CI keep approvals?</h2>
+<div class="panel q">
+<p>Everything else follows from this. It decides whether <code>github.rs</code>, the 2nd workflow and the pictures branch survive in the core.</p>
+<div class="opt rec">
+  <span class="tag keep">A, recommended</span>
+  <div><b>Free CI only proves.</b> Changed pictures are listed in the step summary and the bundle is an Actions artifact, but they do not block. A weakening fails; an admin bypasses branch protection. The human gate is GitHub's normal PR review. <b>All approval machinery leaves the core.</b> Hosted adds the live page, approvals and notes.</div>
+</div>
+<div class="opt">
+  <span class="tag wait">B</span>
+  <div><b>Free keeps comment approvals</b> as today; hosted adds the page on top. Two ways to approve, two authorities, and all of today's machinery stays.</div>
+</div>
+<div class="opt">
+  <span class="tag gone">C</span>
+  <div><b>Free CI blocks on changed pictures</b> with no way to approve except hosted or bypass. Strong upsell, but free users get a red check they cannot clear.</div>
+</div>
+</div>
+
+</main>
+</body>
+</html>
