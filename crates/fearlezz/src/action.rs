@@ -101,6 +101,15 @@ impl Workflow {
         self.text("/pull_request/head/sha")
     }
 
+    /// Whether the event is a pull request from this repository itself, not a fork. Its
+    /// `fearlezz/approval` status, held by the run of it that has a token, is where what waits
+    /// for a person waits; any run of it can tell, with a token or without.
+    pub(crate) fn own_pull_request(&self) -> bool {
+        self.event().pointer("/pull_request/number").is_some()
+            && self.repository.is_some()
+            && self.text("/pull_request/head/repo/full_name") == self.repository.as_deref()
+    }
+
     /// The pull request a proof is for, as the proof names it, when the event is one.
     pub(crate) fn pull(&self) -> Option<crate::proof::Pull> {
         Some(crate::proof::Pull {
@@ -518,13 +527,6 @@ pub(crate) struct Pull {
 }
 
 impl Pull {
-    /// Whether this run holds the `fearlezz/approval` status, so what waits for a person
-    /// (changed pictures, a weakened proof) waits there instead of failing the proof. A fork's
-    /// run writes nothing, so it cannot.
-    pub(crate) fn holds(&self) -> bool {
-        !self.fork
-    }
-
     /// Pushes the changed pictures in `dir`, writes the status comment and sets the status.
     /// GitHub refusing any of it is a warning: the proof stands on its own.
     pub(crate) fn report(&self, comment: &StatusComment, dir: Option<&Path>) {

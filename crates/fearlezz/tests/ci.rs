@@ -1842,6 +1842,22 @@ fn a_weakening_still_fails_a_ci_run_outside_a_pull_request() {
 }
 
 #[test]
+fn a_run_without_a_token_lets_a_weakening_wait_on_the_repositorys_own_pull_request() {
+    // Another job of the same pull request holds the status and makes it wait for an accept.
+    let gh = FakeGitHub::start();
+    let repo = branch_with_change();
+    with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
+    let head = head_of(&repo);
+    let event = pull_request(&head, "owner/repo");
+    let out = on_actions_with(&gh, &repo.root, "pull_request", &event, "42", "");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("weakens tests"), "{}", out.stdout);
+    let fork = pull_request(&head, "someone/repo");
+    let out = on_actions_with(&gh, &repo.root, "pull_request", &fork, "43", "");
+    assert!(!out.ok, "a fork's weakening still fails: {}", out.stdout);
+}
+
+#[test]
 fn a_forks_weakening_fails_its_proof() {
     let gh = FakeGitHub::start();
     let repo = branch_with_change();
