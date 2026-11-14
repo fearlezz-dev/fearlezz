@@ -17,7 +17,7 @@ pieces:
         evidence: [docs/drive/hosted-redesign/inventory.html]
   - id: live-page
     status: figuring-out
-    open: Transport proven (spike-live). Next is the events protocol.
+    open: Protocol version 2 and the live page are built (host-v2-foundation); pictures come next.
     tries:
       - id: spike-live
         what: Throwaway Rust worker with a DO per PR, events in, live Solid page, under wrangler dev.
@@ -117,8 +117,12 @@ slices:
       - crates/fearlezz/tests/core.rs (the_overview_of_every_journal_is_text_and_writes_no_page, a_journal_from_before_approvals_were_removed_still_reads)
     status: built
   - id: host-v2-foundation
-    tests: []
-    status: todo
+    tests:
+      - crates/fearlezz/tests/host.rs (the_run_streams_to_the_host_while_its_checks_run, a_finished_check_sends_its_entry_and_output_and_only_missing_blobs, done_sends_the_files_the_host_still_lacks_and_closes_again, the_log_and_the_summary_link_the_hosts_page, the_token_is_asked_for_the_hosts_origin, nothing_leaves_ci_when_the_app_is_not_installed, without_the_id_token_permission_nothing_is_asked, a_host_that_fails_never_fails_the_proof, every_call_to_the_host_asks_for_a_fresh_token)
+      - ee/host-tests/tests/host.rs (a_run_opens_and_answers_the_page_of_its_work, checks_stream_into_the_run, a_finished_check_asks_only_for_the_files_the_repository_lacks, done_is_refused_while_a_file_is_missing, a_run_takes_calls_only_from_its_own_repository_and_ref, a_closed_run_takes_nothing_more, a_run_for_another_pull_request_is_refused, a_run_for_another_branch_is_refused, the_work_page_is_served_for_a_navigation, an_unknown_work_is_not_found, the_files_origin_refuses_a_grant_for_another_run, a_page_shows_a_check_move_from_running_to_passed_live, a_page_opened_mid_run_shows_the_current_state, two_pages_both_update, and the kept sign in, access, OIDC and files tests)
+      - ee/host-tests/tests/types.rs (the_pages_types_are_the_proof_model)
+      - ee/app/src/live.test.ts (how a snapshot and events become the page's state)
+    status: done
   - id: pictures-on-page
     tests: []
     status: todo
@@ -135,4 +139,4 @@ slices:
     tests: []
     status: todo
 
-next: Build host-v2-foundation on refactor/hosted-proof-redesign; the v1 host shows an empty page until then, since the bundle has no index.html.
+next: Build pictures-on-page on refactor/hosted-proof-redesign: the live page shows each check's changed pictures from the files origin.

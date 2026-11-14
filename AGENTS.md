@@ -13,7 +13,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 
 ## Model
 
-- `crates/fearlezz-proof`: the proof bundle, `proof.json`, as serde types (checks, tests, findings, looks, weakenings, red before green) with what blocks, what to read and red before green's one wording; `waits.rs` derives `Obligations`, what waits for a person (a check's pictures, a fork's head, a weakening), and owns `Kind` (approve or accept: command word, wording, the role it needs). Only serde, so the host builds it to wasm; the core and `ee/host` both depend on it.
+- `crates/fearlezz-proof`: the proof bundle, `proof.json`, as serde types (checks, tests, findings, looks, weakenings, red before green) with what blocks, what to read and red before green's one wording; `waits.rs` derives `Obligations`, what waits for a person (a check's pictures, a fork's head, a weakening), and owns `Kind` (approve or accept: command word, wording, the role it needs); `events.rs` is protocol version 2 (what CI streams to the host, and what a live page receives). Only serde (ts-rs behind the `ts` feature generates the page's TypeScript types), so the host builds it to wasm; the core and `ee/host` both depend on it.
 - `config.rs`: `fearlezz.toml`, stages and checks; a check's `inputs` are what it reads (the reuse key, by default every file outside `no_proof`), a speed hint that never decides whether it is needed.
 - `init.rs`: `fearlezz setup init`, the starter `fearlezz.toml` from the languages at a repository's root.
 - `git.rs`: the facts read from git (root, common dir, changed files, tree id, worktrees).
@@ -33,7 +33,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `record.rs`: recording an app's window on macOS (ScreenCaptureKit through objc2): `fearlezz --still` and a check's `record` table; `record/place.rs` parks it off the developer's screens (`FEARLEZZ_OFF_SCREEN=1`), by AeroSpace when it runs, Accessibility otherwise, gives focus back, and puts back the window positions the app saved while parked.
 - `look.rs`: comparing a check's pictures with the same check run on the base commit, and the lines naming each changed picture's before and after files.
 - `proof.rs`: a check's entry in the proof from its run, and writing the bundle `run --ci --proof` writes (the model is `fearlezz-proof`), which feeds the job summary and the upload. Only the proof host draws a page from it.
-- `host.rs`: sending the proof bundle to the proof host from GitHub Actions with an OIDC token (`[host] url`, default `https://fearlezz.seamlezz.com`), through curl; the host itself lives in `ee/host`.
+- `host.rs`: streaming a CI run to the proof host from GitHub Actions with an OIDC token (`[host] url`, default `https://fearlezz.seamlezz.com`), through curl: open, each check's start and end with its files, done with the bundle; a host error never fails the proof. The host itself lives in `ee/host`, its page in `ee/app`.
 - `red.rs`: red before green, a check run on the base commit with the change's test files laid over it.
 - `hooks.rs`: agent hooks (Claude Code, Codex, Cursor): what `setup sync` writes into each agent's settings, and the answers of `fearlezz setup hook` that hold an agent to the proof while it works.
 - `action.rs`: `run --ci` on GitHub Actions: `Workflow`, the one reader of GitHub's variables and event file (the repository, run page and pull request the proof names), the job summary in Markdown, and the pinned ffmpeg. The core writes nothing to GitHub.
