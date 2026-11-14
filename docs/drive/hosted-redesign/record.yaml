@@ -102,6 +102,10 @@ decided:
 
   - id: one-pr
     what: All slices on one branch, one pull request; hosted never breaks on main.
+  - id: no-local-approval
+    what: >-
+      The local approval (fearlezz say approve --said and --github) goes too. The final stage says
+      pictures changed and a person reviews them on the pull request; it does not wait.
 
 open: []
 
