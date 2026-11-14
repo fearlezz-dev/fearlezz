@@ -1,15 +1,16 @@
 //! The pages on the app origin: a proof's shell, which frames its bundle from the files origin
-//! and passes on what the page asks to approve or accept, and a pull request's latest whole
+//! and holds the Approve and Accept controls in its own bar, and a pull request's latest whole
 //! proof. Who sees them mirrors GitHub: anyone for a public
 //! repository, people who may read it for a private one, and `404` for everyone else, so a
 //! private repository's name is not confirmed.
 
-use fearlezz_proof::waits::Role;
+use fearlezz_proof::Proof;
+use fearlezz_proof::waits::{Kind, Role, Weakening};
 use serde::Deserialize;
 use worker::{Env, Headers, Request, Response};
 
 use crate::session::{self, to_sign_in};
-use crate::{Answer, Config, Refusal, cache, crypto, files, github, repo_key};
+use crate::{Answer, Config, Refusal, approve, cache, crypto, files, github, repo_key};
 
 /// How long the host trusts GitHub's word on who may see a repository.
 const SIGHT_SECONDS: i64 = 300;
@@ -54,34 +55,35 @@ pub async fn open(req: &Request, env: &Env, config: &Config, repo: &str) -> Resu
     Ok(public)
 }
 
-/// Whether the signed in person may share the repository's pull requests: write access, as
-/// GitHub's collaborator permission says, kept as long as who may read. It only decides whether
-/// the shell shows the control; making and revoking a link ask GitHub again.
-async fn shares(
-    req: &Request,
+/// The signed in person's role on the repository, as GitHub's collaborator permission says,
+/// kept as long as who may read; `Less` when their token no longer works. It only decides which
+/// controls the shell shows; approving, accepting, making and revoking a link ask GitHub again.
+async fn role(
     env: &Env,
     config: &Config,
+    person: &session::Session,
     owner: &str,
     name: &str,
-) -> Result<bool, Refusal> {
-    let Some(person) = session::read(req, env).await? else {
-        return Ok(false);
-    };
+) -> Result<Role, Refusal> {
     let key = format!(
-        "writes:{}:{}",
+        "role:{}:{}",
         person.login.to_lowercase(),
         repo_key(owner, name)
     );
     if let Some(cached) = cache::get(env, &key).await? {
-        return Ok(cached == "yes");
+        return Ok(Role::of(&cached));
     }
     let full = format!("{owner}/{name}");
-    let writes = match github::permission(config, &full, &person.login, &person.token).await? {
-        Some(role) => role >= Role::Write,
-        None => return Ok(false),
+    let Some(role) = github::permission(config, &full, &person.login, &person.token).await? else {
+        return Ok(Role::Less);
     };
-    cache::put(env, &key, if writes { "yes" } else { "no" }, SIGHT_SECONDS).await?;
-    Ok(writes)
+    let word = match role {
+        Role::Admin => "admin",
+        Role::Write => "write",
+        Role::Less => "read",
+    };
+    cache::put(env, &key, word, SIGHT_SECONDS).await?;
+    Ok(role)
 }
 
 /// The latest whole proof of a pull request, if it has one.
@@ -167,25 +169,132 @@ pub async fn shell(
         _ => return Err(not_found()),
     }
     let row = whole(env, &repo, id).await?.ok_or_else(not_found)?;
+    let proof: Proof = serde_json::from_str(&row.proof)
+        .map_err(|e| worker::Error::RustError(format!("a stored proof does not read back: {e}")))?;
+    let full = format!("{owner}/{name}");
+    let path = format!("/{owner}/{name}/proofs/{id}/");
+    let person = session::read(req, env).await?;
+    let role = match &person {
+        Some(person) => role(env, config, person, owner, name).await?,
+        None => Role::Less,
+    };
     let share = match row.pull {
-        Some(pull) if shares(req, env, config, owner, name).await? => {
+        Some(pull) if role >= Role::Write => {
             Some(format!("/{owner}/{name}/pull/{}/share", pull as u64))
         }
         _ => None,
     };
+    // What waits is read from the host's own copy of the proof, never from the page.
+    let waits = match row.pull {
+        Some(_) => Waits::of(&proof),
+        None => Waits::default(),
+    };
+    let offer = match &person {
+        _ if waits.is_empty() => Offer::Nothing,
+        None => Offer::SignIn {
+            next: path.clone(),
+            kinds: waits.kinds(),
+        },
+        Some(person) => {
+            // The first kind that waits names what they cannot do, when they can do nothing.
+            let kind = waits.kinds()[0];
+            let can = waits.allowed(role);
+            if can.is_empty() {
+                Offer::Cannot(format!(
+                    "@{} cannot {} here: that needs {} {full} on GitHub.",
+                    person.login,
+                    kind.act(),
+                    kind.needs_on()
+                ))
+            } else {
+                Offer::Controls(can)
+            }
+        }
+    };
+    let view = match &person {
+        Some(person) => Some(approve::view_token(config, &person.id, &repo, id).await?),
+        None => None,
+    };
     let view = View {
-        title: title(&format!("{owner}/{name}"), &row.proof),
+        title: title(&full, &row.proof),
         frame: format!("{}index.html", files::folder(config, &repo, id).await?),
         act: Act::Post {
-            proof: format!("/{owner}/{name}/proofs/{id}/"),
+            proof: path,
             share,
+            view,
+            offer,
         },
     };
     render(config, view)
 }
 
-/// What a shell shows: its title, the bundle page it frames, and what it does when the page asks
-/// to approve or accept.
+/// What waits for a person in a proof of a pull request, as the shell offers it: one Approve per
+/// check whose changed pictures wait (a fork's approval names its head; the host words that when
+/// it posts), and one Accept below every weakening that waits, since one accept covers them all.
+#[derive(Default)]
+pub struct Waits {
+    approve: Vec<String>,
+    accept: Vec<Weakening>,
+}
+
+impl Waits {
+    fn of(proof: &Proof) -> Waits {
+        let obligations = proof.obligations();
+        Waits {
+            approve: obligations
+                .checks()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            accept: obligations.weakenings().into_iter().cloned().collect(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.approve.is_empty() && self.accept.is_empty()
+    }
+
+    fn kinds(&self) -> Vec<Kind> {
+        let mut kinds = Vec::new();
+        if !self.approve.is_empty() {
+            kinds.push(Kind::Approve);
+        }
+        if !self.accept.is_empty() {
+            kinds.push(Kind::Accept);
+        }
+        kinds
+    }
+
+    /// What a person with `role` may settle of it.
+    fn allowed(self, role: Role) -> Waits {
+        Waits {
+            approve: if Kind::Approve.allows(role) {
+                self.approve
+            } else {
+                Vec::new()
+            },
+            accept: if Kind::Accept.allows(role) {
+                self.accept
+            } else {
+                Vec::new()
+            },
+        }
+    }
+}
+
+/// What the shell's bar offers to settle.
+pub enum Offer {
+    /// Nothing waits.
+    Nothing,
+    /// Something waits and nobody is signed in: a way to sign in and come back.
+    SignIn { next: String, kinds: Vec<Kind> },
+    /// Something waits that the person may not settle: why, and nothing to press.
+    Cannot(String),
+    /// What the person may settle, each with a field for their own words.
+    Controls(Waits),
+}
+
+/// What a shell shows: its title, the bundle page it frames, and what its bar offers to settle.
 pub struct View {
     pub title: String,
     pub frame: String,
@@ -193,14 +302,17 @@ pub struct View {
 }
 
 pub enum Act {
-    /// Opened at the proof's own address: approvals post to it with the session, and a person
-    /// with write access gets the pull request's share links.
+    /// Opened at the proof's own address: the bar's own controls post to it with the session and
+    /// the token of this view, and a person with write access gets the pull request's share links.
     Post {
         proof: String,
         share: Option<String>,
+        /// The token of a signed in person's view, which a post must carry.
+        view: Option<String>,
+        offer: Offer,
     },
-    /// Opened through a share link: the shell answers the page but never posts, and points to
-    /// the pull request's own address for signing in.
+    /// Opened through a share link: the shell offers nothing to settle and never posts, and
+    /// points to the pull request's own address for signing in.
     ViewOnly { pull: String },
 }
 
@@ -234,12 +346,14 @@ pub fn render(config: &Config, view: View) -> Answer {
 }
 
 /// The shell: a tiny bar above a frame filling the window. The sandbox lets the bundle run its
-/// scripts on its own origin, but never navigate the window away from the app. The page cannot
-/// reach the API from there, so when a person approves or accepts in it, it asks the shell by
-/// message; the shell takes messages only from its frame on the files origin. At the proof's own
-/// address it posts them to its own origin with the session, shows what came of it in a bar
-/// above the frame, and tells the page; opened by a share link it tells the page it only views.
-/// A person with write access also gets a Share control in the bar.
+/// scripts on its own origin, but never navigate the window away from the app. Approve and
+/// Accept live in the bar, built from the host's own copy of the proof for the person viewing,
+/// and only a press of one of them posts. The page, which the pull request's CI wrote, may send
+/// the words it holds by message; the shell takes messages only from its frame on the files
+/// origin, and a message only fills in the words of a control that is there and focuses it. It
+/// never posts, and never adds a control. After a post the shell tells the page what came of it.
+/// Opened by a share link it offers nothing to settle. A person with write access also gets a
+/// Share control in the bar.
 fn shell_html(view: &View, nonce: &str, files_origin: &str) -> String {
     let (title, frame) = (escape(&view.title), escape(&view.frame));
     let files = js(files_origin);
@@ -254,9 +368,20 @@ fn shell_html(view: &View, nonce: &str, files_origin: &str) -> String {
         ),
         _ => ("", ""),
     };
+    let (bar, note) = match &view.act {
+        Act::Post { offer, .. } => bar(offer),
+        Act::ViewOnly { .. } => (
+            String::new(),
+            "this page was opened through a share link, which only views".to_owned(),
+        ),
+    };
     let script = match &view.act {
-        Act::Post { proof, share } => {
-            let mut script = POST_SCRIPT.replace("__PROOF__", &js(proof));
+        Act::Post {
+            proof, share, view, ..
+        } => {
+            let mut script = POST_SCRIPT
+                .replace("__PROOF__", &js(proof))
+                .replace("__VIEW__", &js(view.as_deref().unwrap_or_default()));
             if let Some(share) = share {
                 script.push_str(&SHARE_SCRIPT.replace("__SHARE__", &js(share)));
             }
@@ -264,6 +389,7 @@ fn shell_html(view: &View, nonce: &str, files_origin: &str) -> String {
         }
         Act::ViewOnly { pull } => VIEW_SCRIPT.replace("__PULL__", &js(pull)),
     };
+    let note = js(&note);
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -276,12 +402,15 @@ fn shell_html(view: &View, nonce: &str, files_origin: &str) -> String {
 <body>
 <header><span class="title">{title}</span>{control}</header>
 {panel}
+{bar}
 <p id="said" role="status" hidden></p>
 <iframe src="{frame}" sandbox="allow-scripts allow-same-origin" title="{title}"></iframe>
 <script nonce="{nonce}">
 (function () {{
-var FILES = {files};
+var FILES = {files}, NOTE = {note};
 var frame = document.querySelector('iframe'), said = document.getElementById('said');
+var calm = window.matchMedia('(prefers-reduced-motion: reduce)');
+var acts = Array.prototype.slice.call(document.querySelectorAll('form[data-kind]'));
 function show(ok, text, link, label) {{
   said.textContent = text;
   if (link) {{
@@ -294,16 +423,30 @@ function show(ok, text, link, label) {{
   said.className = ok ? 'ok' : 'no';
   said.hidden = false;
 }}
+function tell(m) {{ frame.contentWindow.postMessage(m, FILES); }}
+// The control for what the page names, if the bar has one: a message can only find one.
+function control(kind, check) {{
+  return acts.filter(function (f) {{
+    return f.dataset.kind === kind && (kind === 'accept' || f.dataset.check === check);
+  }})[0] || null;
+}}
+// A message from the page may fill in words and focus; it never posts.
 window.addEventListener('message', function (e) {{
   if (e.source !== frame.contentWindow || e.origin !== FILES) return;
   var m = e.data || {{}};
-  var kind = m.kind === 'fearlezz:approve' ? 'approve' : m.kind === 'fearlezz:accept' ? 'accept' : null;
-  if (!kind || typeof m.words !== 'string') return;
+  if (m.kind !== 'fearlezz:fill' || (m.of !== 'approve' && m.of !== 'accept')) return;
   var check = typeof m.check === 'string' ? m.check : null;
-  function tell(ok, text) {{
-    frame.contentWindow.postMessage({{ kind: 'fearlezz:posted', of: kind, check: check, ok: ok, text: text }}, FILES);
+  var form = control(m.of, check);
+  if (!form) {{
+    if (NOTE) tell({{ kind: 'fearlezz:filled', of: m.of, check: check, ok: false, text: 'Not here: ' + NOTE + '.' }});
+    return;
   }}
-  act(kind, check, m.words, tell);
+  var input = form.querySelector('[name=words]');
+  if (typeof m.words === 'string' && m.words.trim() && !input.disabled) input.value = m.words.slice(0, 500);
+  form.scrollIntoView({{ block: 'nearest', behavior: calm.matches ? 'auto' : 'smooth' }});
+  input.focus();
+  form.classList.remove('filled'); void form.offsetWidth; form.classList.add('filled');
+  tell({{ kind: 'fearlezz:filled', of: m.of, check: check, ok: true, text: 'Your words are in the bar above. Press ' + form.dataset.label + ' there to post them as you.' }});
 }});
 {script}
 }})();
@@ -314,14 +457,104 @@ window.addEventListener('message', function (e) {{
     )
 }
 
+/// The bar's Approve and Accept for what `offer` lets the person settle, and what the shell
+/// tells the page when it names something the bar has no control for.
+fn bar(offer: &Offer) -> (String, String) {
+    match offer {
+        Offer::Nothing => (String::new(), String::new()),
+        Offer::SignIn { next, kinds } => {
+            let what = kinds
+                .iter()
+                .map(|k| k.word())
+                .collect::<Vec<_>>()
+                .join(" or ");
+            let link = format!("/login?next={}", next.replace('/', "%2F"));
+            (
+                format!(
+                    r#"<section id="waits" aria-label="Waits for you"><p class="hint">Something here waits for a person. <a href="{}">Sign in to {what}</a></p></section>"#,
+                    escape(&link)
+                ),
+                format!("sign in above to {what}"),
+            )
+        }
+        Offer::Cannot(why) => (
+            format!(
+                r#"<section id="waits" aria-label="Waits for you"><p class="hint">{}</p></section>"#,
+                prose(why)
+            ),
+            why.trim_end_matches('.').to_owned(),
+        ),
+        Offer::Controls(waits) => {
+            let mut html = String::from(r#"<section id="waits" aria-label="Waits for you">"#);
+            for check in &waits.approve {
+                let check = escape(check);
+                html.push_str(&format!(
+                    r#"<form class="act" data-kind="approve" data-check="{check}" data-label="Approve"><span class="what">Pictures of <code>{check}</code></span><input name="words" required maxlength="500" autocomplete="off" placeholder="{hint}" aria-label="Your words on the pictures of {check}"><button type="submit">Approve</button></form>"#,
+                    hint = Kind::Approve.hint(),
+                ));
+            }
+            if !waits.accept.is_empty() {
+                let label = match waits.accept.len() {
+                    1 => "Accept".to_owned(),
+                    2 => "Accept both".to_owned(),
+                    n => format!("Accept all {n}"),
+                };
+                html.push_str(&format!(
+                    r#"<form class="act" data-kind="accept" data-label="{label}"><ul>"#
+                ));
+                for weakening in &waits.accept {
+                    html.push_str(&format!(
+                        "<li>{}</li>",
+                        prose(&sentence(&weakening.to_string()))
+                    ));
+                }
+                html.push_str(&format!(
+                    r#"</ul><input name="words" required maxlength="500" autocomplete="off" placeholder="{hint}" aria-label="Why the weaker proof is right"><button type="submit">{label}</button></form>"#,
+                    hint = Kind::Accept.hint(),
+                ));
+            }
+            html.push_str("</section>");
+            (html, String::new())
+        }
+    }
+}
+
+/// Text with a capital first letter and a full stop, as a sentence.
+fn sentence(text: &str) -> String {
+    let mut chars = text.chars();
+    let mut out: String = match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    };
+    if !out.ends_with('.') {
+        out.push('.');
+    }
+    out
+}
+
+/// Escaped text whose `backticked` names read as code.
+fn prose(text: &str) -> String {
+    escape(text)
+        .split('`')
+        .enumerate()
+        .map(|(i, part)| {
+            if i % 2 == 1 {
+                format!("<code>{part}</code>")
+            } else {
+                part.to_owned()
+            }
+        })
+        .collect()
+}
+
 /// The shell's look: the colours of the core's pages (`crates/fearlezz/src/page.rs`), small, with
 /// borders all the way round, calm under reduced motion.
 const SHELL_STYLE: &str = r#"
 :root { --surface:#e7eaee; --mat:#fff; --sunk:#dce0e5; --ink:#121417; --quiet:#58606c; --line:#cdd3da;
-  --ok:#1d7a4a; --no:#c4532c; --focus:#1f5fd1; --ease:cubic-bezier(.2,.8,.2,1); color-scheme: light dark; }
+  --ok:#1d7a4a; --on-ok:#fff; --no:#c4532c; --focus:#1f5fd1; --ease:cubic-bezier(.2,.8,.2,1); color-scheme: light dark; }
 @media (prefers-color-scheme: dark) {
   :root { --surface:#101318; --mat:#1a1e25; --sunk:#252a33; --ink:#eceef2; --quiet:#a3aab5; --line:#323943;
-    --ok:#4fd08a; --no:#ff7a52; --focus:#7aa7ff; }
+    --ok:#4fd08a; --on-ok:#0c1a12; --no:#ff7a52; --focus:#7aa7ff; }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -349,39 +582,72 @@ button[aria-expanded="true"] { background: var(--sunk); }
 #said.ok { border-color: var(--ok); }
 #said.no { border-color: var(--no); }
 #said a { color: inherit; font-weight: 600; }
+#waits { margin: 2px 12px 6px; display: grid; gap: 6px; color: var(--ink); font-size: 13px; animation: rise .3s var(--ease) both; }
+#waits .hint { margin: 0; padding: 6px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--mat); color: var(--quiet); }
+#waits .hint a { color: var(--ink); font-weight: 600; }
+#waits code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--sunk); border-radius: 5px; padding: 0 4px; }
+#waits .act { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px 8px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--mat); transition: border-color .3s, box-shadow .3s; }
+#waits .what { font-weight: 600; white-space: nowrap; }
+#waits ul { flex-basis: 100%; margin: 0; padding: 0 0 0 18px; color: var(--quiet); }
+#waits input { flex: 1 1 240px; min-width: 0; font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; transition: border-color .2s; }
+#waits input:focus { border-color: var(--focus); outline: none; }
+#waits button { background: var(--ok); border-color: var(--ok); color: var(--on-ok); font-weight: 600; padding: 4px 16px; }
+#waits button:hover { border-color: var(--ink); }
+#waits .act.filled { animation: filled 1.2s var(--ease); }
+#waits .act.sent { border-color: var(--ok); }
+#waits .act.sent input { opacity: .6; }
+@keyframes filled { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--focus) 45%, transparent); }
+  100% { box-shadow: 0 0 0 10px transparent; } }
 iframe { flex: 1; width: 100%; border: 0; }
 @keyframes rise { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 "#;
 
-/// At the proof's own address: posts what the page asks to the host with the session.
+/// At the proof's own address: a press of the bar's own Approve or Accept posts its words to the
+/// host with the session and the token of this view, shows what came of it, and tells the page.
 const POST_SCRIPT: &str = r#"
 var PROOF = __PROOF__;
+var VIEW = __VIEW__;
 function ask(method, path, body) {
+  var headers = { 'Fearlezz-View': VIEW };
+  if (body) headers['Content-Type'] = 'application/json';
   return fetch(path, {
-    method: method, credentials: 'same-origin',
-    headers: body ? { 'Content-Type': 'application/json' } : {},
+    method: method, credentials: 'same-origin', headers: headers,
     body: body ? JSON.stringify(body) : undefined
   }).then(function (r) {
     return r.json().catch(function () { return {}; }).then(function (b) { return { status: r.status, body: b }; });
   });
 }
 function signIn() { return '/login?next=' + encodeURIComponent(location.pathname); }
-function act(kind, check, words, tell) {
-  ask('POST', PROOF + kind, { check: check, words: words }).then(function (a) {
-    if (a.status === 201) {
-      show(true, 'Posted on pull request #' + a.body.pull + ' as @' + a.body.login + ': ' + a.body.comment + '.', a.body.url, 'Open the comment');
-      tell(true, 'Posted on the pull request as @' + a.body.login + '. CI counts it now.');
-    } else {
+acts.forEach(function (form) {
+  var kind = form.dataset.kind, check = form.dataset.check || null;
+  var input = form.querySelector('[name=words]'), button = form.querySelector('button');
+  function told(ok, text) { tell({ kind: 'fearlezz:posted', of: kind, check: check, ok: ok, text: text }); }
+  function again(text) {
+    show(false, 'Not posted: ' + text + '.');
+    told(false, 'Not posted: ' + text + '.');
+    button.disabled = false; button.textContent = form.dataset.label;
+  }
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var words = input.value.trim();
+    if (!words || button.disabled) { input.focus(); return; }
+    button.disabled = true; button.textContent = 'Posting';
+    ask('POST', PROOF + kind, { check: check, words: words }).then(function (a) {
+      if (a.status === 201) {
+        show(true, 'Posted on pull request #' + a.body.pull + ' as @' + a.body.login + ': ' + a.body.comment + '.', a.body.url, 'Open the comment');
+        told(true, 'Posted on the pull request as @' + a.body.login + '. CI counts it now.');
+        form.classList.add('sent'); input.disabled = true; button.textContent = 'Posted';
+        return;
+      }
       var why = a.body.error || 'the host answered ' + a.status;
-      show(false, 'Not posted: ' + why + '.', a.status === 401 ? signIn() : null, 'Sign in');
-      tell(false, 'Not posted: ' + why + '.');
-    }
-  }, function () {
-    show(false, 'Not posted: the host could not be reached. Try again.');
-    tell(false, 'Not posted: the host could not be reached.');
+      again(why);
+      if (a.status === 401) show(false, 'Not posted: ' + why + '.', signIn(), 'Sign in');
+    }, function () { again('the host could not be reached. Try again'); });
   });
-}
+});
 "#;
 
 /// The Share control: makes a link, shows it to copy, and lists the live ones with Revoke.
@@ -453,13 +719,15 @@ make.addEventListener('click', function () {
 });
 "#;
 
-/// Opened through a share link: tells the page it only views, and where to sign in instead.
+/// Opened through a share link: when the page offers words, says the link only views, and where to
+/// sign in instead.
 const VIEW_SCRIPT: &str = r#"
 var PULL = __PULL__;
-function act(kind, check, words, tell) {
-  show(false, 'Not posted: this page was opened through a share link, which only views. To ' + kind + ', sign in on the pull request.', PULL, 'Open it signed in');
-  tell(false, 'Not posted: opened through a share link, which only views.');
-}
+window.addEventListener('message', function (e) {
+  if (e.source !== frame.contentWindow || e.origin !== FILES) return;
+  if ((e.data || {}).kind !== 'fearlezz:fill') return;
+  show(false, 'This page was opened through a share link, which only views. To approve or accept, sign in on the pull request.', PULL, 'Open it signed in');
+});
 "#;
 
 /// A JSON string inside a script: `<` escaped, so no value can end the script early.

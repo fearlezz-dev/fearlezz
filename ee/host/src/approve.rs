@@ -4,8 +4,10 @@
 //! comment as it judges any other. The host only refuses early what CI would not count, and
 //! says why.
 //!
-//! The page that asks runs on the files origin, which never gets the sign in; its shell on the
-//! app origin passes the ask on, so these endpoints take only same origin JSON.
+//! Only the shell's own Approve and Accept, in its bar on the app origin, post here. The proof's
+//! page runs on the files origin and is written by the pull request's CI, so it may at most fill
+//! in the words of those controls; it never asks the host anything. These endpoints take only
+//! same origin JSON that carries the token of the person's own view of the shell.
 
 use fearlezz_proof::Proof;
 use fearlezz_proof::waits::{Kind, short};
@@ -14,7 +16,10 @@ use serde_json::json;
 use worker::{Env, Request, Response};
 
 use crate::github;
-use crate::{Answer, Config, Refusal, pages, repo_key, session};
+use crate::{Answer, Config, Refusal, crypto, pages, repo_key, session};
+
+/// The header the shell's script sends its view token in.
+const VIEW_HEADER: &str = "Fearlezz-View";
 
 /// Longer words than this are no approval but an essay; the pull request has room for that.
 const MAX_WORDS: usize = 500;
@@ -57,6 +62,16 @@ pub async fn act(
     let row = pages::whole(env, &repo, id)
         .await?
         .ok_or_else(|| Refusal::new(404, "not found"))?;
+    let view = req.headers().get(VIEW_HEADER)?.unwrap_or_default();
+    if !holds(config, &person.id, &repo, id, &view).await? {
+        return Err(Refusal::new(
+            403,
+            format!(
+                "refused: {} with the button above the proof's page; reload the page and try again",
+                kind.word()
+            ),
+        ));
+    }
     let proof: Proof = serde_json::from_str(&row.proof)
         .map_err(|e| worker::Error::RustError(format!("a stored proof does not read back: {e}")))?;
     let Some(pull) = row.pull.map(|n| n as u64) else {
@@ -131,6 +146,39 @@ pub async fn act(
     };
     let answer = json!({"url": url, "pull": pull, "comment": body, "login": person.login});
     Ok(Response::from_json(&answer)?.with_status(201))
+}
+
+/// The token of one person's view of one proof's shell: an HMAC of their session and the
+/// proof, so only a page the host wrote for them holds it. The session id itself, the cookie's
+/// secret, never reaches the page.
+pub async fn view_token(
+    config: &Config,
+    session: &str,
+    repo: &str,
+    id: &str,
+) -> worker::Result<String> {
+    use base64::Engine as _;
+    let mac = crypto::hmac_sign(&config.signing_key, &view_data(session, repo, id)).await?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac))
+}
+
+/// Whether `token` is the token of this session's view of this proof.
+async fn holds(
+    config: &Config,
+    session: &str,
+    repo: &str,
+    id: &str,
+    token: &str,
+) -> worker::Result<bool> {
+    use base64::Engine as _;
+    let Ok(mac) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token) else {
+        return Ok(false);
+    };
+    crypto::hmac_verify(&config.signing_key, &view_data(session, repo, id), &mac).await
+}
+
+fn view_data(session: &str, repo: &str, id: &str) -> Vec<u8> {
+    format!("view.{session}.{repo}.{id}").into_bytes()
 }
 
 /// Only the shell on the app origin may ask, and only with JSON: a page on another site can send

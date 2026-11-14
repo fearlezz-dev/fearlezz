@@ -459,9 +459,10 @@ fn the_page_offers_an_accept_where_a_weakening_waits() {
         .expect("the weakening");
     let accept = html.find("data-post=\"accept\"").expect("an accept");
     assert!(weak < accept, "the accept sits with the weakening");
-    // Locally the comment is there to copy; framed, a button has the host post it.
+    // Locally the comment is there to copy; framed, a button points to the host's own Accept
+    // above the page, which alone posts.
     assert!(html.contains("/fearlezz accept &lt;why the weaker proof is right&gt;"));
-    assert!(html.contains("<span>Accept</span>"), "{html}");
+    assert!(html.contains("<span>Accept above</span>"), "{html}");
     assert!(html.contains("<span>Copy accept comment</span>"), "{html}");
 }
 
@@ -481,7 +482,7 @@ fn one_accept_covers_every_weakening_on_the_page() {
             .expect("the weakening");
         assert!(weak < accept, "the accept follows {check}");
     }
-    assert!(html.contains("<span>Accept both</span>"), "{html}");
+    assert!(html.contains("<span>Accept both above</span>"), "{html}");
 }
 
 #[test]
@@ -501,12 +502,18 @@ fn the_page_lets_a_person_approve_in_their_own_words() {
     // The words are the person's own: nothing is filled in for them.
     assert!(row.contains("<input required"), "{row}");
     assert!(!row.contains("value=\"looks good\""), "{row}");
-    assert!(row.contains("<span>Approve</span>"), "{row}");
-    // Locally the command stays; framed, the page asks its parent, the host's shell, and
-    // fetches nothing itself.
+    assert!(row.contains("<span>Approve above</span>"), "{row}");
+    // Locally the command stays; framed, the page only fills in the words of the host's own
+    // Approve above it, which alone posts, and fetches nothing itself.
     assert!(row.contains("fearlezz say approve screens --said"), "{row}");
     assert!(html.contains("var FRAMED = window.parent !== window;"));
-    assert!(html.contains("window.parent.postMessage({ kind: 'fearlezz:' + act.dataset.post"));
+    assert!(
+        html.contains("window.parent.postMessage({ kind: 'fearlezz:fill', of: act.dataset.post")
+    );
+    assert!(
+        !html.contains("'fearlezz:' + act.dataset.post"),
+        "the page asks no post"
+    );
     assert!(html.contains("e.source !== window.parent"));
     assert!(!html.contains("fetch("), "the page fetches nothing");
 }

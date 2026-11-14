@@ -16,6 +16,8 @@ const SIGNIN_SECONDS: i64 = 600;
 
 #[derive(Deserialize)]
 pub struct Session {
+    /// The row's random id, the cookie's value: a secret, never shown on a page.
+    pub id: String,
     pub login: String,
     pub token: String,
 }
@@ -33,7 +35,7 @@ pub async fn read(req: &Request, env: &Env) -> worker::Result<Option<Session>> {
         return Ok(None);
     };
     env.d1("DB")?
-        .prepare("SELECT login, token FROM sessions WHERE id = ?1 AND expires > ?2")
+        .prepare("SELECT id, login, token FROM sessions WHERE id = ?1 AND expires > ?2")
         .bind(&[id.into(), (now() as f64).into()])?
         .first(None)
         .await

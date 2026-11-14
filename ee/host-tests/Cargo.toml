@@ -14,6 +14,8 @@ harness = false
 base64 = "0.22"
 # Seals grants the way the host does, to prove it refuses an expired one.
 hmac = "0.12"
+# Hands Chrome the ends of its DevTools pipe as fds 3 and 4.
+libc = "0.2"
 libtest-mimic = "0.8"
 rand = "0.8"
 rsa = { version = "0.9", features = ["sha2"] }

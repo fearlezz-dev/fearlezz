@@ -1,7 +1,7 @@
 //! The proof page: one static page that shows everything a proof holds. Its verdict and
 //! what waits for a person (a weaker check, pictures to approve, with the approve command in
-//! the developer's own words, or, framed by the proof host, an Approve or Accept button that
-//! asks the host to post the comment as the person) come first; then whether anything broke (every check, its
+//! the developer's own words, or, framed by the proof host, a button that fills in the words
+//! of the host's own Approve or Accept above the page, which alone posts) come first; then whether anything broke (every check, its
 //! tests, findings, red before green and output); then whether it looks right: counts that
 //! filter, pictures grouped by screen, viewport or theme, five ways to compare a before with
 //! its after, films on one clock with lanes of where they differ, and a decision per picture.
@@ -307,8 +307,9 @@ kbd { font: 14px ui-monospace, Menlo, monospace; border: 1px solid var(--line); 
 .cmd { font: 14px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--quiet);
   overflow-x: auto; white-space: nowrap; margin: 0; }
 
-/* Framed by the proof host, a button posts the comment as the person instead of a command to
-   copy; the host's shell does the posting, so the page still fetches nothing. */
+/* Framed by the proof host, a button hands the person's words to the host's own Approve or
+   Accept above the page instead of a command to copy; only those post, so the page fetches
+   nothing and posts nothing. */
 .go .send { display: none; }
 .framed .go .send { display: inline-flex; }
 .framed .go .copy, .framed .go .copy2, .framed .go .copy-comment { display: none; }
@@ -691,7 +692,7 @@ function dock() {
     copy.dataset.copy = c; copy.dataset.label = 'Copy approve command';
     copy2.hidden = false; copy2.dataset.label = 'Copy as message';
     copy2.dataset.copy = 'The ' + CHECK + ' look is right. In my words: ' + quote(words) + (flakyLine ? '\n' + flakyLine : '');
-    cmd.textContent = FRAMED ? 'Posts on the pull request as you: /fearlezz approve ' + (said.value.trim() || '<your words>') : c;
+    cmd.textContent = FRAMED ? 'Approve above posts on the pull request as you: /fearlezz approve ' + (said.value.trim() || '<your words>') : c;
   }
   [copy, copy2].forEach(function (b) { if (!b.classList.contains('done')) b.querySelector('span').textContent = b.dataset.label; });
 }
@@ -714,20 +715,21 @@ layout();
 });
 
 // ----- approve or accept on the proof host -----------------------------------------------
-// Framed, the page runs on the host's files origin, which never holds the sign in, so it
-// cannot post anything itself: it asks the shell, its parent, which posts the comment as the
-// person and answers with what came of it. Locally the comment or command is there to copy.
+// Framed, the page runs on the host's files origin, which never holds the sign in, and anyone
+// who writes to the pull request writes it, so it posts nothing: the host's shell holds Approve
+// and Accept in its bar above the page. A button here only hands the person's words to that
+// control and points to it; the shell answers once, and again with what came of a post made
+// there. Locally the comment or command is there to copy.
 var posts = Array.prototype.slice.call(document.querySelectorAll('[data-post]'));
 posts.forEach(function (act) {
   var row = act.closest('.row'), input = act.querySelector('.said input'), send = act.querySelector('.send');
   var note = row.querySelector('.posted'), cmd = row.querySelector('.cmd'), copy = act.querySelector('.copy-comment');
   function ready() {
-    var busy = row.classList.contains('sending') || row.classList.contains('sent');
-    send.disabled = busy || !input.value.trim() || row.classList.contains('blocked');
+    send.disabled = row.classList.contains('sent') || row.classList.contains('blocked');
     if (act.dataset.post === 'accept') {
       var c = '/fearlezz accept ' + (input.value.trim() || '<why the weaker proof is right>');
       if (copy) copy.dataset.copy = c;
-      cmd.textContent = (FRAMED ? 'Posts on the pull request as you: ' : 'An admin comments on the pull request: ') + c;
+      cmd.textContent = (FRAMED ? 'Accept above posts on the pull request as you: ' : 'An admin comments on the pull request: ') + c;
     }
   }
   act.ready = ready;
@@ -742,21 +744,17 @@ posts.forEach(function (act) {
     });
   });
   send.addEventListener('click', function () {
-    var words = input.value.trim();
-    if (!FRAMED || !words || send.disabled) return;
-    row.classList.add('sending');
-    send.querySelector('span').textContent = 'Posting';
-    note.hidden = true;
+    if (!FRAMED || send.disabled) return;
     // Only the host's shell may frame the page (its files allow no other frame ancestor), so
-    // the parent is the shell; the message holds nothing but the person's words.
-    window.parent.postMessage({ kind: 'fearlezz:' + act.dataset.post, check: act.dataset.check || null, words: words }, '*');
+    // the parent is the shell. The message holds nothing but the person's words, which the
+    // shell fills in; it never posts them.
+    window.parent.postMessage({ kind: 'fearlezz:fill', of: act.dataset.post, check: act.dataset.check || null, words: input.value.trim() }, '*');
   });
   act.answer = function (m) {
-    row.classList.remove('sending');
     note.textContent = m.text;
     note.className = 'posted ' + (m.ok ? 'ok' : 'no');
     note.hidden = false;
-    if (m.ok) {
+    if (m.kind === 'fearlezz:posted' && m.ok) {
       row.classList.add('sent');
       input.disabled = true;
       send.classList.add('done');
@@ -769,7 +767,7 @@ posts.forEach(function (act) {
 window.addEventListener('message', function (e) {
   if (!FRAMED || e.source !== window.parent) return;
   var m = e.data || {};
-  if (m.kind !== 'fearlezz:posted') return;
+  if (m.kind !== 'fearlezz:posted' && m.kind !== 'fearlezz:filled') return;
   posts.forEach(function (act) {
     if (act.dataset.post === m.of && (act.dataset.check || null) === (m.check || null)) act.answer(m);
   });
@@ -1042,14 +1040,15 @@ fn waits(html: &mut String, proof: &Proof) -> std::fmt::Result {
 }
 
 /// Accepting a weakening that waits for an admin: their words, and the comment to copy, or,
-/// framed by the proof host, an Accept button that has the host post it as them. One accept
-/// covers the whole weakened proof.
+/// framed by the proof host, a button that hands their words to the host's own Accept above the
+/// page, which posts it as them. One accept covers the whole weakened proof.
 fn accept(html: &mut String, count: usize) -> std::fmt::Result {
     let comment = "/fearlezz accept <why the weaker proof is right>";
+    // Framed, the button only fills in the host's own Accept above the page, which posts.
     let label = match count {
-        1 => "Accept".to_string(),
-        2 => "Accept both".to_string(),
-        n => format!("Accept all {n}"),
+        1 => "Accept above".to_string(),
+        2 => "Accept both above".to_string(),
+        n => format!("Accept all {n} above"),
     };
     write!(
         html,
@@ -1059,8 +1058,9 @@ fn accept(html: &mut String, count: usize) -> std::fmt::Result {
 }
 
 /// One look's pictures to approve: a peek at the first, how many were looked at, and the
-/// approve command in the developer's own words, or, framed by the proof host, an Approve
-/// button that has the host post `/fearlezz approve <words>` as the person.
+/// approve command in the developer's own words, or, framed by the proof host, a button that
+/// hands those words to the host's own Approve above the page, which posts
+/// `/fearlezz approve <words>` as the person.
 fn approve(html: &mut String, look: &Look) -> std::fmt::Result {
     let need = look.to_look_at();
     let check = esc(&look.check);
@@ -1088,7 +1088,7 @@ fn approve(html: &mut String, look: &Look) -> std::fmt::Result {
     let command = format!("fearlezz say approve {} --said \"looks good\"", look.check);
     write!(
         html,
-        "</div><div class=\"what\"><b>Pictures of <code>{check}</code></b><p class=\"q\">{}. <a href=\"#look-{check}\">Look at them</a></p></div><div class=\"progress\"><svg class=\"ring\" viewBox=\"0 0 38 38\" aria-hidden=\"true\"><circle class=\"track\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/><circle class=\"fill\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/></svg><span><span class=\"num seen\">0</span> of <span class=\"num need\">{need}</span> looked at</span></div></div><div class=\"act\" data-post=\"approve\" data-check=\"{check}\"><label class=\"said\"><span>In your words</span><input required maxlength=\"500\" placeholder=\"looks good\" autocomplete=\"off\"></label><div class=\"go\"><button type=\"button\" class=\"primary copy\" data-copy=\"{cmd}\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy approve command</span></button><button type=\"button\" class=\"second copy2\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy as message</span></button><button type=\"button\" class=\"primary send\" data-label=\"Approve\" disabled><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Approve</span></button></div></div><p class=\"cmd\">{cmd}</p><p class=\"posted\" role=\"status\" hidden></p></div>",
+        "</div><div class=\"what\"><b>Pictures of <code>{check}</code></b><p class=\"q\">{}. <a href=\"#look-{check}\">Look at them</a></p></div><div class=\"progress\"><svg class=\"ring\" viewBox=\"0 0 38 38\" aria-hidden=\"true\"><circle class=\"track\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/><circle class=\"fill\" cx=\"19\" cy=\"19\" r=\"15.9\" pathLength=\"100\"/></svg><span><span class=\"num seen\">0</span> of <span class=\"num need\">{need}</span> looked at</span></div></div><div class=\"act\" data-post=\"approve\" data-check=\"{check}\"><label class=\"said\"><span>In your words</span><input required maxlength=\"500\" placeholder=\"looks good\" autocomplete=\"off\"></label><div class=\"go\"><button type=\"button\" class=\"primary copy\" data-copy=\"{cmd}\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy approve command</span></button><button type=\"button\" class=\"second copy2\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Copy as message</span></button><button type=\"button\" class=\"primary send\" data-label=\"Approve above\" disabled><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12.5l4.5 4.5L19 7.5\"/></svg><span>Approve above</span></button></div></div><p class=\"cmd\">{cmd}</p><p class=\"posted\" role=\"status\" hidden></p></div>",
         esc(&look.counts()),
         cmd = esc(&command)
     )
