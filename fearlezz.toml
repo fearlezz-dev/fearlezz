@@ -6,7 +6,7 @@
 use = ["devenv", "rust", "agents", "safety"]
 
 # Prose needs no proof: an edit to it alone reruns no check.
-no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
+no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore", "demo/notes/**"]
 
 # Checks without inputs are keyed on every file outside no_proof. The tests keep inputs, as a
 # speed hint: an edit to a workflow or install.sh would otherwise rerun the slowest check. They
