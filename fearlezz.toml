@@ -17,11 +17,12 @@ inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", 
 
 # The proof host in ee/ is a Cargo workspace of its own, built to wasm, so the rust piece's
 # checks at the root do not reach it. These read ee/ and the proof bundle crate it shares with
-# the core, so other core edits never rerun them.
+# the core, so other core edits never rerun them; ee-fmt reads the core's sources too, since
+# `--all` checks them through the path dependency on the proof bundle crate.
 [check.ee-fmt]
 run = "cargo fmt --manifest-path ee/Cargo.toml --all --check"
 stage = "working"
-inputs = ["ee/**", "crates/fearlezz-proof/**"]
+inputs = ["ee/**", "crates/fearlezz-proof/**", "crates/**/*.rs"]
 
 [check.ee-clippy]
 run = "cargo clippy --manifest-path ee/Cargo.toml --all-targets --quiet --message-format=json"

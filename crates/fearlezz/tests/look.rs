@@ -82,15 +82,30 @@ fn run_compares_stills_with_the_base_and_names_their_files() {
     let (before, after) = files_of(&out, "home.png");
     let (before, after) = (before.expect("a before"), after.expect("an after"));
     assert!(before.is_file() && after.is_file(), "{}", out.stdout);
-    assert_ne!(std::fs::read(&before).unwrap(), std::fs::read(&after).unwrap());
+    assert_ne!(
+        std::fs::read(&before).unwrap(),
+        std::fs::read(&after).unwrap()
+    );
     let (none, extra) = files_of(&out, "extra.png");
-    assert!(none.is_none(), "a new picture has no before: {}", out.stdout);
+    assert!(
+        none.is_none(),
+        "a new picture has no before: {}",
+        out.stdout
+    );
     assert!(extra.unwrap().is_file(), "{}", out.stdout);
     // Pictures that stay the same are counted, not listed.
     assert!(!out.stdout.contains("about.png:"), "{}", out.stdout);
     // Only the host has a page.
     assert!(!out.stdout.contains("report"), "{}", out.stdout);
-    assert!(!after.parent().unwrap().parent().unwrap().join("index.html").exists());
+    assert!(
+        !after
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("index.html")
+            .exists()
+    );
     // The check ran once here and once on the base.
     assert_eq!(runs(std::path::Path::new(&counter)), 2);
 }
@@ -138,7 +153,9 @@ fn status_names_the_changed_pictures_with_their_files() {
     repo.fz_env(&["run"], &[("COUNTER", &counter)]);
     let status = repo.fz_env(&[], &[("COUNTER", &counter)]);
     assert!(
-        status.stdout.contains("look screens: 1 changed, 1 new, 1 same"),
+        status
+            .stdout
+            .contains("look screens: 1 changed, 1 new, 1 same"),
         "{}",
         status.stdout
     );
@@ -162,9 +179,8 @@ fn the_final_stage_is_ready_with_changed_pictures_and_names_them() {
     let out = ran(&repo, &counter, &["run"]);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
-        out.stdout.contains(
-            "2 pictures changed (screens): a person reviews them on the pull request"
-        ),
+        out.stdout
+            .contains("2 pictures changed (screens): a person reviews them on the pull request"),
         "{}",
         out.stdout
     );
@@ -176,9 +192,9 @@ fn the_final_stage_is_ready_with_changed_pictures_and_names_them() {
     );
     let status = ran(&repo, &counter, &[]);
     assert!(
-        status.stdout.contains(
-            "2 pictures changed (screens): a person reviews them on the pull request"
-        ),
+        status
+            .stdout
+            .contains("2 pictures changed (screens): a person reviews them on the pull request"),
         "{}",
         status.stdout
     );

@@ -49,7 +49,9 @@ const PASSES_ANYWAY: &str = "test -e src/value\n";
 fn ci(repo: &Repo) -> (common::Output, String) {
     let path = repo.path(".runs/summary.md");
     // The summary is appended to, as on GitHub; each run here reads its own.
-    let _ = std::fs::remove_file(&path);
+    if path.exists() {
+        std::fs::remove_file(&path).unwrap();
+    }
     let out = repo.fz_env(
         &["run", "--ci"],
         &[("GITHUB_STEP_SUMMARY", path.to_str().unwrap())],

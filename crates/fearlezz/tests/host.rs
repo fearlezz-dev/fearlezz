@@ -36,7 +36,9 @@ fn repo(host: &FakeHost) -> Repo {
 fn ci(repo: &Repo, env: &[(String, String)]) -> (common::Output, String) {
     let summary = repo.path(".runs/summary.md");
     // The summary is appended to, as on GitHub; each run here reads its own.
-    let _ = std::fs::remove_file(&summary);
+    if summary.exists() {
+        std::fs::remove_file(&summary).unwrap();
+    }
     let mut all: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let path = summary.to_str().unwrap().to_string();
     all.push(("GITHUB_REPOSITORY", "owner/repo"));
@@ -92,7 +94,10 @@ fn the_bundle_goes_to_the_host_and_the_summary_links_its_page() {
     assert_eq!(sent["proof"]["schema"], 1, "{sent:#}");
     assert_eq!(sent["proof"]["checks"][0]["id"], "tests", "{sent:#}");
     let files = sent["files"].as_object().unwrap();
-    assert!(!files.contains_key("index.html"), "only the host has a page: {sent:#}");
+    assert!(
+        !files.contains_key("index.html"),
+        "only the host has a page: {sent:#}"
+    );
     assert!(files.contains_key("outputs/tests.log"), "{sent:#}");
     assert!(
         !files.contains_key("proof.json"),
@@ -107,7 +112,10 @@ fn the_bundle_goes_to_the_host_and_the_summary_links_its_page() {
         assert_eq!(file["size"], bytes.len(), "{path}");
     }
     let page = format!("{}/owner/repo/proofs/p1/", host.url);
-    assert!(text.contains(&format!("[The proof page]({page})")), "{text}");
+    assert!(
+        text.contains(&format!("[The proof page]({page})")),
+        "{text}"
+    );
     assert!(
         out.stdout.contains(&format!("proof page: {page}")),
         "{}",

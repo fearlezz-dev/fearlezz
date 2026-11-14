@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 
 /// One request the fake took: its method and path.
 #[derive(Clone, Debug)]
-pub struct Request {
-    pub method: String,
-    pub path: String,
+pub(crate) struct Request {
+    pub(crate) method: String,
+    pub(crate) path: String,
 }
 
 /// The fake server, running until the test ends.

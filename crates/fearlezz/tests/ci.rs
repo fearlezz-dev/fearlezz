@@ -213,13 +213,15 @@ const GITHUB: [(&str, &str); 3] = [
 fn summary_with(repo: &Repo, env: &[(&str, &str)]) -> (common::Output, String) {
     let path = repo.path(".runs/summary.md");
     // The summary is appended to, as on GitHub; each run here reads its own.
-    let _ = std::fs::remove_file(&path);
+    if path.exists() {
+        std::fs::remove_file(&path).unwrap();
+    }
     let mut all = GITHUB.to_vec();
     all.push(("GITHUB_STEP_SUMMARY", path.to_str().unwrap()));
     all.extend_from_slice(env);
     let out = repo.fz_env(&["run", "--ci"], &all);
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|_| panic!("{}\n{}", out.stdout, out.stderr));
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{}\n{}", out.stdout, out.stderr));
     (out, text)
 }
 
@@ -943,7 +945,11 @@ fn changed_pictures_are_listed_and_neither_block_nor_wait() {
     );
     assert!(!text.contains("/fearlezz"), "{text}");
     assert!(!text.contains("<!--"), "{text}");
-    assert!(out.stdout.contains("look screens: 1 changed, 1 same"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("look screens: 1 changed, 1 same"),
+        "{}",
+        out.stdout
+    );
 }
 
 #[test]
@@ -976,10 +982,7 @@ fn the_job_summary_marks_flaky_pictures() {
     let (out, text) = summary(&repo);
     assert!(out.ok, "{}", out.stdout);
     assert!(text.contains("**home.png** changed:"), "{text}");
-    assert!(
-        text.contains("**about.png** changed (flaky)"),
-        "{text}"
-    );
+    assert!(text.contains("**about.png** changed (flaky)"), "{text}");
 }
 
 #[test]
