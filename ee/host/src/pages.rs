@@ -345,7 +345,8 @@ pub fn render(config: &Config, view: View) -> Answer {
     Ok(Response::ok(html)?.with_headers(headers))
 }
 
-/// The shell: a tiny bar above a frame filling the window. The sandbox lets the bundle run its
+/// The shell: a frame filling the window, under a tiny bar only when the bar holds a control (the
+/// page shows its own title, so a bar of only the title would repeat it). The sandbox lets the bundle run its
 /// scripts on its own origin, but never navigate the window away from the app. Approve and
 /// Accept live in the bar, built from the host's own copy of the proof for the person viewing,
 /// and only a press of one of them posts. The page, which the pull request's CI wrote, may send
@@ -367,6 +368,11 @@ fn shell_html(view: &View, nonce: &str, files_origin: &str) -> String {
 </section>"#,
         ),
         _ => ("", ""),
+    };
+    let header = if control.is_empty() {
+        String::new()
+    } else {
+        format!("<header>{control}</header>")
     };
     let (bar, note) = match &view.act {
         Act::Post { offer, .. } => bar(offer),
@@ -400,7 +406,7 @@ fn shell_html(view: &View, nonce: &str, files_origin: &str) -> String {
 <style>{SHELL_STYLE}</style>
 </head>
 <body>
-<header><span class="title">{title}</span>{control}</header>
+{header}
 {panel}
 {bar}
 <p id="said" role="status" hidden></p>
@@ -560,8 +566,7 @@ const SHELL_STYLE: &str = r#"
 [hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
 body { display: flex; flex-direction: column; font: 12px/1.5 system-ui, sans-serif; color: var(--quiet); background: var(--surface); }
-header { display: flex; align-items: center; gap: 8px; padding: 2px 6px 2px 12px; min-height: 26px; }
-header .title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+header { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 2px 6px 2px 12px; min-height: 26px; }
 button { font: inherit; color: var(--ink); background: var(--mat); border: 1px solid var(--line); border-radius: 7px;
   padding: 1px 10px; cursor: pointer; transition: background .2s, border-color .2s; }
 button:hover { border-color: var(--quiet); }

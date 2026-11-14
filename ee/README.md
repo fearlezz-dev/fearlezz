@@ -59,7 +59,7 @@ App origin pages:
 
 | Path | Shows |
 | --- | --- |
-| `/<owner>/<repo>/proofs/<id>/` | The shell: a tiny bar above a full height frame of `<FILES_ORIGIN>/<grant>/index.html`, holding the title, Share, and Approve and Accept for what waits. The host writes it, never CI. Nothing below this path is served here. |
+| `/<owner>/<repo>/proofs/<id>/` | The shell: a full height frame of `<FILES_ORIGIN>/<grant>/index.html`, under a tiny bar with Share for writers and Approve and Accept for what waits, shown only when it holds one of them (the page shows its own title). The host writes it, never CI. Nothing below this path is served here. |
 | `/<owner>/<repo>/pull/<n>` | A redirect to the latest whole proof of that pull request. |
 | `/s/<token>` | A share link: the shell of its pull request's latest whole proof, for anyone, without a session. It only views; see below. |
 | `/login`, `/callback`, `/logout` | GitHub sign in. |

@@ -1632,8 +1632,11 @@ fn the_shell_offers_share_to_writers_alone() {
     let reader = sign_in("reader-code", "/");
     let html = get(&path, &[("Cookie", &reader)]).text();
     assert!(!html.contains("id=\"share\""), "{html}");
+    // With nothing to offer there is no bar: the page shows its own title.
+    assert!(!html.contains("<header"), "{html}");
     let html = get(&path, &[]).text();
     assert!(!html.contains("id=\"share\""), "{html}");
+    assert!(!html.contains("<header"), "{html}");
 }
 
 fn a_share_link_view_offers_no_posting() {
