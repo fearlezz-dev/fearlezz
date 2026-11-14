@@ -10,7 +10,6 @@ use std::time::SystemTime;
 use anyhow::{Context as _, Result, bail};
 use globset::{GlobBuilder, GlobMatcher};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 
 /// Where a check's test runner says how many tests ran.
 #[derive(Clone)]
@@ -160,36 +159,25 @@ fn find(base: &Path, dir: &Path, matcher: &GlobMatcher, since: SystemTime, out: 
     }
 }
 
-/// One test case a JUnit report says ran.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Case {
-    /// `classname::name`, or the name alone when there is no class.
-    pub name: String,
-    /// The `file` attribute, which some runners write.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<String>,
-    pub failed: bool,
-}
+pub(crate) use fearlezz_proof::Case;
 
-impl Case {
-    /// Whether the case comes from the test file `path`: the report names that file, or its
-    /// class is the file, the file's module (`tests.test_a`), or ends in the file's stem
-    /// (`crate::red_green`, `com.x.FooTest`). Runners that name neither, such as Go's, name
-    /// no case.
-    pub(crate) fn is_from(&self, path: &str) -> bool {
-        if self.file.as_deref() == Some(path) {
-            return true;
-        }
-        let class = self.name.rsplit_once("::").map_or("", |(class, _)| class);
-        if class.is_empty() {
-            return false;
-        }
-        let bare = path.rsplit_once('.').map_or(path, |(stem, _)| stem);
-        let module = bare.replace('/', ".");
-        let stem = bare.rsplit('/').next().unwrap_or(bare);
-        let last = class.rsplit(['.', ':', '/', '$']).next().unwrap_or(class);
-        class == path || class == module || class.starts_with(&format!("{module}.")) || last == stem
+/// Whether `case` comes from the test file `path`: the report names that file, or its class
+/// is the file, the file's module (`tests.test_a`), or ends in the file's stem
+/// (`crate::red_green`, `com.x.FooTest`). Runners that name neither, such as Go's, name no
+/// case.
+pub(crate) fn is_from(case: &Case, path: &str) -> bool {
+    if case.file.as_deref() == Some(path) {
+        return true;
     }
+    let class = case.name.rsplit_once("::").map_or("", |(class, _)| class);
+    if class.is_empty() {
+        return false;
+    }
+    let bare = path.rsplit_once('.').map_or(path, |(stem, _)| stem);
+    let module = bare.replace('/', ".");
+    let stem = bare.rsplit('/').next().unwrap_or(bare);
+    let last = class.rsplit(['.', ':', '/', '$']).next().unwrap_or(class);
+    class == path || class == module || class.starts_with(&format!("{module}.")) || last == stem
 }
 
 /// The test cases of one report that were not skipped: those with a `<failure` or `<error`
@@ -282,7 +270,7 @@ fn attr(attrs: &str, name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::Reader;
+    use super::{Reader, is_from};
 
     #[test]
     fn a_reader_as_part_of_a_key_is_what_was_written() {
@@ -326,8 +314,8 @@ mod tests {
                 ("a.test.ts::errs", true)
             ]
         );
-        assert!(cases[0].is_from("tests/test_a.py"));
-        assert!(cases[2].is_from("src/a.test.ts"));
-        assert!(!cases[0].is_from("tests/test_b.py"));
+        assert!(is_from(&cases[0], "tests/test_a.py"));
+        assert!(is_from(&cases[2], "src/a.test.ts"));
+        assert!(!is_from(&cases[0], "tests/test_b.py"));
     }
 }

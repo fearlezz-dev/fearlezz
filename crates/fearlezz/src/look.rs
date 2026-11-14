@@ -5,13 +5,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::config::{Check, Config};
 use crate::env::EnvCtx;
 use crate::git::Git;
-use crate::media::{self, Comparison, Verdict};
+use crate::media::{self, Verdict};
 use crate::run;
 use crate::state::Worktree;
 use crate::store::{Outcome, RunResult, Store};
@@ -19,106 +18,12 @@ use crate::store::{Outcome, RunResult, Store};
 /// The journal name base runs are recorded under.
 pub(crate) const BASE_JOURNAL: &str = "(base)";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Change {
-    Changed,
-    Timing,
-    New,
-    Gone,
-    Unreadable,
-    Same,
-}
+pub(crate) use fearlezz_proof::look::{Change, Item, Look};
 
-impl Change {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Change::Changed => "changed",
-            Change::Timing => "timing",
-            Change::New => "new",
-            Change::Gone => "gone",
-            Change::Unreadable => "unreadable",
-            Change::Same => "same",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Item {
-    pub name: String,
-    pub kind: String,
-    pub change: Change,
-    pub summary: String,
-    /// Copies of the media inside the look folder, relative to it.
-    pub before: Option<String>,
-    pub after: Option<String>,
-    pub comparison: Option<Comparison>,
-    /// Named by the check's `flaky`: compared and shown, but never blocks or waits for
-    /// approval.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub flaky: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Look {
-    pub check: String,
-    pub base_commit: String,
-    pub base_result: String,
-    /// Why there is no before (no base branch, the check fails on the base, the look
-    /// failed). Then every picture counts as new and needs approval.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub no_before: Option<String>,
-    /// Something about the comparison a person should know, such as a base run that passed
-    /// without taking any pictures.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-    pub items: Vec<Item>,
-    pub report: PathBuf,
-}
-
-impl Look {
-    /// For example `1 changed, 2 same, 1 new, 1 flaky`. Flaky pictures count apart.
-    pub(crate) fn counts(&self) -> String {
-        let mut changes: Vec<Change> = self
-            .items
-            .iter()
-            .filter(|i| !i.flaky)
-            .map(|i| i.change)
-            .collect();
-        changes.sort();
-        let mut parts: Vec<String> = Vec::new();
-        for c in changes.iter().copied() {
-            let n = changes.iter().filter(|x| **x == c).count();
-            let part = format!("{n} {}", c.label());
-            if !parts.contains(&part) {
-                parts.push(part);
-            }
-        }
-        let flaky = self.items.iter().filter(|i| i.flaky).count();
-        if flaky > 0 {
-            parts.push(format!("{flaky} flaky"));
-        }
-        parts.join(", ")
-    }
-
-    /// Items a person should look at: anything but same, and never a flaky one.
-    pub(crate) fn to_look_at(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|i| i.change != Change::Same && !i.flaky)
-            .count()
-    }
-
-    /// The look saved in the folder `dir`, if any.
-    pub(crate) fn at(dir: &Path) -> Option<Look> {
-        let text = fs::read_to_string(dir.join("look.json")).ok()?;
-        serde_json::from_str(&text).ok()
-    }
-
-    /// The folder it is saved in.
-    pub(crate) fn dir(&self) -> &Path {
-        self.report.parent().unwrap_or(&self.report)
-    }
+/// The look saved in the folder `dir`, if any.
+pub(crate) fn saved(dir: &Path) -> Option<Look> {
+    let text = fs::read_to_string(dir.join("look.json")).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 pub(crate) enum LookOutcome {
@@ -499,7 +404,7 @@ fn build(
                                         Verdict::Timing => Change::Timing,
                                         Verdict::Changed => Change::Changed,
                                     };
-                                    item.summary = c.summary();
+                                    item.summary = media::summary(&c);
                                     item.comparison = Some(c);
                                 }
                                 Err(e) => {

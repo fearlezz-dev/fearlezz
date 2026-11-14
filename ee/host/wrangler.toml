@@ -1,0 +1,43 @@
+# The proof host. Its secrets (secretspec.toml, kept in 1Password) reach the Worker through
+# the devenv task host-push-secrets, and host-deploy deploys it; the tests pass every setting
+# with `wrangler dev --var`. The worker answers on both origins below, so both route to it.
+name = "fearlezz-host"
+main = "build/index.js"
+compatibility_date = "2026-10-01"
+
+# Both origins are custom domains of this Worker: the app, and the proof files on another site.
+routes = [
+  { pattern = "fearlezz.seamlezz.com", custom_domain = true },
+  { pattern = "fearlezz.seamlezz.net", custom_domain = true },
+]
+
+[build]
+command = "worker-build --release"
+
+[vars]
+# Where people sign in and CI uploads.
+APP_ORIGIN = "https://fearlezz.seamlezz.com"
+# Where proof files are served: another site, so a proof's page cannot use the sign in.
+FILES_ORIGIN = "https://fearlezz.seamlezz.net"
+# The host's origin, which CI asks its OIDC token for: APP_ORIGIN, the default host of the core.
+AUDIENCE = "https://fearlezz.seamlezz.com"
+OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+OIDC_JWKS = "https://token.actions.githubusercontent.com/.well-known/jwks"
+GITHUB_API = "https://api.github.com"
+# Where people sign in.
+GITHUB_WEB = "https://github.com"
+# The Fearlezz GitHub App's client id: its OAuth client, and the issuer of its JWTs.
+GITHUB_CLIENT_ID = "Iv23liJRwzB5ys23d4Z9"
+INSTALL_URL = "https://github.com/apps/fearlezz-dev/installations/new"
+
+[[r2_buckets]]
+binding = "BLOBS"
+# In Western Europe, as the database.
+bucket_name = "fearlezz-bundles"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fearlezz-proofs"
+# In Western Europe; local runs and the tests use a local copy, never this one.
+database_id = "ac62746a-bf66-4e97-8ae5-af025298186d"
+migrations_dir = "migrations"

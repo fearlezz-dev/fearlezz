@@ -1,0 +1,43 @@
+name: pictures
+
+# Answers /fearlezz approve and /fearlezz accept comments by setting fearlezz/approval, and keeps
+# the fearlezz-pictures branch small. GitHub runs these events from the default branch, so this
+# builds Fearlezz from that trusted code, never from a pull request.
+on:
+  issue_comment:
+    types: [created, edited, deleted]
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "0 4 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  pictures:
+    if: >-
+      github.event_name != 'issue_comment'
+      || startsWith(github.event.comment.body, '/fearlezz approve')
+      || startsWith(github.event.changes.body.from, '/fearlezz approve')
+      || startsWith(github.event.comment.body, '/fearlezz accept')
+      || startsWith(github.event.changes.body.from, '/fearlezz accept')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - run: nix profile install nixpkgs#devenv
+      - name: Build Fearlezz from the default branch
+        run: |
+          devenv shell -- cargo build --quiet
+          echo "$PWD/target/debug" >> "$GITHUB_PATH"
+      - uses: ./
+        with:
+          version: installed

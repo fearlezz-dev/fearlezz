@@ -1,0 +1,26 @@
+[package]
+name = "fearlezz-host-tests"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+# The tests share one worker under wrangler dev, started before the first and stopped after the
+# last, which the standard harness cannot do.
+[[test]]
+name = "host"
+harness = false
+
+[dev-dependencies]
+base64 = "0.22"
+# Seals grants the way the host does, to prove it refuses an expired one.
+hmac = "0.12"
+# Hands Chrome the ends of its DevTools pipe as fds 3 and 4.
+libc = "0.2"
+libtest-mimic = "0.8"
+rand = "0.8"
+rsa = { version = "0.9", features = ["sha2"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+# Plain HTTP to local ports, and bodies as sent: no TLS, no gzip.
+ureq = { version = "3", default-features = false }

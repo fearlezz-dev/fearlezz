@@ -1,0 +1,253 @@
+//! Approving pictures and accepting a weakened proof from a proof's page. The host never
+//! approves anything itself: it posts `/fearlezz approve <words>` or `/fearlezz accept <words>`
+//! on the pull request as the signed in person, with their own GitHub token, and CI judges that
+//! comment as it judges any other. The host only refuses early what CI would not count, and
+//! says why.
+//!
+//! Only the shell's own Approve and Accept, in its bar on the app origin, post here. The proof's
+//! page runs on the files origin and is written by the pull request's CI, so it may at most fill
+//! in the words of those controls; it never asks the host anything. These endpoints take only
+//! same origin JSON that carries the token of the person's own view of the shell.
+
+use fearlezz_proof::Proof;
+use fearlezz_proof::waits::{Kind, short};
+use serde::Deserialize;
+use serde_json::json;
+use worker::{Env, Request, Response};
+
+use crate::github;
+use crate::{Answer, Config, Refusal, crypto, pages, repo_key, session};
+
+/// The header the shell's script sends its view token in.
+const VIEW_HEADER: &str = "Fearlezz-View";
+
+/// Longer words than this are no approval but an essay; the pull request has room for that.
+const MAX_WORDS: usize = 500;
+
+#[derive(Deserialize)]
+struct Ask {
+    /// The check whose pictures are approved; an accept covers the whole weakened proof.
+    #[serde(default)]
+    check: Option<String>,
+    words: String,
+}
+
+pub async fn act(
+    mut req: Request,
+    env: &Env,
+    config: &Config,
+    owner: &str,
+    name: &str,
+    id: &str,
+    kind: Kind,
+) -> Answer {
+    same_origin(&req, config)?;
+    let Some(person) = session::read(&req, env).await? else {
+        return Err(Refusal::new(
+            401,
+            format!("sign in to {} on this page", kind.word()),
+        ));
+    };
+    let ask: Ask = req
+        .json()
+        .await
+        .map_err(|_| Refusal::new(400, "send {\"check\": <check>, \"words\": <your words>}"))?;
+    let words = words(&ask.words, kind)?;
+
+    let repo = repo_key(owner, name);
+    // Someone GitHub shows nothing of a private repository learns nothing of it here either.
+    if !pages::open(&req, env, config, &repo).await? {
+        return Err(sign_in_again());
+    }
+    let row = pages::whole(env, &repo, id)
+        .await?
+        .ok_or_else(|| Refusal::new(404, "not found"))?;
+    let view = req.headers().get(VIEW_HEADER)?.unwrap_or_default();
+    if !holds(config, &person.id, &repo, id, &view).await? {
+        return Err(Refusal::new(
+            403,
+            format!(
+                "refused: {} with the button above the proof's page; reload the page and try again",
+                kind.word()
+            ),
+        ));
+    }
+    let proof: Proof = serde_json::from_str(&row.proof)
+        .map_err(|e| worker::Error::RustError(format!("a stored proof does not read back: {e}")))?;
+    let Some(pull) = row.pull.map(|n| n as u64) else {
+        return Err(Refusal::new(
+            409,
+            "this proof is of no pull request, so there is nothing to comment on",
+        ));
+    };
+    let latest = pages::latest(env, &repo, pull).await?;
+    if latest.as_deref() != Some(id) {
+        let newer = latest
+            .map(|l| format!(": open {}/{owner}/{name}/proofs/{l}/", config.app_origin))
+            .unwrap_or_default();
+        return Err(Refusal::new(
+            409,
+            format!(
+                "a newer proof of pull request {pull} exists{newer}, and {} what it shows",
+                kind.word()
+            ),
+        ));
+    }
+    waits(&proof, kind, ask.check.as_deref())?;
+
+    let full = format!("{owner}/{name}");
+    let Some(role) = github::permission(config, &full, &person.login, &person.token).await? else {
+        return Err(sign_in_again());
+    };
+    if !kind.allows(role) {
+        return Err(Refusal::new(
+            403,
+            format!(
+                "@{} cannot {} here: that needs {} {full} on GitHub",
+                person.login,
+                kind.word(),
+                kind.needs_on()
+            ),
+        ));
+    }
+
+    let head = proof.head.as_str();
+    let Some(now) = github::head(config, &full, pull, &person.token).await? else {
+        return Err(sign_in_again());
+    };
+    if now.sha != head {
+        return Err(Refusal::new(
+            409,
+            format!(
+                "pull request {pull} is at {} now, newer than this proof of {}: wait for its proof, then {} that",
+                short(&now.sha),
+                short(head),
+                kind.word()
+            ),
+        ));
+    }
+    // A fork's run writes no status comment, so its approval names the head the person saw.
+    let fork = !now.from.eq_ignore_ascii_case(&full);
+    let body = match (kind, fork) {
+        (Kind::Approve, true) => format!("/fearlezz approve {} {words}", short(head)),
+        _ => format!("/fearlezz {} {words}", kind.word()),
+    };
+    let url = match github::comment(config, &full, pull, &person.token, &body).await? {
+        github::Posted::Url(url) => url,
+        github::Posted::BadToken => return Err(sign_in_again()),
+        github::Posted::Refused(status) => {
+            return Err(Refusal::new(
+                502,
+                format!(
+                    "GitHub refused the comment ({status}); the Fearlezz app needs the pull requests write permission, or comment `{body}` on the pull request yourself"
+                ),
+            ));
+        }
+    };
+    let answer = json!({"url": url, "pull": pull, "comment": body, "login": person.login});
+    Ok(Response::from_json(&answer)?.with_status(201))
+}
+
+/// The token of one person's view of one proof's shell: an HMAC of their session and the
+/// proof, so only a page the host wrote for them holds it. The session id itself, the cookie's
+/// secret, never reaches the page.
+pub async fn view_token(
+    config: &Config,
+    session: &str,
+    repo: &str,
+    id: &str,
+) -> worker::Result<String> {
+    use base64::Engine as _;
+    let mac = crypto::hmac_sign(&config.signing_key, &view_data(session, repo, id)).await?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac))
+}
+
+/// Whether `token` is the token of this session's view of this proof.
+async fn holds(
+    config: &Config,
+    session: &str,
+    repo: &str,
+    id: &str,
+    token: &str,
+) -> worker::Result<bool> {
+    use base64::Engine as _;
+    let Ok(mac) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token) else {
+        return Ok(false);
+    };
+    crypto::hmac_verify(&config.signing_key, &view_data(session, repo, id), &mac).await
+}
+
+fn view_data(session: &str, repo: &str, id: &str) -> Vec<u8> {
+    format!("view.{session}.{repo}.{id}").into_bytes()
+}
+
+/// Only the shell on the app origin may ask, and only with JSON: a page on another site can send
+/// the session cookie with a form post, never this.
+pub fn same_origin(req: &Request, config: &Config) -> Result<(), Refusal> {
+    let origin = req.headers().get("Origin")?;
+    if origin.as_deref() != Some(config.app_origin.as_str()) {
+        return Err(Refusal::new(
+            403,
+            "refused: the ask did not come from this site",
+        ));
+    }
+    let json = req
+        .headers()
+        .get("Content-Type")?
+        .is_some_and(|t| t.trim_start().starts_with("application/json"));
+    if !json {
+        return Err(Refusal::new(415, "send JSON"));
+    }
+    Ok(())
+}
+
+/// The person's own words, on one line, as CI reads them from the comment.
+fn words(said: &str, kind: Kind) -> Result<String, Refusal> {
+    if said.contains(['\n', '\r']) {
+        return Err(Refusal::new(400, "keep your words on one line"));
+    }
+    let words = said.split_whitespace().collect::<Vec<_>>().join(" ");
+    if words.is_empty() {
+        return Err(Refusal::new(
+            400,
+            format!("say {}, in your own words", kind.hint()),
+        ));
+    }
+    if words.chars().count() > MAX_WORDS {
+        return Err(Refusal::new(
+            400,
+            format!("say it in at most {MAX_WORDS} characters"),
+        ));
+    }
+    Ok(words)
+}
+
+/// Whether the proof shows something `kind` settles: pictures of `check` that changed, or a
+/// weakening that waits for an admin rather than failing the proof.
+fn waits(proof: &Proof, kind: Kind, check: Option<&str>) -> Result<(), Refusal> {
+    let obligations = proof.obligations();
+    match kind {
+        Kind::Approve => {
+            let check = check.unwrap_or_default();
+            if !obligations.checks().contains(&check) {
+                return Err(Refusal::new(
+                    409,
+                    format!("no changed pictures of `{check}` wait in this proof"),
+                ));
+            }
+        }
+        Kind::Accept => {
+            if obligations.of(kind).next().is_none() {
+                return Err(Refusal::new(
+                    409,
+                    "no weakened proof waits for an accept in this proof",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn sign_in_again() -> Refusal {
+    Refusal::new(401, "your GitHub sign in expired; sign in again")
+}

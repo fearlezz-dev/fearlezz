@@ -223,6 +223,7 @@ fn approving_pictures_on_the_pull_request_is_left_to_a_person() {
         "gh pr comment 7 --body \"/fearlezz approve looks right\"",
         "gh api repos/o/r/issues/7/comments -f body='/fearlezz approve ok'",
         "curl -d '{\"body\":\"/fearlezz approve\"}' https://api.github.com/repos/o/r/issues/7/comments",
+        "gh pr comment 7 --body \"/fearlezz accept the lint was noise\"",
     ] {
         let answer = hook(&repo, "claude", "before-shell", &shell(command));
         assert!(denied(&answer), "{command}: {answer}");

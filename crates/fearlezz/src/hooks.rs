@@ -143,11 +143,12 @@ pub(crate) fn judge(config: &Config, work: &Work, event: Event, input: &Input) -
              why they fail. Ask the developer: fearlezz say ask \"<question>\""
                 .into(),
         ),
-        // CI takes `/fearlezz approve` from anyone with write access, which may be the account
-        // the agent works with.
+        // CI takes `/fearlezz approve` from anyone with write access and `/fearlezz accept`
+        // from an admin, either of which may be the account the agent works with.
         Event::BeforeShell if posts_approval(command) => Answer::Deny(
-            "Fearlezz: approving changed pictures is for a person, in their own words. Show the \
-             developer the pictures and ask them to comment /fearlezz approve on the pull \
+            "Fearlezz: approving changed pictures or accepting a weakened proof is for a person, \
+             in their own words. Show the developer the pictures or what weakened and ask them \
+             to comment /fearlezz approve (or, with admin rights, /fearlezz accept) on the pull \
              request themselves."
                 .into(),
         ),
@@ -241,9 +242,10 @@ fn merges_past_checks(line: &str) -> bool {
     })
 }
 
-/// A line that sends `/fearlezz approve` somewhere with a tool that can post a comment.
+/// A line that sends `/fearlezz approve` or `/fearlezz accept` somewhere with a tool that can
+/// post a comment.
 fn posts_approval(line: &str) -> bool {
-    line.contains("/fearlezz approve")
+    (line.contains("/fearlezz approve") || line.contains("/fearlezz accept"))
         && commands(line)
             .iter()
             .any(|w| matches!(w.first(), Some(&("gh" | "curl" | "wget" | "hub" | "http"))))

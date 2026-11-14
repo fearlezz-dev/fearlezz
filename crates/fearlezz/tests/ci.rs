@@ -946,7 +946,7 @@ fn ci_with_comment(repo: &Repo) -> (common::Output, String) {
 fn waiting(text: &str) -> serde_json::Value {
     let line = text
         .lines()
-        .find_map(|l| l.strip_prefix("<!-- fearlezz-pictures "))
+        .find_map(|l| l.strip_prefix("<!-- fearlezz-waiting "))
         .unwrap_or_else(|| panic!("no hidden line in {text}"));
     serde_json::from_str(line.strip_suffix(" -->").unwrap()).unwrap()
 }
@@ -961,7 +961,9 @@ fn changed_pictures_wait_for_a_person_without_failing_the_proof() {
     assert!(text.contains("**Pictures need approval**"), "{text}");
     assert!(!text.contains("wait for a person"), "{text}");
     assert!(
-        text.contains("The `fearlezz/pictures` status says whether they are approved."),
+        text.contains(
+            "The `fearlezz/approval` status says whether everything that waits has what it needs."
+        ),
         "{text}"
     );
     let shown: Vec<&str> = text.lines().filter(|l| !l.starts_with("<!--")).collect();
@@ -1183,7 +1185,7 @@ fn on_a_pull_request_ci_publishes_the_pictures_comments_and_waits() {
         let src = format!("https://github.com/owner/repo/raw/{BRANCH}/{file}");
         assert!(comment.body.contains(&src), "{src} in {}", comment.body);
     }
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
     assert_eq!(status.target, comment.url());
 }
@@ -1244,7 +1246,7 @@ fn a_run_for_an_older_head_leaves_the_newer_one_alone() {
     assert!(out.stdout.contains("moved on to fffffff"), "{}", out.stdout);
     assert!(gh.state().comments.is_empty(), "{:?}", gh.state().comments);
     assert_eq!(gh.state().branch_files(BRANCH), Vec::<String>::new());
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
 }
 
@@ -1260,7 +1262,7 @@ fn pictures_that_stay_the_same_set_the_status_green() {
     let out = on_actions(&gh, &repo.root, "pull_request", &event, "42");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(status_comment(&gh).body.contains("**Proven**"));
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "success");
     assert_eq!(gh.state().branch_files(BRANCH), Vec::<String>::new());
 }
@@ -1277,7 +1279,7 @@ fn an_app_token_finds_its_own_comment_and_answers_approvals() {
     let empty = tempfile::tempdir().unwrap();
     let out = on_actions_with(&gh, empty.path(), "issue_comment", &event, "50", APP_TOKEN);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "success");
 }
 
@@ -1341,7 +1343,7 @@ fn a_maintainer_approves_a_forks_head_by_comment() {
     let reply = answer(&gh, &event);
     assert!(reply.contains("> ccccccc checked the artifact"), "{reply}");
     assert!(reply.contains("ccccccc"), "{reply}");
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "success");
     assert_eq!(
         status.target,
@@ -1375,7 +1377,7 @@ fn a_forks_approval_names_the_head_the_person_looked_at() {
     );
     assert!(reply.contains("/fearlezz approve ccccccc"), "{reply}");
     assert_eq!(
-        gh.state().status(&head, "fearlezz/pictures").unwrap().state,
+        gh.state().status(&head, "fearlezz/approval").unwrap().state,
         "pending"
     );
     // The fork pushes a new head before the run answers an approval of the old one.
@@ -1386,7 +1388,7 @@ fn a_forks_approval_names_the_head_the_person_looked_at() {
     assert!(reply.contains("/fearlezz approve ddddddd"), "{reply}");
     assert_eq!(
         gh.state()
-            .status(&newer, "fearlezz/pictures")
+            .status(&newer, "fearlezz/approval")
             .unwrap()
             .state,
         "pending"
@@ -1414,7 +1416,7 @@ fn an_approval_written_before_a_newer_proof_does_not_count() {
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let reply = answer(&gh, &event);
     assert!(reply.contains("before"), "{reply}");
-    let status = gh.state().status(&newer, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&newer, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
 }
 
@@ -1428,7 +1430,7 @@ fn editing_the_approval_so_it_no_longer_approves_takes_it_back() {
     gh.state().edit_comment(id, "wait, not yet");
     let reply = answer(&gh, &edited(&event, "wait, not yet"));
     assert!(reply.contains("taken back"), "{reply}");
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
     assert!(
         status_comment(&gh)
@@ -1450,7 +1452,7 @@ fn a_delete_answered_before_its_approval_leaves_the_pictures_waiting() {
     deleted["action"] = "deleted".into();
     answer(&gh, &deleted);
     answer(&gh, &created);
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
     assert!(
         !gh.state()
@@ -1471,7 +1473,7 @@ fn an_approval_deleted_while_its_run_sets_the_status_leaves_the_pictures_waiting
     let empty = tempfile::tempdir().unwrap();
     let out = on_actions(&gh, empty.path(), "issue_comment", &created, "50");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
 }
 
@@ -1484,7 +1486,7 @@ fn a_rerun_with_the_same_pictures_keeps_the_approval() {
     let again = pull_request(&head, "owner/repo");
     let out = on_actions(&gh, &repo.root, "pull_request", &again, "43");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "success");
     assert_eq!(
         status.target,
@@ -1504,7 +1506,7 @@ fn a_rerun_with_changed_pictures_needs_a_new_approval() {
     let again = pull_request(&head, "owner/repo");
     let out = on_actions(&gh, &repo.root, "pull_request", &again, "43");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
     // Other pictures come in a new comment, so when they were shown is when it was written.
     let shown = status_comment(&gh);
@@ -1557,7 +1559,7 @@ fn a_rerun_that_films_the_same_change_keeps_the_approval() {
     let event = pull_request(&head, "owner/repo");
     let out = on_actions(&gh, &repo.root, "pull_request", &event, "43");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "success", "{}", out.stdout);
     assert_eq!(
         status.target,
@@ -1577,7 +1579,7 @@ fn a_rerun_of_the_same_head_over_a_moved_base_needs_a_new_approval() {
     let event = pull_request(&head, "owner/repo");
     let out = on_actions(&gh, &repo.root, "pull_request", &event, "43");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending", "{}", out.stdout);
 }
 
@@ -1589,7 +1591,7 @@ fn comment_event(gh: &FakeGitHub, login: &str, body: &str) -> serde_json::Value 
     serde_json::json!({
         "action": "created",
         "issue": { "number": 7, "pull_request": { "url": "https://api.github.com/x" } },
-        "comment": { "id": c.id, "body": body, "html_url": c.url(),
+        "comment": { "id": c.id, "body": body, "html_url": c.url(), "created_at": c.created,
                      "user": { "login": login, "type": "User" } },
         "repository": { "full_name": "owner/repo" },
     })
@@ -1621,7 +1623,7 @@ fn a_person_with_write_access_approves_the_pictures_by_comment() {
     let asked = event["comment"]["html_url"].as_str().unwrap().to_string();
     let reply = answer(&gh, &event);
     assert!(reply.contains("> the blue home is right"), "{reply}");
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "success");
     assert_eq!(status.target, asked);
 }
@@ -1646,7 +1648,7 @@ fn settling_an_approval_never_writes_the_status_comment() {
 #[test]
 fn settling_writes_a_waiting_status_whose_description_is_out_of_date() {
     let (gh, _repo, head) = proven_on_actions();
-    let set = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let set = gh.state().status(&head, "fearlezz/approval").unwrap();
     gh.state().statuses.push(common::github::Status {
         description: "changed pictures of older wait for /fearlezz approve".into(),
         ..set.clone()
@@ -1656,7 +1658,7 @@ fn settling_writes_a_waiting_status_whose_description_is_out_of_date() {
         &gh,
         &comment_event(&gh, "stranger", "/fearlezz approve fine"),
     );
-    let now = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let now = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(now.description, set.description);
 }
 
@@ -1671,7 +1673,7 @@ fn deleting_the_approval_takes_it_back_when_the_status_comment_is_gone() {
     gh.state().comments.retain(|c| c.id != id && c.id != shown);
     event["action"] = "deleted".into();
     answer(&gh, &event);
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
 }
 
@@ -1682,7 +1684,7 @@ fn deleting_the_approval_takes_it_back() {
     let mut event = comment_event(&gh, "lead", "/fearlezz approve fine");
     answer(&gh, &event);
     assert_eq!(
-        gh.state().status(&head, "fearlezz/pictures").unwrap().state,
+        gh.state().status(&head, "fearlezz/approval").unwrap().state,
         "success"
     );
     let id = event["comment"]["id"].as_u64().unwrap();
@@ -1690,7 +1692,7 @@ fn deleting_the_approval_takes_it_back() {
     event["action"] = "deleted".into();
     let reply = answer(&gh, &event);
     assert!(reply.contains("deleted"), "{reply}");
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
     let comment = status_comment(&gh);
     assert!(
@@ -1714,7 +1716,7 @@ fn deleting_an_older_approval_leaves_the_current_one() {
     let empty = tempfile::tempdir().unwrap();
     let out = on_actions(&gh, empty.path(), "issue_comment", &first, "51");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "success");
     assert_eq!(
         status.target,
@@ -1733,7 +1735,7 @@ fn approving_needs_write_access() {
         &comment_event(&gh, "visitor", "/fearlezz approve fine"),
     );
     assert!(reply.contains("needs write access"), "{reply}");
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
 }
 
@@ -1743,7 +1745,7 @@ fn approving_needs_words() {
     gh.state().permissions.insert("lead".into(), "admin".into());
     let reply = answer(&gh, &comment_event(&gh, "lead", "/fearlezz approve"));
     assert!(reply.contains("your own words"), "{reply}");
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
 }
 
@@ -1757,7 +1759,7 @@ fn an_approval_for_an_older_head_is_refused() {
         reply.contains("nothing to approve for fffffff yet"),
         "{reply}"
     );
-    let status = gh.state().status(&head, "fearlezz/pictures").unwrap();
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "pending");
 }
 
@@ -1770,6 +1772,248 @@ fn other_comments_are_left_alone() {
         &comment_event(&gh, "lead", "/fearlezz approved? not yet"),
     );
     assert_eq!(gh.state().comments.len(), before + 1, "no reply");
+}
+
+// A weakened proof waits for an admin's accept
+
+/// A branch whose config makes `tests` run another command, proven on pull request 7.
+fn weakened_on_actions() -> (FakeGitHub, Repo, String) {
+    let gh = FakeGitHub::start();
+    let repo = branch_with_change();
+    with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
+    let head = head_of(&repo);
+    gh.state().pulls.insert(7, (head.clone(), "open".into()));
+    let event = pull_request(&head, "owner/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &event, "42");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("weakens tests: it runs another command"),
+        "{}",
+        out.stdout
+    );
+    (gh, repo, head)
+}
+
+#[test]
+fn a_weakening_on_a_pull_request_waits_for_an_admin_without_failing_the_proof() {
+    let (gh, _repo, head) = weakened_on_actions();
+    let comment = status_comment(&gh);
+    assert!(
+        comment.body.contains("**Weakened proof needs an admin**"),
+        "{}",
+        comment.body
+    );
+    assert!(!comment.body.contains("Not proven"), "{}", comment.body);
+    assert!(
+        comment.body.contains("check `tests` is weaker"),
+        "{}",
+        comment.body
+    );
+    assert!(
+        comment.body.contains("`/fearlezz accept "),
+        "{}",
+        comment.body
+    );
+    let w = waiting(&comment.body);
+    assert_eq!(w["head"], head.as_str());
+    assert_eq!(w["checks"], serde_json::json!([]));
+    assert_eq!(w["weakened"][0]["check"], "tests", "{w}");
+    assert_eq!(w["weakened"][0]["how"], "it runs another command", "{w}");
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
+    assert_eq!(status.state, "pending");
+    assert!(status.description.contains("tests"), "{status:?}");
+    assert!(
+        status.description.contains("admin's /fearlezz accept"),
+        "{status:?}"
+    );
+    assert_eq!(status.target, comment.url());
+    assert!(gh.state().status(&head, "fearlezz/pictures").is_none());
+}
+
+#[test]
+fn a_weakening_still_fails_a_ci_run_outside_a_pull_request() {
+    let repo = branch_with_change();
+    with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
+    let (out, text) = comment(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(text.contains("**Not proven**"), "{text}");
+    assert!(text.contains("merge past CI"), "{text}");
+}
+
+#[test]
+fn a_forks_weakening_fails_its_proof() {
+    let gh = FakeGitHub::start();
+    let repo = branch_with_change();
+    with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
+    let head = head_of(&repo);
+    gh.state().pulls.insert(7, (head.clone(), "open".into()));
+    gh.state().forks.insert(7);
+    let event = pull_request(&head, "someone/repo");
+    let out = on_actions_with(&gh, &repo.root, "pull_request", &event, "42", FORK_TOKEN);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("weakens tests"), "{}", out.stdout);
+}
+
+#[test]
+fn an_admin_accepts_a_weakened_proof_by_comment() {
+    let (gh, _repo, head) = weakened_on_actions();
+    gh.state()
+        .permissions
+        .insert("owner".into(), "admin".into());
+    let event = comment_event(&gh, "owner", "/fearlezz accept the old command hid nothing");
+    let asked = event["comment"]["html_url"].as_str().unwrap().to_string();
+    let reply = answer(&gh, &event);
+    assert!(reply.starts_with("@owner accepted"), "{reply}");
+    assert!(reply.contains("> the old command hid nothing"), "{reply}");
+    assert!(reply.contains("check `tests` is weaker"), "{reply}");
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
+    assert_eq!(status.state, "success");
+    assert_eq!(status.target, asked);
+    assert!(
+        status.description.contains("accepted by owner"),
+        "{status:?}"
+    );
+}
+
+#[test]
+fn accepting_a_weakened_proof_needs_admin_rights() {
+    let (gh, _repo, head) = weakened_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    let reply = answer(&gh, &comment_event(&gh, "lead", "/fearlezz accept fine"));
+    assert!(reply.contains("needs admin rights"), "{reply}");
+    // Approving is not accepting.
+    let reply = answer(&gh, &comment_event(&gh, "lead", "/fearlezz approve fine"));
+    assert!(reply.contains("no changed pictures wait"), "{reply}");
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
+#[test]
+fn accepting_needs_words() {
+    let (gh, _repo, head) = weakened_on_actions();
+    gh.state()
+        .permissions
+        .insert("owner".into(), "admin".into());
+    let reply = answer(&gh, &comment_event(&gh, "owner", "/fearlezz accept"));
+    assert!(reply.contains("your own words"), "{reply}");
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
+#[test]
+fn an_accept_written_before_the_proof_showed_the_weakening_does_not_count() {
+    let gh = FakeGitHub::start();
+    gh.state()
+        .permissions
+        .insert("owner".into(), "admin".into());
+    let early = comment_event(&gh, "owner", "/fearlezz accept fine");
+    let repo = branch_with_change();
+    with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
+    let head = head_of(&repo);
+    gh.state().pulls.insert(7, (head.clone(), "open".into()));
+    let event = pull_request(&head, "owner/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &event, "42");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let reply = answer(&gh, &early);
+    assert!(reply.contains("before"), "{reply}");
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
+#[test]
+fn deleting_the_accept_takes_it_back() {
+    let (gh, _repo, head) = weakened_on_actions();
+    gh.state()
+        .permissions
+        .insert("owner".into(), "admin".into());
+    let mut event = comment_event(&gh, "owner", "/fearlezz accept fine");
+    answer(&gh, &event);
+    let id = event["comment"]["id"].as_u64().unwrap();
+    gh.state().comments.retain(|c| c.id != id);
+    event["action"] = "deleted".into();
+    let reply = answer(&gh, &event);
+    assert!(reply.contains("taken back"), "{reply}");
+    assert!(reply.contains("/fearlezz accept"), "{reply}");
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
+    assert_eq!(status.state, "pending");
+}
+
+/// Changed pictures and a weakened `screens` (moved to a later stage), proven on pull request 7.
+fn pictures_and_weakening_on_actions() -> (FakeGitHub, Repo, String) {
+    let gh = FakeGitHub::start();
+    let repo = screens_branch("blue");
+    repo.write(
+        "fearlezz.toml",
+        &full(&SCREENS.replace("stage = \"look\"", "stage = \"merge\"")),
+    );
+    repo.commit("later");
+    let head = head_of(&repo);
+    gh.state().pulls.insert(7, (head.clone(), "open".into()));
+    let event = pull_request(&head, "owner/repo");
+    let out = on_actions(&gh, &repo.root, "pull_request", &event, "42");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    (gh, repo, head)
+}
+
+#[test]
+fn the_approval_status_is_green_only_when_everything_that_waits_has_what_it_needs() {
+    let (gh, _repo, head) = pictures_and_weakening_on_actions();
+    let comment = status_comment(&gh);
+    assert!(
+        comment.body.contains("**Needs approval**"),
+        "{}",
+        comment.body
+    );
+    gh.state().permissions.insert("lead".into(), "write".into());
+    gh.state()
+        .permissions
+        .insert("owner".into(), "admin".into());
+    let reply = answer(
+        &gh,
+        &comment_event(&gh, "lead", "/fearlezz approve blue is right"),
+    );
+    assert!(reply.starts_with("@lead approved"), "{reply}");
+    assert!(
+        reply.contains("/fearlezz accept"),
+        "what still waits: {reply}"
+    );
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
+    assert_eq!(status.state, "pending");
+    assert!(
+        status.description.contains("approved by lead"),
+        "{status:?}"
+    );
+    assert!(
+        status.description.contains("/fearlezz accept"),
+        "{status:?}"
+    );
+    let reply = answer(
+        &gh,
+        &comment_event(&gh, "owner", "/fearlezz accept look is enough"),
+    );
+    assert!(reply.starts_with("@owner accepted"), "{reply}");
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
+    assert_eq!(status.state, "success", "{status:?}");
+}
+
+#[test]
+fn an_accept_comment_settles_the_status() {
+    let (gh, _repo, head) = pictures_and_weakening_on_actions();
+    gh.state()
+        .permissions
+        .insert("owner".into(), "admin".into());
+    answer(&gh, &comment_event(&gh, "owner", "/fearlezz accept fine"));
+    let status = gh.state().status(&head, "fearlezz/approval").unwrap();
+    assert_eq!(status.state, "pending");
+    assert!(
+        status.description.contains("accepted by owner"),
+        "{status:?}"
+    );
+    assert!(
+        status.description.contains("/fearlezz approve"),
+        "{status:?}"
+    );
 }
 
 // The pictures branch

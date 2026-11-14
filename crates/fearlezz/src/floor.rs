@@ -4,6 +4,7 @@
 //! the checks, never which files they read.
 
 use anyhow::Result;
+use fearlezz_proof::waits::{PAST, Part, Weakening};
 
 use crate::config::{self, Builtin, Config, Env, Ports, Widening};
 use crate::findings::Scope;
@@ -13,15 +14,7 @@ use crate::state::Worktree;
 #[derive(Default)]
 pub(crate) struct Floor {
     /// What weakened, and how.
-    pub weakened: Vec<(String, String)>,
-}
-
-/// One thing that keeps a commit from being proven: what, why, and what to do about it.
-#[derive(Clone)]
-pub(crate) struct Item {
-    pub what: String,
-    pub why: String,
-    pub fix: String,
+    pub weakened: Vec<Weakening>,
 }
 
 impl Floor {
@@ -43,38 +36,22 @@ impl Floor {
         self.weakened.is_empty()
     }
 
-    /// What fails the floor, one item each, for a reader who sees nothing else.
-    pub(crate) fn items(&self, base: &str) -> Vec<Item> {
-        self.weakened
-            .iter()
-            .map(|(what, how)| Item {
-                what: if what.contains('.') || what == "no_proof" {
-                    format!("`{what}` is weaker")
-                } else {
-                    format!("check `{what}` is weaker")
-                },
-                why: how.clone(),
-                fix: format!(
-                    "keep the proof {base} requires; when it must change, a person with admin \
-                     rights merges past CI after reading this"
-                ),
-            })
-            .collect()
-    }
-
-    /// The lines that say what fails the floor and how to get past it.
-    pub(crate) fn lines(&self) -> Vec<String> {
+    /// The lines a run prints: what fails the floor and how to get past it; when it `waits`
+    /// on a pull request, that an admin's accept lets it through.
+    pub(crate) fn lines(&self, waits: bool) -> Vec<String> {
         let mut lines: Vec<String> = self
             .weakened
             .iter()
-            .map(|(what, how)| format!("weakens {what}: {how}"))
+            .map(|w| format!("weakens {}: {}", w.part.name(), w.how))
             .collect();
         if !self.weakened.is_empty() {
-            lines.push(
-                "  fix: keep the proof the base branch requires; when it must change, a person \
-                 with admin rights merges past CI after reading this"
-                    .into(),
-            );
+            lines.push(if waits {
+                "  note: the proof passes; the fearlezz/approval status waits until a person with \
+                 admin rights reads why and comments /fearlezz accept <words>"
+                    .into()
+            } else {
+                format!("  fix: keep the proof the base branch requires; {PAST}")
+            });
         }
         lines
     }
@@ -84,10 +61,15 @@ impl Floor {
 /// stage, reporting or reading findings otherwise, taking fewer pictures (see
 /// [`config::Pictures::weakenings`]), rules covering fewer of `files`, and new `no_proof` globs
 /// or dropped negations. Which files a check reads is only a speed hint, so it never weakens.
-fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, String)> {
+fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<Weakening> {
     let mut found = Vec::new();
     for b in &base.checks {
-        let mut say = |how: String| found.push((b.id.clone(), how));
+        let mut say = |how: String| {
+            found.push(Weakening {
+                part: Part::Check(b.id.clone()),
+                how,
+            });
+        };
         let Some(h) = head.checks.iter().find(|h| h.id == b.id) else {
             say("it is gone".into());
             continue;
@@ -152,18 +134,18 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
         }
         if let (Some(bf), Some(hf)) = (&b.findings, &h.findings) {
             for tool in bf.tools.iter().filter(|t| hf.tools.contains(t)) {
-                found.extend(bf.levels.weakenings(&hf.levels, *tool));
+                found.extend(settings(bf.levels.weakenings(&hf.levels, *tool)));
             }
         }
         if let (Some(Builtin::Rules(br)), Some(Builtin::Rules(hr))) = (&b.builtin, &h.builtin) {
-            found.extend(br.weakenings(hr, files));
+            found.extend(settings(br.weakenings(hr, files)));
         }
     }
     // Checks that share a lints table would name its weakenings once each.
     let mut seen = std::collections::BTreeSet::new();
     found.retain(|w| seen.insert(w.clone()));
-    found.extend(base.settings.weakenings(&head.settings));
-    found.extend(env_weakenings(&base.env, &head.env));
+    found.extend(settings(base.settings.weakenings(&head.settings)));
+    found.extend(settings(env_weakenings(&base.env, &head.env)));
     for w in head.no_proof.widenings(&base.no_proof) {
         let how = match w {
             Widening::Added(glob) => format!("it newly says {glob} needs no proof"),
@@ -173,9 +155,20 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(String, St
             ),
             Widening::Reordered => "it reorders its globs so more files need no proof".into(),
         };
-        found.push(("no_proof".into(), how));
+        found.push(Weakening {
+            part: Part::Setting("no_proof".into()),
+            how,
+        });
     }
     found
+}
+
+/// Weakenings of parts of the config other than a check, each as its path and how.
+fn settings(found: Vec<(String, String)>) -> impl Iterator<Item = Weakening> {
+    found.into_iter().map(|(path, how)| Weakening {
+        part: Part::Setting(path),
+        how,
+    })
 }
 
 /// How `head` makes checks run in another environment: any command, variable, cloned folder

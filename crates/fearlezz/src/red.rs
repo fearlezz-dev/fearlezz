@@ -10,7 +10,6 @@
 //! files too, failing there shows nothing.
 
 use std::fs;
-use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -21,42 +20,9 @@ use crate::counts::{Case, Reader};
 use crate::env::EnvCtx;
 use crate::git::Git;
 use crate::look::{self, Base};
+use crate::proof::{RED_NEXT, Red, Verdict};
 use crate::state::Worktree;
 use crate::store::{Outcome, RunResult, Store};
-
-/// What the check did on the base commit with the change's test files.
-pub(crate) struct Red {
-    /// The test files the change added, changed or removed that the check reads.
-    pub files: Vec<String>,
-    /// The run on the base commit with those files.
-    pub base: RunResult,
-    pub verdict: Verdict,
-}
-
-/// What the run on the base commit shows.
-pub(crate) enum Verdict {
-    /// The check failed on the base and passes here. `tests` names the tests that failed there
-    /// and pass here, when its reader names tests.
-    Red { tests: Vec<String> },
-    /// The check failed on the base before any of the change's tests ran: they do not build
-    /// there. Counted as red.
-    Unbuilt,
-    /// The check fails on the base without the change's test files too.
-    BaseFails { log: PathBuf },
-    /// The check passed on the base too. `tests` names the change's tests, when its reader
-    /// names them.
-    NotRed { tests: Vec<String> },
-}
-
-impl Red {
-    /// `tests/a.sh` or `2 test files`, with the verbs agreeing.
-    pub(crate) fn subject(&self) -> (String, &'static str, &'static str) {
-        match self.files.as_slice() {
-            [one] => (one.clone(), "fails", "passes"),
-            many => (format!("{} test files", many.len()), "fail", "pass"),
-        }
-    }
-}
 
 /// The change's test files for `check`, by `test_files` alone: its inputs only decide reuse.
 pub(crate) fn test_files(check: &Check, wt: &Worktree) -> Vec<String> {
@@ -71,7 +37,7 @@ pub(crate) fn test_files(check: &Check, wt: &Worktree) -> Vec<String> {
 /// worktree named by their content, so the same test files reuse it and its result. When that
 /// fails, also runs it on the plain base commit (or reuses that run) to tell a broken base
 /// apart. `head` is the check's passing run on the change. None when the change touches none
-/// of its test files.
+/// of its test files. It never blocks: whether it should depends on the change being a fix.
 pub(crate) fn run(
     git: &Git,
     config: &Config,
@@ -81,9 +47,20 @@ pub(crate) fn run(
     stage: &str,
     env: &EnvCtx<'_>,
 ) -> Result<Option<Red>> {
+    let shown = |files: Vec<String>, verdict, tests, log| Red {
+        verdict,
+        files,
+        tests,
+        why: None,
+        blocks: false,
+        log,
+    };
     let files = test_files(check, wt);
     if files.is_empty() {
         return Ok(None);
+    }
+    if !on_base_config(git, wt, &check.id)? {
+        return Ok(Some(shown(files, Verdict::New, Vec::new(), None)));
     }
     let mut hash = Sha256::new();
     let mut overlay = Vec::new();
@@ -117,15 +94,14 @@ pub(crate) fn run(
     }
     base.reread(config)?;
     let result = on_base(store, check, &mut base, stage, env)?;
-    let verdict = if result.outcome == Outcome::Passed {
-        Verdict::NotRed {
-            tests: names(
-                result
-                    .cases
-                    .iter()
-                    .filter(|c| !c.failed && files.iter().any(|f| c.is_from(f))),
-            ),
-        }
+    let red = if result.outcome == Outcome::Passed {
+        let tests = names(
+            result
+                .cases
+                .iter()
+                .filter(|c| !c.failed && files.iter().any(|f| crate::counts::is_from(c, f))),
+        );
+        shown(files, Verdict::NotRed, tests, None)
     } else {
         let mut tests: Vec<String> = names(
             result
@@ -139,21 +115,33 @@ pub(crate) fn run(
         if plain.outcome == Outcome::Failed {
             tests.retain(|t| !fails(&plain, t));
             if tests.is_empty() {
-                Verdict::BaseFails { log: plain.log }
+                shown(files, Verdict::BaseFails, Vec::new(), Some(plain.log))
             } else {
-                Verdict::Red { tests }
+                shown(files, Verdict::Red, tests, Some(result.log.clone()))
             }
         } else if tests.is_empty() && names_tests {
-            Verdict::Unbuilt
+            shown(
+                files,
+                Verdict::Unbuilt,
+                Vec::new(),
+                Some(result.log.clone()),
+            )
         } else {
-            Verdict::Red { tests }
+            shown(files, Verdict::Red, tests, Some(result.log.clone()))
         }
     };
-    Ok(Some(Red {
-        files,
-        base: result,
-        verdict,
-    }))
+    Ok(Some(red))
+}
+
+/// Whether the base commit's config has check `id`: one the change adds has no run there to
+/// compare with.
+fn on_base_config(git: &Git, wt: &Worktree, id: &str) -> Result<bool> {
+    let (base, _hold) = git.base_worktree(&wt.base, "")?;
+    if !base.root.join(crate::config::FILE).exists() {
+        return Ok(false);
+    }
+    let config = Config::load(&base.root, &git.common)?;
+    Ok(config.checks.iter().any(|c| c.id == id))
 }
 
 /// The check's run on `base`, reused when its inputs ran there before.
@@ -215,7 +203,7 @@ impl Mark {
     /// What to do when a fix is held by it, or None when it holds nothing.
     pub(crate) fn next(&self, check: &str) -> Option<String> {
         Some(match self.unshown.as_ref()? {
-            Unshown::PassesOnBase => format!("{NEXT}, then fearlezz run"),
+            Unshown::PassesOnBase => format!("{RED_NEXT}, then fearlezz run"),
             // A next line is one line; the run printed the whole reason.
             Unshown::DidNotRun(why) => format!(
                 "red before green {check} did not run ({}); make the check run on the base \
@@ -226,17 +214,10 @@ impl Mark {
     }
 }
 
-impl Verdict {
-    /// Why it does not show the change, when it does not.
-    pub(crate) fn unshown(&self) -> Option<Unshown> {
-        matches!(self, Verdict::NotRed { .. }).then_some(Unshown::PassesOnBase)
-    }
+/// Why `red` does not show the change, when it does not.
+pub(crate) fn unshown(red: &Red) -> Option<Unshown> {
+    (red.verdict == Verdict::NotRed).then_some(Unshown::PassesOnBase)
 }
-
-/// What a fix whose tests pass on the base commit does next.
-pub(crate) const NEXT: &str = "change a test so it fails without the fix; when the change fixes \
-                               no bug, its pull request title does not start with fix: (nor, \
-                               before there is one, any of its commits)";
 
 /// Whether the change says it fixes a bug. The pull request title decides when it is known
 /// (in CI), since with a squash merge it is the commit: a `feat:` title with an interim
@@ -245,8 +226,8 @@ pub(crate) const NEXT: &str = "change a test so it fails without the fix; when t
 /// merge commit does not hide an earlier fix; uncommitted work with no commits of its own is
 /// not a fix yet.
 pub(crate) fn is_fix_change(git: &Git, base: &str) -> Result<bool> {
-    if let Some(title) = crate::pull_request("title") {
-        return Ok(is_fix(&title));
+    if let Some(title) = crate::action::Workflow::read().title() {
+        return Ok(is_fix(title));
     }
     Ok(git.subjects_since(base)?.iter().any(|s| is_fix(s)))
 }

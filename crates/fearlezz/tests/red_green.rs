@@ -332,6 +332,31 @@ fn when_the_base_already_fails_failing_there_shows_nothing() {
 }
 
 #[test]
+fn a_check_the_change_adds_has_nothing_on_the_base_to_compare() {
+    let repo = repo();
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{config}\n[check.more]\nrun = \"sh more/t.sh\"\nstage = \"working\"\ninputs = [\"more/**\"]\ntest_files = [\"more/**\"]\n"
+        ),
+    );
+    repo.write("more/t.sh", "true\n");
+    repo.commit("feat: more checks");
+    let (out, _) = ci(&repo);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains(
+            "red before green more: the check is new in this change, so the base commit has \
+             nothing to compare"
+        ),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("already fails"), "{}", out.stdout);
+}
+
+#[test]
 fn when_the_base_already_fails_a_junit_check_names_only_the_tests_the_change_makes_pass() {
     let repo = junit_repo();
     break_the_base(&repo);

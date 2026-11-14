@@ -11,6 +11,7 @@ categories = ["command-line-utilities", "development-tools::testing"]
 
 [dependencies]
 anyhow = "1.0.104"
+fearlezz-proof = { path = "../fearlezz-proof" }
 clap = { version = "4.6.7", features = ["derive"] }
 flate2 = "1.1.5"
 globset = "0.4.21"

@@ -1,6 +1,6 @@
 # Fearlezz
 
-Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearlezz`.
+Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearlezz`, with the proof bundle model in `crates/fearlezz-proof`, shared with the proof host.
 
 ## Working here
 
@@ -13,6 +13,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 
 ## Model
 
+- `crates/fearlezz-proof`: the proof bundle, `proof.json`, as serde types (checks, tests, findings, looks, weakenings, red before green) with what blocks, what to read and red before green's one wording; `waits.rs` derives `Obligations`, what waits for a person (a check's pictures, a fork's head, a weakening), and owns `Kind` (approve or accept: command word, wording, the role it needs). Only serde, so the host builds it to wasm; the core and `ee/host` both depend on it.
 - `config.rs`: `fearlezz.toml`, stages and checks; a check's `inputs` are what it reads (the reuse key, by default every file outside `no_proof`), a speed hint that never decides whether it is needed.
 - `init.rs`: `fearlezz setup init`, the starter `fearlezz.toml` from the languages at a repository's root.
 - `git.rs`: the facts read from git (root, common dir, changed files, tree id, worktrees).
@@ -24,18 +25,20 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `settings.rs`: shared tool settings from pieces, written into each tool's own file, and the agent skill every project gets; drift is a finding of the built in `settings` check. The skill's source is `skills/fearlezz/SKILL.md`, embedded in the binary; after changing it run `fearlezz setup sync`.
 - `lints.rs`: `[lints.<tool>]` tables, the level (gate, flag, hint, off) a finding of each rule gets, by rule name.
 - `rules.rs`: `[rule.<name>]` conventions (paths, naming, companion files, ast-grep code rules) that form the built in `rules` check.
-- `floor.rs`: the base branch's config as the floor of a change's proof: what the change weakens about its checks. Proof is about behaviour, so it never judges files.
+- `floor.rs`: the base branch's config as the floor of a change's proof: what the change weakens about its checks, as typed weakenings. Proof is about behaviour, so it never judges files.
 - `findings.rs`: findings a check reports at file and line (cargo JSON, SARIF, jsonl), the lines a change touched, and the verdict.
 - `counts.rs`: how many tests a check ran (JUnit reports, or a pattern in its output); zero fails the check.
 - `env.rs`: the environment: preparing a fresh checkout (copy-on-write clones of ignored folders), and starting, reusing, resetting and stopping the services checks need.
 - `media.rs`: comparing two stills or films (stable states, time warping, blurred pixel diff).
 - `record.rs`: recording an app's window on macOS (ScreenCaptureKit through objc2): `fearlezz --still` and a check's `record` table; `record/place.rs` parks it off the developer's screens (`FEARLEZZ_OFF_SCREEN=1`), by AeroSpace when it runs, Accessibility otherwise, gives focus back, and puts back the window positions the app saved while parked.
-- `look.rs`: comparing a check's pictures with the same check run on the base commit; `report.rs`: the look report page.
+- `look.rs`: comparing a check's pictures with the same check run on the base commit.
+- `proof.rs`: a check's entry in the proof from its run, and writing the bundle `run --ci --proof` writes (the model is `fearlezz-proof`), which feeds the status comment, the check page, the proof page and the upload. `report.rs`: the proof page drawn from it, the same locally and on the proof host.
+- `host.rs`: sending the proof bundle to the proof host from GitHub Actions with an OIDC token (`[host] url`, default `https://fearlezz.seamlezz.com`); the host itself lives in `ee/host`.
 - `page.rs`: what the static pages share (colours, controls, motion); they fetch nothing.
 - `red.rs`: red before green, a check run on the base commit with the change's test files laid over it.
 - `hooks.rs`: agent hooks (Claude Code, Codex, Cursor): what `setup sync` writes into each agent's settings, and the answers of `fearlezz setup hook` that hold an agent to the proof while it works.
-- `github.rs`: GitHub: the one client (REST through curl, GraphQL for the atomic ref update), the status comment and check page with their Markdown, and the one rule for which approval counts, shared by CI and `say approve --github`.
-- `action.rs`: `run --ci` on GitHub Actions: what the event asks (prove, approve, withdraw, clean, squash), forks and stale runs, the pictures branch through the git data API, and the pinned ffmpeg.
+- `github.rs`: GitHub: the one client (REST through curl, GraphQL for the atomic ref update), the status comment (its hidden line holds the obligations) and check page with their Markdown, and the one rule for which approval counts (`Pending` and `Verdict` over the obligations), shared by CI and `say approve --github`.
+- `action.rs`: `run --ci` on GitHub Actions: `Workflow`, the one reader of GitHub's variables and event file (the repository, run page and pull request the proof names), what the event asks (prove, approve, withdraw, clean, squash), forks and stale runs, the pictures branch through the git data API, and the pinned ffmpeg.
 - `main.rs`: the CLI; `overview.rs`: the overview page.
 
 ## Releases

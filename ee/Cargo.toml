@@ -1,0 +1,18 @@
+# The hosted parts: their own workspace, apart from the open core's, because the proof host is
+# built to wasm and the core never depends on anything here.
+[workspace]
+resolver = "3"
+members = ["host", "host-tests"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+# The tests generate RSA keys; unoptimised that takes seconds per key.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
