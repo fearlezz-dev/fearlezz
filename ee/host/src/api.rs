@@ -212,9 +212,10 @@ pub async fn done(req: &Request, env: &Env, config: &Config, id: &str) -> Answer
     #[derive(Deserialize)]
     struct Row {
         pull: Option<f64>,
+        proof: String,
     }
     let row: Option<Row> = db
-        .prepare("SELECT pull FROM proofs WHERE id = ?1 AND repo = ?2")
+        .prepare("SELECT pull, proof FROM proofs WHERE id = ?1 AND repo = ?2")
         .bind(&[id.into(), repo.as_str().into()])?
         .first(None)
         .await?;
@@ -242,17 +243,46 @@ pub async fn done(req: &Request, env: &Env, config: &Config, id: &str) -> Answer
             .bind(&[id.into()])?,
     ];
     if let Some(pull) = pull {
-        statements.push(
-            db.prepare(
-                "INSERT INTO latest (repo, pull, proof) VALUES (?1, ?2, ?3) ON CONFLICT (repo, pull) DO UPDATE SET proof = excluded.proof",
-            )
-            .bind(&[repo.as_str().into(), (pull as f64).into(), id.into()])?,
-        );
+        // Runs finish in any order, so a slow run of an earlier push must not replace the proof
+        // of the head GitHub shows now; it is the latest only while nothing else is.
+        let proof: Proof = serde_json::from_str(&row.proof).map_err(|e| {
+            worker::Error::RustError(format!("a stored proof does not read back: {e}"))
+        })?;
+        let sql = if current(config, &repo, pull, &proof.head).await? {
+            "INSERT INTO latest (repo, pull, proof) VALUES (?1, ?2, ?3) ON CONFLICT (repo, pull) DO UPDATE SET proof = excluded.proof"
+        } else {
+            "INSERT INTO latest (repo, pull, proof) VALUES (?1, ?2, ?3) ON CONFLICT (repo, pull) DO NOTHING"
+        };
+        statements.push(db.prepare(sql).bind(&[
+            repo.as_str().into(),
+            (pull as f64).into(),
+            id.into(),
+        ])?);
     }
     db.batch(statements).await?;
     Ok(Response::from_json(
         &json!({"url": page_url(config, &run, id)}),
     )?)
+}
+
+/// Whether `head` is the head of pull request `pull` as GitHub says now, asked as the app.
+async fn current(config: &Config, repo: &str, pull: u64, head: &str) -> Result<bool, Refusal> {
+    let Some(token) = github::installation_token(config, repo).await? else {
+        return Err(Refusal::new(
+            403,
+            format!(
+                "the Fearlezz app is not installed on {repo}: {}",
+                config.install_url
+            ),
+        ));
+    };
+    match github::head(config, repo, pull, &token).await? {
+        Some(now) => Ok(now.sha == head),
+        None => Err(worker::Error::RustError(format!(
+            "GitHub refused the installation token of {repo}"
+        ))
+        .into()),
+    }
 }
 
 /// A pull request's proof comes only from a run of that pull request.

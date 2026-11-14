@@ -35,7 +35,7 @@ pull request, its `ref` (`refs/pull/<n>/merge`) must name the pull request the p
 | `GET /api/v1/installed` | `200 {"installed": true}`, or `200 {"installed": false, "install": "<url>"}`. Asks GitHub whether the app is installed on the token's repository. |
 | `POST /api/v1/proofs` | Body `{"proof": <proof.json>, "files": {"<path>": {"sha256": "<hex>", "size": <bytes>}}}`, every file of the bundle but `proof.json` (so `index.html` too). Refused unless installed. `201 {"id": "<id>", "url": "<page url>", "missing": ["<sha256>", ...]}`: the files the host does not hold yet. |
 | `PUT /api/v1/blobs/<sha256>` | The bytes of one missing file, with `Content-Length`. Stored by content, per repository, so a picture that did not change is sent once. Refused when the bytes do not hash to the name. `204`. |
-| `POST /api/v1/proofs/<id>/done` | Refused while a file is missing. Marks the proof whole and makes it the latest of its pull request. `200 {"url": "<page url>"}`. |
+| `POST /api/v1/proofs/<id>/done` | Refused while a file is missing. Marks the proof whole. It becomes the latest of its pull request when its `head` is the pull request's head as GitHub says now (asked as the app), or when the pull request has no latest yet; so runs finishing out of order never replace the proof of the current head with an older one. `200 {"url": "<page url>"}`. |
 
 A refusal answers `{"error": "<what to do>"}` with `401` for a token that does not pass, `403`
 for a repository without the app or a proof for another repository or pull request, `400` for
@@ -59,11 +59,11 @@ App origin pages:
 
 | Path | Shows |
 | --- | --- |
-| `/<owner>/<repo>/proofs/<id>/` | The shell: a tiny title above a full height frame of `<FILES_ORIGIN>/<grant>/index.html`. The host writes it, never CI. Nothing below this path is served here. |
+| `/<owner>/<repo>/proofs/<id>/` | The shell: a tiny bar above a full height frame of `<FILES_ORIGIN>/<grant>/index.html`, holding the title, Share, and Approve and Accept for what waits. The host writes it, never CI. Nothing below this path is served here. |
 | `/<owner>/<repo>/pull/<n>` | A redirect to the latest whole proof of that pull request. |
 | `/s/<token>` | A share link: the shell of its pull request's latest whole proof, for anyone, without a session. It only views; see below. |
 | `/login`, `/callback`, `/logout` | GitHub sign in. |
-| `POST /<owner>/<repo>/proofs/<id>/approve`, `.../accept` | Posts `/fearlezz approve <words>` or `/fearlezz accept <words>` on the pull request as the signed in person. Only the shell calls these; see below. |
+| `POST /<owner>/<repo>/proofs/<id>/approve`, `.../accept` | Posts `/fearlezz approve <words>` or `/fearlezz accept <words>` on the pull request as the signed in person. Only the shell's own Approve and Accept call these; see below. |
 | `POST /<owner>/<repo>/pull/<n>/share`, `GET` the same path, `POST .../share/<token>/revoke` | Makes a share link of the pull request, lists its live links, and revokes one. Only the shell's Share control calls these; see below. |
 
 Files origin: `/<grant>/<path>` is the bundle's file at that path, with its content type and
@@ -79,23 +79,41 @@ Files origin: `/<grant>/<path>` is the bundle's file at that path, with its cont
   for browsers too old for it), so only the shell may frame them. The shell itself may not be
   framed and is never cached, since it holds a grant.
 
-### Approving on the page
+### Approving and accepting
 
-The page offers an Approve button per check whose pictures wait and an Accept button beside a
-weakening that waits for an admin, each with a field for the person's own words. The host never
-approves anything itself: it posts the same comment a person would write on the pull request,
-as that person, with their GitHub token, and CI judges it exactly as any other (who may, when
-it was written, what it covers). A fork's approval names its head:
+The host never approves anything itself: it posts the same comment a person would write on the
+pull request, as that person, with their GitHub token, and CI judges it exactly as any other (who
+may, when it was written, what it covers). A fork's approval names its head:
 `/fearlezz approve <short head> <words>`.
 
-The page runs on the files origin, which never holds the sign in, so it cannot call the host.
-Framed (`window.parent !== window`), its button sends
-`postMessage({kind: "fearlezz:approve" | "fearlezz:accept", check, words})` to its parent. The
-shell takes messages only from its frame's window and from `FILES_ORIGIN`, posts them to its own
-origin, shows what came of it in a bar above the frame (the comment's link, or why it was
-refused), and answers the frame with `{kind: "fearlezz:posted", of, check, ok, text}`. Opened
-locally, not framed, the page shows the command or comment to copy instead. The shell's one
-script runs by a nonce that changes per view, and its `connect-src` is `'self'`.
+**The shell owns the buttons.** The page's HTML comes from the pull request's CI run, so anyone
+with write access to the repository controls it; nothing it says may post as the person viewing
+it. The shell's bar, on the app origin, holds the controls, built by the host from its own copy
+of `proof.json` (`Proof::obligations`):
+
+- one **Approve** per check whose changed pictures wait, and one **Accept** below every weakening
+  that waits (one accept covers them all), each with a field for the person's own words;
+- only for a signed in person whose role allows that kind (write access to approve, admin rights
+  to accept), as GitHub's collaborator permission says, cached 5 minutes like who may read;
+- without a session, a link to sign in and come back; with too little access, why, and nothing to
+  press; through a share link, nothing.
+
+Only a press of one of those controls posts. It sends `{"check", "words"}` to its own origin with
+the session and a `Fearlezz-View` header: the token of this person's view of this proof, an
+HMAC under `SIGNING_KEY` of their session id and the proof, written into the shell's script. The
+page cannot read it (another origin) and the session id itself never reaches a page. The shell
+shows what came of it in its bar (the comment's link, or why it was refused) and tells the
+frame `{kind: "fearlezz:posted", of, check, ok, text}`, so the page's row shows it too.
+
+**The message from the page is only a prefill.** Framed (`window.parent !== window`), the page's
+Approve above and Accept above buttons send
+`postMessage({kind: "fearlezz:fill", of: "approve" | "accept", check, words})`. The shell takes
+messages only from its frame's window and from `FILES_ORIGIN`; a message fills in the words of
+the matching control that is already there, focuses it and scrolls it into view, and answers
+`{kind: "fearlezz:filled", of, check, ok, text}`. It never posts, never adds a control, and a
+message for a kind or check that does not wait finds nothing. Opened locally, not framed, the
+page shows the command or comment to copy instead. The shell's one script runs by a nonce that
+changes per view, and its `connect-src` is `'self'`.
 
 `POST /<owner>/<repo>/proofs/<id>/approve` (or `accept`) takes `{"check": "<check>", "words":
 "<words>"}` (`check` only for approve) and answers `201 {"url": "<comment url>", "pull": <n>,
@@ -103,7 +121,7 @@ script runs by a nonce that changes per view, and its `connect-src` is `'self'`.
 
 | Status | When |
 | --- | --- |
-| `403` | The `Origin` header is not `APP_ORIGIN` (the session cookie is `SameSite=Lax` too), or the person lacks write access (approve) or admin rights (accept), as GitHub's collaborator permission says when asked with their token. |
+| `403` | The `Origin` header is not `APP_ORIGIN` (the session cookie is `SameSite=Lax` too), the `Fearlezz-View` token is missing or not this session's view of this proof (reload the page), or the person lacks write access (approve) or admin rights (accept), as GitHub's collaborator permission says when asked with their token. |
 | `415` | The body is not JSON, so no form on another site can post it. |
 | `401` | No session, or GitHub no longer takes its token: sign in again. |
 | `400` | Words empty, over 500 characters, or on more than one line. |
@@ -141,10 +159,10 @@ work as CI proves new commits.
 - **Only that pull request.** The link skips the repository's access check for its own pull
   request's latest proof alone. The proof's own address, other pull requests and the API still
   need what they needed before.
-- **It only views.** The link's shell never posts: when the framed page asks to approve or
-  accept, the shell tells it the link only views and points to the pull request's own address
-  to sign in, even for a signed in writer. Its `connect-src` is `'none'`, and it shows no Share
-  control.
+- **It only views.** The link's shell has no Approve or Accept and never posts: when the framed
+  page offers words to fill in, the shell says the link only views and points to the pull
+  request's own address to sign in, even for a signed in writer. Its `connect-src` is `'none'`,
+  and it shows no Share control.
 - **The files** come from the files origin under the same one hour grant of one proof as
   any other view, handed out fresh on each load; the token never reaches the files origin, and
   the shell sends no referrer and asks not to be indexed.
@@ -181,6 +199,9 @@ and `415` for a body that is not JSON.
 
 `ee/` is a Cargo workspace of its own, apart from the core's: `host` is the worker
 (`wrangler.toml` holds its bindings and settings, `migrations/` the D1 schema), and
-`host-tests` drives it over HTTP under `wrangler dev --local` against a fake GitHub. Inside
+`host-tests` drives it over HTTP under `wrangler dev --local` against a fake GitHub, and the
+shell with its frame in headless Chrome (Google Chrome or Chromium, from `/Applications` or
+`PATH`) over the DevTools protocol on a pipe. `cargo test ... -- --ignored pictures` writes
+pictures of the shell's bar, light and dark, to `ee/target/tmp`. Inside
 `devenv shell`, `cargo test --manifest-path ee/Cargo.toml` builds the worker and runs them;
 Fearlezz proves it with the `ee-fmt`, `ee-clippy` and `ee-tests` checks.

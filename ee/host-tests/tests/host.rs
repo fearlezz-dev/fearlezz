@@ -5,6 +5,8 @@
 //! the app origin and the files origin, under two host names for the same local port.
 
 // Beside this file, not in tests/, where cargo would take each for a test of its own.
+#[path = "host/browser.rs"]
+mod browser;
 #[path = "host/github.rs"]
 mod github;
 #[path = "host/worker.rs"]
@@ -184,6 +186,10 @@ fn main() {
             pull_leads_to_the_latest_whole_proof,
         ),
         (
+            "an_older_head_finishing_last_keeps_the_newer_proof_latest",
+            an_older_head_finishing_last_keeps_the_newer_proof_latest,
+        ),
+        (
             "a_private_proof_sends_a_stranger_to_sign_in",
             a_private_proof_sends_a_stranger_to_sign_in,
         ),
@@ -273,8 +279,28 @@ fn main() {
             approving_a_private_proof_without_access_gets_not_found,
         ),
         (
-            "the_shell_sends_what_its_frame_asks_to_its_own_origin",
-            the_shell_sends_what_its_frame_asks_to_its_own_origin,
+            "approving_needs_the_shells_view_token",
+            approving_needs_the_shells_view_token,
+        ),
+        (
+            "the_shell_offers_approve_and_accept_by_role",
+            the_shell_offers_approve_and_accept_by_role,
+        ),
+        (
+            "the_shell_offers_nothing_to_settle_when_nothing_waits",
+            the_shell_offers_nothing_to_settle_when_nothing_waits,
+        ),
+        (
+            "the_shell_takes_only_words_from_its_frame",
+            the_shell_takes_only_words_from_its_frame,
+        ),
+        (
+            "a_page_that_asks_on_load_gets_nothing_posted",
+            a_page_that_asks_on_load_gets_nothing_posted,
+        ),
+        (
+            "only_the_shells_own_button_posts",
+            only_the_shells_own_button_posts,
         ),
         (
             "a_writer_makes_a_share_link_anyone_can_open",
@@ -318,10 +344,17 @@ fn main() {
             a_share_link_view_offers_no_posting,
         ),
     ];
-    let trials = tests
+    let mut trials: Vec<Trial> = tests
         .iter()
         .map(|&(name, test)| Trial::test(name, move || run(test)))
         .collect();
+    // Pictures of the shell's bar for a person to look at, not a test: run with --ignored.
+    trials.push(
+        Trial::test("pictures_of_the_shells_bar", || {
+            run(pictures_of_the_shells_bar)
+        })
+        .with_ignored_flag(true),
+    );
     let conclusion = libtest_mimic::run(&args, trials);
     if let Some(world) = WORLD.get() {
         if conclusion.has_failed() {
@@ -765,6 +798,36 @@ fn pull_leads_to_the_latest_whole_proof() {
     assert_eq!(get("/owner/repo/pull/24", &[]).status, 404);
 }
 
+fn an_older_head_finishing_last_keeps_the_newer_proof_latest() {
+    // GitHub says the pull request is at HEAD; a slow run of an earlier push finishes last.
+    let mut older = proof("owner/repo", 83);
+    older["head"] = json!("0ld0000aaaa0000aaaa0000aaaa0000aaaa0000a");
+    let newer = start_upload("owner/repo", 83, &proof("owner/repo", 83), b"<p>newer</p>");
+    let late = start_upload("owner/repo", 83, &older, b"<p>older</p>");
+    finish_upload("owner/repo", 83, &newer);
+    finish_upload("owner/repo", 83, &late);
+    let answer = get("/owner/repo/pull/83", &[]);
+    assert_eq!(answer.status, 302, "{}", answer.text());
+    assert_eq!(
+        answer.header("location").unwrap(),
+        format!("/owner/repo/proofs/{newer}/"),
+        "the proof of the current head stays the latest"
+    );
+    // The older proof is still whole at its own address.
+    assert_eq!(get(&format!("/owner/repo/proofs/{late}/"), &[]).status, 200);
+
+    // An older head that finishes while nothing newer is whole is the latest there is.
+    let mut older = proof("owner/repo", 84);
+    older["head"] = json!("0ld0000aaaa0000aaaa0000aaaa0000aaaa0000a");
+    let late = start_upload("owner/repo", 84, &older, b"<p>alone</p>");
+    finish_upload("owner/repo", 84, &late);
+    let answer = get("/owner/repo/pull/84", &[]);
+    assert_eq!(
+        answer.header("location").unwrap(),
+        format!("/owner/repo/proofs/{late}/")
+    );
+}
+
 // Who sees a page.
 
 fn a_private_proof_sends_a_stranger_to_sign_in() {
@@ -1136,9 +1199,110 @@ fn approving_a_private_proof_without_access_gets_not_found() {
     assert_eq!(answer.status, 201, "{}", answer.text());
 }
 
-fn the_shell_sends_what_its_frame_asks_to_its_own_origin() {
+fn approving_needs_the_shells_view_token() {
+    let id = upload_proof("owner/team", 85, &waiting("owner/team", 85));
+    let other = upload_proof("owner/team", 86, &waiting("owner/team", 86));
+    let writer = sign_in("writer-code", "/");
+    let admin = sign_in("admin-code", "/");
+    let words = json!({"check": "screens", "words": "fine"});
+    let path = format!("/owner/team/proofs/{id}/approve");
+    let origin = world().worker.url.clone();
+    let send = |session: &str, view: Option<&str>| {
+        let mut headers = vec![
+            ("Origin", origin.as_str()),
+            ("Content-Type", "application/json"),
+            ("Cookie", session),
+        ];
+        if let Some(view) = view {
+            headers.push(("Fearlezz-View", view));
+        }
+        request(
+            "POST",
+            &path,
+            &headers,
+            Some(words.to_string().into_bytes()),
+        )
+    };
+    // Without the token only the shell's page holds, nothing is posted, whoever asks.
+    let answer = send(&writer, None);
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    assert!(answer.json()["error"].as_str().unwrap().contains("reload"));
+    // Nor with a token of another proof's shell, another person's, or a made up one.
+    let theirs = view_token("owner/team", &id, &admin).unwrap();
+    let elsewhere = view_token("owner/team", &other, &writer).unwrap();
+    for view in [theirs.as_str(), elsewhere.as_str(), "made.up"] {
+        let answer = send(&writer, Some(view));
+        assert_eq!(answer.status, 403, "{view}: {}", answer.text());
+    }
+    assert!(world().github.posted("owner/team", 85).is_empty());
+    // The token of this person's own view of this proof posts.
+    let mine = view_token("owner/team", &id, &writer).unwrap();
+    let answer = send(&writer, Some(&mine));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+}
+
+fn the_shell_offers_approve_and_accept_by_role() {
+    let id = upload_proof("owner/team", 87, &waiting("owner/team", 87));
+    let path = format!("/owner/team/proofs/{id}/");
+    let approve = "data-kind=\"approve\" data-check=\"screens\"";
+    let accept = "data-kind=\"accept\"";
+    // An admin gets both, each with a field for their own words, from the host's own proof.
+    let admin = sign_in("admin-code", "/");
+    let html = get(&path, &[("Cookie", &admin)]).text();
+    let bar = &html[html
+        .find("id=\"waits\"")
+        .unwrap_or_else(|| panic!("{html}"))..];
+    let bar = &bar[..bar.find("</section>").unwrap()];
+    assert_eq!(bar.matches(approve).count(), 1, "{bar}");
+    assert_eq!(bar.matches(accept).count(), 1, "{bar}");
+    assert_eq!(bar.matches("name=\"words\"").count(), 2, "{bar}");
+    assert!(bar.contains("Check <code>tests</code> is weaker"), "{bar}");
+    assert!(bar.contains("it runs another command"), "{bar}");
+    assert!(
+        !bar.contains(" value="),
+        "nothing is filled in for them: {bar}"
+    );
+    // A writer approves, but only an admin accepts.
+    let writer = sign_in("writer-code", "/");
+    let html = get(&path, &[("Cookie", &writer)]).text();
+    assert!(html.contains(approve), "{html}");
+    assert!(!html.contains(accept), "{html}");
+    // A reader gets nothing to press, and someone without a session a way to sign in.
+    let reader = sign_in("reader-code", "/");
+    let html = get(&path, &[("Cookie", &reader)]).text();
+    assert!(!html.contains("data-kind="), "{html}");
+    let html = get(&path, &[]).text();
+    assert!(!html.contains("data-kind="), "{html}");
+    let next = path.replace('/', "%2F");
+    assert!(
+        html.contains(&format!("href=\"/login?next={next}\"")),
+        "{html}"
+    );
+    // A fork's head waits as a whole: one Approve that names no check.
+    let fork = upload_proof("owner/team", 88, &waiting("owner/team", 88));
+    world()
+        .github
+        .set_head("owner/team", 88, github::HEAD, "someone/team");
+    let html = get(
+        &format!("/owner/team/proofs/{fork}/"),
+        &[("Cookie", &writer)],
+    )
+    .text();
+    assert!(html.contains(approve), "{html}");
+}
+
+fn the_shell_offers_nothing_to_settle_when_nothing_waits() {
+    let id = upload_proof("owner/team", 89, &proof("owner/team", 89));
+    let admin = sign_in("admin-code", "/");
+    let html = get(&format!("/owner/team/proofs/{id}/"), &[("Cookie", &admin)]).text();
+    assert!(!html.contains("id=\"waits\""), "{html}");
+    assert!(!html.contains("data-kind="), "{html}");
+}
+
+fn the_shell_takes_only_words_from_its_frame() {
     let id = upload_proof("owner/team", 63, &waiting("owner/team", 63));
-    let answer = get(&format!("/owner/team/proofs/{id}/"), &[]);
+    let writer = sign_in("writer-code", "/");
+    let answer = get(&format!("/owner/team/proofs/{id}/"), &[("Cookie", &writer)]);
     assert_eq!(answer.status, 200, "{}", answer.text());
     let csp = answer.header("content-security-policy").unwrap().to_owned();
     let html = answer.text();
@@ -1150,17 +1314,116 @@ fn the_shell_sends_what_its_frame_asks_to_its_own_origin() {
         "{csp}"
     );
     assert!(csp.contains("connect-src 'self'"), "{csp}");
-    let again = get(&format!("/owner/team/proofs/{id}/"), &[]).text();
+    let again = get(&format!("/owner/team/proofs/{id}/"), &[("Cookie", &writer)]).text();
     assert!(!again.contains(&nonce), "a fresh nonce per view");
-    // It listens to its frame alone, from the files origin, and sends nothing elsewhere.
+    // It listens to its frame alone, from the files origin, for words to fill in.
     let files = &world().worker.files;
     assert!(html.contains("e.source !== frame.contentWindow"), "{html}");
     assert!(html.contains(&format!("\"{files}\"")), "{html}");
+    assert!(html.contains("'fearlezz:fill'"), "{html}");
+    assert!(!html.contains("'fearlezz:approve'"), "{html}");
     assert!(html.contains("credentials: 'same-origin'"), "{html}");
     assert!(
         html.contains("id=\"said\""),
         "the bar for what happened: {html}"
     );
+}
+
+/// A page that asks on load, as a pull request's CI could write it: with the old messages
+/// that once had the shell post, fill messages, and a post of its own to the app origin, for
+/// the proof its grant names.
+fn asking_page(app: &str) -> String {
+    format!(
+        r#"<!doctype html><title>asks</title><p>a page that asks</p><script>
+var p = window.parent;
+p.postMessage({{ kind: 'fearlezz:approve', check: 'screens', words: 'approved by the page' }}, '*');
+p.postMessage({{ kind: 'fearlezz:accept', check: null, words: 'accepted by the page' }}, '*');
+p.postMessage({{ kind: 'fearlezz:fill', of: 'approve', check: 'nothing', words: 'not a check' }}, '*');
+p.postMessage({{ kind: 'fearlezz:fill', of: 'approve', check: 'screens', words: 'words from the page' }}, '*');
+p.postMessage({{ kind: 'fearlezz:fill', of: 'accept', check: null, words: 'why from the page' }}, '*');
+var grant = JSON.parse(atob(location.pathname.split('/')[1].split('.')[0].replace(/-/g, '+').replace(/_/g, '/')));
+fetch('{app}/' + grant.repo + '/proofs/' + grant.proof + '/accept', {{ method: 'POST', credentials: 'include',
+  headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ words: 'fetched' }}) }}).catch(function () {{}});
+</script>"#
+    )
+}
+
+/// Opens the shell of a waiting proof whose page asks on load, signed in as an admin, in a
+/// real browser.
+fn open_asking_shell(pull: u64) -> browser::Browser {
+    let app = world().worker.url.clone();
+    let page = asking_page(&app);
+    let id = upload_with(
+        "owner/team",
+        pull,
+        &waiting("owner/team", pull),
+        &[("index.html", page.as_bytes())],
+    );
+    let admin = sign_in("admin-code", "/");
+    let (name, value) = admin.split_once('=').unwrap();
+    let mut browser = browser::Browser::start();
+    browser.cookie(&app, name, value);
+    browser.open(&format!("{app}/owner/team/proofs/{id}/"));
+    browser
+}
+
+fn a_page_that_asks_on_load_gets_nothing_posted() {
+    let mut browser = open_asking_shell(90);
+    // The page's words reach the shell's own fields, which shows its messages arrived...
+    browser.wait_for(
+        "(document.querySelector('[data-kind=accept] [name=words]') || {}).value === 'why from the page'",
+    );
+    // ...yet nothing is posted: not on load, not by the old messages, not by its own fetch.
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        world().github.posted("owner/team", 90).is_empty(),
+        "{:?}",
+        world().github.posted("owner/team", 90)
+    );
+    let approve = browser.eval("document.querySelector('[data-kind=approve] [name=words]').value");
+    assert_eq!(approve, json!("words from the page"));
+    assert_eq!(
+        browser.eval("document.activeElement.name"),
+        json!("words"),
+        "the field it filled has focus"
+    );
+    assert_eq!(
+        browser.eval("document.querySelectorAll('[data-kind]').length"),
+        json!(2),
+        "a message never adds a control"
+    );
+}
+
+fn only_the_shells_own_button_posts() {
+    let mut browser = open_asking_shell(91);
+    browser.wait_for(
+        "(document.querySelector('[data-kind=approve] [name=words]') || {}).value === 'words from the page'",
+    );
+    browser.eval("document.querySelector('[data-kind=approve] [name=words]').value = 'the header reads well'");
+    browser.eval("document.querySelector('[data-kind=approve] button').click()");
+    browser.wait_for("!document.getElementById('said').hidden");
+    let posted = world().github.posted("owner/team", 91);
+    assert_eq!(posted.len(), 1, "{posted:?}");
+    assert_eq!(posted[0].login, "admin");
+    assert_eq!(posted[0].body, "/fearlezz approve the header reads well");
+    let said = browser.eval("document.getElementById('said').textContent");
+    assert!(said.as_str().unwrap().contains("Posted"), "{said}");
+}
+
+/// Pictures of the shell's bar with Approve and Accept, light and dark, for a person to look at.
+fn pictures_of_the_shells_bar() {
+    let mut browser = open_asking_shell(92);
+    browser.wait_for(
+        "(document.querySelector('[data-kind=accept] [name=words]') || {}).value === 'why from the page'",
+    );
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    for scheme in ["light", "dark"] {
+        browser.scheme(scheme);
+        std::thread::sleep(Duration::from_millis(500));
+        let file = dir.join(format!("shell-bar-{scheme}.png"));
+        std::fs::write(&file, browser.picture()).unwrap();
+        println!("{}", file.display());
+    }
 }
 
 // Share links.
@@ -1389,6 +1652,7 @@ fn a_share_link_view_offers_no_posting() {
         assert!(html.contains("e.source !== frame.contentWindow"), "{html}");
         assert!(!html.contains("fetch("), "{html}");
         assert!(!html.contains("id=\"share\""), "{html}");
+        assert!(!html.contains("data-kind="), "no Approve or Accept: {html}");
         assert!(html.contains("share link"), "{html}");
         let csp = answer.header("content-security-policy").unwrap();
         assert!(csp.contains("connect-src 'none'"), "{csp}");
@@ -1415,7 +1679,8 @@ fn waiting(repository: &str, pull: u64) -> Value {
     proof
 }
 
-/// Approves or accepts a proof from its shell, as the shell's script asks: same origin, JSON.
+/// Approves or accepts a proof from its shell, as the shell's script asks: same origin, JSON,
+/// with the token of the person's view of the shell when they may see it.
 fn act(repository: &str, id: &str, kind: &str, session: Option<&str>, body: Value) -> Answer {
     let path = format!("/{repository}/proofs/{id}/{kind}");
     let origin = world().worker.url.clone();
@@ -1423,10 +1688,30 @@ fn act(repository: &str, id: &str, kind: &str, session: Option<&str>, body: Valu
         ("Origin", origin.as_str()),
         ("Content-Type", "application/json"),
     ];
+    let view = session.and_then(|s| view_token(repository, id, s));
     if let Some(session) = session {
         headers.push(("Cookie", session));
     }
+    if let Some(view) = &view {
+        headers.push(("Fearlezz-View", view));
+    }
     request("POST", &path, &headers, Some(body.to_string().into_bytes()))
+}
+
+/// The token of a person's view of a proof's shell, which its script sends with a post; None
+/// when the shell does not open for them.
+fn view_token(repository: &str, id: &str, session: &str) -> Option<String> {
+    let answer = get(
+        &format!("/{repository}/proofs/{id}/"),
+        &[("Cookie", session)],
+    );
+    if answer.status != 200 {
+        return None;
+    }
+    let html = answer.text();
+    let start = html.find("var VIEW = \"")? + "var VIEW = \"".len();
+    let end = html[start..].find('"')?;
+    Some(html[start..start + end].to_owned())
 }
 
 /// Makes a share link of a pull request, as the shell's script asks: same origin, JSON.
@@ -1540,6 +1825,22 @@ fn upload_proof(repository: &str, pull: u64, proof: &Value) -> String {
 }
 
 fn upload_with(repository: &str, pull: u64, proof: &Value, files: &[(&str, &[u8])]) -> String {
+    let id = start_upload_with(repository, pull, proof, files);
+    finish_upload(repository, pull, &id);
+    id
+}
+
+/// An upload with every file sent but not yet done, with `page` as its page; the proof's id.
+fn start_upload(repository: &str, pull: u64, proof: &Value, page: &[u8]) -> String {
+    start_upload_with(repository, pull, proof, &[("index.html", page)])
+}
+
+fn start_upload_with(
+    repository: &str,
+    pull: u64,
+    proof: &Value,
+    files: &[(&str, &[u8])],
+) -> String {
     let token = ci(repository, pull);
     let body = upload_body(proof, files);
     let answer = api("POST", "/api/v1/proofs", &token, Some(body));
@@ -1561,10 +1862,16 @@ fn upload_with(repository: &str, pull: u64, proof: &Value, files: &[(&str, &[u8]
         );
         assert_eq!(answer.status, 204, "{}", answer.text());
     }
+    id
+}
+
+/// Marks an upload done, as CI does once every file is sent.
+fn finish_upload(repository: &str, pull: u64, id: &str) {
+    let token = ci(repository, pull);
     let answer = api("POST", &format!("/api/v1/proofs/{id}/done"), &token, None);
     assert_eq!(answer.status, 200, "{}", answer.text());
-    assert_eq!(answer.json()["url"], created["url"]);
-    id
+    let url = format!("{}/{repository}/proofs/{id}/", world().worker.url);
+    assert_eq!(answer.json()["url"], json!(url));
 }
 
 /// Signs in with a GitHub OAuth code, starting from `next`; the session cookie.
