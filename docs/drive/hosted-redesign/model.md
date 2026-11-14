@@ -34,6 +34,22 @@ Working draft for the drive record `record.yaml`. Not decided until the record s
 - GitHub webhooks (`workflow_job`) for queued runs, so a page shows "waiting for a runner"
   before Fearlezz itself starts.
 
+## Protocol, version 2 (draft)
+
+Writers authenticate with a GitHub OIDC token (CI) or a host token from `setup login` (local).
+
+| Call | Does |
+| --- | --- |
+| `POST /api/v2/runs` | `{repository, branch, pull?, head, base, source, checks: [<planned ids>]}`. Opens a run, running. Answers `{run, url}`: the host's page of the work. |
+| `POST /api/v2/runs/<run>/checks` | One check's entry (`fearlezz_proof::Check`) as it starts and as it ends, with its files `{path: {sha256, size}}`. Answers the files the host lacks. |
+| `PUT /api/v2/blobs/<sha256>` | Bytes of one missing file, as in version 1. |
+| `POST /api/v2/runs/<run>/done` | `proof.json`. Refused while a file is missing. Closes the run; the host settles the check run. |
+| `GET /api/v2/work/<owner>/<repo>/<branch>` | Host token only: runs, verdicts and open notes of the work, for `fearlezz`. |
+| `GET /api/v2/blobs/<sha256>` | Host token only: a noted picture, for `fearlezz --notes`. |
+
+A run that never says done is closed as cancelled when its job ends (the `workflow_job`
+webhook), or after an hour for a local run.
+
 ## What the agent does
 
 - `fearlezz` shows what waits on the host for this branch: open notes, verdicts, the CI run.

@@ -95,9 +95,14 @@ decided:
       TypeScript with Solid, built by Vite, served by the same worker; TypeScript types generated
       from fearlezz-proof. The page lives only in ee/; the core gets no JS build.
 
-open:
   - id: verdict-follows-picture
-    ask: Does a verdict follow the picture's content across pushes, or reset on every new head?
+    what: >-
+      A verdict follows the picture: keyed by check, picture and content (films by which states
+      changed), so an unchanged picture keeps its verdict across pushes.
+
+open:
+  - id: slicing
+    ask: A series of pull requests (hosted off between the core cut and host v2), or one branch?
 
 slices: []
 
