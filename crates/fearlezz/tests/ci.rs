@@ -2036,6 +2036,25 @@ fn an_accept_answered_after_a_later_approve_still_gets_its_reply() {
 }
 
 #[test]
+fn running_a_comments_event_again_replies_once() {
+    let (gh, _repo, _head) = weakened_on_actions();
+    gh.state()
+        .permissions
+        .insert("owner".into(), "admin".into());
+    let event = comment_event(&gh, "owner", "/fearlezz accept fine");
+    answer(&gh, &event);
+    // A re-run of the job, or GitHub delivering the event twice.
+    answer(&gh, &event);
+    let replies = gh
+        .state()
+        .comments
+        .iter()
+        .filter(|c| c.body.starts_with("@owner accepted"))
+        .count();
+    assert_eq!(replies, 1);
+}
+
+#[test]
 fn an_accept_comment_settles_the_status() {
     let (gh, _repo, head) = pictures_and_weakening_on_actions();
     gh.state()

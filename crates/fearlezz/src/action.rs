@@ -366,7 +366,7 @@ impl Actions {
         match verdict.of(kind) {
             Some(Ok(a)) if a.url == url => {
                 if !was {
-                    self.reply_counted(pr, kind, &pending, &verdict, a)?;
+                    self.reply_counted(pr, id, kind, &pending, &verdict, a)?;
                 }
             }
             // Deleted, or edited into something else.
@@ -396,9 +396,13 @@ impl Actions {
         Ok(())
     }
 
+    /// Says that comment `id` counts, quoting its words, once: a run of the same event again (a
+    /// re-run, or GitHub delivering it twice) finds its reply and stays silent. The reply names
+    /// the comment in a hidden line, so new words in an edited comment get a reply of their own.
     fn reply_counted(
         &self,
         pr: u64,
+        id: u64,
         kind: Kind,
         pending: &Pending,
         verdict: &Verdict,
@@ -430,8 +434,19 @@ impl Actions {
             kind.renewed_by(),
             kind.word()
         );
+        let mark = format!("<!-- fearlezz-reply {id} -->");
+        let replied = self.api.comments(pr)?.iter().any(|c| {
+            c["user"]["type"] == "Bot"
+                && c["body"]
+                    .as_str()
+                    .is_some_and(|b| b.contains(&mark) && b.contains(&text))
+        });
+        if replied {
+            println!("comment {id} already has its reply");
+            return Ok(());
+        }
         self.api
-            .comment(pr, &format!("{text}\n\n{}", pending.still(verdict)))?;
+            .comment(pr, &format!("{text}\n\n{}\n{mark}", pending.still(verdict)))?;
         println!("@{} {} pull request {pr} at {short}", a.by, kind.past());
         Ok(())
     }
