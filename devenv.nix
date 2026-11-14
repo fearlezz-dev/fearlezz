@@ -76,5 +76,12 @@ in
     };
   };
 
+  # The page's packages, before every shell, so a fresh checkout's checks find them; with the
+  # lockfile met it takes a few milliseconds.
+  tasks."app:install" = {
+    exec = ''bun install --frozen-lockfile --silent --cwd "$DEVENV_ROOT/ee/app"'';
+    before = [ "devenv:enterShell" ];
+  };
+
   enterTest = "check";
 }
