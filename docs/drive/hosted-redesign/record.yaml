@@ -17,12 +17,20 @@ pieces:
         evidence: [docs/drive/hosted-redesign/inventory.html]
   - id: live-page
     status: figuring-out
-    open: Can workers-rs do Durable Objects with hibernating WebSockets, and serve a Solid page?
+    open: Transport proven (spike-live). Next is the events protocol.
     tries:
       - id: spike-live
         what: Throwaway Rust worker with a DO per PR, events in, live Solid page, under wrangler dev.
-        state: trying
-        evidence: []
+        taught: >-
+          workers-rs 0.9.0 (ours, newest) supports DO WebSocket hibernation with no workaround;
+          the object was evicted after 90 s idle with the socket kept and its attachment intact.
+          Two clients got events in order, a late client got the current state first. Worker wasm
+          87 KB gzip, Solid page 5.9 KB gzip, POST to receive 4 ms median locally. Snags: assets
+          fallback needs Sec-Fetch-Mode navigate, tsc needs skipLibCheck, wrangler dev shows no
+          hibernation indicator.
+        state: picked
+        why: Rust Durable Object with hibernation works; no JS object or polling needed.
+        evidence: [spike deleted after recording; numbers above]
   - id: authority
     status: figuring-out
     open: Where an approval lives and who sets the GitHub status in hosted mode.
@@ -36,8 +44,8 @@ pieces:
         state: working
         evidence: [docs/drive/hosted-redesign/mockup.html, docs/drive/hosted-redesign/model.md]
   - id: ui-stack
-    status: figuring-out
-    open: Default is TypeScript with Solid in ee/, types generated from fearlezz-proof; not yet confirmed.
+    status: done
+    open: Picked, see decided stack.
     tries: []
 
 decided:
@@ -81,9 +89,15 @@ decided:
       The local overview page goes too; fearlezz --all prints text. The host's repository page
       lists all work live.
 
+  - id: stack
+    what: >-
+      Rust worker with one Durable Object per piece of work for live updates; the page in
+      TypeScript with Solid, built by Vite, served by the same worker; TypeScript types generated
+      from fearlezz-proof. The page lives only in ee/; the core gets no JS build.
+
 open:
-  - id: ui-stack
-    ask: Confirm TypeScript with Solid in ee/, types generated from fearlezz-proof (after spike-live).
+  - id: verdict-follows-picture
+    ask: Does a verdict follow the picture's content across pushes, or reset on every new head?
 
 slices: []
 
