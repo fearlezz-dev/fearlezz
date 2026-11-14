@@ -76,10 +76,14 @@ decided:
     what: >-
       Approving is per picture: Looks right or Needs change. Words only on Needs change notes.
       Replaces the approval per check in the person's own words.
+  - id: no-overview-page
+    what: >-
+      The local overview page goes too; fearlezz --all prints text. The host's repository page
+      lists all work live.
 
 open:
-  - id: overview-page
-    ask: The local overview page (overview.rs, fearlezz --all) also goes, by only-host-has-a-page? (stated as default, no objection yet)
+  - id: ui-stack
+    ask: Confirm TypeScript with Solid in ee/, types generated from fearlezz-proof (after spike-live).
 
 slices: []
 
