@@ -45,3 +45,10 @@ stage = "working"
 [check.packaging]
 run = "jq empty release-please-config.json .release-please-manifest.json && yq '.' action.yml > /dev/null && shellcheck install.sh"
 stage = "working"
+
+# A throwaway picture for trying approve and accept on the proof host; never merged.
+[check.demo-card]
+run = 'mkdir -p "$FEARLEZZ_OUT/stills" && ffmpeg -loglevel error -f lavfi -i "color=c=$(cat demo/color):s=480x270" -vf "drawbox=x=40:y=40:w=400:h=60:color=white@0.9:t=fill,drawbox=x=40:y=130:w=260:h=24:color=white@0.6:t=fill" -frames:v 1 "$FEARLEZZ_OUT/stills/card.png"'
+stage = "look"
+stills = "stills/**/*.png"
+inputs = ["demo/**"]
