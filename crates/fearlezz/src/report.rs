@@ -109,12 +109,12 @@ code { font: .9em ui-monospace, "SF Mono", Menlo, monospace; background: var(--s
 .checks { background: var(--mat); border-radius: 16px; box-shadow: var(--shadow); padding: 6px; }
 .chk { border-radius: 11px; }
 .chk[open] { background: color-mix(in srgb, var(--sunk) 38%, transparent); }
-.chk > summary { display: grid; grid-template-columns: 12px minmax(7ch, auto) 1fr auto 6ch; gap: 14px;
+.chk > summary { display: grid; grid-template-columns: 12px minmax(7ch, auto) 1fr auto minmax(10ch, max-content); gap: 14px;
   align-items: center; padding: 13px 16px; color: var(--ink); border-radius: 11px; }
 .chk > summary::before { display: none; }
 .chk > summary:hover { background: color-mix(in srgb, var(--sunk) 55%, transparent); }
 .chk > summary .meta { color: var(--quiet); font-size: 15px; }
-.chk > summary .time { color: var(--quiet); font-size: 15px; text-align: right; }
+.chk > summary .time { color: var(--quiet); font-size: 15px; text-align: right; white-space: nowrap; }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .badges .word { font-size: 13px; padding: 0 8px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
