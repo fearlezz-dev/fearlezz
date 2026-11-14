@@ -100,10 +100,32 @@ decided:
       A verdict follows the picture: keyed by check, picture and content (films by which states
       changed), so an unchanged picture keeps its verdict across pushes.
 
-open:
-  - id: slicing
-    ask: A series of pull requests (hosted off between the core cut and host v2), or one branch?
+  - id: one-pr
+    what: All slices on one branch, one pull request; hosted never breaks on main.
 
-slices: []
+open: []
 
-next: Wait for spike-live; then sketch fearlezz --notes and the events protocol. Earlier: inventory shown (docs/drive/hosted-redesign/inventory.html). Waiting on free-approvals; then authority, live transport spike, UI stack.
+slices:
+  - id: core-cut
+    tests: []
+    status: todo
+  - id: host-v2-foundation
+    tests: []
+    status: todo
+  - id: pictures-on-page
+    tests: []
+    status: todo
+  - id: verdicts-and-check
+    tests: []
+    status: todo
+  - id: notes
+    tests: []
+    status: todo
+  - id: local-runs
+    tests: []
+    status: todo
+  - id: finish
+    tests: []
+    status: todo
+
+next: Build core-cut on refactor/hosted-proof-redesign.
