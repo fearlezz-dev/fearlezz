@@ -11,7 +11,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # Writes the changed pictures to the fearlezz-pictures branch, so the status comment shows them.
+  contents: write
   pull-requests: write
   statuses: write
   # Lets the run prove itself to the proof host and send it the proof page.
