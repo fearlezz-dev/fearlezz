@@ -12,6 +12,9 @@ harness = false
 
 [dev-dependencies]
 base64 = "0.22"
+# The page's TypeScript types are generated from the proof model (tests/types.rs).
+fearlezz-proof = { path = "../../crates/fearlezz-proof", features = ["ts"] }
+ts-rs = "12.0.1"
 # Seals grants the way the host does, to prove it refuses an expired one.
 hmac = "0.12"
 # Hands Chrome the ends of its DevTools pipe as fds 3 and 4.

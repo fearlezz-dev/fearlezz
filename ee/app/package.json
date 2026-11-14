@@ -1,0 +1,16 @@
+{
+  "name": "fearlezz-host-page",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "solid-js": "1.9.19"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "vite": "8.3.8",
+    "vite-plugin-solid": "2.11.16"
+  }
+}

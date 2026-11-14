@@ -1,5 +1,5 @@
-//! A real browser for what only a browser shows: the shell and the page it frames talking by
-//! message. Headless Chrome (or Chromium), driven over the DevTools protocol on a pipe
+//! A real browser for what only a browser shows: a work's page drawing itself and updating
+//! live over its WebSocket. Headless Chrome (or Chromium), driven over the DevTools protocol on a pipe
 //! (`--remote-debugging-pipe`: JSON messages ending in a NUL byte, Chrome reading fd 3 and
 //! writing fd 4), so the tests need no WebSocket client and no driver binary.
 
@@ -18,7 +18,7 @@ pub struct Browser {
     to: File,
     from: BufReader<File>,
     next: u64,
-    /// The page's session, once a page is open.
+    /// The session of the page commands go to, once a page is open.
     page: Option<String>,
     _profile: tempfile::TempDir,
 }
@@ -126,21 +126,23 @@ impl Browser {
         }
     }
 
-    /// Gives the browser a cookie for `url`, as signing in would have.
-    pub fn cookie(&mut self, url: &str, name: &str, value: &str) {
-        let cookie = json!({"name": name, "value": value, "url": url, "httpOnly": true});
-        self.send("Storage.setCookies", json!({"cookies": [cookie]}), false);
-    }
-
-    /// Opens `url` in a fresh page and attaches to it.
-    pub fn open(&mut self, url: &str) {
+    /// Opens `url` in a fresh page and sends commands to it from now on; the page, to come
+    /// back to it with `on`.
+    pub fn open(&mut self, url: &str) -> String {
         let target = self.send("Target.createTarget", json!({"url": url}), false);
         let attached = self.send(
             "Target.attachToTarget",
             json!({"targetId": target["targetId"], "flatten": true}),
             false,
         );
-        self.page = Some(attached["sessionId"].as_str().unwrap().to_owned());
+        let page = attached["sessionId"].as_str().unwrap().to_owned();
+        self.page = Some(page.clone());
+        page
+    }
+
+    /// Sends commands to `page`, one `open` gave.
+    pub fn on(&mut self, page: &str) {
+        self.page = Some(page.to_owned());
     }
 
     /// The value of a script run in the page, awaited when it is a promise.
@@ -165,22 +167,6 @@ impl Browser {
             std::thread::sleep(Duration::from_millis(100));
         }
         panic!("{script} never held");
-    }
-
-    /// Asks for the light or the dark scheme, as the system would.
-    pub fn scheme(&mut self, scheme: &str) {
-        let features = [json!({"name": "prefers-color-scheme", "value": scheme})];
-        let params = json!({"features": features});
-        self.send("Emulation.setEmulatedMedia", params, true);
-    }
-
-    /// A PNG of the page as it shows.
-    pub fn picture(&mut self) -> Vec<u8> {
-        use base64::Engine as _;
-        let shot = self.send("Page.captureScreenshot", json!({"format": "png"}), true);
-        base64::engine::general_purpose::STANDARD
-            .decode(shot["data"].as_str().unwrap())
-            .unwrap()
     }
 }
 

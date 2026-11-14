@@ -1,0 +1,62 @@
+/* Plain but tidy; the page is restyled with the pictures and verdicts. */
+:root {
+  --fg: #18212e;
+  --bg: #f6f7f9;
+  --card: #fff;
+  --line: #d5dbe4;
+  --soft: #5a6577;
+  --ok: #1e7a52;
+  --bad: #b53a26;
+  --run: #2d55c8;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e6eaf0;
+    --bg: #11161e;
+    --card: #19202b;
+    --line: #2c3645;
+    --soft: #9aa6b8;
+    --ok: #4cc38a;
+    --bad: #f07a65;
+    --run: #7d9bf0;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+.repo { color: var(--soft); font-size: 0.85rem; margin: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.branch { font-family: ui-monospace, monospace; }
+.live { margin-left: auto; font-size: 0.75rem; }
+.live.live::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+h1 { font-size: 1.5rem; margin: 4px 0 20px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.note { color: var(--soft); }
+.run { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+.run header { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
+.run h2 { font-size: 1rem; margin: 0; }
+.count, .job { font-size: 0.8rem; color: var(--soft); }
+.job { margin-left: auto; }
+.pill { font-size: 0.72rem; font-weight: 600; padding: 1px 8px; border-radius: 99px; }
+.pill.running { color: var(--run); background: color-mix(in srgb, var(--run) 14%, transparent); }
+.pill.done { color: var(--soft); background: color-mix(in srgb, var(--soft) 14%, transparent); }
+.checks { list-style: none; margin: 10px 0 0; padding: 0; }
+.checks li { display: grid; grid-template-columns: 16px 1fr auto 64px; gap: 8px; align-items: center; padding: 5px 0; border-top: 1px solid var(--line); font-size: 0.9rem; }
+.checks .id { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.checks .state { color: var(--soft); font-size: 0.82rem; }
+.checks .seconds { text-align: right; color: var(--soft); font-variant-numeric: tabular-nums; font-size: 0.82rem; }
+[data-state="passed"] .state { color: var(--ok); }
+[data-state="failed"] .state { color: var(--bad); }
+[data-state="running"] .state { color: var(--run); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.dot.passed { background: var(--ok); }
+.dot.failed { background: var(--bad); }
+.dot.running { background: var(--run); }
+@media (prefers-reduced-motion: no-preference) {
+  .dot.running { animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+}
