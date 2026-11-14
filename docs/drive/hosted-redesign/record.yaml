@@ -111,8 +111,11 @@ open: []
 
 slices:
   - id: core-cut
-    tests: []
-    status: todo
+    tests:
+      - crates/fearlezz/tests/ci.rs (on_a_pull_request_ci_proves_and_writes_nothing_to_github, a_weakening_fails_a_pull_request_and_writes_nothing_to_github, changed_pictures_are_listed_and_neither_block_nor_wait)
+      - crates/fearlezz/tests/look.rs (run_compares_stills_with_the_base_and_names_their_files, the_final_stage_is_ready_with_changed_pictures_and_names_them, say_approve_is_gone)
+      - crates/fearlezz/tests/core.rs (the_overview_of_every_journal_is_text_and_writes_no_page, a_journal_from_before_approvals_were_removed_still_reads)
+    status: built
   - id: host-v2-foundation
     tests: []
     status: todo
@@ -132,4 +135,4 @@ slices:
     tests: []
     status: todo
 
-next: Build core-cut on refactor/hosted-proof-redesign.
+next: Build host-v2-foundation on refactor/hosted-proof-redesign; the v1 host shows an empty page until then, since the bundle has no index.html.

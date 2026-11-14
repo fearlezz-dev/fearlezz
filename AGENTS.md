@@ -31,15 +31,13 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `env.rs`: the environment: preparing a fresh checkout (copy-on-write clones of ignored folders), and starting, reusing, resetting and stopping the services checks need.
 - `media.rs`: comparing two stills or films (stable states, time warping, blurred pixel diff).
 - `record.rs`: recording an app's window on macOS (ScreenCaptureKit through objc2): `fearlezz --still` and a check's `record` table; `record/place.rs` parks it off the developer's screens (`FEARLEZZ_OFF_SCREEN=1`), by AeroSpace when it runs, Accessibility otherwise, gives focus back, and puts back the window positions the app saved while parked.
-- `look.rs`: comparing a check's pictures with the same check run on the base commit.
-- `proof.rs`: a check's entry in the proof from its run, and writing the bundle `run --ci --proof` writes (the model is `fearlezz-proof`), which feeds the status comment, the check page, the proof page and the upload. `report.rs`: the proof page drawn from it, the same locally and on the proof host.
-- `host.rs`: sending the proof bundle to the proof host from GitHub Actions with an OIDC token (`[host] url`, default `https://fearlezz.seamlezz.com`); the host itself lives in `ee/host`.
-- `page.rs`: what the static pages share (colours, controls, motion); they fetch nothing.
+- `look.rs`: comparing a check's pictures with the same check run on the base commit, and the lines naming each changed picture's before and after files.
+- `proof.rs`: a check's entry in the proof from its run, and writing the bundle `run --ci --proof` writes (the model is `fearlezz-proof`), which feeds the job summary and the upload. Only the proof host draws a page from it.
+- `host.rs`: sending the proof bundle to the proof host from GitHub Actions with an OIDC token (`[host] url`, default `https://fearlezz.seamlezz.com`), through curl; the host itself lives in `ee/host`.
 - `red.rs`: red before green, a check run on the base commit with the change's test files laid over it.
 - `hooks.rs`: agent hooks (Claude Code, Codex, Cursor): what `setup sync` writes into each agent's settings, and the answers of `fearlezz setup hook` that hold an agent to the proof while it works.
-- `github.rs`: GitHub: the one client (REST through curl, GraphQL for the atomic ref update), the status comment (its hidden line holds the obligations) and check page with their Markdown, and the one rule for which approval counts (`Pending` and `Verdict` over the obligations), shared by CI and `say approve --github`.
-- `action.rs`: `run --ci` on GitHub Actions: `Workflow`, the one reader of GitHub's variables and event file (the repository, run page and pull request the proof names), what the event asks (prove, approve, withdraw, clean, squash), forks and stale runs, the pictures branch through the git data API, and the pinned ffmpeg.
-- `main.rs`: the CLI; `overview.rs`: the overview page.
+- `action.rs`: `run --ci` on GitHub Actions: `Workflow`, the one reader of GitHub's variables and event file (the repository, run page and pull request the proof names), the job summary in Markdown, and the pinned ffmpeg. The core writes nothing to GitHub.
+- `main.rs`: the CLI.
 
 ## Releases
 
