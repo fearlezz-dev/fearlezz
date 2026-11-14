@@ -46,8 +46,7 @@ The hosted parts in `ee/`: proof links and pages a team can open without the dev
 
 ## Not proven yet
 
-- Nothing is deployed: no Cloudflare account, GitHub App, domains or D1 database id yet. The shell and its frame are driven in headless Chrome under `wrangler dev`, not in other browsers.
+- Deployed on `fearlezz.seamlezz.com` and `fearlezz.seamlezz.net` (D1 and R2 in Western Europe, the GitHub App `fearlezz-dev`, since `fearlezz` was taken), but no proof has gone through it from real CI yet. The shell and its frame are driven in headless Chrome under `wrangler dev`, not in other browsers.
 - The local final stage does not write the whole proof page yet; only `run --ci --proof` does.
 - Share link tokens are stored as they are, not hashed, like session ids, so the list can show a link to copy again.
-- The host's secrets are set with `wrangler secret put`; declaring them in SecretSpec comes with the deploy.
 - Revoking a share link stops new loads at once; a page already open keeps loading files until its grant expires, up to an hour.

@@ -14,8 +14,8 @@ permissions:
   contents: read
   pull-requests: write
   statuses: write
-  # No id-token: write yet: the proof host is not deployed, so this repository sends no proof
-  # page. Grant it once the host runs and its GitHub App is installed here.
+  # Lets the run prove itself to the proof host and send it the proof page.
+  id-token: write
 
 jobs:
   # Fearlezz proves itself through its own action, built from this commit, so the action and

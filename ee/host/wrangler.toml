@@ -1,9 +1,15 @@
-# The proof host. Secrets (GITHUB_CLIENT_SECRET, GITHUB_APP_KEY, SIGNING_KEY) are set with
-# `wrangler secret put`; the tests pass every setting with `wrangler dev --var`. The worker
-# answers on both origins below, so both route to it.
+# The proof host. Its secrets (secretspec.toml, kept in 1Password) reach the Worker through
+# the devenv task host-push-secrets, and host-deploy deploys it; the tests pass every setting
+# with `wrangler dev --var`. The worker answers on both origins below, so both route to it.
 name = "fearlezz-host"
 main = "build/index.js"
 compatibility_date = "2026-10-01"
+
+# Both origins are custom domains of this Worker: the app, and the proof files on another site.
+routes = [
+  { pattern = "fearlezz.seamlezz.com", custom_domain = true },
+  { pattern = "fearlezz.seamlezz.net", custom_domain = true },
+]
 
 [build]
 command = "worker-build --release"
@@ -21,16 +27,17 @@ GITHUB_API = "https://api.github.com"
 # Where people sign in.
 GITHUB_WEB = "https://github.com"
 # The Fearlezz GitHub App's client id: its OAuth client, and the issuer of its JWTs.
-GITHUB_CLIENT_ID = "set-when-deployed"
-INSTALL_URL = "https://github.com/apps/fearlezz/installations/new"
+GITHUB_CLIENT_ID = "Iv23liJRwzB5ys23d4Z9"
+INSTALL_URL = "https://github.com/apps/fearlezz-dev/installations/new"
 
 [[r2_buckets]]
 binding = "BLOBS"
-bucket_name = "fearlezz-proofs"
+# In Western Europe, as the database.
+bucket_name = "fearlezz-bundles"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "fearlezz-proofs"
-# Local runs need no real database; deploying sets the id wrangler gives.
-database_id = "00000000-0000-0000-0000-000000000000"
+# In Western Europe; local runs and the tests use a local copy, never this one.
+database_id = "ac62746a-bf66-4e97-8ae5-af025298186d"
 migrations_dir = "migrations"
