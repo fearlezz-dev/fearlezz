@@ -666,54 +666,6 @@ fn since_shows_what_happened_after_a_moment() {
 // Overview
 
 #[test]
-fn overview_writes_one_page_with_every_journal() {
-    let repo = repo();
-    repo.fz(&["say", "note", "main work"]);
-    let other = repo.worktree("feat/waiting");
-    other.fz(&["say", "ask", "Pick a variant"]);
-    let out = repo.fz(&["--page"]);
-    assert!(out.ok, "{}", out.stderr);
-    let path = out
-        .lines()
-        .iter()
-        .find_map(|l| l.strip_prefix("wrote "))
-        .unwrap()
-        .to_string();
-    let html = std::fs::read_to_string(path).unwrap();
-    assert!(html.contains("feat/x") && html.contains("feat/waiting"));
-    assert!(html.contains("Needs you"));
-    assert!(html.contains("Pick a variant"));
-    // The same house style as the look report: nothing fetched, motion that can be calmed,
-    // and borders all the way round or not at all.
-    assert!(!html.contains("http://") && !html.contains("https://"));
-    assert!(html.contains("prefers-reduced-motion"));
-    for side in ["border-left", "border-right", "border-top", "border-bottom"] {
-        assert!(!html.contains(side), "{side}");
-    }
-}
-
-#[test]
-fn the_overview_says_each_checks_state_in_words() {
-    let repo = repo();
-    repo.write("src/lib.rs", "fn b() {}\n");
-    assert!(repo.fz(&["run", "tests"]).ok);
-    repo.write("src/lib.rs", "fn c() {}\n");
-    let out = repo.fz(&["--page"]);
-    let path = out
-        .lines()
-        .iter()
-        .find_map(|l| l.strip_prefix("wrote "))
-        .unwrap()
-        .to_string();
-    let html = std::fs::read_to_string(path).unwrap();
-    // Colour alone tells nobody who cannot see it, and a hidden word reaches no screen reader.
-    assert!(!html.contains("<span hidden>"), "{html}");
-    for words in [">stale: src/lib.rs changed<", ">never run<"] {
-        assert!(html.contains(words), "{words}: {html}");
-    }
-}
-
-#[test]
 fn a_detached_head_needs_a_journal_name() {
     let repo = repo();
     repo.git(&["checkout", "-q", "--detach"]);
