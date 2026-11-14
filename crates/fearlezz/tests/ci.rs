@@ -1842,6 +1842,22 @@ fn a_weakening_still_fails_a_ci_run_outside_a_pull_request() {
 }
 
 #[test]
+fn a_run_without_a_token_lets_a_weakening_wait_on_the_repositorys_own_pull_request() {
+    // Another job of the same pull request holds the status and makes it wait for an accept.
+    let gh = FakeGitHub::start();
+    let repo = branch_with_change();
+    with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
+    let head = head_of(&repo);
+    let event = pull_request(&head, "owner/repo");
+    let out = on_actions_with(&gh, &repo.root, "pull_request", &event, "42", "");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("weakens tests"), "{}", out.stdout);
+    let fork = pull_request(&head, "someone/repo");
+    let out = on_actions_with(&gh, &repo.root, "pull_request", &fork, "43", "");
+    assert!(!out.ok, "a fork's weakening still fails: {}", out.stdout);
+}
+
+#[test]
 fn a_forks_weakening_fails_its_proof() {
     let gh = FakeGitHub::start();
     let repo = branch_with_change();
@@ -1995,6 +2011,47 @@ fn the_approval_status_is_green_only_when_everything_that_waits_has_what_it_need
     assert!(reply.starts_with("@owner accepted"), "{reply}");
     let status = gh.state().status(&head, "fearlezz/approval").unwrap();
     assert_eq!(status.state, "success", "{status:?}");
+}
+
+#[test]
+fn an_accept_answered_after_a_later_approve_still_gets_its_reply() {
+    let (gh, _repo, head) = pictures_and_weakening_on_actions();
+    gh.state().permissions.insert("lead".into(), "write".into());
+    gh.state()
+        .permissions
+        .insert("owner".into(), "admin".into());
+    let accept = comment_event(&gh, "owner", "/fearlezz accept look is enough");
+    let approve = comment_event(&gh, "lead", "/fearlezz approve blue is right");
+    // The approve's run finishes first and turns the status green for both.
+    let reply = answer(&gh, &approve);
+    assert!(reply.starts_with("@lead approved"), "{reply}");
+    assert_eq!(
+        gh.state().status(&head, "fearlezz/approval").unwrap().state,
+        "success"
+    );
+    // The accept's own run still says it counted, quoting its words.
+    let reply = answer(&gh, &accept);
+    assert!(reply.starts_with("@owner accepted"), "{reply}");
+    assert!(reply.contains("> look is enough"), "{reply}");
+}
+
+#[test]
+fn running_a_comments_event_again_replies_once() {
+    let (gh, _repo, _head) = weakened_on_actions();
+    gh.state()
+        .permissions
+        .insert("owner".into(), "admin".into());
+    let event = comment_event(&gh, "owner", "/fearlezz accept fine");
+    answer(&gh, &event);
+    // A re-run of the job, or GitHub delivering the event twice.
+    answer(&gh, &event);
+    let replies = gh
+        .state()
+        .comments
+        .iter()
+        .filter(|c| c.body.starts_with("@owner accepted"))
+        .count();
+    assert_eq!(replies, 1);
 }
 
 #[test]

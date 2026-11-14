@@ -101,6 +101,15 @@ impl Workflow {
         self.text("/pull_request/head/sha")
     }
 
+    /// Whether the event is a pull request from this repository itself, not a fork. Its
+    /// `fearlezz/approval` status, held by the run of it that has a token, is where what waits
+    /// for a person waits; any run of it can tell, with a token or without.
+    pub(crate) fn own_pull_request(&self) -> bool {
+        self.event().pointer("/pull_request/number").is_some()
+            && self.repository.is_some()
+            && self.text("/pull_request/head/repo/full_name") == self.repository.as_deref()
+    }
+
     /// The pull request a proof is for, as the proof names it, when the event is one.
     pub(crate) fn pull(&self) -> Option<crate::proof::Pull> {
         Some(crate::proof::Pull {
@@ -331,8 +340,10 @@ impl Actions {
             }
         };
         let short = short(&pending.head);
-        // It counted before this event when its earlier words count for what waits now.
-        let was = green_by_it
+        // It counted before this event when its earlier words count for what waits now. A comment
+        // just written never did, even when another comment's run already turned the status
+        // green linked to it.
+        let was = (action != "created" && green_by_it)
             || match &before {
                 Some(old) if earlier.is_some() => {
                     let mut comment = json!({
@@ -355,7 +366,7 @@ impl Actions {
         match verdict.of(kind) {
             Some(Ok(a)) if a.url == url => {
                 if !was {
-                    self.reply_counted(pr, kind, &pending, &verdict, a)?;
+                    self.reply_counted(pr, id, kind, &pending, &verdict, a)?;
                 }
             }
             // Deleted, or edited into something else.
@@ -385,9 +396,13 @@ impl Actions {
         Ok(())
     }
 
+    /// Says that comment `id` counts, quoting its words, once: a run of the same event again (a
+    /// re-run, or GitHub delivering it twice) finds its reply and stays silent. The reply names
+    /// the comment in a hidden line, so new words in an edited comment get a reply of their own.
     fn reply_counted(
         &self,
         pr: u64,
+        id: u64,
         kind: Kind,
         pending: &Pending,
         verdict: &Verdict,
@@ -419,8 +434,19 @@ impl Actions {
             kind.renewed_by(),
             kind.word()
         );
+        let mark = format!("<!-- fearlezz-reply {id} -->");
+        let replied = self.api.comments(pr)?.iter().any(|c| {
+            c["user"]["type"] == "Bot"
+                && c["body"]
+                    .as_str()
+                    .is_some_and(|b| b.contains(&mark) && b.contains(&text))
+        });
+        if replied {
+            println!("comment {id} already has its reply");
+            return Ok(());
+        }
         self.api
-            .comment(pr, &format!("{text}\n\n{}", pending.still(verdict)))?;
+            .comment(pr, &format!("{text}\n\n{}\n{mark}", pending.still(verdict)))?;
         println!("@{} {} pull request {pr} at {short}", a.by, kind.past());
         Ok(())
     }
@@ -516,13 +542,6 @@ pub(crate) struct Pull {
 }
 
 impl Pull {
-    /// Whether this run holds the `fearlezz/approval` status, so what waits for a person
-    /// (changed pictures, a weakened proof) waits there instead of failing the proof. A fork's
-    /// run writes nothing, so it cannot.
-    pub(crate) fn holds(&self) -> bool {
-        !self.fork
-    }
-
     /// Pushes the changed pictures in `dir`, writes the status comment and sets the status.
     /// GitHub refusing any of it is a warning: the proof stands on its own.
     pub(crate) fn report(&self, comment: &StatusComment, dir: Option<&Path>) {

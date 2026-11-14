@@ -863,9 +863,11 @@ struct CiOut {
 
 impl CiOut {
     /// Whether what the change weakens waits for an admin's accept rather than failing the
-    /// proof: only on a pull request whose run holds the `fearlezz/approval` status.
+    /// proof: only on a pull request from the repository itself, whose `fearlezz/approval`
+    /// status makes it wait. A run of it without a token (another job of the same pull request)
+    /// waits too, since the run with the token holds that status; a fork's run cannot.
     fn weakenings_wait(&self) -> bool {
-        self.pull.as_ref().is_some_and(action::Pull::holds)
+        self.workflow.own_pull_request()
     }
 }
 
