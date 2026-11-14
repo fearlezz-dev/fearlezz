@@ -65,6 +65,11 @@ pub(crate) fn not_run(check: &crate::config::Check, stage: &str, why: &str) -> C
     }
 }
 
+/// Where a check's output lives in the bundle, relative to it.
+pub(crate) fn output_path(id: &str) -> String {
+    format!("outputs/{id}.log")
+}
+
 /// Writes `proof.json` into `dir` with every check's output and every picture's media beside
 /// it, named relative to `dir`. Only the proof host draws a page from it.
 pub(crate) fn write(proof: &Proof, dir: &Path) -> Result<()> {
@@ -72,7 +77,7 @@ pub(crate) fn write(proof: &Proof, dir: &Path) -> Result<()> {
     let mut out = proof.clone();
     for check in &mut out.checks {
         let Some(log) = &check.log else { continue };
-        let rel = format!("outputs/{}.log", check.id);
+        let rel = output_path(&check.id);
         copy(log, &dir.join(&rel))?;
         check.output = Some(rel);
     }

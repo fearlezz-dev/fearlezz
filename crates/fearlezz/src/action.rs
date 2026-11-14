@@ -29,6 +29,10 @@ pub(crate) struct Workflow {
     pub repository: Option<String>,
     /// The run's page.
     pub run_url: Option<String>,
+    /// The job's id in its workflow.
+    pub job: Option<String>,
+    /// The ref the run is for, such as `refs/heads/main` or `refs/pull/24/merge`.
+    git_ref: Option<String>,
     /// The event, Null without one or when its file cannot be read.
     event: Value,
 }
@@ -52,6 +56,8 @@ impl Workflow {
             actions: var("GITHUB_ACTIONS").as_deref() == Some("true"),
             repository,
             run_url,
+            job: var("GITHUB_JOB"),
+            git_ref: var("GITHUB_REF"),
             event,
         }
     }
@@ -70,6 +76,13 @@ impl Workflow {
         self.text("/pull_request/head/sha")
     }
 
+    /// The branch the work is on: a pull request's head branch, or the pushed branch. None
+    /// for a run on a tag or another ref that is no branch.
+    pub(crate) fn branch(&self) -> Option<&str> {
+        self.text("/pull_request/head/ref")
+            .or_else(|| self.git_ref.as_deref()?.strip_prefix("refs/heads/"))
+    }
+
     /// The pull request a proof is for, as the proof names it, when the event is one.
     pub(crate) fn pull(&self) -> Option<crate::proof::Pull> {
         Some(crate::proof::Pull {
@@ -83,7 +96,7 @@ impl Workflow {
 /// The job summary of a proof: whether the commit is proven, what keeps it from being proven
 /// and what to do, what a reader should know, the changed pictures for a person to review on
 /// the pull request, every check, and the end of each failing output. `page` is the proof
-/// host's page of it, when the host took the bundle.
+/// host's page of the work, when the host opened the run.
 pub(crate) fn summary(proof: &Proof, page: Option<&str>) -> Result<String, std::fmt::Error> {
     let mut text = String::new();
     let blockers = proof.blockers();
@@ -105,8 +118,8 @@ pub(crate) fn summary(proof: &Proof, page: Option<&str>) -> Result<String, std::
     if let Some(url) = page {
         writeln!(
             text,
-            "[The proof page]({url}) shows everything this run showed: every check, its tests, \
-             findings and output, and every picture.\n"
+            "[The proof page]({url}) shows this run live on the proof host: each check as it \
+             runs, and how it came out.\n"
         )?;
     }
     if !blockers.is_empty() {

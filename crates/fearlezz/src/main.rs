@@ -712,8 +712,10 @@ fn print_failure(f: &store::RunResult) {
 /// Only CI writes these, so the agent whose work they judge cannot change them.
 struct CommitReport {
     proof: proof::Proof,
-    /// The proof host the config names, when it is not the default one.
-    host: Option<String>,
+    /// The run on the proof host, while it takes it.
+    stream: Option<host::Stream>,
+    /// The host's page of the work, once the host opened the run.
+    page: Option<String>,
     /// A folder for the proof bundle, when asked.
     bundle: Option<PathBuf>,
 }
@@ -727,7 +729,13 @@ struct CiOut {
 }
 
 impl CommitReport {
-    fn start(ctx: &Ctx, wt: &Worktree, to_run: usize, out: CiOut) -> Result<CommitReport> {
+    fn start(
+        ctx: &Ctx,
+        wt: &Worktree,
+        targets: &[&config::Check],
+        out: CiOut,
+    ) -> Result<CommitReport> {
+        let to_run = targets.len();
         let merge = ctx.git.head_short()?;
         // A pull request's run proves the merge GitHub made of its head into the base branch;
         // the head is the commit people know.
@@ -759,11 +767,37 @@ impl CommitReport {
             run_url: out.workflow.run_url.clone(),
             ..proof::Proof::new(commit, head, ctx.config.base.clone())
         };
+        let stream = host::Host::from_actions(ctx.config.host.as_deref())
+            .and_then(|host| open_run(host, &proof, &out.workflow, targets));
         Ok(CommitReport {
+            page: stream.as_ref().map(|s| s.url.clone()),
+            stream,
             proof,
-            host: ctx.config.host.clone(),
             bundle: out.proof,
         })
+    }
+
+    /// A check starts.
+    fn starts(&mut self, check: &config::Check) {
+        self.stream_step(|s| s.started(&check.id));
+    }
+
+    /// A check could not run here.
+    fn not_run(&mut self, check: &config::Check, stage: &str, why: &str) {
+        let entry = proof::not_run(check, stage, why);
+        self.stream_step(|s| s.finished(&entry));
+        self.proof.checks.push(entry);
+    }
+
+    /// Sends one step of the run to the host; a host that fails is said once and sent
+    /// nothing more, and never fails the proof.
+    fn stream_step(&mut self, step: impl FnOnce(&host::Stream) -> Result<()>) {
+        if let Some(stream) = &self.stream
+            && let Err(e) = step(stream)
+        {
+            println!("proof page not sent: {e:#}");
+            self.stream = None;
+        }
     }
 
     fn ran(&mut self, check: &config::Check, stage: &str, result: &store::RunResult) {
@@ -784,19 +818,17 @@ impl CommitReport {
         };
         println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
         let failure = (result.outcome == Outcome::Failed).then(|| failure_item(result));
-        self.proof
-            .checks
-            .push(proof::ran(check, stage, result, failure));
+        let entry = proof::ran(check, stage, result, failure);
+        self.stream_step(|s| s.finished(&entry));
+        self.proof.checks.push(entry);
     }
 
-    /// Writes the bundle when asked, sends it to the proof host from GitHub Actions, and
-    /// writes the job summary GitHub Actions names, when it names one.
+    /// Writes the bundle when asked, closes the run on the proof host with it, and writes the
+    /// job summary GitHub Actions names, when it names one.
     fn finish(mut self, floor: &floor::Floor) -> Result<()> {
         use std::io::Write as _;
         self.proof.weakened.clone_from(&floor.weakened);
-        // A host that cannot be reached never fails the proof: CI proved the commit anyway.
-        let host = host::Host::from_actions(self.host.as_deref());
-        let temp = match (&self.bundle, &host) {
+        let temp = match (&self.bundle, &self.stream) {
             (None, Some(_)) => Some(tempfile::tempdir()?),
             _ => None,
         };
@@ -807,28 +839,11 @@ impl CommitReport {
         if let Some(dir) = &bundle {
             proof::write(&self.proof, dir)?;
         }
-        let page = match (&host, &bundle) {
-            (Some(host), Some(dir)) => match host.send(dir) {
-                Ok(host::Sent::Page(url)) => {
-                    println!("proof page: {url}");
-                    Some(url)
-                }
-                Ok(host::Sent::NotInstalled(install)) => {
-                    println!(
-                        "proof page: the Fearlezz app is not installed on this repository, so \
-                         nothing was sent; install it to get the page: {install}"
-                    );
-                    None
-                }
-                Err(e) => {
-                    println!("proof page not sent: {e:#}");
-                    None
-                }
-            },
-            _ => None,
-        };
+        if let Some(dir) = &bundle {
+            self.stream_step(|s| s.done(dir));
+        }
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-            let summary = action::summary(&self.proof, page.as_deref())?;
+            let summary = action::summary(&self.proof, self.page.as_deref())?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -836,6 +851,52 @@ impl CommitReport {
                 .write_all(summary.as_bytes())?;
         }
         Ok(())
+    }
+}
+
+/// Opens the run on the proof host, printing its page or why there is none. A host that
+/// fails never fails the proof: CI proves the commit anyway.
+fn open_run(
+    host: host::Host,
+    proof: &proof::Proof,
+    workflow: &action::Workflow,
+    targets: &[&config::Check],
+) -> Option<host::Stream> {
+    let (Some(repository), Some(branch)) = (&workflow.repository, workflow.branch()) else {
+        println!(
+            "proof page not sent: the run names no repository and branch (GITHUB_REPOSITORY, \
+             GITHUB_REF)"
+        );
+        return None;
+    };
+    let open = fearlezz_proof::events::Open {
+        repository: repository.clone(),
+        branch: branch.to_string(),
+        pull: proof.pull.clone(),
+        head: proof.head.clone(),
+        base: proof.base.clone(),
+        source: fearlezz_proof::events::Source::Ci {
+            job: workflow.job.clone().unwrap_or_default(),
+            run_url: workflow.run_url.clone(),
+        },
+        checks: targets.iter().map(|c| c.id.clone()).collect(),
+    };
+    match host.open(&open) {
+        Ok(host::Opening::Opened(stream)) => {
+            println!("proof page: {}", stream.url);
+            Some(stream)
+        }
+        Ok(host::Opening::NotInstalled(install)) => {
+            println!(
+                "proof page: the Fearlezz app is not installed on this repository, so nothing \
+                 was sent; install it to get the page: {install}"
+            );
+            None
+        }
+        Err(e) => {
+            println!("proof page not sent: {e:#}");
+            None
+        }
     }
 }
 
@@ -934,7 +995,7 @@ fn run_checks(
         }
     };
     let mut report = out
-        .map(|out| CommitReport::start(ctx, &wt, targets.len(), out))
+        .map(|out| CommitReport::start(ctx, &wt, &targets, out))
         .transpose()?;
     if targets.is_empty() {
         // Every check waits in a later stage: say where.
@@ -1001,9 +1062,7 @@ fn run_checks(
         {
             if let Some(r) = report.as_mut() {
                 println!("not run {}: {}", check.id, u.why);
-                r.proof
-                    .checks
-                    .push(proof::not_run(check, stages.name(check.stage), &u.why));
+                r.not_run(check, stages.name(check.stage), &u.why);
                 not_run += 1;
             } else {
                 println!("fail {}: {}", check.id, u.why);
@@ -1011,6 +1070,9 @@ fn run_checks(
                 cannot_record += 1;
             }
             continue;
+        }
+        if let Some(r) = report.as_mut() {
+            r.starts(check);
         }
         let (result, was_reused) = if let Some(r) = reuse {
             (r, true)

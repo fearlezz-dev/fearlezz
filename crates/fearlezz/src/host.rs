@@ -1,7 +1,8 @@
-//! The proof host from CI (`ee/README.md`): a GitHub Actions job that may request an OIDC
-//! token asks the host whether its repository installed the app, and only then sends its
-//! proof bundle: the proof as JSON, then each file the host does not hold yet, by content.
-//! Talks through curl, which every runner has.
+//! The proof host from CI (protocol version 2 of `ee/README.md`): a GitHub Actions job that
+//! may request an OIDC token asks the host whether its repository installed the app, and only
+//! then streams its run: it opens the run before any check runs, says when each check starts
+//! and ends (its entry with the files it made, each sent by content when the host lacks it),
+//! and closes the run with `proof.json`. Talks through curl, which every runner has.
 
 use std::fs;
 use std::io::{Read as _, Write as _};
@@ -9,7 +10,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::{Value, json};
+use fearlezz_proof::events::{self, Done, Files, Missing, Open, Opened, Step};
+use serde::Serialize;
+use serde_json::Value;
+
+use crate::proof::Check;
 
 /// The host a project sends to unless its config names another.
 pub(crate) const DEFAULT: &str = "https://fearlezz.seamlezz.com";
@@ -23,12 +28,20 @@ pub(crate) struct Host {
     request: String,
 }
 
-/// What sending a bundle came to.
-pub(crate) enum Sent {
-    /// The page that shows it.
-    Page(String),
+/// What opening a run came to.
+pub(crate) enum Opening {
+    /// The host took it: send it the rest.
+    Opened(Stream),
     /// The repository has not installed the app; where to install it.
     NotInstalled(String),
+}
+
+/// A run the host opened, to stream the rest of it to.
+pub(crate) struct Stream {
+    host: Host,
+    run: String,
+    /// The host's page of the work, where the run shows live.
+    pub url: String,
 }
 
 impl Host {
@@ -49,7 +62,7 @@ impl Host {
         Some(Host { url, ask, request })
     }
 
-    /// A fresh OIDC token: one lives minutes, and sending films can take longer.
+    /// A fresh OIDC token: one lives minutes, and a run with films can take longer.
     fn token(&self) -> Result<String> {
         let (status, answer) = curl("GET", &self.ask, &self.request, &[], Body::None)?;
         Ok(answer["value"]
@@ -59,57 +72,27 @@ impl Host {
             .to_string())
     }
 
-    /// Sends the bundle in `dir`, when the host says the repository installed the app.
-    pub(crate) fn send(&self, dir: &Path) -> Result<Sent> {
-        let (status, answer) = self.call("GET", "/api/v1/installed", Body::None)?;
+    /// Opens the run, when the host says the repository installed the app.
+    pub(crate) fn open(self, open: &Open) -> Result<Opening> {
+        let (status, answer) = self.call("GET", "/api/v2/installed", Body::None)?;
         if status != 200 {
             bail!("the host answered {status} when asked whether the app is installed");
         }
         if answer["installed"] != true {
             let install = answer["install"].as_str().unwrap_or(DEFAULT).to_string();
-            return Ok(Sent::NotInstalled(install));
+            return Ok(Opening::NotInstalled(install));
         }
-        let proof: Value = serde_json::from_slice(&fs::read(dir.join("proof.json"))?)?;
-        let files = files(dir)?;
-        let manifest: serde_json::Map<String, Value> = files
-            .iter()
-            .map(|f| (f.path.clone(), json!({"sha256": f.sha256, "size": f.size})))
-            .collect();
-        let (status, answer) = self.call(
-            "POST",
-            "/api/v1/proofs",
-            Body::Json(&json!({"proof": proof, "files": manifest})),
-        )?;
+        let (status, answer) = self.call("POST", "/api/v2/runs", json(open)?)?;
         if status != 201 {
-            bail!("the host refused the proof ({status}): {answer}");
+            bail!("the host refused the run ({status}): {answer}");
         }
-        let id = answer["id"]
-            .as_str()
-            .context("the host gave the proof no id")?
-            .to_string();
-        let missing: Vec<&str> = answer["missing"]
-            .as_array()
-            .map(|m| m.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
-        for sha in missing {
-            let Some(file) = files.iter().find(|f| f.sha256 == sha) else {
-                bail!("the host asked for a file the bundle does not have ({sha})");
-            };
-            let (status, _) = self.call(
-                "PUT",
-                &format!("/api/v1/blobs/{sha}"),
-                Body::File(&dir.join(&file.path)),
-            )?;
-            if !(200..300).contains(&status) {
-                bail!("the host refused {} ({status})", file.path);
-            }
-        }
-        let (status, answer) =
-            self.call("POST", &format!("/api/v1/proofs/{id}/done"), Body::None)?;
-        match answer["url"].as_str() {
-            Some(url) if status == 200 => Ok(Sent::Page(url.to_string())),
-            _ => bail!("the host did not take the proof as whole ({status}): {answer}"),
-        }
+        let opened: Opened = serde_json::from_value(answer)
+            .context("the host answered the run without its id and page")?;
+        Ok(Opening::Opened(Stream {
+            host: self,
+            run: opened.run,
+            url: opened.url,
+        }))
     }
 
     fn call(&self, method: &str, path: &str, body: Body<'_>) -> Result<(u16, Value)> {
@@ -123,16 +106,142 @@ impl Host {
     }
 }
 
-/// One file of a bundle, by its path in it.
-struct File {
-    path: String,
-    sha256: String,
-    size: u64,
+impl Stream {
+    /// Says the check `id` starts.
+    pub(crate) fn started(&self, id: &str) -> Result<()> {
+        let step = Step::Started {
+            check: id.to_string(),
+        };
+        self.step(&step, &[])
+    }
+
+    /// Sends a check's entry once it ended, with its output, and the output's bytes when the
+    /// host lacks them.
+    pub(crate) fn finished(&self, check: &Check) -> Result<()> {
+        let mut entry = check.clone();
+        let mut local = Vec::new();
+        if let Some(log) = &check.log {
+            let path = crate::proof::output_path(&check.id);
+            entry.output = Some(path.clone());
+            local.push(Local::of(path, log.clone())?);
+        }
+        let step = Step::Finished {
+            check: Box::new(entry),
+            files: manifest(&local),
+        };
+        self.step(&step, &local)
+    }
+
+    fn step(&self, step: &Step, local: &[Local]) -> Result<()> {
+        let path = format!("/api/v2/runs/{}/checks", self.run);
+        let (status, answer) = self.host.call("POST", &path, json(step)?)?;
+        if status != 200 {
+            bail!("the host refused a check ({status}): {answer}");
+        }
+        self.send(&missing(answer)?, local)
+    }
+
+    /// Closes the run with the bundle written in `dir`: its `proof.json`, and every other
+    /// file it holds, sent first when the host says it lacks them.
+    pub(crate) fn done(&self, dir: &Path) -> Result<()> {
+        let proof = serde_json::from_slice(&fs::read(dir.join("proof.json"))?)
+            .context("reading the bundle's proof.json")?;
+        let local = bundle(dir)?;
+        let done = Done {
+            proof: Box::new(proof),
+            files: manifest(&local),
+        };
+        let path = format!("/api/v2/runs/{}/done", self.run);
+        let (status, answer) = self.host.call("POST", &path, json(&done)?)?;
+        let status = if status == 409 {
+            // The host refuses done while it lacks a file, and names what it lacks.
+            self.send(&missing(answer)?, &local)?;
+            let (status, answer) = self.host.call("POST", &path, json(&done)?)?;
+            if status != 200 {
+                bail!("the host did not close the run ({status}): {answer}");
+            }
+            status
+        } else {
+            status
+        };
+        if status != 200 {
+            bail!("the host did not close the run ({status})");
+        }
+        Ok(())
+    }
+
+    /// Sends each file the host named as missing.
+    fn send(&self, missing: &[String], local: &[Local]) -> Result<()> {
+        for sha in missing {
+            let Some(file) = local.iter().find(|f| &f.file.sha256 == sha) else {
+                bail!("the host asked for a file this run does not have ({sha})");
+            };
+            let (status, _) = self.host.call(
+                "PUT",
+                &format!("/api/v2/blobs/{sha}"),
+                Body::File(&file.on_disk),
+            )?;
+            if !(200..300).contains(&status) {
+                bail!("the host refused {} ({status})", file.path);
+            }
+        }
+        Ok(())
+    }
 }
 
-/// Every file of the bundle but `proof.json`, which goes as JSON.
-fn files(dir: &Path) -> Result<Vec<File>> {
-    use sha2::{Digest as _, Sha256};
+fn json<T: Serialize>(value: &T) -> Result<Body<'static>> {
+    Ok(Body::Json(serde_json::to_value(value)?))
+}
+
+fn missing(answer: Value) -> Result<Vec<String>> {
+    let missing: Missing =
+        serde_json::from_value(answer).context("the host did not say which files it lacks")?;
+    Ok(missing.missing)
+}
+
+/// One file of a run: its path in the bundle, where it is on this machine, and its content.
+struct Local {
+    path: String,
+    on_disk: PathBuf,
+    file: events::File,
+}
+
+impl Local {
+    fn of(path: String, on_disk: PathBuf) -> Result<Local> {
+        use sha2::{Digest as _, Sha256};
+        let mut hash = Sha256::new();
+        let mut file =
+            fs::File::open(&on_disk).with_context(|| format!("reading {}", on_disk.display()))?;
+        let mut buf = [0; 64 * 1024];
+        let mut size = 0;
+        loop {
+            let n = file.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hash.update(buf.get(..n).unwrap_or_default());
+            size += n as u64;
+        }
+        Ok(Local {
+            path,
+            on_disk,
+            file: events::File {
+                sha256: hex::encode(hash.finalize()),
+                size,
+            },
+        })
+    }
+}
+
+fn manifest(local: &[Local]) -> Files {
+    local
+        .iter()
+        .map(|f| (f.path.clone(), f.file.clone()))
+        .collect()
+}
+
+/// Every file of the bundle in `dir` but `proof.json`, which goes as JSON.
+fn bundle(dir: &Path) -> Result<Vec<Local>> {
     let mut out = Vec::new();
     let mut todo: Vec<PathBuf> = vec![dir.to_path_buf()];
     while let Some(at) = todo.pop() {
@@ -151,23 +260,7 @@ fn files(dir: &Path) -> Result<Vec<File>> {
             if rel == "proof.json" {
                 continue;
             }
-            let mut hash = Sha256::new();
-            let mut file = fs::File::open(&path)?;
-            let mut buf = [0; 64 * 1024];
-            let mut size = 0;
-            loop {
-                let n = file.read(&mut buf)?;
-                if n == 0 {
-                    break;
-                }
-                hash.update(buf.get(..n).unwrap_or_default());
-                size += n as u64;
-            }
-            out.push(File {
-                path: rel,
-                sha256: hex::encode(hash.finalize()),
-                size,
-            });
+            out.push(Local::of(rel, path)?);
         }
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
@@ -189,7 +282,7 @@ fn encode(text: &str) -> String {
 /// What a request sends.
 pub(crate) enum Body<'a> {
     None,
-    Json(&'a Value),
+    Json(Value),
     /// A file's bytes, as they are.
     File(&'a Path),
 }
@@ -206,7 +299,9 @@ pub(crate) fn curl(
     body: Body<'_>,
 ) -> Result<(u16, Value)> {
     let mut cmd = Command::new("curl");
+    // A host that cannot be reached must not hold the checks up: they run between the calls.
     cmd.args(["-sS", "-K", "-", "-X", method, "-w", "\n%{http_code}"])
+        .args(["--connect-timeout", "10"])
         .args(["-H", "User-Agent: fearlezz", "-H", "Expect:"]);
     for header in headers {
         cmd.args(["-H", header]);
@@ -215,7 +310,7 @@ pub(crate) fn curl(
         Body::None => None,
         Body::Json(value) => {
             let mut file = tempfile::NamedTempFile::new()?;
-            serde_json::to_writer(&mut file, value)?;
+            serde_json::to_writer(&mut file, &value)?;
             file.flush()?;
             cmd.args(["-H", "Content-Type: application/json", "--data-binary"])
                 .arg(format!("@{}", file.path().display()));

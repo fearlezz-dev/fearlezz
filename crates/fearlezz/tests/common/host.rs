@@ -1,6 +1,7 @@
-//! A fake proof host on a local port, speaking the protocol in `ee/README.md`, with GitHub
-//! Actions' OIDC token endpoint beside it. It keeps every request so a test can read back
-//! what Fearlezz sent.
+//! A fake proof host on a local port, speaking protocol version 2 of `ee/README.md`, with
+//! GitHub Actions' OIDC token endpoint beside it. It keeps every request in order so a test can
+//! read back what Fearlezz sent and when, and takes the calls home of checks (`/mark/<name>`)
+//! to show when a check's command ran among them.
 
 #![allow(dead_code, reason = "each test file uses only some of the helpers")]
 
@@ -15,6 +16,8 @@ use serde_json::{Value, json};
 pub(crate) const OIDC: &str = "oidc-token";
 /// The token GitHub Actions gives a job to ask for an OIDC token.
 pub(crate) const REQUEST_TOKEN: &str = "request-token";
+/// The id of every run the fake opens.
+pub(crate) const RUN: &str = "r1";
 
 /// One request the fake took.
 #[derive(Clone, Debug)]
@@ -35,6 +38,8 @@ pub(crate) struct State {
     pub blobs: BTreeMap<String, Vec<u8>>,
     /// Paths that answer 500.
     pub broken: BTreeSet<String>,
+    /// Forgets every blob when done is first asked, as a host that lost them would.
+    pub forget_before_done: bool,
 }
 
 pub(crate) struct FakeHost {
@@ -86,6 +91,37 @@ impl FakeHost {
             .into_iter()
             .filter(|r| r.path.starts_with("/api/"))
             .collect()
+    }
+
+    /// The calls it took in order, as `METHOD /path`, with what each check step said
+    /// (`POST /api/v2/runs/r1/checks started tests`) and the checks' own calls home
+    /// (`GET /mark/tests`), without the token endpoint.
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.requests()
+            .into_iter()
+            .filter(|r| !r.path.starts_with("/token"))
+            .map(|r| {
+                let line = format!("{} {}", r.method, r.path);
+                let sent: Value = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
+                if let Some(id) = sent["started"]["check"].as_str() {
+                    format!("{line} started {id}")
+                } else if let Some(id) = sent["finished"]["check"]["id"].as_str() {
+                    format!("{line} finished {id}")
+                } else {
+                    line
+                }
+            })
+            .collect()
+    }
+
+    /// The body of the first call to `path`, as JSON.
+    pub(crate) fn sent(&self, method: &str, path: &str) -> Value {
+        let request = self
+            .requests()
+            .into_iter()
+            .find(|r| r.method == method && r.path == path)
+            .unwrap_or_else(|| panic!("no {method} {path}"));
+        serde_json::from_slice(&request.body).unwrap()
     }
 }
 
@@ -157,45 +193,65 @@ fn answer(
         }
         return (200, json!({ "value": OIDC }));
     }
+    if route.starts_with("/mark/") {
+        // A check's command calling home, to show when it ran among the calls.
+        return (200, json!({}));
+    }
     if auth != Some(&format!("Bearer {OIDC}")) {
         return (401, json!({"error": "no token"}));
     }
+    let sent: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let page = format!("{base}/owner/repo/work/feat/x");
     match (method, route) {
-        ("GET", "/api/v1/installed") if s.installed => (200, json!({"installed": true})),
-        ("GET", "/api/v1/installed") => (
+        ("GET", "/api/v2/installed") if s.installed => (200, json!({"installed": true})),
+        ("GET", "/api/v2/installed") => (
             200,
             json!({"installed": false, "install": "https://github.com/apps/fearlezz"}),
         ),
-        ("POST", "/api/v1/proofs") => {
-            let Ok(sent) = serde_json::from_slice::<Value>(body) else {
-                return (400, json!({"error": "not json"}));
-            };
-            let mut missing: Vec<String> = sent["files"]
-                .as_object()
-                .map(|f| {
-                    f.values()
-                        .filter_map(|v| v["sha256"].as_str())
-                        .filter(|sha| !s.held.contains(*sha))
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
-            missing.sort();
-            missing.dedup();
-            (
-                201,
-                json!({"id": "p1", "url": format!("{base}/owner/repo/proofs/p1/"), "missing": missing}),
-            )
+        ("POST", "/api/v2/runs") => (201, json!({"run": RUN, "url": page})),
+        ("POST", "/api/v2/runs/r1/checks") => {
+            let missing = s.lacks(&sent["finished"]["files"]);
+            (200, json!({ "missing": missing }))
         }
-        ("POST", "/api/v1/proofs/p1/done") => {
-            (200, json!({"url": format!("{base}/owner/repo/proofs/p1/")}))
+        ("POST", "/api/v2/runs/r1/done") => {
+            if std::mem::take(&mut s.forget_before_done) {
+                s.held.clear();
+            }
+            let missing = s.lacks(&sent["files"]);
+            if missing.is_empty() {
+                (200, json!({ "url": page }))
+            } else {
+                (
+                    409,
+                    json!({"error": "files are missing", "missing": missing}),
+                )
+            }
         }
-        ("PUT", blob) if blob.starts_with("/api/v1/blobs/") => {
-            let sha = blob.trim_start_matches("/api/v1/blobs/").to_string();
+        ("PUT", blob) if blob.starts_with("/api/v2/blobs/") => {
+            let sha = blob.trim_start_matches("/api/v2/blobs/").to_string();
             s.blobs.insert(sha.clone(), body.to_vec());
             s.held.insert(sha);
             (204, json!({}))
         }
         _ => (404, json!({"error": "unknown"})),
+    }
+}
+
+impl State {
+    /// The SHA-256s of `files` (`{path: {sha256, size}}`) it does not hold, sorted, once each.
+    fn lacks(&self, files: &Value) -> Vec<String> {
+        let mut missing: Vec<String> = files
+            .as_object()
+            .map(|f| {
+                f.values()
+                    .filter_map(|v| v["sha256"].as_str())
+                    .filter(|sha| !self.held.contains(*sha))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        missing.sort();
+        missing.dedup();
+        missing
     }
 }

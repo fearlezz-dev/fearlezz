@@ -7,6 +7,7 @@
 //! about the proof, red before green, and every picture. What blocks, what waits and what to
 //! read are derived, never stored.
 
+pub mod events;
 pub mod findings;
 pub mod look;
 pub mod media;
@@ -60,6 +61,7 @@ pub struct Proof {
 
 /// The pull request a run proves: enough to know which one a page belongs to.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Pull {
     /// Its number.
     pub number: u64,
@@ -73,6 +75,7 @@ pub struct Pull {
 /// How a check came out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Ran {
     /// It passed.
     Passed,
@@ -95,6 +98,7 @@ impl Ran {
 
 /// One check the run took up.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Check {
     /// Its id.
     pub id: String,
@@ -143,6 +147,7 @@ pub struct Check {
 
 /// One test case a test report says ran.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Case {
     /// `classname::name`, or the name alone when there is no class.
     pub name: String,
@@ -155,6 +160,7 @@ pub struct Case {
 
 /// One thing that keeps a commit from being proven: what, why, and what to do about it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Item {
     /// What is wrong.
     pub what: String,
@@ -166,6 +172,7 @@ pub struct Item {
 
 /// What running the check on the base commit with the change's test files showed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Red {
     /// What it comes to.
     pub verdict: Verdict,
@@ -189,6 +196,7 @@ pub struct Red {
 /// What red before green comes to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Verdict {
     /// The tests fail on the base and pass here.
     Red,

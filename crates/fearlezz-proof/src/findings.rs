@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// How much a finding matters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Level {
     /// Told to the agent only.
     Hint,
@@ -29,6 +30,7 @@ impl Level {
 
 /// One problem a check reported.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Finding {
     /// Relative to the worktree root; empty when the tool named no file.
     pub file: String,
