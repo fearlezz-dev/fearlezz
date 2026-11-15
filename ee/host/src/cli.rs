@@ -1,25 +1,37 @@
 //! The CLI's way in: `fearlezz setup login` runs GitHub's device flow through the host, which
 //! holds the app's client id and asks GitHub, and ends in a host token for the CLI. The token
 //! speaks for the person who entered the code, with their GitHub token deciding what it may
-//! read: the works of repositories they may read, and the pictures of those works' runs. It
-//! can never write: a verdict, a note, a resolve or an accept takes a browser session and
-//! refuses any `Authorization` header (`say::person`), and the CI calls take only an OIDC token.
+//! do: read the works of repositories they may read and the pictures of those works' runs, and
+//! open and stream local runs of repositories they may write (`api.rs`). It can never give a
+//! verdict, a note, a resolve or an accept: those take a browser session and refuse any
+//! `Authorization` header (`say::person`).
 //!
-//! The host keeps a token as its HMAC with the signing key, so the table alone opens nothing.
+//! The token is the host's own: it lives 30 days from its last use, until `fearlezz setup
+//! logout` ends it, while the host keeps the person's GitHub token fresh with its refresh token,
+//! so the person signs in once. The host keeps a token as its HMAC with the signing key, so the
+//! table alone opens nothing.
 
 use fearlezz_proof::look::Look;
 use fearlezz_proof::notes::{Feedback, Noted};
 use fearlezz_proof::review::Review;
 use serde::Deserialize;
 use serde_json::json;
+use wasm_bindgen::JsValue;
 use worker::{Env, Headers, Request, Response};
 
-use crate::github::{self, Device};
+use crate::github::{self, Device, UserToken};
 use crate::work::{self, NOTE_COLUMNS, NoteRow, Place, WorkRow, read};
 use crate::{Answer, Config, Refusal, crypto, files, now, pages, repo_key};
 
 /// What every CLI token starts with, so a reader tells it from CI's OIDC token at a glance.
 const PREFIX: &str = "fzh_";
+
+/// How long a CLI token lives after its last use.
+const IDLE_SECONDS: i64 = 30 * 86400;
+
+/// How long before its GitHub token expires the host renews it, so a call never meets it
+/// expired.
+const RENEW_SECONDS: i64 = 300;
 
 /// `POST /api/v2/login/device`: starts a device flow, answering what GitHub said: the code the
 /// person enters (`user_code`) at `verification_uri`, and the `device_code` the CLI polls with.
@@ -52,7 +64,7 @@ pub async fn token(mut req: Request, env: &Env, config: &Config) -> Answer {
         .json()
         .await
         .map_err(|_| Refusal::new(400, "send {\"device_code\"}"))?;
-    let (github_token, seconds) = match github::device_token(config, &ask.device_code).await? {
+    let github_token = match github::device_token(config, &ask.device_code).await? {
         Device::Pending { interval } => {
             return Ok(Response::from_json(
                 &json!({"pending": true, "interval": interval}),
@@ -66,30 +78,44 @@ pub async fn token(mut req: Request, env: &Env, config: &Config) -> Answer {
                 ),
             ));
         }
-        Device::Token { token, seconds } => (token, seconds),
+        Device::Token(token) => token,
     };
-    let login = github::login(config, &github_token)
+    let login = github::login(config, &github_token.token)
         .await?
         .ok_or_else(|| Refusal::new(400, "GitHub did not say who signed in"))?;
     let token = format!("{PREFIX}{}{}", crypto::random_id()?, crypto::random_id()?);
     let db = env.d1("DB")?;
-    // Tokens nobody logged out of would pile up; each sign in sweeps the expired ones.
-    db.prepare("DELETE FROM cli_tokens WHERE expires <= ?1")
-        .bind(&[(now() as f64).into()])?
+    // Tokens nobody logged out of would pile up; each sign in sweeps the idle ones.
+    db.prepare("DELETE FROM cli_tokens WHERE used <= ?1")
+        .bind(&[((now() - IDLE_SECONDS) as f64).into()])?
         .run()
         .await?;
-    db.prepare("INSERT INTO cli_tokens (hash, login, token, expires) VALUES (?1, ?2, ?3, ?4)")
-        .bind(&[
-            hash(config, &token).await?.into(),
-            login.as_str().into(),
-            github_token.into(),
-            ((now() + seconds) as f64).into(),
-        ])?
-        .run()
-        .await?;
+    db.prepare(
+        "INSERT INTO cli_tokens (hash, login, token, token_expires, refresh, used) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )
+    .bind(&[
+        hash(config, &token).await?.into(),
+        login.as_str().into(),
+        github_token.token.as_str().into(),
+        expiry(&github_token),
+        github_token
+            .refresh
+            .as_deref()
+            .map_or(JsValue::NULL, JsValue::from),
+        (now() as f64).into(),
+    ])?
+    .run()
+    .await?;
     Ok(Response::from_json(
         &json!({"token": token, "login": login}),
     )?)
+}
+
+/// When a GitHub user token expires, as D1 keeps it; null when it does not.
+fn expiry(token: &UserToken) -> JsValue {
+    token
+        .seconds
+        .map_or(JsValue::NULL, |s| ((now() + s) as f64).into())
 }
 
 /// `DELETE /api/v2/login`: the CLI logs out, which ends its token on the host. `204`.
@@ -105,9 +131,14 @@ pub async fn logout(req: &Request, env: &Env, config: &Config) -> Answer {
 }
 
 /// The person a CLI token speaks for, and their GitHub token.
-struct Reader {
-    login: String,
-    token: String,
+pub struct Person {
+    pub login: String,
+    pub token: String,
+}
+
+/// Whether the request carries a CLI token (`fzh_…`), whether or not it holds.
+pub fn carries(req: &Request) -> worker::Result<bool> {
+    Ok(bearer(req)?.is_some())
 }
 
 fn bearer(req: &Request) -> worker::Result<Option<String>> {
@@ -123,31 +154,80 @@ async fn hash(config: &Config, token: &str) -> worker::Result<String> {
     Ok(hex::encode(mac))
 }
 
-/// The person the request's CLI token speaks for, when it may read `repo` (lowercased): `401`
-/// without a token that holds, `404` for a repository they may not read.
-async fn reader(req: &Request, env: &Env, config: &Config, repo: &str) -> Result<Reader, Refusal> {
+/// The person the request's CLI token speaks for: `401` without a token used in the last 30
+/// days, or when their GitHub token can no longer be renewed. Each use keeps the token alive
+/// for 30 more days, and a GitHub token about to expire is renewed first.
+pub async fn person(req: &Request, env: &Env, config: &Config) -> Result<Person, Refusal> {
     let expired = || Refusal::new(401, "sign in to the proof host: fearlezz setup login");
     let token = bearer(req)?.ok_or_else(expired)?;
     #[derive(Deserialize)]
     struct Row {
         login: String,
         token: String,
+        token_expires: Option<f64>,
+        refresh: Option<String>,
+        used: f64,
     }
-    let row: Option<Row> = env
-        .d1("DB")?
-        .prepare("SELECT login, token FROM cli_tokens WHERE hash = ?1 AND expires > ?2")
-        .bind(&[hash(config, &token).await?.into(), (now() as f64).into()])?
+    let db = env.d1("DB")?;
+    let hash = hash(config, &token).await?;
+    let now = now();
+    let row: Option<Row> = db
+        .prepare("SELECT login, token, token_expires, refresh, used FROM cli_tokens WHERE hash = ?1 AND used > ?2")
+        .bind(&[hash.as_str().into(), ((now - IDLE_SECONDS) as f64).into()])?
         .first(None)
         .await?;
     let row = row.ok_or_else(expired)?;
-    let reader = Reader {
+    let mut person = Person {
         login: row.login,
         token: row.token,
     };
+    let stale = row
+        .token_expires
+        .is_some_and(|at| at as i64 <= now + RENEW_SECONDS);
+    if stale {
+        let renewed = match &row.refresh {
+            Some(refresh) => github::refresh(config, refresh).await?,
+            None => None,
+        };
+        let Some(renewed) = renewed else {
+            db.prepare("DELETE FROM cli_tokens WHERE hash = ?1")
+                .bind(&[hash.as_str().into()])?
+                .run()
+                .await?;
+            return Err(expired());
+        };
+        db.prepare("UPDATE cli_tokens SET token = ?2, token_expires = ?3, refresh = COALESCE(?4, refresh) WHERE hash = ?1")
+            .bind(&[
+                hash.as_str().into(),
+                renewed.token.as_str().into(),
+                expiry(&renewed),
+                renewed.refresh.as_deref().map_or(JsValue::NULL, JsValue::from),
+            ])?
+            .run()
+            .await?;
+        person.token = renewed.token;
+    }
+    // Written at most once an hour, not on every call.
+    if (row.used as i64) < now - 3600 {
+        db.prepare("UPDATE cli_tokens SET used = ?2 WHERE hash = ?1")
+            .bind(&[hash.as_str().into(), (now as f64).into()])?
+            .run()
+            .await?;
+    }
+    Ok(person)
+}
+
+/// The person the request's CLI token speaks for, when they may read `repo` (lowercased):
+/// `401` without a token that holds, `404` for a repository they may not read.
+async fn reader(req: &Request, env: &Env, config: &Config, repo: &str) -> Result<Person, Refusal> {
+    let reader = person(req, env, config).await?;
     match pages::reads(env, config, &reader.login, &reader.token, repo).await? {
         Some(true) => Ok(reader),
         Some(false) => Err(Refusal::new(404, "not found")),
-        None => Err(expired()),
+        None => Err(Refusal::new(
+            401,
+            "sign in to the proof host: fearlezz setup login",
+        )),
     }
 }
 

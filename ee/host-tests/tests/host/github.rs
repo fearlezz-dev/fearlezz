@@ -95,6 +95,8 @@ pub struct State {
     pub next_id: u64,
     /// Device flow sign ins by device code: the code a person enters, and who entered it.
     pub devices: BTreeMap<String, (String, Option<String>)>,
+    /// Refresh tokens of user tokens and their login; each renews once.
+    pub refreshes: BTreeMap<String, String>,
 }
 
 pub struct FakeGitHub {
@@ -135,6 +137,17 @@ impl FakeGitHub {
                 ("owner/open".to_owned(), repo(false, Some(5), &[])),
                 // The review tests: verdicts, accepts, the check run and the comment.
                 ("owner/review".to_owned(), reviewed(false, 6)),
+                // The local run tests: each CLI test signs in as a login of its own.
+                (
+                    "owner/local".to_owned(),
+                    Repo {
+                        private: false,
+                        installation: Some(7),
+                        readers: set(&["reader", "writer", "dev", "refresher"]),
+                        writers: set(&["writer", "dev", "refresher"]),
+                        admins: set(&[]),
+                    },
+                ),
             ]),
             codes: BTreeMap::from([
                 ("reader-code".to_owned(), "reader".to_owned()),
@@ -149,6 +162,7 @@ impl FakeGitHub {
             comments: Vec::new(),
             next_id: 1000,
             devices: BTreeMap::new(),
+            refreshes: BTreeMap::new(),
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -207,6 +221,14 @@ impl FakeGitHub {
             .find(|(code, _)| code == user_code)
             .unwrap_or_else(|| panic!("no device flow shows {user_code}"));
         device.1 = Some(login.to_owned());
+    }
+
+    /// Every user token `login` got through the device flow or a refresh expires, as GitHub's
+    /// do after eight hours; their refresh tokens still renew them.
+    pub fn expire(&self, login: &str) {
+        let mut state = self.state.lock().unwrap();
+        let prefix = format!("person-{login}-");
+        state.tokens.retain(|token, _| !token.starts_with(&prefix));
     }
 
     /// Publishes another Actions OIDC key, as GitHub does when it rotates them.
@@ -469,13 +491,19 @@ fn answer(
                 Some((_, None)) => (200, json!({"error": "authorization_pending"})),
                 Some((_, Some(login))) => {
                     state.devices.remove(code);
-                    let token = format!("person-{login}");
-                    state.tokens.insert(token.clone(), login);
-                    (
-                        200,
-                        json!({"access_token": token, "token_type": "bearer", "expires_in": 28800}),
-                    )
+                    (200, user_token(state, &login))
                 }
+            }
+        }
+        ("POST", ["login", "oauth", "access_token"]) if body["grant_type"] == "refresh_token" => {
+            let field = |name: &str| body.get(name).and_then(Value::as_str).unwrap_or_default();
+            if field("client_id") != CLIENT_ID || field("client_secret") != CLIENT_SECRET {
+                return (200, json!({"error": "incorrect_client_credentials"}));
+            }
+            let refresh = field("refresh_token").to_owned();
+            match state.refreshes.remove(&refresh) {
+                Some(login) => (200, user_token(state, &login)),
+                None => (200, json!({"error": "bad_refresh_token"})),
             }
         }
         ("POST", ["login", "oauth", "access_token"]) => {
@@ -500,6 +528,19 @@ fn answer(
 
 /// Whether `token` is the app's installation token on `repo`: only the app writes check runs
 /// and its own comments.
+/// A new expiring user token for `login` with its refresh token, as GitHub answers it.
+fn user_token(state: &mut State, login: &str) -> Value {
+    state.next_id += 1;
+    let token = format!("person-{login}-{}", state.next_id);
+    let refresh = format!("refresh-{}", state.next_id);
+    state.tokens.insert(token.clone(), login.to_owned());
+    state.refreshes.insert(refresh.clone(), login.to_owned());
+    json!({
+        "access_token": token, "token_type": "bearer", "expires_in": 28800,
+        "refresh_token": refresh, "refresh_token_expires_in": 15_897_600,
+    })
+}
+
 fn writes_as_app(state: &State, repo: &str, token: &str) -> bool {
     let installation = token
         .strip_prefix("installation-")

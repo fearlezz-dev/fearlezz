@@ -112,6 +112,18 @@ h1 { font-size: clamp(1.6rem, 4vw, 2.3rem); margin: 4px 0 12px; }
 .pill { margin-left: auto; font-size: 0.72rem; font-weight: 700; padding: 1px 8px; border-radius: 99px; }
 .pill.running { color: var(--run); background: color-mix(in srgb, var(--run) 14%, transparent); }
 .pill.done { color: var(--quiet); background: var(--sunk); }
+/* A local run: the agent's word, marked with a dashed edge all round, as unproven. */
+.tag.unproven {
+  font-size: 0.72rem; font-weight: 700; padding: 0 7px; border-radius: 99px;
+  color: var(--timing); border: 1px dashed currentColor;
+}
+.standing.local { color: var(--timing); }
+p.unproven {
+  flex-basis: 100%; margin: 0; padding: 8px 12px; border-radius: 10px; font-size: 0.9rem;
+  border: 1px dashed color-mix(in srgb, var(--timing) 70%, transparent);
+  background: color-mix(in srgb, var(--timing) 9%, transparent);
+}
+p.unproven b { color: var(--timing); }
 .pill.failed { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
 .checks { list-style: none; margin: 0 12px; padding: 0; }
 .checks li {

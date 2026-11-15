@@ -7,7 +7,7 @@ import { type CheckState, type Status, connect, stateOf } from "./live";
 import { PicturesPanel } from "./PicturesPanel";
 import { picturesOf } from "./pictures";
 import type { Job, Review, Run, RunCheck, Snapshot } from "./proof";
-import { type Viewer, accept, canAccept, signIn, standing, viewerOf, waitsFor } from "./review";
+import { type Viewer, accept, canAccept, localBy, signIn, standing, viewerOf, waitsFor } from "./review";
 
 const WORDS: Record<CheckState, string> = {
   planned: "waiting",
@@ -109,13 +109,15 @@ function title(state: Snapshot): string {
   return pull.title ? `#${pull.number} ${pull.title}` : `#${pull.number}`;
 }
 
-/** Where the run shown stands, in one line: once it ran, what waits for the person looking. */
+/** Where the run shown stands, in one line: once it ran, what waits for the person looking. A
+ * local run is the agent's word, so it says so first and waits for no one. */
 function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer | undefined }) {
   const ended = () => props.run.checks.filter((c) => c.entry).length;
   const failed = () => props.run.checks.filter((c) => c.entry?.outcome === "failed").length;
   const toLook = () => picturesOf(props.run).filter((p) => p.picture.change !== "same" && !p.picture.flaky).length;
   const head = () => props.run.head.slice(0, 7);
   const kind = () => {
+    if (localBy(props.run)) return "local";
     if (props.run.state === "running") return "run";
     const state = props.review?.state;
     if (state === "waits") return "look";
@@ -125,7 +127,17 @@ function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer 
     return toLook() ? "look" : "ok";
   };
   const pictures = (n: number) => `${n} ${n === 1 ? "picture" : "pictures"}`;
+  const local = () => {
+    const by = localBy(props.run);
+    const what = `Unproven: ${by}'s local run of ${head()}`;
+    if (props.run.state === "running") return `${what}, ${ended()} of ${props.run.checks.length} checks`;
+    if (props.run.state === "cancelled") return `${what} stopped without its proof`;
+    if (failed()) return `${what}: ${failed()} ${failed() === 1 ? "check" : "checks"} failed`;
+    if (toLook()) return `${what}: ${pictures(toLook())} changed`;
+    return `${what}: its checks passed`;
+  };
   const text = () => {
+    if (localBy(props.run)) return local();
     if (props.run.state === "running") {
       const looking = toLook() ? `, ${pictures(toLook())} to look at already` : "";
       return `Proving ${head()}: ${ended()} of ${props.run.checks.length} checks${looking}`;
@@ -269,15 +281,33 @@ function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => v
   const failed = () => props.run.checks.some((c) => c.entry?.outcome === "failed");
   const pill = () =>
     props.run.state === "running" ? "running" : props.run.state === "cancelled" ? "cancelled" : failed() ? "failed" : "done";
+  const by = () => localBy(props.run);
+  // A local run proves nothing: it ran, it did not prove.
+  const verb = () => {
+    if (props.run.state === "cancelled") return "Stopped";
+    if (by()) return props.run.state === "running" ? "Running" : "Ran";
+    return props.run.state === "running" ? "Proving" : "Proved";
+  };
   return (
-    <section class="run" data-run={props.run.id} data-state={props.run.state} data-shown={String(props.shown)}>
+    <section
+      class={`run ${by() ? "local" : ""}`}
+      data-run={props.run.id}
+      data-state={props.run.state}
+      data-source={props.run.source.kind}
+      data-shown={String(props.shown)}
+    >
       <button type="button" class="run-head" aria-pressed={props.shown} onClick={() => props.onShow()}>
         <span class="run-title">
-          {props.run.state === "running" ? "Proving" : props.run.state === "cancelled" ? "Stopped" : "Proved"}{" "}
-          <code>{props.run.head.slice(0, 7)}</code>
+          {verb()} <code>{props.run.head.slice(0, 7)}</code>
+          <Show when={by()}>
+            <span class="tag unproven" data-unproven title="A local run is the agent's word: it is never reviewed">
+              unproven
+            </span>
+          </Show>
           <span class={`pill ${pill()}`}>{pill()}</span>
         </span>
         <span class="run-meta">
+          <Show when={by()}>{(who) => <>local, by {who()}, </>}</Show>
           {done()} of {props.run.checks.length} checks, {ago(props.now - props.run.opened)}
         </span>
       </button>

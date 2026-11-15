@@ -19,7 +19,7 @@ import {
 } from "./pictures";
 import { type Draft, type Shown as Noted, fromWhere, makeNote, notesOn, resolveNote, sidesOf } from "./notes";
 import type { PictureChange, Run, Snapshot, VerdictKind } from "./proof";
-import { type Viewer, canSay, carried, signIn, toLookAt, verdict as say, verdictOf } from "./review";
+import { type Viewer, canSay, carried, localBy, signIn, toLookAt, verdict as say, verdictOf } from "./review";
 import { MODES, type Mode, type Noting, Stage } from "./Stage";
 
 // The way to compare and the grouping stay as a person moves between pictures and runs.
@@ -57,7 +57,8 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
     const p = current();
     return p ? notesOn(props.state, p.check, p.picture.name, props.run) : [];
   });
-  const canNote = () => canSay(props.viewer) && props.run.source.kind === "ci";
+  // Notes may be made on any run, a local one too: that is how they reach the agent early.
+  const canNote = () => canSay(props.viewer);
   const noting: Noting = {
     get notes() {
       return notes();
@@ -104,6 +105,13 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
     <section class="pictures" data-pictures aria-labelledby="pictures-title">
       <div class="pictures-head">
         <h2 id="pictures-title">Does it look right to you?</h2>
+        <Show when={localBy(props.run)}>
+          {(who) => (
+            <p class="unproven" data-unproven>
+              <b>{who()}'s local run</b> is the agent's word. Notes reach the agent now; verdicts wait for CI.
+            </p>
+          )}
+        </Show>
         <nav class="counts" aria-label="Show only">
           <For each={counts(pictures())}>
             {(c) => (
@@ -292,7 +300,7 @@ function ReviewBar(props: {
   const [words, setWords] = createSignal("");
   const verdict = createMemo(() => verdictOf(props.state, props.run, props.shown));
   const never = () => {
-    if (props.run.source.kind !== "ci") return "A local run is never reviewed; its pictures get a verdict on CI.";
+    if (localBy(props.run)) return "A local run is unproven, so its pictures get a verdict on CI.";
     if (props.shown.picture.flaky) return "Flaky pictures never wait for a verdict.";
     if (!toLookAt(props.shown)) return "Unchanged pictures need no verdict.";
     return "";

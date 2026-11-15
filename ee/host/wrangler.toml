@@ -60,3 +60,7 @@ database_name = "fearlezz-proofs"
 # In Western Europe; local runs and the tests use a local copy, never this one.
 database_id = "ac62746a-bf66-4e97-8ae5-af025298186d"
 migrations_dir = "migrations"
+
+# Closes the local runs that said nothing for an hour (`api::close_silent`).
+[triggers]
+crons = ["*/10 * * * *"]

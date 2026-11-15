@@ -377,7 +377,11 @@ job: string,
 /**
  * The workflow run's page.
  */
-run_url?: string | null, } | { "kind": "local", };
+run_url?: string | null, } | { "kind": "local", 
+/**
+ * Who ran it: the login of the CLI's sign in, which the host sets from its token.
+ */
+login: string, };
 
 export type RunCheck = { 
 /**

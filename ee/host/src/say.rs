@@ -6,7 +6,8 @@
 //! nothing else: a request that carries an `Authorization` header is refused, whatever token
 //! it holds, so no token a program holds (CI's OIDC token, or the CLI's own token to come) can
 //! ever give one. It must come from the app origin (`Origin`) as JSON, which a page on another
-//! site cannot send with the cookie. Only CI runs are reviewed; a local run never is.
+//! site cannot send with the cookie. Only CI runs are reviewed; a local run never is, though
+//! a person may leave notes on its pictures (`notes.rs`).
 
 use fearlezz_proof::events::{Live, Source, WorkChange};
 use fearlezz_proof::look::Look;
@@ -76,7 +77,8 @@ pub async fn person(
         .ok_or_else(|| Refusal::new(401, format!("sign in to {what}")))
 }
 
-/// The run `id`, when the request may see it; a run it may not see is not found.
+/// The run `id`, CI's or local, when the request may see it; a run it may not see is not
+/// found.
 pub async fn run(
     req: &Request,
     env: &Env,
@@ -95,31 +97,38 @@ pub async fn run(
     if !pages::open(req, env, config, &row.repo).await? {
         return Err(Refusal::new(404, "not found"));
     }
-    if !matches!(read::<Source>(&row.source)?, Source::Ci { .. }) {
-        return Err(Refusal::new(
-            409,
-            "this is a local run, which is never reviewed: verdicts, notes and accepts are given on a CI run",
-        ));
-    }
     Ok(row)
+}
+
+impl RunRow {
+    /// Refuses a local run, which is the agent's word and never reviewed: `what` is given on a
+    /// CI run.
+    fn reviewed(&self, what: &str) -> Result<(), Refusal> {
+        if matches!(read::<Source>(&self.source)?, Source::Ci { .. }) {
+            return Ok(());
+        }
+        Err(Refusal::new(
+            409,
+            format!(
+                "this is a local run, which is unproven and never reviewed: {what} on a CI run; notes may be made here"
+            ),
+        ))
+    }
 }
 
 /// What a person may do on a repository: GitHub's word, kept for a few minutes.
 pub async fn role(
     env: &Env,
     config: &Config,
-    person: &Session,
+    login: &str,
+    token: &str,
     repo: &str,
 ) -> Result<Role, Refusal> {
-    let key = format!(
-        "role:{}:{}",
-        person.login.to_lowercase(),
-        repo.to_lowercase()
-    );
+    let key = format!("role:{}:{}", login.to_lowercase(), repo.to_lowercase());
     if let Some(cached) = cache::get(env, &key).await? {
         return Ok(Role::of(&cached));
     }
-    let Some(role) = github::permission(config, repo, &person.login, &person.token).await? else {
+    let Some(role) = github::permission(config, repo, login, token).await? else {
         return Err(Refusal::new(
             401,
             "your GitHub sign in expired; sign in again",
@@ -147,7 +156,8 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
     })?;
     let db = env.d1("DB")?;
     let run = run(&req, env, config, &db, id).await?;
-    if role(env, config, &person, &run.repository).await? < Role::Write {
+    run.reviewed("verdicts are given")?;
+    if role(env, config, &person.login, &person.token, &run.repository).await? < Role::Write {
         return Err(Refusal::new(
             403,
             format!(
@@ -249,7 +259,8 @@ pub async fn accept(req: Request, env: &Env, config: &Config, id: &str) -> Answe
     let person = person(&req, env, config, "accept a weakened proof").await?;
     let db = env.d1("DB")?;
     let run = run(&req, env, config, &db, id).await?;
-    if role(env, config, &person, &run.repository).await? < Role::Admin {
+    run.reviewed("weakenings are accepted")?;
+    if role(env, config, &person.login, &person.token, &run.repository).await? < Role::Admin {
         return Err(Refusal::new(
             403,
             format!(
@@ -298,7 +309,8 @@ pub async fn viewer(req: &Request, env: &Env, config: &Config, owner: &str, name
     }
     let answer = match session::read(req, env).await? {
         Some(person) => {
-            let role = match role(env, config, &person, &format!("{owner}/{name}")).await? {
+            let repository = format!("{owner}/{name}");
+            let role = match role(env, config, &person.login, &person.token, &repository).await? {
                 Role::Admin => "admin",
                 Role::Write => "write",
                 Role::Less => "read",

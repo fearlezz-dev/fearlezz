@@ -6,15 +6,16 @@
 //!   head, so its check run says it waits for CI; closed: the app writes nothing more on it. A
 //!   pull request from a fork is passed over: its CI gets no OIDC token, so no hosted run comes.
 //! - `workflow_job`: what `jobs.rs` says, a queued job waiting on the page and a completed one
-//!   closing the run that never said done.
+//!   closing the run that never said done. A local run has no job; `api::close_silent` closes
+//!   it once it said nothing for an hour.
 
-use fearlezz_proof::events::{Change, Live, Source, WorkChange};
+use fearlezz_proof::events::{Live, Source, WorkChange};
 use serde::Deserialize;
 use wasm_bindgen::JsValue;
 use worker::{Env, Request, Response};
 
 use crate::work::{self, read};
-use crate::{Answer, Config, Refusal, crypto, jobs, now, review};
+use crate::{Answer, Config, Refusal, api, crypto, jobs, now, review};
 
 #[derive(Deserialize)]
 struct Repository {
@@ -223,27 +224,9 @@ async fn cancel(env: &Env, config: &Config, repo: &str, job: &WorkflowJob) -> wo
             } => url.ends_with(&page) && jobs::runs(&job.name, &id),
             _ => false,
         };
-        if !held {
-            continue;
+        if held {
+            api::cancel(env, config, &db, &row.id, &row.work, false).await?;
         }
-        let seq = work::commit(
-            &db,
-            vec![
-                db.prepare(
-                    "UPDATE runs SET state = 'cancelled' WHERE id = ?1 AND state = 'running'",
-                )
-                .bind(&[row.id.as_str().into()])?,
-                work::bump(&db, &row.work)?,
-            ],
-        )
-        .await?;
-        let live = Live::Event {
-            seq,
-            run: row.id.clone(),
-            change: Box::new(Change::Cancelled {}),
-        };
-        work::notify(env, &row.work, &live).await;
-        review::refresh(env, config, &row.work, false).await?;
     }
     Ok(())
 }

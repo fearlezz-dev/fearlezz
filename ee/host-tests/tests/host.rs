@@ -10,6 +10,8 @@
 mod browser;
 #[path = "host/github.rs"]
 mod github;
+#[path = "host/local.rs"]
+mod local;
 #[path = "host/media.rs"]
 mod media;
 #[path = "host/notes.rs"]
@@ -365,6 +367,38 @@ fn main() {
         (
             "an_old_note_shows_dashed_with_its_run_on_a_later_run",
             notes::an_old_note_shows_dashed_with_its_run_on_a_later_run,
+        ),
+        (
+            "a_cli_token_opens_a_local_run_only_with_write_access",
+            local::a_cli_token_opens_a_local_run_only_with_write_access,
+        ),
+        (
+            "a_local_run_takes_notes_but_never_a_verdict_or_an_accept",
+            local::a_local_run_takes_notes_but_never_a_verdict_or_an_accept,
+        ),
+        (
+            "a_local_run_never_touches_the_check_run_or_the_comment",
+            local::a_local_run_never_touches_the_check_run_or_the_comment,
+        ),
+        (
+            "a_note_on_a_local_run_shows_on_a_later_ci_run_of_the_work",
+            local::a_note_on_a_local_run_shows_on_a_later_ci_run_of_the_work,
+        ),
+        (
+            "a_silent_local_run_is_cancelled_after_an_hour",
+            local::a_silent_local_run_is_cancelled_after_an_hour,
+        ),
+        (
+            "the_host_renews_an_expired_github_token",
+            local::the_host_renews_an_expired_github_token,
+        ),
+        (
+            "a_cli_token_unused_for_30_days_is_refused",
+            local::a_cli_token_unused_for_30_days_is_refused,
+        ),
+        (
+            "the_page_marks_a_local_run_unproven_and_offers_only_notes",
+            local::the_page_marks_a_local_run_unproven_and_offers_only_notes,
         ),
     ];
     let mut trials: Vec<Trial> = tests
@@ -2517,6 +2551,7 @@ fn pictures() {
     shoot(&mut reader, "review-light-reader");
 
     notes::pictures(&shoot);
+    local::pictures(&shoot);
 }
 
 // Helpers.
@@ -2532,6 +2567,8 @@ struct Job {
     head: String,
     /// The workflow run it is a job of, as its run page names it.
     workflow_run: u64,
+    /// A developer's CLI token instead of CI's: the run is a local one.
+    cli: Option<String>,
 }
 
 /// A run the host opened.
@@ -2548,6 +2585,7 @@ impl Job {
             pull: Some(number),
             head: HEAD.to_owned(),
             workflow_run: 1,
+            cli: None,
         }
     }
 
@@ -2558,6 +2596,16 @@ impl Job {
             pull: None,
             head: HEAD.to_owned(),
             workflow_run: 1,
+            cli: None,
+        }
+    }
+
+    /// A developer's local run of `branch`, sent with their CLI `token`: no pull request, and
+    /// no job.
+    fn local(repository: &'static str, branch: &str, token: &str) -> Job {
+        Job {
+            cli: Some(token.to_owned()),
+            ..Job::push(repository, branch)
         }
     }
 
@@ -2597,7 +2645,10 @@ impl Job {
     }
 
     fn token(&self) -> String {
-        oidc(&self.claims())
+        match &self.cli {
+            Some(token) => token.clone(),
+            None => oidc(&self.claims()),
+        }
     }
 
     /// What the job sends to open a run of `checks`.
@@ -2616,6 +2667,9 @@ impl Job {
         });
         if let Some(n) = self.pull {
             body["pull"] = json!({"number": n, "title": format!("Pull request {n}")});
+        }
+        if self.cli.is_some() {
+            body["source"] = json!({"kind": "local"});
         }
         body
     }

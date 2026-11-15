@@ -86,7 +86,9 @@ impl Worker {
         .args(["--inspector-port", &free_port().to_string()])
         // The config routes both production domains to the worker, and wrangler dev would
         // otherwise show every request as the first one, folding the files origin into the app.
-        .arg("--infer-origin-from-routes=false");
+        .arg("--infer-origin-from-routes=false")
+        // The schedule runs when a test asks `/__scheduled`, not by the clock.
+        .arg("--test-scheduled");
         for (name, value) in vars {
             cmd.arg("--var").arg(format!("{name}:{value}"));
         }

@@ -13,6 +13,9 @@ export type Viewer = { login: null } | { login: string; role: "admin" | "write" 
 export const canSay = (viewer: Viewer | undefined) => !!viewer?.login && viewer.role !== "read";
 export const canAccept = (viewer: Viewer | undefined) => !!viewer?.login && viewer.role === "admin";
 
+/** Who ran a local run, which is unproven and never reviewed; undefined for a CI run. */
+export const localBy = (run: Run) => (run.source.kind === "local" ? run.source.login || "a developer" : undefined);
+
 /** Whether a person looks at a picture: anything but the same, and never a flaky one. */
 export const toLookAt = (p: Shown) => p.picture.change !== "same" && !p.picture.flaky;
 

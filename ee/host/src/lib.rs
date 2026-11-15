@@ -1,7 +1,8 @@
 //! The proof host: takes the runs CI streams (OIDC authenticated, files stored by content in
 //! R2, records in D1) and shows each piece of work live to the people GitHub lets read its
 //! repository, who review it there: a verdict per picture with notes of what should change, an
-//! admin's accept of a weakening. The CLI reads what waits with a token of its own.
+//! admin's accept of a weakening. The CLI reads what waits with a token of its own, and with it
+//! streams the developer's local runs, shown unproven and never reviewed.
 //! The host is the authority for review and writes it to GitHub as the app. `ee/README.md` is
 //! the protocol.
 //!
@@ -29,6 +30,15 @@ mod work;
 
 pub use room::WorkRoom;
 use worker::{Env, Request, Response, Result, event};
+
+/// The host's schedule (`wrangler.toml`): closes the local runs that went silent.
+#[event(scheduled)]
+async fn scheduled(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
+    let closed = async { api::close_silent(&env, &Config::from(&env)?).await };
+    if let Err(error) = closed.await {
+        worker::console_error!("silent local runs were not closed: {error}");
+    }
+}
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { picturesOf } from "./pictures";
 import type { Picture, Review, Run, Snapshot } from "./proof";
-import { carried, standing, verdictOf, waitsFor } from "./review";
+import { carried, localBy, standing, verdictOf, waitsFor } from "./review";
 
 const picture: Picture = {
   name: "card.png",
@@ -85,5 +85,14 @@ describe("needs change", () => {
       weakened: [],
     };
     expect(standing(review)).toBe("1 picture needs change at aaa1111");
+  });
+});
+
+describe("a local run", () => {
+  test("says who ran it, and a CI run is no one's", () => {
+    const local: Run = { ...run("l1", "abc", "k"), source: { kind: "local", login: "writer" } };
+    expect(localBy(local)).toBe("writer");
+    expect(localBy({ ...local, source: { kind: "local", login: "" } })).toBe("a developer");
+    expect(localBy(run("c1", "abc", "k"))).toBeUndefined();
   });
 });

@@ -6,7 +6,7 @@
 use super::*;
 
 /// What the page sends to make a note on `picture` of check `screens`.
-fn ask(picture: &str, side: &str, region: [f64; 4], words: &str) -> Value {
+pub fn ask(picture: &str, side: &str, region: [f64; 4], words: &str) -> Value {
     let [x, y, w, h] = region;
     json!({
         "check": "screens", "picture": picture, "side": side,
@@ -42,7 +42,7 @@ fn resolve(id: &str, cookie: Option<&str>, headers: &[(&str, &str)]) -> Answer {
 
 /// The CLI's sign in as `login`: the device flow through the host, approved on the fake
 /// GitHub. The host token it ends in.
-fn cli_token(login: &str) -> String {
+pub fn cli_token(login: &str) -> String {
     let answer = request("POST", "/api/v2/login/device", &[], Some(b"{}".to_vec()));
     assert_eq!(answer.status, 200, "{}", answer.text());
     let device = answer.json();
@@ -61,7 +61,7 @@ fn cli_token(login: &str) -> String {
 }
 
 /// What waits on the host for a work, as the CLI reads it with `token`.
-fn feedback(token: &str, repository: &str, branch: &str) -> Answer {
+pub fn feedback(token: &str, repository: &str, branch: &str) -> Answer {
     api(
         "GET",
         &format!("/api/v2/work/{repository}/{branch}"),
@@ -127,14 +127,6 @@ pub fn a_note_needs_a_session_write_access_and_a_picture_of_the_run() {
     let snapshot = live("/owner/review/pull/120", &[]).json();
     assert_eq!(snapshot["notes"][0]["words"], "Too tight", "{snapshot:#}");
     assert_eq!(review_of(120)["notes"][0]["id"], note["id"]);
-
-    // A local run is never reviewed, so it takes no notes either.
-    world().worker.sql(&format!(
-        r#"UPDATE runs SET source = '{{"kind":"local"}}' WHERE id = '{run}'"#
-    ));
-    let answer = say(&run, "notes", Some(&writer), &[], &good);
-    assert_eq!(answer.status, 409, "{}", answer.text());
-    assert!(answer.text().contains("local run"), "{}", answer.text());
 }
 
 pub fn needs_change_needs_an_open_note_and_fails_the_check_run() {
@@ -273,14 +265,15 @@ pub fn a_cli_token_reads_but_never_writes() {
         let answer = say(&run, "accept", cookie, &bearer, &json!({}));
         assert_eq!(answer.status, 403, "an accept: {}", answer.text());
     }
-    // Nor does it open or stream a run: those take CI's OIDC token alone.
+    // Nor does it open a CI run: it opens only its person's local runs.
     let answer = api(
         "POST",
         "/api/v2/runs",
         &token,
         Some(job.opening(&["screens"]).to_string().into_bytes()),
     );
-    assert_eq!(answer.status, 401, "{}", answer.text());
+    assert_eq!(answer.status, 400, "{}", answer.text());
+    assert!(answer.text().contains("local run"), "{}", answer.text());
     let review = review_of(123);
     assert!(review["pictures"][0]["verdict"].is_null(), "{review:#}");
     assert!(review["accept"].is_null(), "{review:#}");
@@ -396,7 +389,7 @@ pub fn the_cli_reads_open_notes_with_their_pictures() {
 
 /// The point at fractions `(fx, fy)` of the drawing layer on `side` of the stage, in page
 /// pixels.
-fn point_on(browser: &mut browser::Browser, side: &str, fx: f64, fy: f64) -> (f64, f64) {
+pub fn point_on(browser: &mut browser::Browser, side: &str, fx: f64, fy: f64) -> (f64, f64) {
     let rect = browser.eval(&format!(
         r#"(() => {{ const r = document.querySelector('[data-draw="{side}"]').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }})()"#
     ));
@@ -406,7 +399,7 @@ fn point_on(browser: &mut browser::Browser, side: &str, fx: f64, fy: f64) -> (f6
 
 /// Draws a region on `side` from `(x0, y0)` to `(x1, y1)` in fractions, writes `words` and
 /// adds the note, `both` ticking "on both sides" first.
-fn draw_note(
+pub fn draw_note(
     browser: &mut browser::Browser,
     side: &str,
     region: [f64; 4],

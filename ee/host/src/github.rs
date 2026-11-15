@@ -215,8 +215,8 @@ pub async fn device_code(config: &Config) -> Result<Option<Value>> {
 pub enum Device {
     /// The person has not entered the code yet; ask again after `interval` seconds.
     Pending { interval: u64 },
-    /// They did: their token, and how long it lasts.
-    Token { token: String, seconds: i64 },
+    /// They did: their token, and how to renew it.
+    Token(UserToken),
     /// It ended without a token, in GitHub's words.
     Refused(String),
 }
@@ -230,11 +230,8 @@ pub async fn device_token(config: &Config, device_code: &str) -> Result<Device> 
         "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
     });
     let reply = call(Method::Post, &url, None, Some(&body)).await?;
-    if let Some(token) = reply.body["access_token"].as_str() {
-        return Ok(Device::Token {
-            token: token.to_owned(),
-            seconds: reply.body["expires_in"].as_i64().unwrap_or(8 * 3600),
-        });
+    if let Some(token) = UserToken::of(&reply.body) {
+        return Ok(Device::Token(token));
     }
     let interval = reply.body["interval"].as_u64().unwrap_or(5);
     Ok(match reply.body["error"].as_str() {
@@ -243,4 +240,36 @@ pub async fn device_token(config: &Config, device_code: &str) -> Result<Device> 
         Some(error) => Device::Refused(error.to_owned()),
         None => Device::Refused(format!("GitHub answered {}", reply.status)),
     })
+}
+
+/// A person's GitHub App user token as GitHub hands it out: the token, how many seconds it
+/// lasts and the refresh token that renews it, when the app makes user tokens expire.
+pub struct UserToken {
+    pub token: String,
+    pub seconds: Option<i64>,
+    pub refresh: Option<String>,
+}
+
+impl UserToken {
+    fn of(body: &Value) -> Option<UserToken> {
+        Some(UserToken {
+            token: body["access_token"].as_str()?.to_owned(),
+            seconds: body["expires_in"].as_i64(),
+            refresh: body["refresh_token"].as_str().map(str::to_owned),
+        })
+    }
+}
+
+/// Renews a person's user token with its refresh token, as GitHub lets an app; None when
+/// GitHub refuses it (the refresh token expired, or the person revoked the app).
+pub async fn refresh(config: &Config, refresh_token: &str) -> Result<Option<UserToken>> {
+    let url = format!("{}/login/oauth/access_token", config.github_web);
+    let body = json!({
+        "client_id": config.client_id,
+        "client_secret": config.client_secret,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    });
+    let reply = call(Method::Post, &url, None, Some(&body)).await?;
+    Ok(UserToken::of(&reply.body))
 }

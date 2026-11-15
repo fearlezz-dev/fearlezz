@@ -1,6 +1,6 @@
 //! Notes on a work's page: a person with write access marks what should change on a picture of
-//! a CI run (a region of its before, its after or both, a moment of a film, their words), and
-//! resolves a note once it is settled. Both are what a person says, so they pass the same
+//! a run, CI's or a local one (a region of its before, its after or both, a moment of a film,
+//! their words), and resolves a note once it is settled. Both are what a person says, so they pass the same
 //! checks as a verdict (`say::person`): a browser session from the app origin as JSON, never a
 //! token. Every change goes to the work's open pages and moves its review, whose check run
 //! summary lists the open notes.
@@ -17,7 +17,8 @@ use crate::work::{self, NOTE_COLUMNS, NoteRow, read};
 use crate::{Answer, Config, Refusal, crypto, now, pages, review};
 
 /// `POST /api/v2/runs/<run>/notes`: a person with write access notes what should change on a
-/// picture of a CI run. `201 {"note"}`.
+/// picture of a run. A local run takes notes too, though never a verdict: that is how feedback
+/// reaches the agent before a pull request exists. `201 {"note"}`.
 pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
     let person = say::person(&req, env, config, "make a note").await?;
     let ask: Ask = req.json().await.map_err(|_| {
@@ -175,7 +176,7 @@ async fn writer(
     repository: &str,
     what: &str,
 ) -> Result<(), Refusal> {
-    if say::role(env, config, person, repository).await? < Role::Write {
+    if say::role(env, config, &person.login, &person.token, repository).await? < Role::Write {
         return Err(Refusal::new(
             403,
             format!(
