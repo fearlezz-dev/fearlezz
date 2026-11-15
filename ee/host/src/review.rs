@@ -5,8 +5,9 @@
 //!
 //! The check run says `queued` until a CI run of the head opens, `in_progress` while one runs,
 //! `failure` when the proof failed, `cancelled` when every run of the head ended without its
-//! proof, `action_required` while a picture waits for a verdict or a weakening for an admin's
-//! accept, and `success` once nothing waits. `action_required` needs no requested actions: it
+//! proof, `failure` too while a person says a picture needs change (its summary lists the open notes),
+//! `action_required` while a picture waits for a verdict or a weakening for an admin's accept,
+//! and `success` once nothing waits. `action_required` needs no requested actions: it
 //! completes the check run (so a required check blocks the merge), and GitHub sends people to
 //! its `details_url`, the work's page, which is where they act.
 
@@ -51,9 +52,9 @@ pub async fn refresh(
         .await?;
     let Some(row) = row else { return Ok(()) };
     let Some(head) = &row.head else { return Ok(()) };
-    let (runs, verdicts) = work::of_head(&db, work, head).await?;
+    let of = work::of_head(&db, work, head).await?;
     let accept = accept(&db, work, head).await?;
-    let review = review::review(head, &runs, &verdicts, accept.as_ref());
+    let review = review::review(head, &of.runs, &of.verdicts, &of.notes, accept.as_ref());
     let text = serde_json::to_string(&review)?;
     if row.review.as_deref() != Some(text.as_str()) {
         let seq = work::commit(
@@ -125,7 +126,7 @@ fn status(state: State) -> (&'static str, Option<&'static str>) {
     match state {
         State::Ci => ("queued", None),
         State::Running => ("in_progress", None),
-        State::Failed => ("completed", Some("failure")),
+        State::Failed | State::NeedsChange => ("completed", Some("failure")),
         State::Cancelled => ("completed", Some("cancelled")),
         State::Waits => ("completed", Some("action_required")),
         State::Approved => ("completed", Some("success")),

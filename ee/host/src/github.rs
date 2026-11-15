@@ -200,3 +200,47 @@ pub async fn write(
         ))),
     }
 }
+
+/// Starts GitHub's device flow for the app: the codes a person enters on GitHub, as GitHub
+/// answers them (`device_code`, `user_code`, `verification_uri`, `expires_in`, `interval`); None
+/// when GitHub refuses, as it does while the app's device flow is off.
+pub async fn device_code(config: &Config) -> Result<Option<Value>> {
+    let url = format!("{}/login/device/code", config.github_web);
+    let body = json!({"client_id": config.client_id});
+    let reply = call(Method::Post, &url, None, Some(&body)).await?;
+    Ok((reply.status == 200 && reply.body["device_code"].is_string()).then_some(reply.body))
+}
+
+/// Where a device flow stands.
+pub enum Device {
+    /// The person has not entered the code yet; ask again after `interval` seconds.
+    Pending { interval: u64 },
+    /// They did: their token, and how long it lasts.
+    Token { token: String, seconds: i64 },
+    /// It ended without a token, in GitHub's words.
+    Refused(String),
+}
+
+/// Asks GitHub whether the person entered the code of device flow `device_code`.
+pub async fn device_token(config: &Config, device_code: &str) -> Result<Device> {
+    let url = format!("{}/login/oauth/access_token", config.github_web);
+    let body = json!({
+        "client_id": config.client_id,
+        "device_code": device_code,
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+    });
+    let reply = call(Method::Post, &url, None, Some(&body)).await?;
+    if let Some(token) = reply.body["access_token"].as_str() {
+        return Ok(Device::Token {
+            token: token.to_owned(),
+            seconds: reply.body["expires_in"].as_i64().unwrap_or(8 * 3600),
+        });
+    }
+    let interval = reply.body["interval"].as_u64().unwrap_or(5);
+    Ok(match reply.body["error"].as_str() {
+        Some("authorization_pending") => Device::Pending { interval },
+        Some("slow_down") => Device::Pending { interval },
+        Some(error) => Device::Refused(error.to_owned()),
+        None => Device::Refused(format!("GitHub answered {}", reply.status)),
+    })
+}

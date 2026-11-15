@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use fearlezz_proof::events::{Keys, Live, Run, RunCheck, RunState, Snapshot, Source, Work};
 use fearlezz_proof::look::Look;
+use fearlezz_proof::notes::{Note, NoteState, Region, Side};
 use fearlezz_proof::review::{self, Review, Verdict, VerdictKind};
 use fearlezz_proof::{Check, Proof, Pull};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
@@ -191,6 +192,7 @@ struct VerdictRow {
     check_id: String,
     picture: String,
     key: String,
+    kind: String,
     login: String,
     at: f64,
     run: String,
@@ -203,7 +205,7 @@ impl VerdictRow {
             check: self.check_id,
             picture: self.picture,
             key: self.key,
-            kind: VerdictKind::LooksRight,
+            kind: VerdictKind::of(&self.kind),
             by: self.login,
             at: self.at,
             run: self.run,
@@ -213,8 +215,81 @@ impl VerdictRow {
 }
 
 /// The work's verdicts, in the order given.
-const VERDICTS: &str =
-    "SELECT check_id, picture, key, login, at, run, head FROM verdicts WHERE work = ?1 ORDER BY at";
+const VERDICTS: &str = "SELECT check_id, picture, key, kind, login, at, run, head FROM verdicts WHERE work = ?1 ORDER BY at";
+
+/// A note as stored.
+#[derive(Deserialize)]
+pub struct NoteRow {
+    id: String,
+    pub work: String,
+    check_id: String,
+    picture: String,
+    run: String,
+    head: String,
+    side: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    time: Option<f64>,
+    words: String,
+    login: String,
+    at: f64,
+    state: String,
+    resolved_by: Option<String>,
+}
+
+impl NoteRow {
+    pub fn note(self) -> Note {
+        Note {
+            id: self.id,
+            check: self.check_id,
+            picture: self.picture,
+            run: self.run,
+            head: self.head,
+            side: match self.side.as_str() {
+                "before" => Side::Before,
+                "both" => Side::Both,
+                _ => Side::After,
+            },
+            region: Region {
+                x: self.x,
+                y: self.y,
+                w: self.w,
+                h: self.h,
+            },
+            time: self.time,
+            words: self.words,
+            by: self.login,
+            at: self.at,
+            state: if self.state == "resolved" {
+                NoteState::Resolved
+            } else {
+                NoteState::Open
+            },
+            resolved_by: self.resolved_by,
+        }
+    }
+}
+
+/// Every column of a note, as `NoteRow` reads it.
+pub const NOTE_COLUMNS: &str = "id, work, check_id, picture, run, head, side, x, y, w, h, time, words, login, at, state, resolved_by";
+
+/// The work's open notes, oldest first.
+fn open_notes(db: &D1Database, work: &str) -> worker::Result<D1PreparedStatement> {
+    db.prepare(format!(
+        "SELECT {NOTE_COLUMNS} FROM notes WHERE work = ?1 AND state = 'open' ORDER BY at, rowid"
+    ))
+    .bind(&[work.into()])
+}
+
+fn notes_of(result: &D1Result) -> worker::Result<Vec<Note>> {
+    Ok(result
+        .results::<NoteRow>()?
+        .into_iter()
+        .map(NoteRow::note)
+        .collect())
+}
 
 /// The runs a `WHERE` picks, as three statements of a batch: the runs, their checks, and their
 /// held files; `assemble` reads their results.
@@ -298,6 +373,7 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
         .bind(&[work.into()])?,
         db.prepare(VERDICTS).bind(&[work.into()])?,
         jobs::statement(db, work)?,
+        open_notes(db, work)?,
     ];
     statements.extend(run_statements(
         db,
@@ -305,7 +381,7 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
         &[work.into(), RUNS_SHOWN.into()],
     )?);
     let results = db.batch(statements).await?;
-    let [works, verdicts, waiting, runs @ ..] = results.as_slice() else {
+    let [works, verdicts, waiting, notes, runs @ ..] = results.as_slice() else {
         return Err(worker::Error::RustError(
             "D1 answered another number of results".into(),
         ));
@@ -336,24 +412,30 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
         review,
         verdicts,
         waiting: jobs::read(waiting)?,
+        notes: notes_of(notes)?,
     }))
 }
 
 /// What a work's review is derived from: its runs of `head`, newest first, with their
-/// proofs, and its verdicts.
-pub async fn of_head(
-    db: &D1Database,
-    work: &str,
-    head: &str,
-) -> worker::Result<(Vec<(Run, Option<Proof>)>, Vec<Verdict>)> {
-    let mut statements = vec![db.prepare(VERDICTS).bind(&[work.into()])?];
+/// proofs, its verdicts and its open notes.
+pub struct OfHead {
+    pub runs: Vec<(Run, Option<Proof>)>,
+    pub verdicts: Vec<Verdict>,
+    pub notes: Vec<Note>,
+}
+
+pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<OfHead> {
+    let mut statements = vec![
+        db.prepare(VERDICTS).bind(&[work.into()])?,
+        open_notes(db, work)?,
+    ];
     statements.extend(run_statements(
         db,
         "work = ?1 AND head = ?2",
         &[work.into(), head.into()],
     )?);
     let results = db.batch(statements).await?;
-    let [verdicts, runs @ ..] = results.as_slice() else {
+    let [verdicts, notes, runs @ ..] = results.as_slice() else {
         return Err(worker::Error::RustError(
             "D1 answered another number of results".into(),
         ));
@@ -363,7 +445,11 @@ pub async fn of_head(
         .into_iter()
         .map(VerdictRow::verdict)
         .collect();
-    Ok((assemble(runs)?, verdicts))
+    Ok(OfHead {
+        runs: assemble(runs)?,
+        verdicts,
+        notes: notes_of(notes)?,
+    })
 }
 
 /// A run's state as stored.

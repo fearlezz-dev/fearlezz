@@ -93,6 +93,8 @@ pub struct State {
     pub comments: Vec<Comment>,
     /// The id the next check run or comment gets.
     pub next_id: u64,
+    /// Device flow sign ins by device code: the code a person enters, and who entered it.
+    pub devices: BTreeMap<String, (String, Option<String>)>,
 }
 
 pub struct FakeGitHub {
@@ -146,6 +148,7 @@ impl FakeGitHub {
             check_runs: Vec::new(),
             comments: Vec::new(),
             next_id: 1000,
+            devices: BTreeMap::new(),
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -192,6 +195,18 @@ impl FakeGitHub {
             .filter(|c| c.repo == repo && c.issue == issue)
             .cloned()
             .collect()
+    }
+
+    /// A person enters `user_code` on GitHub's device page and approves the app, signed in as
+    /// `login`.
+    pub fn approve(&self, user_code: &str, login: &str) {
+        let mut state = self.state.lock().unwrap();
+        let device = state
+            .devices
+            .values_mut()
+            .find(|(code, _)| code == user_code)
+            .unwrap_or_else(|| panic!("no device flow shows {user_code}"));
+        device.1 = Some(login.to_owned());
     }
 
     /// Publishes another Actions OIDC key, as GitHub does when it rotates them.
@@ -423,6 +438,44 @@ fn answer(
                     (200, json!({"id": id}))
                 }
                 None => (404, json!({"message": "Not Found"})),
+            }
+        }
+        ("POST", ["login", "device", "code"]) => {
+            if body["client_id"] != CLIENT_ID {
+                return (404, json!({"error": "Not Found"}));
+            }
+            state.next_id += 1;
+            let device = format!("device-{}", state.next_id);
+            let user = format!("FZ{:02}-{:04}", state.next_id % 100, state.next_id);
+            state.devices.insert(device.clone(), (user.clone(), None));
+            (
+                200,
+                json!({
+                    "device_code": device, "user_code": user,
+                    "verification_uri": "https://github.com/login/device",
+                    "expires_in": 900, "interval": 5,
+                }),
+            )
+        }
+        ("POST", ["login", "oauth", "access_token"])
+            if body["grant_type"] == "urn:ietf:params:oauth:grant-type:device_code" =>
+        {
+            if body["client_id"] != CLIENT_ID {
+                return (200, json!({"error": "incorrect_client_credentials"}));
+            }
+            let code = body["device_code"].as_str().unwrap_or_default();
+            match state.devices.get(code).cloned() {
+                None => (200, json!({"error": "expired_token"})),
+                Some((_, None)) => (200, json!({"error": "authorization_pending"})),
+                Some((_, Some(login))) => {
+                    state.devices.remove(code);
+                    let token = format!("person-{login}");
+                    state.tokens.insert(token.clone(), login);
+                    (
+                        200,
+                        json!({"access_token": token, "token_type": "bearer", "expires_in": 28800}),
+                    )
+                }
             }
         }
         ("POST", ["login", "oauth", "access_token"]) => {

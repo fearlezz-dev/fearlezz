@@ -132,16 +132,25 @@ and GitHub gets it as the check run and the comment.
   kept by check, picture and content: a still by the SHA-256 of its before and after, a film by
   which of its stable states changed (its bytes differ each time it is recorded). So a picture
   that did not change keeps its verdict across runs and pushes; the page says "carried over".
-  A verdict has a kind; `looks_right` is the only one so far.
+  A verdict has a kind: `looks_right`, or `needs_change`, which a person can give only while
+  the picture has an open note. A `needs_change` verdict holds for the content it was given on:
+  once the picture changes, it waits for a look again.
+- **Notes** say what should change: a region of a picture's before, its after or both (in
+  fractions of the picture), at a moment of a film, with the person's words. A note is kept by
+  check and picture, so an open note shows on every later run of the work until a person with
+  write access resolves it. Resolving changes no verdict: whether the picture now looks right
+  is said on its own.
 - **An accept is per head**, by an admin of the repository, and covers every weakening of it.
 
 | Call | Does |
 | --- | --- |
-| `POST /api/v2/runs/<run>/verdicts` | Body `{"check", "picture", "kind": "looks_right"}`. `201 {"verdict"}`. `403` without write access; `409` for a local run, a picture with nothing to look at, or one whose files are not all in yet. |
+| `POST /api/v2/runs/<run>/verdicts` | Body `{"check", "picture", "kind": "looks_right" \| "needs_change"}`. `201 {"verdict"}`. `403` without write access; `409` for a local run, a picture with nothing to look at, one whose files are not all in yet, or `needs_change` without an open note on the picture. |
+| `POST /api/v2/runs/<run>/notes` | Body `{"check", "picture", "side": "before" \| "after" \| "both", "region": {"x", "y", "w", "h"}, "time"?, "words"}`. `201 {"note"}`. `400` for empty words (at most 2000 characters), a region outside the picture, a side the picture lacks, or a time on a still; `403` without write access; `409` for a picture the run does not have. |
+| `POST /api/v2/notes/<id>/resolve` | Body `{}`. `200 {"note"}`. `403` without write access. |
 | `POST /api/v2/runs/<run>/accept` | Body `{}`. `201 {"accept"}`. `403` unless admin, `409` unless the run is done with weakenings that wait. |
 | `GET /api/v2/viewer/<owner>/<repo>` | `{"login", "role": "admin" \| "write" \| "read"}`, or `{"login": null}` signed out. |
 
-Both writes take only a browser session: a request with an `Authorization` header is `403`
+Every write takes only a browser session: a request with an `Authorization` header is `403`
 (a CI token or any bearer never gives a verdict), one whose `Origin` is not the app origin is
 `403`, one whose body is not `application/json` is `415`, and one without a session is `401`.
 A run the person may not see is `404`. Write and admin access come from GitHub's collaborator
@@ -154,14 +163,16 @@ permission, cached 5 minutes per login and repository.
 | no CI run of the head yet | `queued` | Waiting for CI to prove `<head>` |
 | a CI run is running | `in_progress` | CI is proving `<head>` |
 | the proof failed | completed, `failure` | The proof of `<head>` failed |
+| a picture needs change | completed, `failure` | "1 picture needs change at `<head>`" |
 | every run ended without done | completed, `cancelled` | The CI run of `<head>` ended without its proof |
 | a picture or a weakening waits | completed, `action_required` | what waits, for example "2 pictures wait for a look" |
 | everything looks right and is accepted | completed, `success` | Everything looks right |
 
 Waiting is `action_required`, not `neutral`: it completes the check run, so a required check
 blocks the merge, and GitHub shows it as asking for something; `neutral` would let a required
-check pass. Its details link is the work's page. The summary lists the pictures that wait, the
-ones that look right and by whom, and the weakenings with their accept. Make `Fearlezz review`
+check pass. Its details link is the work's page. The summary lists the pictures that need
+change, the ones that wait, the ones that look right and by whom, the open notes with their
+words, and the weakenings with their accept. Make `Fearlezz review`
 a required check in the branch's protection to hold merges to review. A check run that is
 completed and goes back to running is created anew; otherwise it is edited, and an unchanged
 one is not sent again.
@@ -185,8 +196,31 @@ webhook secret before anything in it is read (`401` when the signature does not 
 **Deploying review.** In the GitHub App's settings, add the permissions and events above, set
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared
 in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
-deploy applies the D1 migrations (`0006_review.sql`). Existing installations must approve the
-new permissions before the host can write their check runs.
+deploy applies the D1 migrations (`0006_review.sql`, `0007_notes.sql`). Existing installations
+must approve the new permissions before the host can write their check runs. For
+`fearlezz setup login`, also tick **Enable Device Flow** in the app's settings.
+
+### The CLI
+
+The agent reads what people said through Fearlezz, never through the page. `fearlezz setup
+login` runs GitHub's device flow through the host (which holds the app's client id) and ends in
+a host token (`fzh_…`) that the CLI keeps in the user's config folder, readable by the user
+alone. The token speaks for the person who entered the code, lasts as long as their GitHub
+token, and is kept on the host only as its HMAC with `SIGNING_KEY` (`cli_tokens`). It reads and
+never writes: every write above refuses an `Authorization` header.
+
+| Call | Does |
+| --- | --- |
+| `POST /api/v2/login/device` | `{"device_code", "user_code", "verification_uri", "expires_in", "interval"}`. `502` when GitHub refuses (the app's device flow is off). |
+| `POST /api/v2/login/token` | Body `{"device_code"}`. `{"pending": true, "interval"}` until the person entered the code, then `{"token", "login"}`; `400` when the flow ended without them. |
+| `DELETE /api/v2/login` | Ends the bearer's token. `204`. |
+| `GET /api/v2/work/<owner>/<repo>/<branch>` | With the token: the work, its page URL, the review of its head and its open notes with the paths of their pictures (`notes::Feedback`). `401` without a token that holds, `404` for a work or repository the person may not read. |
+| `GET /api/v2/runs/<run>/files/<path>` | With the token: one picture or film of a run, as a download (`Content-Disposition: attachment`, a sandboxing CSP, `nosniff`); only picture and film types. |
+
+`fearlezz` shows per picture its verdict or "not looked at yet" and its open notes when the
+CLI is signed in and the branch is on GitHub, waiting at most two seconds; `fearlezz --notes`
+prints each open note and saves its pictures with the region drawn (ffmpeg, in the CLI) into
+the user cache folder; the stop hook holds the agent once while notes are open.
 
 ### Two origins
 

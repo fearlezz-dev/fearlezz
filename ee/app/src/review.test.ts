@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { picturesOf } from "./pictures";
 import type { Picture, Review, Run, Snapshot } from "./proof";
-import { carried, verdictOf, waitsFor } from "./review";
+import { carried, standing, verdictOf, waitsFor } from "./review";
 
 const picture: Picture = {
   name: "card.png",
@@ -65,5 +65,25 @@ describe("waitsFor", () => {
       "2 pictures wait for your look, and a weakened proof waits for your accept at aaa1111",
     );
     expect(waitsFor({ ...review, weakened: [] }, { login: null })).toBe("2 pictures wait for a look at aaa1111");
+  });
+});
+
+describe("needs change", () => {
+  test("the headline says which pictures need change", () => {
+    const review: Review = {
+      head: "aaa1111bbb",
+      state: "needs_change",
+      pictures: [
+        {
+          check: "screens",
+          name: "a.png",
+          key: "1",
+          verdict: { check: "screens", picture: "a.png", key: "1", kind: "needs_change", by: "w", at: 1, run: "r1", head: "aaa1111bbb" },
+        },
+        { check: "screens", name: "b.png", key: "2" },
+      ],
+      weakened: [],
+    };
+    expect(standing(review)).toBe("1 picture needs change at aaa1111");
   });
 });

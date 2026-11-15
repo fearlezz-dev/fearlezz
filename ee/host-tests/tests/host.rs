@@ -12,6 +12,8 @@ mod browser;
 mod github;
 #[path = "host/media.rs"]
 mod media;
+#[path = "host/notes.rs"]
+mod notes;
 #[path = "host/worker.rs"]
 mod worker;
 
@@ -327,6 +329,42 @@ fn main() {
         (
             "the_page_says_what_each_person_can_do",
             the_page_says_what_each_person_can_do,
+        ),
+        (
+            "a_note_needs_a_session_write_access_and_a_picture_of_the_run",
+            notes::a_note_needs_a_session_write_access_and_a_picture_of_the_run,
+        ),
+        (
+            "needs_change_needs_an_open_note_and_fails_the_check_run",
+            notes::needs_change_needs_an_open_note_and_fails_the_check_run,
+        ),
+        (
+            "an_open_note_follows_the_work_until_a_writer_resolves_it",
+            notes::an_open_note_follows_the_work_until_a_writer_resolves_it,
+        ),
+        (
+            "a_cli_token_reads_but_never_writes",
+            notes::a_cli_token_reads_but_never_writes,
+        ),
+        (
+            "the_cli_signs_in_through_the_host_with_githubs_device_flow",
+            notes::the_cli_signs_in_through_the_host_with_githubs_device_flow,
+        ),
+        (
+            "the_cli_reads_open_notes_with_their_pictures",
+            notes::the_cli_reads_open_notes_with_their_pictures,
+        ),
+        (
+            "a_note_drawn_on_the_page_is_saved_and_shows_in_another_tab",
+            notes::a_note_drawn_on_the_page_is_saved_and_shows_in_another_tab,
+        ),
+        (
+            "a_film_note_takes_the_moment_of_the_film_clock",
+            notes::a_film_note_takes_the_moment_of_the_film_clock,
+        ),
+        (
+            "an_old_note_shows_dashed_with_its_run_on_a_later_run",
+            notes::an_old_note_shows_dashed_with_its_run_on_a_later_run,
         ),
     ];
     let mut trials: Vec<Trial> = tests
@@ -2477,6 +2515,8 @@ fn pictures() {
     reader.wait_for(r#"!!document.querySelector('[data-weakenings] [data-cannot]')"#);
     reader.wait_for(&loaded("img", "after"));
     shoot(&mut reader, "review-light-reader");
+
+    notes::pictures(&shoot);
 }
 
 // Helpers.

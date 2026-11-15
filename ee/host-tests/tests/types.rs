@@ -11,6 +11,7 @@ use fearlezz_proof::events::{
 use fearlezz_proof::findings::{Finding, Level};
 use fearlezz_proof::look::{Change as PictureChange, Item as Picture, Look};
 use fearlezz_proof::media::{Comparison, Moment, Pair, Verdict as Likeness};
+use fearlezz_proof::notes::{Note, NoteState, Region, Side as NoteSide};
 use fearlezz_proof::review::{
     Accept, Job, Picture as ReviewPicture, Review, State as ReviewState, Verdict as PictureVerdict,
     VerdictKind,
@@ -34,6 +35,10 @@ fn declarations() -> String {
         PictureVerdict::decl(&cfg),
         VerdictKind::decl(&cfg),
         Accept::decl(&cfg),
+        Note::decl(&cfg),
+        NoteSide::decl(&cfg),
+        Region::decl(&cfg),
+        NoteState::decl(&cfg),
         Weakening::decl(&cfg),
         Job::decl(&cfg),
         Work::decl(&cfg),

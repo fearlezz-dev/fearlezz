@@ -1,8 +1,9 @@
 // Review on the page: who looks at it and what they may do, the verdict on a picture's
-// content, what waits for this person, and the two things they can say (a verdict, an accept).
+// content, what waits for this person, and what they can say (a verdict, looks right or needs
+// change, and an accept). Notes are in notes.ts.
 // The host derives where review stands; the page only words it for the person looking.
 
-import type { PictureVerdict, Review, Run, Snapshot } from "./proof";
+import type { PictureVerdict, Review, Run, Snapshot, VerdictKind } from "./proof";
 import type { Shown } from "./pictures";
 
 /** Who the page is shown to: nobody signed in, or a login and what GitHub lets them do. */
@@ -51,6 +52,12 @@ export function waitsFor(review: Review, viewer: Viewer | undefined): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)} at ${head}`;
 }
 
+/** Where review stands when a person said pictures need change, in one line. */
+export function standing(review: Review): string {
+  const n = review.pictures.filter((p) => p.verdict?.kind === "needs_change").length;
+  return `${pictures(n)} ${n === 1 ? "needs" : "need"} change at ${review.head.slice(0, 7)}`;
+}
+
 /** Sends what a person says about run `run` (`verdicts` or `accept`): JSON from this page, with
  * its session. The error the host gave, if it refused. */
 async function say(run: string, what: "verdicts" | "accept", body: object): Promise<string | undefined> {
@@ -69,8 +76,8 @@ async function say(run: string, what: "verdicts" | "accept", body: object): Prom
   }
 }
 
-export const looksRight = (run: string, p: Shown) =>
-  say(run, "verdicts", { check: p.check, picture: p.picture.name, kind: "looks_right" });
+export const verdict = (run: string, p: Shown, kind: VerdictKind) =>
+  say(run, "verdicts", { check: p.check, picture: p.picture.name, kind });
 
 export const accept = (run: string) => say(run, "accept", {});
 

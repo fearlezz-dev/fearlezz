@@ -1,6 +1,7 @@
 //! The proof host: takes the runs CI streams (OIDC authenticated, files stored by content in
 //! R2, records in D1) and shows each piece of work live to the people GitHub lets read its
-//! repository, who review it there: a verdict per picture, an admin's accept of a weakening.
+//! repository, who review it there: a verdict per picture with notes of what should change, an
+//! admin's accept of a weakening. The CLI reads what waits with a token of its own.
 //! The host is the authority for review and writes it to GitHub as the app. `ee/README.md` is
 //! the protocol.
 //!
@@ -11,10 +12,12 @@
 
 mod api;
 mod cache;
+mod cli;
 mod crypto;
 mod files;
 mod github;
 mod jobs;
+mod notes;
 mod oidc;
 mod pages;
 mod review;
@@ -59,6 +62,19 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
             say::verdict(req, env, config, run).await
         }
         ("POST", ["api", "v2", "runs", run, "accept"]) => say::accept(req, env, config, run).await,
+        ("POST", ["api", "v2", "runs", run, "notes"]) => notes::make(req, env, config, run).await,
+        ("POST", ["api", "v2", "notes", note, "resolve"]) => {
+            notes::resolve(req, env, config, note).await
+        }
+        ("POST", ["api", "v2", "login", "device"]) => cli::device(config).await,
+        ("POST", ["api", "v2", "login", "token"]) => cli::token(req, env, config).await,
+        ("DELETE", ["api", "v2", "login"]) => cli::logout(&req, env, config).await,
+        ("GET", ["api", "v2", "work", owner, repo, branch @ ..]) => {
+            cli::feedback(&req, env, config, owner, repo, branch).await
+        }
+        ("GET", ["api", "v2", "runs", run, "files", path @ ..]) if !path.is_empty() => {
+            cli::file(&req, env, config, run, path).await
+        }
         ("GET", ["api", "v2", "viewer", owner, repo]) => {
             say::viewer(&req, env, config, owner, repo).await
         }

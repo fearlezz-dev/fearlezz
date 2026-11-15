@@ -7,7 +7,7 @@ import { type CheckState, type Status, connect, stateOf } from "./live";
 import { PicturesPanel } from "./PicturesPanel";
 import { picturesOf } from "./pictures";
 import type { Job, Review, Run, RunCheck, Snapshot } from "./proof";
-import { type Viewer, accept, canAccept, signIn, viewerOf, waitsFor } from "./review";
+import { type Viewer, accept, canAccept, signIn, standing, viewerOf, waitsFor } from "./review";
 
 const WORDS: Record<CheckState, string> = {
   planned: "waiting",
@@ -119,6 +119,7 @@ function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer 
     if (props.run.state === "running") return "run";
     const state = props.review?.state;
     if (state === "waits") return "look";
+    if (state === "needs_change") return "bad";
     if (state === "approved") return "ok";
     if (failed() || state === "failed" || props.run.state === "cancelled") return "bad";
     return toLook() ? "look" : "ok";
@@ -133,6 +134,7 @@ function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer 
     if (failed()) return `${failed()} ${failed() === 1 ? "check" : "checks"} failed at ${head()}`;
     const review = props.review;
     if (review?.state === "failed") return `The proof of ${head()} failed`;
+    if (review?.state === "needs_change") return standing(review);
     if (review?.state === "waits") return waitsFor(review, props.viewer);
     if (review?.state === "approved") {
       return review.pictures.length || review.weakened.length

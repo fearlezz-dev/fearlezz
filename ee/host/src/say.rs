@@ -33,11 +33,11 @@ struct Ask {
 
 /// A run, as saying something about it needs it.
 #[derive(Deserialize)]
-struct RunRow {
-    work: String,
-    repo: String,
-    repository: String,
-    head: String,
+pub struct RunRow {
+    pub work: String,
+    pub repo: String,
+    pub repository: String,
+    pub head: String,
     source: String,
     state: String,
     proof: Option<String>,
@@ -45,7 +45,12 @@ struct RunRow {
 
 /// The person a browser request speaks for, after the checks every saying passes: no token,
 /// from the app origin, JSON, and a session.
-async fn person(req: &Request, env: &Env, config: &Config, what: &str) -> Result<Session, Refusal> {
+pub async fn person(
+    req: &Request,
+    env: &Env,
+    config: &Config,
+    what: &str,
+) -> Result<Session, Refusal> {
     if req.headers().get("Authorization")?.is_some() {
         return Err(Refusal::new(
             403,
@@ -72,7 +77,7 @@ async fn person(req: &Request, env: &Env, config: &Config, what: &str) -> Result
 }
 
 /// The run `id`, when the request may see it; a run it may not see is not found.
-async fn run(
+pub async fn run(
     req: &Request,
     env: &Env,
     config: &Config,
@@ -93,14 +98,19 @@ async fn run(
     if !matches!(read::<Source>(&row.source)?, Source::Ci { .. }) {
         return Err(Refusal::new(
             409,
-            "this is a local run, which is never reviewed: verdicts and accepts are given on a CI run",
+            "this is a local run, which is never reviewed: verdicts, notes and accepts are given on a CI run",
         ));
     }
     Ok(row)
 }
 
 /// What a person may do on a repository: GitHub's word, kept for a few minutes.
-async fn role(env: &Env, config: &Config, person: &Session, repo: &str) -> Result<Role, Refusal> {
+pub async fn role(
+    env: &Env,
+    config: &Config,
+    person: &Session,
+    repo: &str,
+) -> Result<Role, Refusal> {
     let key = format!(
         "role:{}:{}",
         person.login.to_lowercase(),
@@ -125,13 +135,14 @@ async fn role(env: &Env, config: &Config, person: &Session, repo: &str) -> Resul
 }
 
 /// `POST /api/v2/runs/<run>/verdicts`: a person with write access says a picture of a CI run
-/// looks right. It holds for that picture's content, so later runs showing the same keep it.
+/// looks right, or needs change once they made a note on it of what should change. It holds
+/// for that picture's content, so later runs showing the same keep it.
 pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
     let person = person(&req, env, config, "give a verdict").await?;
     let ask: Ask = req.json().await.map_err(|_| {
         Refusal::new(
             400,
-            "send {\"check\", \"picture\", \"kind\": \"looks_right\"}",
+            "send {\"check\", \"picture\", \"kind\": \"looks_right\" | \"needs_change\"}",
         )
     })?;
     let db = env.d1("DB")?;
@@ -167,6 +178,23 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
     let held = work::held(&db, id).await?;
     let key = review::key(item, |path| held.get(path).cloned())
         .ok_or_else(|| Refusal::new(409, "its pictures are not all in yet; wait for them"))?;
+    if ask.kind == VerdictKind::NeedsChange {
+        let noted: Option<f64> = db
+            .prepare("SELECT 1 AS noted FROM notes WHERE work = ?1 AND check_id = ?2 AND picture = ?3 AND state = 'open' LIMIT 1")
+            .bind(&[
+                run.work.as_str().into(),
+                ask.check.as_str().into(),
+                ask.picture.as_str().into(),
+            ])?
+            .first(Some("noted"))
+            .await?;
+        if noted.is_none() {
+            return Err(Refusal::new(
+                409,
+                "say what should change first: make a note on the picture, then say it needs change",
+            ));
+        }
+    }
     let verdict = Verdict {
         check: ask.check,
         picture: ask.picture,
@@ -181,7 +209,7 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
         &db,
         vec![
             db.prepare(
-                "INSERT INTO verdicts (work, check_id, picture, key, kind, login, at, run, head) VALUES (?1, ?2, ?3, ?4, 'looks_right', ?5, ?6, ?7, ?8) \
+                "INSERT INTO verdicts (work, check_id, picture, key, kind, login, at, run, head) VALUES (?1, ?2, ?3, ?4, ?9, ?5, ?6, ?7, ?8) \
                  ON CONFLICT (work, check_id, picture, key) DO UPDATE SET kind = excluded.kind, login = excluded.login, at = excluded.at, run = excluded.run, head = excluded.head",
             )
             .bind(&[
@@ -193,6 +221,7 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
                 verdict.at.into(),
                 verdict.run.as_str().into(),
                 verdict.head.as_str().into(),
+                verdict.kind.word().into(),
             ])?,
             work::bump(&db, &run.work)?,
         ],

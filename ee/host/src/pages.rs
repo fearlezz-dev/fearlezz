@@ -21,24 +21,7 @@ fn not_found() -> Refusal {
 /// person GitHub shows nothing of it gets `404`.
 pub async fn open(req: &Request, env: &Env, config: &Config, repo: &str) -> Result<bool, Refusal> {
     if let Some(session) = session::read(req, env).await? {
-        let key = format!("reads:{}:{repo}", session.login.to_lowercase());
-        let reads = match cache::get(env, &key).await? {
-            Some(cached) => Some(cached == "yes"),
-            None => {
-                let reads = match github::sight(config, repo, &session.token).await? {
-                    github::Sight::Reads => Some(true),
-                    github::Sight::Nothing => Some(false),
-                    // An expired token is no session; a public repository still opens.
-                    github::Sight::BadToken => None,
-                };
-                if let Some(reads) = reads {
-                    let value = if reads { "yes" } else { "no" };
-                    cache::put(env, &key, value, SIGHT_SECONDS).await?;
-                }
-                reads
-            }
-        };
-        match reads {
+        match reads(env, config, &session.login, &session.token, repo).await? {
             Some(true) => return Ok(true),
             Some(false) => return Err(not_found()),
             None => {}
@@ -51,6 +34,32 @@ pub async fn open(req: &Request, env: &Env, config: &Config, repo: &str) -> Resu
     let public = github::public(config, repo).await?;
     cache::put(env, &key, if public { "yes" } else { "no" }, SIGHT_SECONDS).await?;
     Ok(public)
+}
+
+/// Whether `login` may read the repository `repo` (lowercased), as their GitHub `token` sees
+/// it, kept for a few minutes; None when the token no longer works.
+pub async fn reads(
+    env: &Env,
+    config: &Config,
+    login: &str,
+    token: &str,
+    repo: &str,
+) -> worker::Result<Option<bool>> {
+    let key = format!("reads:{}:{repo}", login.to_lowercase());
+    if let Some(cached) = cache::get(env, &key).await? {
+        return Ok(Some(cached == "yes"));
+    }
+    let reads = match github::sight(config, repo, token).await? {
+        github::Sight::Reads => Some(true),
+        github::Sight::Nothing => Some(false),
+        // An expired token is no session; a public repository still opens.
+        github::Sight::BadToken => None,
+    };
+    if let Some(reads) = reads {
+        let value = if reads { "yes" } else { "no" };
+        cache::put(env, &key, value, SIGHT_SECONDS).await?;
+    }
+    Ok(reads)
 }
 
 /// A work's page: the app, which draws the work from its live connection. Someone who may not

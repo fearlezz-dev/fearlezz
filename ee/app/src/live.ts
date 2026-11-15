@@ -38,6 +38,11 @@ export function applyWork(state: Snapshot, seq: number, change: WorkChange): Sna
       const same = (o: typeof v) => o.check === v.check && o.picture === v.picture && o.key === v.key;
       return { ...next, verdicts: [...(state.verdicts ?? []).filter((o) => !same(o)), v] };
     }
+    case "note": {
+      const n = change.note;
+      const others = (state.notes ?? []).filter((o) => o.id !== n.id);
+      return { ...next, notes: n.state === "open" ? [...others, n] : others };
+    }
     case "review":
       return { ...next, review: change.review ?? null };
     case "waiting":

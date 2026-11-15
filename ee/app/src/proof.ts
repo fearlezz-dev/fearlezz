@@ -47,7 +47,11 @@ verdicts?: Array<PictureVerdict>,
 /**
  * Its CI jobs that wait for a runner.
  */
-waiting?: Array<Job>, };
+waiting?: Array<Job>, 
+/**
+ * Its open notes, oldest first, on whichever run they were made.
+ */
+notes?: Array<Note>, };
 
 export type Change = { "kind": "opened", 
 /**
@@ -99,7 +103,11 @@ verdict: PictureVerdict, } | { "kind": "review",
 /**
  * The review, none while the work has no head.
  */
-review?: Review | null, } | { "kind": "waiting", 
+review?: Review | null, } | { "kind": "note", 
+/**
+ * The note as it is now.
+ */
+note: Note, } | { "kind": "waiting", 
 /**
  * Every one.
  */
@@ -125,9 +133,13 @@ weakened: Array<Weakening>,
 /**
  * The accept of those weakenings, once an admin gave it.
  */
-accept?: Accept | null, };
+accept?: Accept | null, 
+/**
+ * The work's open notes, oldest first: they follow the work, not the head.
+ */
+notes?: Array<Note>, };
 
-export type ReviewState = "ci" | "running" | "failed" | "cancelled" | "waits" | "approved";
+export type ReviewState = "ci" | "running" | "failed" | "cancelled" | "needs_change" | "waits" | "approved";
 
 export type ReviewPicture = { 
 /**
@@ -181,7 +193,7 @@ run: string,
  */
 head: string, };
 
-export type VerdictKind = "looks_right";
+export type VerdictKind = "looks_right" | "needs_change";
 
 export type Accept = { 
 /**
@@ -196,6 +208,82 @@ by: string,
  * When, in seconds since the epoch.
  */
 at: number, };
+
+export type Note = { 
+/**
+ * Its id on the host.
+ */
+id: string, 
+/**
+ * The check that took the picture.
+ */
+check: string, 
+/**
+ * The picture's name in its look.
+ */
+picture: string, 
+/**
+ * The CI run it was made on, whose pictures it describes.
+ */
+run: string, 
+/**
+ * The commit that run proved.
+ */
+head: string, 
+/**
+ * Which picture of the pair it marks.
+ */
+side: NoteSide, 
+/**
+ * Where on the picture.
+ */
+region: Region, 
+/**
+ * For a film, the moment it marks, in seconds from its start.
+ */
+time?: number | null, 
+/**
+ * What should change there.
+ */
+words: string, 
+/**
+ * The GitHub login of who made it.
+ */
+by: string, 
+/**
+ * When, in seconds since the epoch.
+ */
+at: number, 
+/**
+ * Whether it still asks for a change.
+ */
+state: NoteState, 
+/**
+ * Who resolved it, once someone did.
+ */
+resolved_by?: string | null, };
+
+export type NoteSide = "before" | "after" | "both";
+
+export type Region = { 
+/**
+ * Its left edge.
+ */
+x: number, 
+/**
+ * Its top edge.
+ */
+y: number, 
+/**
+ * Its width.
+ */
+w: number, 
+/**
+ * Its height.
+ */
+h: number, };
+
+export type NoteState = "open" | "resolved";
 
 export type Weakening = { 
 /**

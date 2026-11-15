@@ -339,6 +339,78 @@ figure.layers { margin: 0; }
 }
 @keyframes tick-in { from { transform: scale(0.4); opacity: 0; } to { transform: none; opacity: 1; } }
 
+/* Notes: what a person marks should change, in the colour of what is wrong. Each region has a
+   number that matches its line in the list; an old note, from an earlier run, is dashed. */
+.notes-layer { position: absolute; inset: 0; z-index: 3; touch-action: auto; }
+.notes-layer.can { cursor: crosshair; touch-action: none; user-select: none; -webkit-user-select: none; }
+.region {
+  position: absolute; border: 2.5px solid var(--bad); border-radius: 4px; pointer-events: none;
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mat) 70%, transparent);
+}
+.region.old { border-style: dashed; background: transparent; }
+.region.draft { border-style: solid; background: color-mix(in srgb, var(--bad) 16%, transparent); }
+.region i {
+  position: absolute; top: -11px; left: -11px; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--bad); color: var(--on-accent); font: 700 12px/22px "Atkinson Hyperlegible", system-ui, sans-serif;
+  text-align: center; font-style: normal; box-shadow: 0 0 0 2px var(--mat);
+}
+.region.old i { background: var(--mat); color: var(--bad); box-shadow: inset 0 0 0 2px var(--bad); }
+@media (prefers-reduced-motion: no-preference) {
+  .region:not(.draft) { animation: mark-in 0.35s var(--ease) both; }
+}
+.note-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 2px; }
+.note-list li {
+  display: grid; grid-template-columns: 24px 1fr auto; gap: 12px; align-items: start;
+  padding: 10px 0; border-top: 1px solid var(--line);
+}
+.note-list li:first-child { border-top: 0; padding-top: 2px; }
+.note-list .n {
+  width: 24px; height: 24px; border-radius: 50%; background: var(--bad); color: var(--on-accent);
+  font-weight: 700; font-size: 0.78rem; line-height: 24px; text-align: center;
+}
+.note-list li.old .n { background: none; color: var(--bad); box-shadow: inset 0 0 0 2px var(--bad); }
+.note-list .words { margin: 0; overflow-wrap: anywhere; white-space: pre-line; }
+.note-list .who { margin: 2px 0 0; font-size: 0.85rem; color: var(--quiet); }
+.plain {
+  border: 0; background: none; border-radius: 8px; padding: 5px 10px; font-weight: 700; font-size: 0.9rem;
+  color: var(--ink); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px;
+}
+.plain:hover { background: var(--sunk); text-decoration-color: currentColor; }
+.note-start { margin: 0 0 12px; justify-content: space-between; }
+.note-start .hint { margin: 0; }
+.compose { margin: 0 0 14px; display: grid; gap: 10px; }
+.words-field { display: grid; gap: 6px; }
+.words-field .label { font-weight: 700; font-size: 0.9rem; color: var(--bad); }
+.compose textarea {
+  font: inherit; color: inherit; background: var(--surface); border: 2px solid var(--line); border-radius: 10px;
+  padding: 8px 12px; resize: vertical; min-height: 64px; width: 100%;
+}
+.compose textarea:focus-visible { outline: none; border-color: var(--focus); }
+.check { display: inline-flex; align-items: center; gap: 8px; font-size: 0.92rem; cursor: pointer; }
+.check input { width: 18px; height: 18px; accent-color: var(--bad); margin: 0; }
+.verdicts { padding-top: 2px; }
+.btn.bad { color: var(--bad); }
+.btn.bad:hover:not(:disabled) { background: var(--bad); color: var(--on-accent); }
+.btn[aria-pressed="true"].ok { background: var(--ok); color: var(--on-accent); }
+.btn[aria-pressed="true"].bad { background: var(--bad); color: var(--on-accent); }
+.btn:not(.ok):not(.bad) { color: var(--ink); }
+.said.bad b:first-child { color: var(--bad); }
+.verdict .said { margin: 0 0 12px; }
+/* A cross: needs change. */
+.needs {
+  flex: none; display: inline-block; width: 18px; height: 18px; border-radius: 50%; background: var(--bad);
+  position: relative;
+}
+.needs::before, .needs::after {
+  content: ""; position: absolute; left: 8px; top: 4px; width: 2px; height: 10px; background: var(--on-accent);
+  transform: rotate(45deg);
+}
+.needs::after { transform: rotate(-45deg); }
+.chip-pic .needs { width: 14px; height: 14px; }
+.chip-pic .needs::before, .chip-pic .needs::after { left: 6px; top: 3px; height: 8px; }
+.mini.noted { color: var(--on-accent); background: var(--bad); font-weight: 700; }
+
 /* A CI job that waits for a runner, and runs that ended otherwise. */
 .run.waiting .run-head { cursor: default; }
 .run.waiting .run-head:hover { background: none; }

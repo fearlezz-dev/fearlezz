@@ -148,9 +148,11 @@ impl Browser {
         self.send("Storage.setCookies", json!({"cookies": [cookie]}), false);
     }
 
-    /// Sends commands to `page`, one `open` gave.
+    /// Sends commands to `page`, one `open` gave, brought to the front, where a person's
+    /// keyboard reaches it.
     pub fn on(&mut self, page: &str) {
         self.page = Some(page.to_owned());
+        self.send("Page.bringToFront", json!({}), true);
     }
 
     /// The value of a script run in the page, awaited when it is a promise.
@@ -174,6 +176,37 @@ impl Browser {
             }
             self.send("Input.dispatchKeyEvent", params, true);
         }
+    }
+
+    /// Drags the mouse from one point of the page to another, as a person draws with it: a
+    /// press, moves on the way, and a release, which the page gets as pointer events.
+    pub fn drag(&mut self, from: (f64, f64), to: (f64, f64)) {
+        let mouse = |kind: &str, (x, y): (f64, f64), buttons: u32| json!({"type": kind, "x": x, "y": y, "button": "left", "buttons": buttons, "clickCount": 1});
+        self.send(
+            "Input.dispatchMouseEvent",
+            mouse("mouseMoved", from, 0),
+            true,
+        );
+        self.send(
+            "Input.dispatchMouseEvent",
+            mouse("mousePressed", from, 1),
+            true,
+        );
+        for step in 1..=5 {
+            let t = f64::from(step) / 5.0;
+            let at = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+            self.send("Input.dispatchMouseEvent", mouse("mouseMoved", at, 1), true);
+        }
+        self.send(
+            "Input.dispatchMouseEvent",
+            mouse("mouseReleased", to, 0),
+            true,
+        );
+    }
+
+    /// Types `text` into whatever has focus, as a keyboard would.
+    pub fn type_text(&mut self, text: &str) {
+        self.send("Input.insertText", json!({"text": text}), true);
     }
 
     /// Shows the page as a screen `width` wide and `height` high, a phone's when `mobile`, in

@@ -162,7 +162,7 @@ fn byte_range(header: &str, size: u64) -> Option<Result<(u64, u64), ()>> {
 
 /// The type a file's name pins, for the pictures and films a page shows; anything else, which
 /// a browser could run or guess at, is never served.
-fn content_type(path: &str) -> Option<&'static str> {
+pub fn content_type(path: &str) -> Option<&'static str> {
     let extension = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     match extension.as_deref()? {
         "png" => Some("image/png"),

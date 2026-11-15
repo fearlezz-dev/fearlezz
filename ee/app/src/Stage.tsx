@@ -1,8 +1,11 @@
 // One picture on the light table: its before and after, the five ways to compare them, and for
-// a film both films on one clock with lanes of where they differ.
+// a film both films on one clock with lanes of where they differ. Side by side, the notes on the
+// picture show as numbered regions, and a person who may make notes drags on either picture to
+// draw one.
 
-import { type JSX, For, Match, Show, Switch, createMemo, createSignal, onCleanup, splitProps } from "solid-js";
+import { type JSX, For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, splitProps } from "solid-js";
 import { fileUrl } from "./grant";
+import { type Draft, type Shown as Noted, meant, onSide, regionBetween } from "./notes";
 import { type Box, type Shown, WORDS, isFilm, lanes, marksAt, plainSummary, stillMarks, title } from "./pictures";
 import type { Comparison } from "./proof";
 
@@ -17,6 +20,89 @@ export const MODES = [
 export type Mode = (typeof MODES)[number][0];
 
 type Side = "before" | "after";
+
+/** What the stage needs to show notes and let a person draw one. */
+export type Noting = {
+  /** The open notes on the picture, numbered. */
+  notes: Noted[];
+  /** The region being drawn, or drawn and waiting for words. */
+  draft: Draft | undefined;
+  /** Whether the person looking may make notes. */
+  can: boolean;
+  /** A region was drawn (`done` once the pointer lifted), or the draft dropped. */
+  onDraft: (draft: Draft | undefined, done: boolean) => void;
+};
+
+/** The notes on one side of a picture, and the layer a person draws a new one on. */
+function NoteLayer(props: { side: Side; noting: Noting }) {
+  let layer: HTMLDivElement | undefined;
+  let start: [number, number] | undefined;
+  const at = (e: PointerEvent): [number, number] => {
+    const r = layer!.getBoundingClientRect();
+    return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+  };
+  const pct = (v: number) => `${v * 100}%`;
+  const regions = () => props.noting.notes.filter((n) => onSide(n.note, props.side));
+  const draft = () => {
+    const d = props.noting.draft;
+    return d && (d.side === props.side || d.both) ? d : undefined;
+  };
+  return (
+    <div
+      ref={layer}
+      class={`notes-layer ${props.noting.can ? "can" : ""}`}
+      data-draw={props.side}
+      onPointerDown={(e) => {
+        if (!props.noting.can || e.button !== 0) return;
+        e.preventDefault();
+        layer!.setPointerCapture(e.pointerId);
+        start = at(e);
+      }}
+      onPointerMove={(e) => {
+        if (!start) return;
+        props.noting.onDraft({ side: props.side, region: regionBetween(start, at(e)) }, false);
+      }}
+      onPointerUp={(e) => {
+        if (!start) return;
+        const region = regionBetween(start, at(e));
+        start = undefined;
+        props.noting.onDraft(meant(region) ? { side: props.side, region } : undefined, meant(region));
+      }}
+      onPointerCancel={() => {
+        start = undefined;
+        props.noting.onDraft(undefined, false);
+      }}
+    >
+      <For each={regions()}>
+        {(n) => (
+          <div
+            class={`region ${n.old ? "old" : ""}`}
+            data-region
+            data-note={n.note.id}
+            data-n={n.n}
+            data-old={String(n.old)}
+            data-says={n.note.words}
+            style={{ left: pct(n.note.region.x), top: pct(n.note.region.y), width: pct(n.note.region.w), height: pct(n.note.region.h) }}
+          >
+            <i>{n.n}</i>
+          </div>
+        )}
+      </For>
+      <Show when={draft()}>
+        {(d) => (
+          <div
+            class="region draft"
+            data-region
+            data-draft
+            style={{ left: pct(d().region.x), top: pct(d().region.y), width: pct(d().region.w), height: pct(d().region.h) }}
+          >
+            <i>{props.noting.notes.length + 1}</i>
+          </div>
+        )}
+      </Show>
+    </div>
+  );
+}
 
 /** The films' one clock: where both are, whether they play, and the videos it moves. */
 type Clock = {
@@ -164,6 +250,7 @@ function Compare(props: {
   clock: Clock | undefined;
   beforeLabel: string;
   afterLabel: string;
+  noting: Noting;
 }) {
   const media = (side: Side) => (
     <Media
@@ -183,6 +270,7 @@ function Compare(props: {
             <Frame size={props.size}>
               {media("before")}
               {marks()}
+              <NoteLayer side="before" noting={props.noting} />
             </Frame>
           </figure>
           <figure>
@@ -190,6 +278,7 @@ function Compare(props: {
             <Frame size={props.size}>
               {media("after")}
               {marks()}
+              <NoteLayer side="after" noting={props.noting} />
             </Frame>
           </figure>
         </div>
@@ -425,6 +514,9 @@ export function Stage(props: {
   of: number;
   onStep: (by: number) => void;
   checks: number;
+  noting: Noting;
+  /** Where a film's clock is, as it moves: the moment a note on the film marks. */
+  onTime: (t: number | undefined) => void;
 }) {
   const picture = () => props.shown.picture;
   const url = (path: string | null) => (path && props.files ? fileUrl(props.files, path) : "");
@@ -494,6 +586,7 @@ export function Stage(props: {
               {(path) => (
                 <Frame size={size()}>
                   <Media src={url(path())} side={picture().after ? "after" : "before"} clock={undefined} label={picture().after ? afterLabel() : beforeLabel()} />
+                  <NoteLayer side={picture().after ? "after" : "before"} noting={props.noting} />
                 </Frame>
               )}
             </Show>
@@ -523,12 +616,15 @@ export function Stage(props: {
               clock={undefined}
               beforeLabel={beforeLabel()}
               afterLabel={afterLabel()}
+              noting={props.noting}
             />
           }
         >
           {(c) => {
             const clock = createClock(Math.max(c.total_before, c.total_after, 0.01));
             const sameSize = c.size_before[0] === c.size_after[0] && c.size_before[1] === c.size_after[1];
+            createEffect(() => props.onTime(clock.t()));
+            onCleanup(() => props.onTime(undefined));
             return (
               <>
                 <Compare
@@ -540,6 +636,7 @@ export function Stage(props: {
                   clock={clock}
                   beforeLabel={beforeLabel()}
                   afterLabel={afterLabel()}
+                  noting={props.noting}
                 />
                 <Timeline film={c} clock={clock} />
               </>
