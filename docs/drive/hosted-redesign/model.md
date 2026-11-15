@@ -64,7 +64,7 @@ Sketch of what the agent sees:
 $ fearlezz
 ...
 waits on the host  fix/card-button, PR #24
-  card / dark     needs change   2 notes by gabber235
+  card / dark     needs change   2 notes by reviewer
   card / light    looks right
   checkout film   not looked at yet
 next: fearlezz --notes   saves the noted pictures with each region drawn
