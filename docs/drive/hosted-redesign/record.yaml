@@ -154,10 +154,13 @@ slices:
       - ee/app/src/notes.test.ts, ee/app/src/review.test.ts (numbering, old notes, regions, sides, needs change as the page words it)
     status: done
   - id: local-runs
-    tests: []
-    status: todo
+    tests:
+      - crates/fearlezz/tests/local.rs (a_signed_in_run_opens_a_local_run_before_its_checks_and_streams_them, without_a_sign_in_a_run_sends_nothing, a_repository_without_the_app_sends_no_run, a_host_that_fails_never_fails_the_run_and_is_given_up_at_once, a_host_that_hangs_costs_the_run_one_short_wait)
+      - ee/host-tests/tests/host/local.rs (a_cli_token_opens_a_local_run_only_with_write_access, a_local_run_takes_notes_but_never_a_verdict_or_an_accept, a_local_run_never_touches_the_check_run_or_the_comment, a_note_on_a_local_run_shows_on_a_later_ci_run_of_the_work, a_silent_local_run_is_cancelled_after_an_hour, the_host_renews_an_expired_github_token, a_cli_token_unused_for_30_days_is_refused, the_page_marks_a_local_run_unproven_and_offers_only_notes, and the local shots of the ignored pictures)
+      - ee/app/src/review.test.ts (who ran a local run)
+    status: done
   - id: finish
     tests: []
     status: todo
 
-next: Build local runs on refactor/hosted-proof-redesign.
+next: Build the finish slice on refactor/hosted-proof-redesign.

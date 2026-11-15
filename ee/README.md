@@ -36,12 +36,23 @@ acts for its own repository. A run for a pull request needs a token whose `head_
 run's branch (and whose `ref` is `refs/pull/<n>/merge`); a run for a push needs `ref` =
 `refs/heads/<branch>`. Only a token for the ref that opened a run writes it.
 
+A developer's machine speaks the same protocol for a **local run**, with the CLI's host token
+(`fzh_…`, see The CLI) instead: `fearlezz run` streams every run once the developer signed in
+with `fearlezz setup login` and the host says the app is installed; without a sign in nothing
+leaves the machine. The token opens and writes only its person's local runs (source `local`,
+with their login, no pull request, no job), of repositories GitHub gives them write access to
+(cached 5 minutes like every role), and uploads their blobs. `installed` then names the
+repository: `GET /api/v2/installed?repository=<owner/name>`. A local run is the agent's word: it
+never moves the work's head or review, the check run or the comment, and takes no verdict or
+accept (notes, yes). The CLI waits at most 2 seconds to connect and 5 without a byte moving, and
+after one failure sends nothing more for that run.
+
 The bodies are the serde types of `crates/fearlezz-proof/src/events.rs`.
 
 | Call | Does |
 | --- | --- |
 | `GET /api/v2/installed` | `200 {"installed": true}`, or `200 {"installed": false, "install": "<url>"}`. |
-| `POST /api/v2/runs` | Body `Open` (only a CI source; an OIDC token never opens a local run, `400`): `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?}, "checks": ["<id>", ...]}`, the checks it plans in order. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
+| `POST /api/v2/runs` | Body `Open` (an OIDC token opens only a CI source, a CLI token only a local one with no `pull`, `400` otherwise): `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?}, "checks": ["<id>", ...]}`, the checks it plans in order. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
 | `POST /api/v2/runs/<run>/checks` | Body `{"started": {"check": "<id>"}}` when a check starts, or `{"finished": {"check": <proof.json check entry>, "files": {"<path>": {"sha256", "size"}}, "look"?: <look>}}` when it ends, with the files it made (its output at `outputs/<id>.log`, its pictures at `looks/<folder>/...`) and, for a check that takes pictures, its look: the pictures compared with the base commit, as in `proof.json` (`400` when the look is of another check). A check the run did not plan joins at the end. `200 {"missing": ["<sha256>", ...]}`: the blobs the host does not hold yet. |
 | `PUT /api/v2/blobs/<sha256>` | The bytes of one missing file, with `Content-Length`. Stored by content, per repository, so a file that did not change is sent once. `204`. |
 | `POST /api/v2/runs/<run>/done` | Body `{"proof": <proof.json>, "files": {...}}`: every file of the bundle. `409 {"error", "missing": [...]}` while a blob is missing (send them and say done again); otherwise the run is done, the proof's entries and looks are the checks' final word, and it answers `200 {"url": "<page url>"}`. |
@@ -135,7 +146,8 @@ and GitHub gets it as the check run and the comment.
   A verdict has a kind: `looks_right`, or `needs_change`, which a person can give only while
   the picture has an open note. A `needs_change` verdict holds for the content it was given on:
   once the picture changes, it waits for a look again.
-- **Notes** say what should change: a region of a picture's before, its after or both (in
+- **Notes** say what should change, on a CI run or a local one (so feedback reaches the agent
+  before a pull request exists): a region of a picture's before, its after or both (in
   fractions of the picture), at a moment of a film, with the person's words. A note is kept by
   check and picture, so an open note shows on every later run of the work until a person with
   write access resolves it. Resolving changes no verdict: whether the picture now looks right
@@ -145,7 +157,7 @@ and GitHub gets it as the check run and the comment.
 | Call | Does |
 | --- | --- |
 | `POST /api/v2/runs/<run>/verdicts` | Body `{"check", "picture", "kind": "looks_right" \| "needs_change"}`. `201 {"verdict"}`. `403` without write access; `409` for a local run, a picture with nothing to look at, one whose files are not all in yet, or `needs_change` without an open note on the picture. |
-| `POST /api/v2/runs/<run>/notes` | Body `{"check", "picture", "side": "before" \| "after" \| "both", "region": {"x", "y", "w", "h"}, "time"?, "words"}`. `201 {"note"}`. `400` for empty words (at most 2000 characters), a region outside the picture, a side the picture lacks, or a time on a still; `403` without write access; `409` for a picture the run does not have. |
+| `POST /api/v2/runs/<run>/notes` | On a CI or a local run. Body `{"check", "picture", "side": "before" \| "after" \| "both", "region": {"x", "y", "w", "h"}, "time"?, "words"}`. `201 {"note"}`. `400` for empty words (at most 2000 characters), a region outside the picture, a side the picture lacks, or a time on a still; `403` without write access; `409` for a picture the run does not have. |
 | `POST /api/v2/notes/<id>/resolve` | Body `{}`. `200 {"note"}`. `403` without write access. |
 | `POST /api/v2/runs/<run>/accept` | Body `{}`. `201 {"accept"}`. `403` unless admin, `409` unless the run is done with weakenings that wait. |
 | `GET /api/v2/viewer/<owner>/<repo>` | `{"login", "role": "admin" \| "write" \| "read"}`, or `{"login": null}` signed out. |
@@ -187,6 +199,8 @@ webhook secret before anything in it is read (`401` when the signature does not 
 - `pull_request` opened, synchronize or reopened: the pull request's head becomes its work's
   head, so the check run says it waits for CI. A pull request from a fork is passed over: its
   CI gets no OIDC token, so no hosted run comes.
+- A local run has no job: one that said nothing for an hour (no start, end or done) is
+  closed as cancelled by the host's schedule (a cron trigger every 10 minutes).
 - `workflow_job`: a job runs Fearlezz when its name is the `GITHUB_JOB` of an earlier run of
   the repository, alone or with a matrix's values after it (`proof (macos-latest)`). A queued
   or waiting one shows on its branch's page as waiting for a runner; a completed one cancels
@@ -196,7 +210,8 @@ webhook secret before anything in it is read (`401` when the signature does not 
 **Deploying review.** In the GitHub App's settings, add the permissions and events above, set
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared
 in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
-deploy applies the D1 migrations (`0006_review.sql`, `0007_notes.sql`). Existing installations
+deploy applies the D1 migrations (`0006_review.sql`, `0007_notes.sql`, `0008_local_runs.sql`,
+which ends the sign ins made before it) and the schedule (`[triggers]` in `wrangler.toml`). Existing installations
 must approve the new permissions before the host can write their check runs. For
 `fearlezz setup login`, also tick **Enable Device Flow** in the app's settings.
 
@@ -205,9 +220,12 @@ must approve the new permissions before the host can write their check runs. For
 The agent reads what people said through Fearlezz, never through the page. `fearlezz setup
 login` runs GitHub's device flow through the host (which holds the app's client id) and ends in
 a host token (`fzh_…`) that the CLI keeps in the user's config folder, readable by the user
-alone. The token speaks for the person who entered the code, lasts as long as their GitHub
-token, and is kept on the host only as its HMAC with `SIGNING_KEY` (`cli_tokens`). It reads and
-never writes: every write above refuses an `Authorization` header.
+alone. The token speaks for the person who entered the code and is the host's own: it lives 30
+days from its last use, until `fearlezz setup logout` ends it, and is kept on the host only as
+its HMAC with `SIGNING_KEY` (`cli_tokens`). The host keeps the person's GitHub user token and its
+refresh token beside it and renews the user token when it is about to expire, so the person
+signs in once. It reads, and streams its person's local runs (Protocol above); a verdict, note,
+resolve or accept refuses any `Authorization` header.
 
 | Call | Does |
 | --- | --- |
