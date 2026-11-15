@@ -116,6 +116,8 @@ pub(crate) struct Work {
     pub needs_proof: bool,
     pub now: String,
     pub next: String,
+    /// Notes people left on the proof host that are still open.
+    pub open_notes: usize,
 }
 
 pub(crate) enum Answer {
@@ -158,6 +160,17 @@ pub(crate) fn judge(config: &Config, work: &Work, event: Event, input: &Input) -
             )),
             None => Answer::Nothing,
         },
+        Event::Stop if !input.again && work.open_notes > 0 => {
+            let (notes, them) = match work.open_notes {
+                1 => ("1 open note".to_owned(), "it"),
+                n => (format!("{n} open notes"), "them"),
+            };
+            Answer::KeepGoing(format!(
+                "Fearlezz: the proof host holds {notes} a person left on this work. Read {them} \
+                 with fearlezz --notes and settle {them}, or ask the developer: fearlezz say ask \
+                 \"<question>\""
+            ))
+        }
         Event::Stop if input.again || work.waiting || work.ready || !work.needs_proof => {
             Answer::Nothing
         }

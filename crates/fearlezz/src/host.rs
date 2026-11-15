@@ -315,11 +315,28 @@ pub(crate) fn curl(
     headers: &[&str],
     body: Body<'_>,
 ) -> Result<(u16, Value)> {
+    curl_within(method, url, token, headers, body, None)
+}
+
+/// `curl`, given up after `seconds` when set: for a call a person waits on. An empty `token`
+/// sends none.
+pub(crate) fn curl_within(
+    method: &str,
+    url: &str,
+    token: &str,
+    headers: &[&str],
+    body: Body<'_>,
+    seconds: Option<u32>,
+) -> Result<(u16, Value)> {
     let mut cmd = Command::new("curl");
     // A host that cannot be reached must not hold the checks up: they run between the calls.
     cmd.args(["-sS", "-K", "-", "-X", method, "-w", "\n%{http_code}"])
         .args(["--connect-timeout", "10"])
         .args(["-H", "User-Agent: fearlezz", "-H", "Expect:"]);
+    if let Some(seconds) = seconds {
+        cmd.args(["--connect-timeout", &seconds.to_string()])
+            .args(["--max-time", &(seconds * 2).to_string()]);
+    }
     for header in headers {
         cmd.args(["-H", header]);
     }
@@ -350,7 +367,9 @@ pub(crate) fn curl(
         .stderr(Stdio::piped())
         .spawn()
         .context("talking to the proof host needs curl")?;
-    if let Some(mut stdin) = child.stdin.take() {
+    if let Some(mut stdin) = child.stdin.take()
+        && !token.is_empty()
+    {
         writeln!(stdin, "header = \"Authorization: Bearer {token}\"")?;
     }
     let out = child.wait_with_output()?;
@@ -373,4 +392,46 @@ pub(crate) fn curl(
         serde_json::from_str(answer).unwrap_or_else(|_| Value::String(answer.to_string()))
     };
     Ok((code, answer))
+}
+
+/// Downloads `url` into the file `to` with a bearer token, the token on curl's stdin as `curl`
+/// sends it; the status code.
+pub(crate) fn download(url: &str, token: &str, to: &Path) -> Result<u16> {
+    let mut child = Command::new("curl")
+        .args(["-sS", "-K", "-", "-o"])
+        .arg(to)
+        .args([
+            "-w",
+            "%{http_code}",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "120",
+        ])
+        .args(["-H", "User-Agent: fearlezz"])
+        .arg(url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("talking to the proof host needs curl")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        writeln!(stdin, "header = \"Authorization: Bearer {token}\"")?;
+    }
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!(
+            "GET {url} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .with_context(|| format!("GET {url} gave no status code"))
+}
+
+/// One segment of a URL path, escaped.
+pub(crate) fn segment(text: &str) -> String {
+    encode(text)
 }

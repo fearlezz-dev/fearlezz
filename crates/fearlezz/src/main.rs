@@ -4,6 +4,7 @@ mod action;
 mod config;
 mod counts;
 mod env;
+mod feedback;
 mod findings;
 mod floor;
 mod git;
@@ -76,6 +77,10 @@ struct See {
     /// id, app name or part of the window title. Prints the PNG's path.
     #[arg(long, value_name = "WINDOW")]
     still: Option<String>,
+    /// The open notes people left on the proof host for this branch, each with its pictures
+    /// saved and its region drawn. Needs `fearlezz setup login`.
+    #[arg(long)]
+    notes: bool,
 }
 
 #[derive(Subcommand)]
@@ -144,6 +149,11 @@ enum Setup {
         #[arg(value_enum)]
         event: hooks::Event,
     },
+    /// Sign in to the proof host through GitHub, to read the notes people leave there. The
+    /// token stays in your config folder and can only read.
+    Login,
+    /// Sign out of the proof host and forget its token.
+    Logout,
     /// Stop the services this checkout runs, or with --all every checkout's.
     Down {
         #[arg(long)]
@@ -180,6 +190,7 @@ fn main() -> ExitCode {
         Some(cmd) => dispatch(cmd),
         None => match &cli.see.still {
             Some(window) => still(window),
+            None if cli.see.notes => notes(),
             None => see(&cli.see),
         },
     };
@@ -372,6 +383,12 @@ fn hook_answer(event: hooks::Event, input: &hooks::Input) -> Result<hooks::Answe
         needs_proof: wt.changed.iter().any(|p| ctx.config.needs_proof(p)),
         now: view.now.clone(),
         next: view.next.clone(),
+        // Asked of the host only where it can hold the agent: a stop it has not held yet.
+        open_notes: if matches!(event, hooks::Event::Stop) && !input.again {
+            feedback::open_notes(&ctx.git, &host_url(Some(&ctx.config)))
+        } else {
+            0
+        },
     };
     Ok(hooks::judge(&ctx.config, &work, event, input))
 }
@@ -412,9 +429,34 @@ fn setup_init() -> Result<()> {
     Ok(())
 }
 
+/// The proof host this repository sends its proof to, or the default one outside a repository.
+fn host_url(config: Option<&Config>) -> String {
+    config
+        .and_then(|c| c.host.as_deref())
+        .unwrap_or(host::DEFAULT)
+        .trim_end_matches('/')
+        .to_owned()
+}
+
+/// The proof host of the repository here, if any.
+fn here_host_url() -> String {
+    let config = Git::discover(&std::env::current_dir().unwrap_or_default())
+        .ok()
+        .and_then(|git| Config::load(&git.root, &git.common).ok());
+    host_url(config.as_ref())
+}
+
+/// `fearlezz --notes`: the open notes on the proof host, with their pictures.
+fn notes() -> Result<bool> {
+    let ctx = ctx()?;
+    feedback::notes(&ctx.git, &host_url(Some(&ctx.config)))
+}
+
 fn setup(what: Setup) -> Result<bool> {
     match what {
         Setup::Init => setup_init()?,
+        Setup::Login => feedback::login(&here_host_url())?,
+        Setup::Logout => feedback::logout(&here_host_url())?,
         Setup::Update { piece } => {
             let git = Git::discover(&std::env::current_dir()?)?;
             let updated = presets::update(&git.root, &git.common, piece.as_deref())?;
@@ -571,7 +613,7 @@ fn see(see: &See) -> Result<bool> {
     } else if let Some(name) = &see.journal {
         let found = ctx.all_views()?.into_iter().find(|(v, _)| v.name == *name);
         let (v, _) = found.with_context(|| format!("no journal \"{name}\""))?;
-        print_status(&ctx, &v);
+        print_status(&ctx, &v, (Vec::new(), 0));
     } else if see.plan {
         plan(&ctx)?;
     } else if let Some(when) = &see.since {
@@ -596,7 +638,8 @@ fn see(see: &See) -> Result<bool> {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         let j = ctx.journal()?;
-        print_status(&ctx, &ctx.view(&j)?);
+        let host = feedback::status(&ctx.git, &host_url(Some(&ctx.config)));
+        print_status(&ctx, &ctx.view(&j)?, host);
     }
     Ok(true)
 }
@@ -1360,7 +1403,9 @@ fn look_at(
     }
 }
 
-fn print_status(ctx: &Ctx, v: &View) {
+/// Where a work stands, then what waits on the proof host (`host`: its lines and how many notes
+/// are open), then what to do next.
+fn print_status(ctx: &Ctx, v: &View, host: (Vec<String>, usize)) {
     println!(
         "{}  stage {}  [{}]",
         v.name,
@@ -1423,7 +1468,23 @@ fn print_status(ctx: &Ctx, v: &View) {
     if let Some((at, text)) = &v.last_note {
         println!("note ({}): {text}", ago(ctx.now, *at));
     }
-    println!("next: {}", v.next);
+    let (lines, open) = host;
+    for line in lines {
+        println!("{line}");
+    }
+    if open > 0 {
+        let notes = if open == 1 {
+            "the open note".to_owned()
+        } else {
+            format!("the {open} open notes")
+        };
+        println!(
+            "next: fearlezz --notes shows {notes} a person left, with their pictures; then {}",
+            v.next
+        );
+    } else {
+        println!("next: {}", v.next);
+    }
 }
 
 fn since(ctx: &Ctx, when: &str) -> Result<()> {

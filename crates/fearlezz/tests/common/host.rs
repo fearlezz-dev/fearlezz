@@ -18,6 +18,8 @@ pub(crate) const OIDC: &str = "oidc-token";
 pub(crate) const REQUEST_TOKEN: &str = "request-token";
 /// The id of every run the fake opens.
 pub(crate) const RUN: &str = "r1";
+/// The CLI token the fake's device flow hands out.
+pub(crate) const HOST_TOKEN: &str = "fzh_test_token";
 
 /// One request the fake took.
 #[derive(Clone, Debug)]
@@ -40,6 +42,12 @@ pub(crate) struct State {
     pub broken: BTreeSet<String>,
     /// Forgets every blob when done is first asked, as a host that lost them would.
     pub forget_before_done: bool,
+    /// How often the CLI asked whether its device sign in went through.
+    pub polls: usize,
+    /// What `GET /api/v2/work/...` answers a CLI token: what waits for the work; none is 404.
+    pub feedback: Option<Value>,
+    /// The pictures a CLI token reads at `/api/v2/runs/<run>/files/<path>`, by that path.
+    pub pictures: BTreeMap<String, Vec<u8>>,
 }
 
 pub(crate) struct FakeHost {
@@ -153,7 +161,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>, base: &str) {
     if reader.read_exact(&mut body).is_err() {
         return;
     }
-    let (status, answer) = {
+    let picture = {
         let mut s = state.lock().unwrap();
         s.requests.push(Request {
             method: method.clone(),
@@ -161,10 +169,27 @@ fn serve(stream: TcpStream, state: &Mutex<State>, base: &str) {
             auth: auth.clone(),
             body: body.clone(),
         });
+        let cli = auth.as_deref() == Some(&format!("Bearer {HOST_TOKEN}"));
+        s.pictures.get(&path).filter(|_| cli).cloned()
+    };
+    let mut stream = stream;
+    if let Some(bytes) = picture {
+        let sent = write!(
+            stream,
+            "HTTP/1.1 200 X\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            bytes.len()
+        )
+        .and_then(|()| stream.write_all(&bytes));
+        if let Err(e) = sent {
+            eprintln!("fake host: {e}");
+        }
+        return;
+    }
+    let (status, answer) = {
+        let mut s = state.lock().unwrap();
         answer(&mut s, &method, &path, auth.as_deref(), &body, base)
     };
     let text = answer.to_string();
-    let mut stream = stream;
     // The client may have gone; the request is recorded either way.
     if let Err(e) = write!(
         stream,
@@ -196,6 +221,38 @@ fn answer(
     if route.starts_with("/mark/") {
         // A check's command calling home, to show when it ran among the calls.
         return (200, json!({}));
+    }
+    // The CLI's sign in, and what its token reads.
+    let cli = auth == Some(&format!("Bearer {HOST_TOKEN}"));
+    match (method, route) {
+        ("POST", "/api/v2/login/device") => {
+            return (
+                200,
+                json!({"device_code": "dc", "user_code": "FZ12-3456",
+                    "verification_uri": "https://github.com/login/device", "expires_in": 900, "interval": 0}),
+            );
+        }
+        ("POST", "/api/v2/login/token") => {
+            s.polls += 1;
+            return if s.polls == 1 {
+                (200, json!({"pending": true, "interval": 0}))
+            } else {
+                (200, json!({"token": HOST_TOKEN, "login": "writer"}))
+            };
+        }
+        ("DELETE", "/api/v2/login") => return (204, json!({})),
+        ("GET", work) if work.starts_with("/api/v2/work/") => {
+            return match (&s.feedback, cli) {
+                (_, false) => (
+                    401,
+                    json!({"error": "sign in to the proof host: fearlezz setup login"}),
+                ),
+                (Some(feedback), true) => (200, feedback.clone()),
+                (None, true) => (404, json!({"error": "not found"})),
+            };
+        }
+        ("GET", file) if file.contains("/files/") => return (404, json!({"error": "not found"})),
+        _ => {}
     }
     if auth != Some(&format!("Bearer {OIDC}")) {
         return (401, json!({"error": "no token"}));

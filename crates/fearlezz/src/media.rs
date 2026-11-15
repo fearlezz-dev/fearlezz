@@ -1119,3 +1119,50 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
 fn round3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
 }
+
+/// Writes one frame of a still or film as a PNG at `out`: a film's frame at `time` seconds (its
+/// last frame when it is shorter), and with `region` (fractions of the picture: x, y, w, h)
+/// outlined in red when given. The pictures of a person's note, for the agent to look at.
+pub(crate) fn noted(
+    source: &Path,
+    time: Option<f64>,
+    region: Option<[f64; 4]>,
+    out: &Path,
+) -> Result<()> {
+    let filter = match region {
+        Some([x, y, w, h]) => {
+            format!("drawbox=x=iw*{x}:y=ih*{y}:w=iw*{w}:h=ih*{h}:color=red:t=max(3\\,ih/100)")
+        }
+        None => "null".to_owned(),
+    };
+    let run = |seek: &[String]| -> Result<bool> {
+        let done = Command::new("ffmpeg")
+            .args(["-v", "error", "-nostdin", "-y"])
+            .args(seek)
+            .arg("-i")
+            .arg(source)
+            .args(["-frames:v", "1", "-update", "1", "-vf", &filter])
+            .arg(out)
+            .output()
+            .context("running ffmpeg; Fearlezz needs it to draw a note on its picture")?;
+        if !done.status.success() {
+            bail!(
+                "ffmpeg could not draw on {}: {}",
+                source.display(),
+                String::from_utf8_lossy(&done.stderr).trim()
+            );
+        }
+        Ok(std::fs::metadata(out).is_ok_and(|m| m.len() > 0))
+    };
+    let seek = time
+        .map(|t| vec!["-ss".to_owned(), format!("{t:.3}")])
+        .unwrap_or_default();
+    if run(&seek)? {
+        return Ok(());
+    }
+    // A moment past the film's end: its last frame.
+    if run(&["-sseof".to_owned(), "-0.1".to_owned()])? {
+        return Ok(());
+    }
+    bail!("ffmpeg took no frame from {}", source.display())
+}
