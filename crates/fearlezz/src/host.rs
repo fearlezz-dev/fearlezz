@@ -65,8 +65,9 @@ impl Host {
     /// A fresh OIDC token: one lives minutes, and a run with films can take longer.
     fn token(&self) -> Result<String> {
         let (status, answer) = curl("GET", &self.ask, &self.request, &[], Body::None)?;
-        Ok(answer["value"]
-            .as_str()
+        Ok(answer
+            .get("value")
+            .and_then(Value::as_str)
             .filter(|_| status == 200)
             .with_context(|| format!("GitHub gave no OIDC token ({status})"))?
             .to_string())
@@ -78,8 +79,12 @@ impl Host {
         if status != 200 {
             bail!("the host answered {status} when asked whether the app is installed");
         }
-        if answer["installed"] != true {
-            let install = answer["install"].as_str().unwrap_or(DEFAULT).to_string();
+        if answer.get("installed") != Some(&Value::Bool(true)) {
+            let install = answer
+                .get("install")
+                .and_then(Value::as_str)
+                .unwrap_or(DEFAULT)
+                .to_string();
             return Ok(Opening::NotInstalled(install));
         }
         let (status, answer) = self.call("POST", "/api/v2/runs", json(open)?)?;
@@ -212,7 +217,7 @@ impl Local {
         let mut hash = Sha256::new();
         let mut file =
             fs::File::open(&on_disk).with_context(|| format!("reading {}", on_disk.display()))?;
-        let mut buf = [0; 64 * 1024];
+        let mut buf = vec![0; 64 * 1024];
         let mut size = 0;
         loop {
             let n = file.read(&mut buf)?;
