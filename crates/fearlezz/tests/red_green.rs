@@ -714,3 +714,27 @@ fn locally_a_fix_whose_red_before_green_cannot_run_is_held() {
         status.stdout
     );
 }
+
+#[test]
+fn the_base_commit_is_prepared_with_its_own_env() {
+    let repo = repo();
+    // The change adds a prepare step that needs a folder only the change has.
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{CHECKS}\n[env]\nprepare = \"test -d newdir\"\n\n[settings.skill]\nagents = \
+             []\n\n[settings.hooks]\nagents = []\n"
+        ),
+    );
+    repo.write("newdir/keep", "\n");
+    change(&repo, SHOWS_IT, "fix: the value is two");
+    // Adding a prepare step weakens the floor, which holds the run; only red before green
+    // is the subject here.
+    let out = repo.fz(FINAL);
+    assert!(
+        out.stdout
+            .contains("red before green tests: tests/new.sh fails on the base commit"),
+        "{}",
+        out.stdout
+    );
+}

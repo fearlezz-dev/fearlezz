@@ -687,3 +687,27 @@ fn narrowing_the_stills_glob_weakens_the_proof() {
         out.stdout
     );
 }
+
+#[test]
+fn the_base_commit_is_prepared_with_its_own_env_for_the_look() {
+    let repo = stills_repo();
+    // The change adds a prepare step that needs a folder only the change has.
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{}\n[env]\nprepare = \"test -d newdir\"\n\n[settings.skill]\nagents = \
+             []\n\n[settings.hooks]\nagents = []\n",
+            stills_config("stills = \"stills/**/*.png\"")
+        ),
+    );
+    repo.write("newdir/keep", "\n");
+    repo.write("src/color.txt", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("look screens: 1 changed"),
+        "{}",
+        out.stdout
+    );
+}

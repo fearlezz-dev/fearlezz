@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use sha2::{Digest as _, Sha256};
 
-use crate::config::{Check, Config};
+use crate::config::{Check, Config, Env};
 use crate::env::EnvCtx;
 use crate::git::Git;
 use crate::media::{self, Verdict};
@@ -60,6 +60,9 @@ pub(crate) enum LookOutcome {
 pub(crate) struct Base {
     pub commit: String,
     pub wt: Worktree,
+    /// The base commit's own `[env]`: its code ran in that environment, so its checkout is
+    /// prepared and its services run by it, never by the change's.
+    env: Env,
     prepared: bool,
     /// Keeps other commands from removing the worktree while this one uses it.
     _hold: fs::File,
@@ -70,10 +73,16 @@ impl Base {
     /// run on a base commit goes through here, so where base checkouts live is decided once.
     pub(crate) fn at(git: &Git, config: &Config, commit: String, name: &str) -> Result<Base> {
         let (base, hold) = git.base_worktree(&commit, name)?;
+        let env = if base.root.join(crate::config::FILE).exists() {
+            Config::load(&base.root, &git.common)?.env
+        } else {
+            Env::default()
+        };
         let wt = Worktree::read(base, config)?;
         Ok(Base {
             commit,
             wt,
+            env,
             prepared: false,
             _hold: hold,
         })
@@ -279,7 +288,7 @@ fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf 
 }
 
 /// Runs a check on the base checkout: prepared like any checkout, with its own services
-/// for this one run.
+/// for this one run, both by the base commit's own `[env]`.
 pub(crate) fn run_on_base(
     store: &Store,
     check: &Check,
@@ -290,16 +299,16 @@ pub(crate) fn run_on_base(
 ) -> Result<RunResult> {
     let root = base.wt.git.root.clone();
     if !base.prepared {
-        if let Some(line) = env.state.prepare(env.cfg, &env.main, &root)? {
+        if let Some(line) = env.state.prepare(&base.env, &env.main, &root)? {
             println!("base {line}");
         }
         base.prepared = true;
     }
     let mut vars = std::collections::BTreeMap::new();
     if check.needs_services() {
-        let (services, line) = env
-            .state
-            .ensure_up(env.cfg, &root, BASE_JOURNAL, false, env.now)?;
+        let (services, line) =
+            env.state
+                .ensure_up(&base.env, &root, BASE_JOURNAL, false, env.now)?;
         if let Some(line) = line {
             println!("base {line}");
         }
@@ -315,7 +324,7 @@ pub(crate) fn run_on_base(
     };
     let result = run::execute(store, check, inputs, &at);
     let stopped = if check.needs_services() {
-        env.state.stop(env.cfg, &root)
+        env.state.stop(&base.env, &root)
     } else {
         Ok(())
     };
