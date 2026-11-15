@@ -336,6 +336,10 @@ fn main() {
             a_matrix_leg_ending_leaves_its_siblings_running,
         ),
         (
+            "every_leg_of_the_newest_attempt_is_reviewed",
+            every_leg_of_the_newest_attempt_is_reviewed,
+        ),
+        (
             "writes_at_once_reach_a_live_page_in_the_order_of_their_numbers",
             writes_at_once_reach_a_live_page_in_the_order_of_their_numbers,
         ),
@@ -2603,6 +2607,50 @@ fn a_matrix_leg_ending_leaves_its_siblings_running() {
     assert_eq!(state(&linux_run.id), "done");
 }
 
+fn every_leg_of_the_newest_attempt_is_reviewed() {
+    let linux = Job::pull("owner/review", 117, "review/legs")
+        .at(&commit("a117"), 1117)
+        .on("runner-linux");
+    let macos = linux.on("runner-macos");
+    let (linux_look, linux_files) = one_still(b"legs before", b"legs after on linux");
+    let (macos_look, macos_files) = one_still(b"legs before", b"legs after on macos");
+    let linux_run = proven(&linux, &linux_look, &linux_files, &json!({}));
+    let macos_run = proven(&macos, &macos_look, &macos_files, &json!({}));
+    let keys = |review: &Value| -> Vec<String> {
+        let pictures = review["pictures"].as_array().unwrap();
+        pictures
+            .iter()
+            .map(|p| p["key"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let review = review_of(117);
+    assert_eq!(keys(&review).len(), 2, "each leg's picture: {review:#}");
+    assert_eq!(review["state"], "waits", "{review:#}");
+
+    // A verdict on one leg's picture leaves the other's waiting.
+    let writer = sign_in("writer-code", "/");
+    let picture = looks_right("card/light.png");
+    let answer = say(&linux_run, "verdicts", Some(&writer), &[], &picture);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let review = review_of(117);
+    assert_eq!(review["state"], "waits", "{review:#}");
+    let answer = say(&macos_run, "verdicts", Some(&writer), &[], &picture);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    assert_eq!(review_of(117)["state"], "approved");
+    let first = keys(&review_of(117));
+
+    // The workflow run again: its legs replace those of the attempt before.
+    let (linux_look, linux_files) = one_still(b"legs before", b"legs after on linux, again");
+    let (macos_look, macos_files) = one_still(b"legs before", b"legs after on macos, again");
+    proven(&linux.again(), &linux_look, &linux_files, &json!({}));
+    proven(&macos.again(), &macos_look, &macos_files, &json!({}));
+    let review = review_of(117);
+    let again = keys(&review);
+    assert_eq!(again.len(), 2, "each leg's picture: {review:#}");
+    assert!(again.iter().all(|k| !first.contains(k)), "{review:#}");
+    assert_eq!(review["state"], "waits", "{review:#}");
+}
+
 fn writes_at_once_reach_a_live_page_in_the_order_of_their_numbers() {
     let job = Job::pull("owner/review", 117, "review/order").at(&commit("a117"), 1117);
     let checks: Vec<String> = (0..16).map(|i| format!("check-{i}")).collect();
@@ -2978,6 +3026,8 @@ struct Job {
     head: String,
     /// The workflow run it is a job of, as its run page names it.
     workflow_run: u64,
+    /// The workflow run's attempt, 1 until it is run again.
+    attempt: u32,
     /// The runner that took it, which tells the legs of a matrix apart.
     runner: String,
     /// A developer's CLI token instead of CI's: the run is a local one.
@@ -3001,6 +3051,7 @@ impl Job {
             pull: Some(number),
             head: HEAD.to_owned(),
             workflow_run: 1,
+            attempt: 1,
             runner: RUNNER.to_owned(),
             cli: None,
         }
@@ -3013,6 +3064,7 @@ impl Job {
             pull: None,
             head: HEAD.to_owned(),
             workflow_run: 1,
+            attempt: 1,
             runner: RUNNER.to_owned(),
             cli: None,
         }
@@ -3032,6 +3084,14 @@ impl Job {
         Job {
             head: head.to_owned(),
             workflow_run,
+            ..self.clone()
+        }
+    }
+
+    /// The same job in the next attempt of its workflow run, as running it again starts.
+    fn again(&self) -> Job {
+        Job {
+            attempt: self.attempt + 1,
             ..self.clone()
         }
     }
@@ -3089,7 +3149,7 @@ impl Job {
                 "job": "proof",
                 "run_url": format!("https://github.com/{}/actions/runs/{}", self.repository, self.workflow_run),
                 "run_id": self.workflow_run,
-                "run_attempt": 1,
+                "run_attempt": self.attempt,
                 "runner_name": self.runner,
             },
             "checks": checks,

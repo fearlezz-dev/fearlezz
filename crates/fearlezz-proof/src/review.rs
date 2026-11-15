@@ -221,8 +221,9 @@ pub fn key(item: &Item, sha: impl Fn(&str) -> Option<String>) -> Option<String> 
 }
 
 /// The review of `head` from the work's runs (newest first, each with its proof once done),
-/// its verdicts, its notes and the head's accept. Only CI runs of the head count, the newest of
-/// each job.
+/// its verdicts, its notes and the head's accept. Only CI runs of the head count: of each job,
+/// every run of its newest workflow run attempt, so every leg of a matrix counts, and running
+/// the workflow again replaces the legs of the attempt before.
 pub fn review(
     head: &str,
     runs: &[(Run, Option<Proof>)],
@@ -230,18 +231,27 @@ pub fn review(
     notes: &[Note],
     accept: Option<&Accept>,
 ) -> Review {
-    let mut jobs: Vec<&str> = Vec::new();
-    let mut counted: Vec<&(Run, Option<Proof>)> = Vec::new();
-    for entry in runs {
-        let Source::Ci { job, .. } = &entry.0.source else {
-            continue;
-        };
-        if entry.0.head != head || jobs.contains(&job.as_str()) {
-            continue;
+    fn ci<'a>(run: &'a Run, head: &str) -> Option<(&'a str, u64, u32)> {
+        match &run.source {
+            Source::Ci {
+                job,
+                run_id,
+                run_attempt,
+                ..
+            } if run.head == head => Some((job.as_str(), *run_id, *run_attempt)),
+            _ => None,
         }
-        jobs.push(job);
-        counted.push(entry);
     }
+    let mut attempts: Vec<(&str, u64, u32)> = Vec::new();
+    for attempt in runs.iter().filter_map(|(run, _)| ci(run, head)) {
+        if !attempts.iter().any(|(job, ..)| *job == attempt.0) {
+            attempts.push(attempt);
+        }
+    }
+    let counted: Vec<&(Run, Option<Proof>)> = runs
+        .iter()
+        .filter(|(run, _)| ci(run, head).is_some_and(|attempt| attempts.contains(&attempt)))
+        .collect();
     let live: Vec<&(Run, Option<Proof>)> = counted
         .iter()
         .copied()

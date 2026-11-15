@@ -154,8 +154,9 @@ viewer lost access (Who sees a page).
 ### Review
 
 The host is where review happens. Its one model is `crates/fearlezz-proof/src/review.rs`: the
-review of a work's head is derived from the head's CI runs (the newest of each job), the work's
-verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
+review of a work's head is derived from the head's CI runs (of each job, every run of its newest
+workflow run attempt: every leg of a matrix counts, and running the workflow again replaces the
+legs of the attempt before), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
 Every write that can move it (a run opening, a look arriving, done, a cancel, a verdict, an
 accept, a push to the pull request) derives it again in the work's room, after the writes
 before it; when it changed, open pages get it live and GitHub gets it as the check run and the
