@@ -16,7 +16,7 @@ use fearlezz_proof::events::{
 };
 use fearlezz_proof::look::Look;
 use fearlezz_proof::review as reviews;
-use fearlezz_proof::waits::Role;
+use fearlezz_proof::review::Role;
 use fearlezz_proof::{Check, SCHEMA};
 use serde::Deserialize;
 use serde_json::{Value, json};

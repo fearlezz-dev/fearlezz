@@ -64,6 +64,13 @@ pub struct Item {
     pub flaky: bool,
 }
 
+impl Item {
+    /// Whether a person looks at it: anything but the same, and never a flaky one.
+    pub fn to_look_at(&self) -> bool {
+        self.change != Change::Same && !self.flaky
+    }
+}
+
 /// One check's pictures compared with its run on the base commit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -120,11 +127,8 @@ impl Look {
         parts.join(", ")
     }
 
-    /// Items a person should look at: anything but same, and never a flaky one.
+    /// How many of its pictures a person looks at (see [`Item::to_look_at`]).
     pub fn to_look_at(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|i| i.change != Change::Same && !i.flaky)
-            .count()
+        self.items.iter().filter(|i| i.to_look_at()).count()
     }
 }

@@ -10,6 +10,7 @@ use fearlezz_proof::events::{
     WorkChange,
 };
 use fearlezz_proof::findings::{Finding, Level};
+use fearlezz_proof::floor::Weakening;
 use fearlezz_proof::look::{Change as PictureChange, Item as Picture, Look};
 use fearlezz_proof::media::{Comparison, Moment, Pair, Verdict as Likeness};
 use fearlezz_proof::notes::{Note, NoteState, Region, Side as NoteSide};
@@ -17,7 +18,6 @@ use fearlezz_proof::review::{
     Accept, Job, Picture as ReviewPicture, Review, State as ReviewState, Verdict as PictureVerdict,
     VerdictKind,
 };
-use fearlezz_proof::waits::Weakening;
 use fearlezz_proof::{Case, Check, Item, Pull, Ran, Red, Verdict};
 use ts_rs::{Config, TS};
 

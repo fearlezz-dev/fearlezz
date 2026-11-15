@@ -12,7 +12,7 @@
 //! token: the list shows who made each link and when, and the link itself is shown once, when
 //! it is made. Revoking deletes the row and ends the pages open on it.
 
-use fearlezz_proof::waits::Role;
+use fearlezz_proof::review::Role;
 use serde::Deserialize;
 use serde_json::json;
 use worker::{D1Database, Env, Headers, Request, Response};

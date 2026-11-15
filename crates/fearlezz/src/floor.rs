@@ -4,7 +4,7 @@
 //! the checks, never which files they read.
 
 use anyhow::Result;
-use fearlezz_proof::waits::{PAST, Part, Weakening};
+use fearlezz_proof::floor::{PAST, Part, Weakening};
 
 use crate::config::{self, Builtin, Config, Env, Ports, Widening};
 use crate::findings::Scope;

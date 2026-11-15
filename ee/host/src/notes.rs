@@ -8,7 +8,7 @@
 use fearlezz_proof::events::{Live, WorkChange};
 use fearlezz_proof::look::Look;
 use fearlezz_proof::notes::{Ask, Note, NoteState, Side, WORDS_MAX};
-use fearlezz_proof::waits::Role;
+use fearlezz_proof::review::Role;
 use serde_json::json;
 use worker::{D1Database, Env, Request, Response};
 

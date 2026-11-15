@@ -7,7 +7,7 @@ import { type CheckState, Feed, type Status, connect, stateOf } from "./live";
 import { PicturesPanel } from "./PicturesPanel";
 import { picturesOf } from "./pictures";
 import type { Job, Review, Run, RunCheck, Snapshot } from "./proof";
-import { type Viewer, accept, canAccept, canSay, localBy, maySignIn, signIn, standing, viewerOf, waitsFor } from "./review";
+import { type Viewer, accept, canAccept, canSay, localBy, maySignIn, signIn, standing, toLookAt, viewerOf, waitsFor } from "./review";
 import { ShareControl } from "./ShareControl";
 import { ago } from "./ago";
 
@@ -140,7 +140,7 @@ function title(state: Snapshot): string {
 function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer | undefined }) {
   const ended = () => props.run.checks.filter((c) => c.entry).length;
   const failed = () => props.run.checks.filter((c) => c.entry?.outcome === "failed").length;
-  const toLook = () => picturesOf(props.run).filter((p) => p.picture.change !== "same" && !p.picture.flaky).length;
+  const toLook = () => picturesOf(props.run).filter(toLookAt).length;
   const head = () => props.run.head.slice(0, 7);
   const kind = () => {
     if (localBy(props.run)) return "local";

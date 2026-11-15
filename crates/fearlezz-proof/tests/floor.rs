@@ -1,15 +1,6 @@
-//! Who may settle what waits, and how a weakening reads and writes.
+//! How a weakening reads and writes.
 
-use fearlezz_proof::waits::{Kind, Part, Role, Weakening};
-
-#[test]
-fn approving_needs_write_access_and_accepting_admin_rights() {
-    assert!(Kind::Approve.allows(Role::of("write")));
-    assert!(Kind::Approve.allows(Role::of("admin")));
-    assert!(!Kind::Approve.allows(Role::of("read")));
-    assert!(!Kind::Accept.allows(Role::of("write")));
-    assert!(Kind::Accept.allows(Role::of("admin")));
-}
+use fearlezz_proof::floor::{Part, Weakening};
 
 #[test]
 fn a_weakening_reads_and_writes_its_part_by_name() {

@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use worker::{Fetch, Headers, Method, Request, RequestInit, Result};
 
-use fearlezz_proof::waits::Role;
+use fearlezz_proof::review::Role;
 
 use crate::{Config, crypto, now};
 

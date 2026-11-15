@@ -4,11 +4,11 @@
 use std::collections::BTreeMap;
 
 use fearlezz_proof::events::{Run, RunCheck, RunState, Source};
+use fearlezz_proof::floor::{Part, Weakening};
 use fearlezz_proof::look::{Change, Item, Look};
 use fearlezz_proof::media::{Comparison, Pair, Verdict as Likeness};
 use fearlezz_proof::notes::{Note, NoteState, Region, Side};
 use fearlezz_proof::review::{self, Accept, State, Verdict, VerdictKind};
-use fearlezz_proof::waits::{Part, Weakening};
 use fearlezz_proof::{Check, Proof, Ran};
 
 fn still(name: &str, change: Change) -> Item {

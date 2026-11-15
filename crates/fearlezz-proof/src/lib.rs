@@ -1,27 +1,27 @@
-//! The proof bundle of Fearlezz: what one proving run showed, as `proof.json` holds it, and
-//! what in it waits for a person. `fearlezz run --ci --proof` writes it and the proof host
-//! reads it, both through these types, so a page, the status comment and the host's approve
-//! and accept read one model. It builds for wasm32 with serde alone.
+//! The proof bundle of Fearlezz: what one proving run showed, as `proof.json` holds it.
+//! `fearlezz run --ci --proof` writes it and the proof host reads it, both through these types,
+//! so the CLI, the host's pages and its review read one model. It builds for wasm32 with serde
+//! alone.
 //!
 //! Each check carries its command, output, tests and findings, beside what the change weakens
-//! about the proof, red before green, and every picture. What blocks, what waits and what to
-//! read are derived, never stored.
+//! about the proof, red before green, and every picture. What blocks and what to read are
+//! derived, never stored.
 
 pub mod events;
 pub mod findings;
+pub mod floor;
 pub mod look;
 pub mod media;
 pub mod notes;
 pub mod review;
-pub mod waits;
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::findings::Finding;
+use crate::floor::Weakening;
 use crate::look::Look;
-use crate::waits::{Obligation, Obligations, Weakening};
 
 /// The version of `proof.json`; a reader refuses one it does not know.
 pub const SCHEMA: u32 = 1;
@@ -316,26 +316,6 @@ impl Proof {
             .filter_map(|c| c.red.as_ref().map(|r| r.note(&c.id)));
         not_run.chain(red).collect()
     }
-
-    /// Looks whose changed pictures wait for a person.
-    pub fn pictures_to_approve(&self) -> impl Iterator<Item = &Look> {
-        self.looks.iter().filter(|l| l.to_look_at() > 0)
-    }
-
-    /// What waits for a person on its head: the changed pictures of each check, then what the
-    /// change weakens where it waits for an admin's accept.
-    pub fn obligations(&self) -> Obligations {
-        let pictures = self
-            .pictures_to_approve()
-            .map(|l| Obligation::Pictures(l.check.clone()));
-        let weakened = self
-            .weakened
-            .iter()
-            .filter(|_| self.weakenings_wait)
-            .cloned()
-            .map(Obligation::Weakened);
-        pictures.chain(weakened).collect()
-    }
 }
 
 impl Red {
@@ -497,4 +477,9 @@ pub fn test_names(names: &[String], quote: &str) -> String {
         Some(more) if more > 0 => format!("{text} and {more} more"),
         _ => text,
     }
+}
+
+/// The first seven characters of a commit, as people read it.
+pub fn short(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }

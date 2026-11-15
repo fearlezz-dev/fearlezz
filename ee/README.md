@@ -2,8 +2,8 @@
 
 Hosted, paid parts of Fearlezz. The open core in `crates/` never depends on anything here; it
 only speaks the protocol below. The host reads `proof.json` through the core's own bundle
-model, the small crate `crates/fearlezz-proof` (serde types, what waits for a person, and who
-may settle it), so both always read one shape.
+model, the small crate `crates/fearlezz-proof` (serde types, the review of a head, and who may
+say what), so both always read one shape.
 
 ## Proof host
 

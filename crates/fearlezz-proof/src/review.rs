@@ -11,10 +11,33 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::events::{Run, RunState, Source};
-use crate::look::{Change, Item};
+use crate::floor::Weakening;
+use crate::look::Item;
 use crate::notes::Note;
-use crate::waits::{Weakening, short};
-use crate::{Proof, Ran};
+use crate::{Proof, Ran, short};
+
+/// What a person may do on a repository, as GitHub's collaborator permission says it: a
+/// verdict, a note or a share link needs write access, an accept admin rights.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Role {
+    /// Read, or nothing.
+    Less,
+    /// Write or maintain.
+    Write,
+    /// Admin.
+    Admin,
+}
+
+impl Role {
+    /// The role GitHub's `permission` field names: `admin`, `write`, or anything less.
+    pub fn of(permission: &str) -> Role {
+        match permission {
+            "admin" => Role::Admin,
+            "write" => Role::Write,
+            _ => Role::Less,
+        }
+    }
+}
 
 /// What a person says of a picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,11 +175,6 @@ pub struct Job {
     pub since: f64,
 }
 
-/// Whether a person looks at a picture: anything but the same, and never a flaky one.
-pub fn to_look_at(item: &Item) -> bool {
-    item.change != Change::Same && !item.flaky
-}
-
 /// What a picture shows, as a verdict follows it, from `sha`, the SHA-256 of a file of the run
 /// by its path. A still is its before's and after's bytes (`still:<before>:<after>`, `-` for a
 /// side it lacks). A film's bytes differ each time it is recorded, so a film is which of its
@@ -226,7 +244,7 @@ pub fn review(
     for (run, _) in &live {
         for check in &run.checks {
             let Some(look) = &check.look else { continue };
-            for item in look.items.iter().filter(|i| to_look_at(i)) {
+            for item in look.items.iter().filter(|i| i.to_look_at()) {
                 let Some(key) = check.keys.get(&item.name) else {
                     continue;
                 };

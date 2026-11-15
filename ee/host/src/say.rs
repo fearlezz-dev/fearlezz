@@ -11,8 +11,8 @@
 
 use fearlezz_proof::events::{Live, Source, WorkChange};
 use fearlezz_proof::look::Look;
+use fearlezz_proof::review::Role;
 use fearlezz_proof::review::{self, Verdict, VerdictKind};
-use fearlezz_proof::waits::Role;
 use fearlezz_proof::{Proof, events::RunState};
 use serde::Deserialize;
 use serde_json::json;
@@ -175,7 +175,7 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
     let item = look
         .as_ref()
         .and_then(|l| l.items.iter().find(|i| i.name == ask.picture))
-        .filter(|i| review::to_look_at(i))
+        .filter(|i| i.to_look_at())
         .ok_or_else(|| {
             Refusal::new(
                 409,
