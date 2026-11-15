@@ -266,7 +266,7 @@ function Compare(props: {
       <Match when={props.mode === "side"}>
         <div class="layers side">
           <figure>
-            <figcaption>{props.beforeLabel}</figcaption>
+            <figcaption title={props.beforeLabel}>Before</figcaption>
             <Frame size={props.size}>
               {media("before")}
               {marks()}
@@ -274,7 +274,7 @@ function Compare(props: {
             </Frame>
           </figure>
           <figure>
-            <figcaption>{props.afterLabel}</figcaption>
+            <figcaption title={props.afterLabel}>After</figcaption>
             <Frame size={props.size}>
               {media("after")}
               {marks()}
@@ -333,8 +333,8 @@ function Slider(props: Layered) {
   return (
     <figure class="layers one">
       <figcaption class="ends">
-        <span>{props.beforeLabel}</span>
-        <span>{props.afterLabel}</span>
+        <span title={props.beforeLabel}>Before</span>
+        <span title={props.afterLabel}>After</span>
       </figcaption>
       <Frame
         size={props.size}
@@ -413,7 +413,7 @@ function Blink(props: Layered) {
   onCleanup(() => clearInterval(timer));
   return (
     <figure class="layers one">
-      <figcaption>{before() ? props.beforeLabel : props.afterLabel}</figcaption>
+      <figcaption title={before() ? props.beforeLabel : props.afterLabel}>{before() ? "Before" : "After"}</figcaption>
       <Frame
         size={props.size}
         class={`blink ${before() ? "show-before" : ""}`}
@@ -510,9 +510,6 @@ export function Stage(props: {
   head: string;
   mode: Mode;
   onMode: (mode: Mode) => void;
-  position: number;
-  of: number;
-  onStep: (by: number) => void;
   checks: number;
   noting: Noting;
   /** Where a film's clock is, as it moves: the moment a note on the film marks. */
@@ -550,38 +547,40 @@ export function Stage(props: {
         <Show when={props.shown.parts.theme}>
           <span class="tag">{props.shown.parts.theme}</span>
         </Show>
-        <Show when={film()}>
-          <span class="tag">Film</span>
-        </Show>
         <Show when={props.checks > 1}>
           <span class="tag">{props.shown.check}</span>
         </Show>
-        <span class={`word ${picture().change}`}>{WORDS[picture().change]}</span>
-        <span class="step">
-          <button type="button" class="ghost" aria-label="Previous picture" onClick={() => props.onStep(-1)} disabled={props.position <= 1}>
-            ‹
-          </button>
-          <span class="num">
-            {props.position} of {props.of}
-          </span>
-          <button type="button" class="ghost" aria-label="Next picture" onClick={() => props.onStep(1)} disabled={props.position >= props.of}>
-            ›
-          </button>
+        <span
+          class={`word ${picture().change}`}
+          title={`${plainSummary(picture())} ${props.shown.picture.name}, taken by ${props.shown.check}, compared with the same check on ${base()}.${props.shown.look.note ? ` ${props.shown.look.note}` : ""}`}
+        >
+          {film() ? `${WORDS[picture().change]} film` : WORDS[picture().change]}
         </span>
+        <Show when={both()}>
+          <div class="modes seg" role="group" aria-label="How to compare">
+            <For each={MODES}>
+              {([key, label], k) => (
+                <button type="button" data-mode={key} aria-pressed={props.mode === key} title={`${label} (${k() + 1})`} onClick={() => props.onMode(key)}>
+                  {label}
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
       </header>
       <Show when={picture().flaky}>
-        <p class="flaky-note" data-flaky-note>
-          Flaky: this picture changes from run to run, so it is shown but never waits for you.
+        <p class="flaky-note" data-flaky-note title="This picture changes from run to run, so it is shown but never waits for you">
+          Flaky, never waits for you
         </p>
       </Show>
       <Show when={props.shown.look.no_before}>
-        {(why) => <p class="look-note">No before: {why()}. Every picture of this check counts as new.</p>}
+        {(why) => <p class="look-note" title="Every picture of this check counts as new">No before: {why()}</p>}
       </Show>
       <Show
         when={both()}
         fallback={
           <figure class="layers one">
-            <figcaption>{picture().after ? afterLabel() : beforeLabel()}</figcaption>
+            <figcaption title={picture().after ? afterLabel() : beforeLabel()}>{picture().after ? "After" : "Before"}</figcaption>
             <Show when={picture().after ?? picture().before} fallback={<p class="missing">Neither side could be read.</p>}>
               {(path) => (
                 <Frame size={size()}>
@@ -593,16 +592,6 @@ export function Stage(props: {
           </figure>
         }
       >
-        <div class="modes seg" role="group" aria-label="How to compare">
-          <For each={MODES}>
-            {([key, label], k) => (
-              <button type="button" data-mode={key} aria-pressed={props.mode === key} onClick={() => props.onMode(key)}>
-                {label}
-                <kbd>{k() + 1}</kbd>
-              </button>
-            )}
-          </For>
-        </div>
         <Show
           when={film() && comparison()}
           keyed
@@ -644,14 +633,6 @@ export function Stage(props: {
           }}
         </Show>
       </Show>
-      <details class="more">
-        <summary>Details</summary>
-        <p>{plainSummary(picture())}</p>
-        <p>
-          {props.shown.picture.name}, taken by {props.shown.check}, compared with the same check on {props.shown.look.base_commit.slice(0, 10)}.
-        </p>
-        <Show when={props.shown.look.note}>{(note) => <p>{note()}</p>}</Show>
-      </details>
     </article>
   );
 }

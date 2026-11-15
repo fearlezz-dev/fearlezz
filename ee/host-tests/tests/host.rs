@@ -1926,7 +1926,12 @@ fn looks_right(picture: &str) -> Value {
 
 /// What a CI run's change weakens, as its proof shows it.
 fn weakenings() -> Value {
-    json!([{"check": "tests", "how": "it runs another command"}])
+    json!([{
+        "check": "tests",
+        "how": "it runs another command",
+        "was": "[check.tests]\nrun = \"cargo test\"\n",
+        "now": "[check.tests]\nrun = \"cargo test --lib\"\n",
+    }])
 }
 
 /// A proof that weakens `weakenings()`, which fails it while no admin accepted it.
@@ -3176,7 +3181,7 @@ fn a_verdict_given_in_one_tab_shows_in_another() {
     browser.eval("window.stayed = true");
     // The headline says what waits for this person, once the host says who they are.
     browser.wait_for(
-        "document.querySelector('[data-standing]').textContent.includes('wait for your look')",
+        "document.querySelector('[data-standing]').textContent.includes('Waits for you')",
     );
 
     browser.on(&first);
@@ -3235,8 +3240,24 @@ fn the_page_says_what_each_person_can_do() {
     admin.open(&url);
     admin.wait_for(r#"!!document.querySelector('[data-weakenings] button[data-accept]')"#);
     assert_eq!(
-        admin.eval("document.querySelector('[data-weakenings]').textContent.includes('it runs another command')"),
+        admin.eval("document.querySelector('[data-weakenings]').textContent.includes('runs another command')"),
         json!(true)
+    );
+    // What changed shows on request: the check on the base and on the head, the words that
+    // differ marked.
+    assert_eq!(
+        admin.eval("!!document.querySelector('[data-diff]')"),
+        json!(false)
+    );
+    admin.eval("document.querySelector('button[data-show-change]').click()");
+    admin.wait_for("!!document.querySelector('[data-diff]')");
+    assert_eq!(
+        admin.eval("[...document.querySelectorAll('[data-diff] [data-line=now] mark')].some((m) => m.textContent.includes('--lib'))"),
+        json!(true)
+    );
+    assert_eq!(
+        admin.eval("[...document.querySelectorAll('[data-diff] [data-line]')].map((l) => l.dataset.line).join(' ')"),
+        json!("same was now")
     );
     admin.eval("document.querySelector('button[data-accept]').click()");
     admin.wait_for(r#"document.querySelector('[data-weakenings]').dataset.accepted === "true""#);
@@ -3304,6 +3325,16 @@ fn pictures() {
         let scheme = if dark { "dark" } else { "light" };
         shoot(&mut admin, &format!("review-{scheme}-waits"));
     }
+    // What the change weakens, opened to show the change.
+    admin.eval("document.querySelector('button[data-show-change]').click()");
+    admin.wait_for("!!document.querySelector('[data-diff]')");
+    for dark in [false, true] {
+        admin.view(1280, 900, false, dark);
+        let scheme = if dark { "dark" } else { "light" };
+        admin.eval("window.scrollTo(0, 0)");
+        shoot(&mut admin, &format!("review-{scheme}-weakening"));
+    }
+    admin.eval("document.querySelector('button[data-show-change]').click()");
     admin.eval(r#"document.querySelector('button[data-say="looks_right"]').click()"#);
     admin.wait_for(&verdict_shows("looks_right"));
     for dark in [false, true] {

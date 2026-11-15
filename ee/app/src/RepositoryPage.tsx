@@ -39,9 +39,10 @@ export function RepositoryPage(props: { repository: string }) {
   return (
     <main class="repository">
       <header class="top">
-        <div class="repo">
-          <span>Every piece of work</span>
-          <span class={`live ${status()}`}>{status() === "live" ? "live" : "reconnecting"}</span>
+        <div class="crumb">
+          <span class={`live ${status()}`} title={status() === "live" ? "Updates live" : "Reconnecting"}>
+            {status() === "live" ? "live" : "reconnecting"}
+          </span>
         </div>
         <h1>{list.state?.repository ?? props.repository}</h1>
       </header>
@@ -71,8 +72,8 @@ function Row(props: { listed: Listed; now: number }) {
   const waits = () => waitsOn(props.listed);
   return (
     <li class="work-row" data-listed={props.listed.path} data-state={standing()}>
-      <a href={props.listed.path}>
-        <span class={`dot ${standing()}`} aria-hidden="true" />
+      <a href={props.listed.path} title={`${WORDS[standing()]}, ${ago(props.now - props.listed.active)}`}>
+        <span class={`dot ${standing()}`} role="img" aria-label={WORDS[standing()]} />
         <span class="what">
           <span class="title">
             <Show when={pull()} fallback={<span class="branch">{props.listed.work.branch}</span>}>
@@ -83,22 +84,18 @@ function Row(props: { listed: Listed; now: number }) {
               )}
             </Show>
           </span>
-          <span class="meta">
-            <Show when={pull()}>
-              <span class="branch">{props.listed.work.branch}</span>,{" "}
-            </Show>
-            <span class="state">{WORDS[standing()]}</span>
-            <Show when={props.listed.latest && props.listed.latest.failed > 0 && standing() !== "failed"}>
-              , {props.listed.latest!.failed} failed so far
-            </Show>
-            , {ago(props.now - props.listed.active)}
-          </span>
+          <Show when={pull()}>
+            <span class="meta branch">{props.listed.work.branch}</span>
+          </Show>
         </span>
         <span class="waits">
           <Show when={local()}>
             <span class="tag unproven" data-unproven title="The newest run is a local run: the agent's word, never reviewed">
               local, {local()}
             </span>
+          </Show>
+          <Show when={props.listed.latest && props.listed.latest.failed > 0 && standing() !== "failed"}>
+            <span class="wait bad">{props.listed.latest!.failed} failed so far</span>
           </Show>
           <For each={waits()}>{(w) => <span class="wait">{w}</span>}</For>
         </span>
