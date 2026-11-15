@@ -12,7 +12,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::look::Look;
+use crate::review::{Job, Review, Verdict};
 use crate::{Check, Proof, Pull};
+
+/// The content keys of a look's pictures (`review::key`), by picture name.
+pub type Keys = BTreeMap<String, String>;
 
 /// The files a call names, by their path in the proof bundle.
 pub type Files = BTreeMap<String, File>;
@@ -40,6 +44,8 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_url: Option<String>,
     },
+    /// A developer's machine: unproven, and never reviewed. Nothing opens one yet.
+    Local {},
 }
 
 /// Opens a run: what CI sends before any check runs.
@@ -135,10 +141,12 @@ pub struct Work {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
-    /// Opened and not closed. A run that never says done stays here.
+    /// Opened and not closed.
     Running,
     /// Closed with its proof.
     Done,
+    /// Its job ended without closing it.
+    Cancelled,
 }
 
 /// One check of a run as the host knows it: planned, started, or ended with its entry.
@@ -156,6 +164,9 @@ pub struct RunCheck {
     /// Its pictures compared with the base commit, once compared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub look: Option<Look>,
+    /// What each picture of its look shows, by name, as a verdict follows it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys: Keys,
 }
 
 /// One run of the work, as a page shows it.
@@ -189,6 +200,15 @@ pub struct Snapshot {
     pub work: Work,
     /// Its runs, newest first.
     pub runs: Vec<Run>,
+    /// Where review of its newest head stands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<Review>,
+    /// Every verdict given on its pictures.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verdicts: Vec<Verdict>,
+    /// Its CI jobs that wait for a runner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting: Vec<Job>,
 }
 
 /// What changed in a run.
@@ -217,6 +237,9 @@ pub enum Change {
         /// Its pictures compared with the base commit, when it takes pictures.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         look: Option<Box<Look>>,
+        /// What each picture of the look shows, as a verdict follows it.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        keys: Keys,
     },
     /// The run closed, with each check's final entry (red before green and instability are
     /// known only at the end) and every look.
@@ -225,6 +248,34 @@ pub enum Change {
         checks: Vec<Check>,
         /// Every look, each of the check named by its `check`.
         looks: Vec<Look>,
+        /// What each picture of each look shows, by check.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        keys: BTreeMap<String, Keys>,
+    },
+    /// Its job ended without closing it.
+    Cancelled {},
+}
+
+/// What changed in the work as a whole.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkChange {
+    /// Someone gave a verdict on a picture; it replaces one on the same content.
+    Verdict {
+        /// The verdict.
+        verdict: Verdict,
+    },
+    /// Where review of the newest head stands now.
+    Review {
+        /// The review, none while the work has no head.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        review: Option<Review>,
+    },
+    /// The CI jobs that wait for a runner now.
+    Waiting {
+        /// Every one.
+        waiting: Vec<Job>,
     },
 }
 
@@ -243,5 +294,12 @@ pub enum Live {
         run: String,
         /// What changed.
         change: Box<Change>,
+    },
+    /// One change of the work as a whole.
+    Work {
+        /// Its place in the work's events.
+        seq: u64,
+        /// What changed.
+        change: Box<WorkChange>,
     },
 }

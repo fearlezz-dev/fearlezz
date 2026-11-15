@@ -151,9 +151,11 @@ impl Kind {
 
 /// What a change weakens about the proof the base branch requires.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Weakening {
     /// What weakened.
     #[serde(flatten)]
+    #[cfg_attr(feature = "ts", ts(flatten))]
     pub part: Part,
     /// How it weakened, such as `it runs another command`.
     pub how: String,
@@ -161,6 +163,7 @@ pub struct Weakening {
 
 /// A part of the config that can weaken.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Part {
     /// A check, by id.
