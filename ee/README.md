@@ -93,10 +93,12 @@ The page is a Solid app (`ee/app`) the worker serves from its static assets: the
 repository the host holds no work of, is `404`. It answers `no-store`, may not be framed, its `connect-src` is `'self'`, and its
 `img-src` and `media-src` name the files origin, the only place pictures load from.
 
-**Live.** D1 is the one record; the Durable Object of a work (`WorkRoom`) holds only the
-WebSockets of its open pages, which hibernate with it. Every write to a work bumps its `seq`
-in the same D1 batch, and then goes to the room as an event. The live connection's messages
-are `events::Live`:
+**Live.** D1 is the one record; the Durable Object of a work (`WorkRoom`) holds the WebSockets
+of its open pages, which hibernate with it, and runs every write to the work, one at a time
+(`blockConcurrencyWhile`): the write and the bump of the work's `seq` in one D1 batch, then the
+event to its pages, then the review derived again when the write can move it. So pages get the
+events in the order of their `seq`, each one more than the one before, and the review last
+written is derived from the newest state. The live connection's messages are `events::Live`:
 
 - first `{"kind": "snapshot", "seq", "work", "runs"}`: the work and its newest 20 runs, each with
   its checks in order (planned, `started` at a time, or with their `entry`, and their `look`
@@ -154,8 +156,9 @@ The host is where review happens. Its one model is `crates/fearlezz-proof/src/re
 review of a work's head is derived from the head's CI runs (the newest of each job), the work's
 verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
 Every write that can move it (a run opening, a look arriving, done, a cancel, a verdict, an
-accept, a push to the pull request) derives it again; when it changed, open pages get it live
-and GitHub gets it as the check run and the comment.
+accept, a push to the pull request) derives it again in the work's room, after the writes
+before it; when it changed, open pages get it live and GitHub gets it as the check run and the
+comment, so runs that open at once still make one comment and one check run.
 
 - **Verdicts are per picture**, on a CI run only, by a signed in person with write access.
   A picture to look at is changed, new, gone, timing or unreadable, and not flaky. A verdict is

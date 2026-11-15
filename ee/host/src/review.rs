@@ -12,14 +12,15 @@
 //! completes the check run (so a required check blocks the merge), and GitHub sends people to
 //! its `details_url`, the work's page, which is where they act.
 
-use fearlezz_proof::events::{Live, WorkChange};
+use fearlezz_proof::events::WorkChange;
 use fearlezz_proof::review::{self, Review, State};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use wasm_bindgen::JsValue;
 use worker::{D1Database, Env, Method};
 
-use crate::work;
+use crate::room::Pages;
+use crate::work::{self, Event, Statement};
 use crate::{Config, github};
 
 /// The check run's name on GitHub.
@@ -37,11 +38,14 @@ struct Row {
 
 /// Derives the review of work `work` again and sends it where it shows: to the work's pages when
 /// it changed, and to its pull request on GitHub. `first_run` is said by a CI run opening, which
-/// creates the pull request's comment when it has none; everything else only edits it. GitHub
-/// failing is logged and never fails the call that changed the work.
+/// creates the pull request's comment when it has none; everything else only edits it. Only the
+/// work's room calls it, while no other write to the work runs (`work::apply`), so it reads the
+/// newest state and two never write one comment or check run twice. GitHub failing is logged
+/// and never fails the write that changed the work.
 pub async fn refresh(
     env: &Env,
     config: &Config,
+    pages: &Pages,
     work: &str,
     first_run: bool,
 ) -> worker::Result<()> {
@@ -58,27 +62,21 @@ pub async fn refresh(
     let review = review::review(head, &of.runs, &of.verdicts, &of.notes, accept.as_ref());
     let text = serde_json::to_string(&review)?;
     if row.review.as_deref() != Some(text.as_str()) {
-        let seq = work::commit(
-            &db,
-            vec![
-                db.prepare("UPDATE works SET review = ?2 WHERE id = ?1")
-                    .bind(&[work.into(), text.as_str().into()])?,
-                work::bump(&db, work)?,
-            ],
-        )
-        .await?;
         let change = WorkChange::Review {
             review: Some(review.clone()),
         };
-        work::notify(
+        work::commit(
             env,
+            &db,
+            pages,
             work,
-            &Live::Work {
-                seq,
-                change: Box::new(change),
-            },
+            vec![Statement::new(
+                "UPDATE works SET review = ?2 WHERE id = ?1",
+                [work.into(), text.into()],
+            )],
+            Some(Event::work(change)),
         )
-        .await;
+        .await?;
     }
     if let Some(pull) = row.pull
         && let Err(error) = publish(&db, config, &row, pull as u64, &review, first_run).await

@@ -336,6 +336,18 @@ fn main() {
             a_matrix_leg_ending_leaves_its_siblings_running,
         ),
         (
+            "writes_at_once_reach_a_live_page_in_the_order_of_their_numbers",
+            writes_at_once_reach_a_live_page_in_the_order_of_their_numbers,
+        ),
+        (
+            "runs_opening_at_once_write_one_comment_and_one_check_run",
+            runs_opening_at_once_write_one_comment_and_one_check_run,
+        ),
+        (
+            "a_verdict_and_done_at_once_leave_the_newest_review_on_github",
+            a_verdict_and_done_at_once_leave_the_newest_review_on_github,
+        ),
+        (
             "a_queued_job_shows_as_waiting_for_a_runner",
             a_queued_job_shows_as_waiting_for_a_runner,
         ),
@@ -2585,6 +2597,131 @@ fn a_matrix_leg_ending_leaves_its_siblings_running() {
     );
     assert_eq!(state(&macos_run.id), "cancelled");
     assert_eq!(state(&linux_run.id), "done");
+}
+
+fn writes_at_once_reach_a_live_page_in_the_order_of_their_numbers() {
+    let job = Job::pull("owner/review", 117, "review/order").at(&commit("a117"), 1117);
+    let checks: Vec<String> = (0..16).map(|i| format!("check-{i}")).collect();
+    let planned: Vec<&str> = checks.iter().map(String::as_str).collect();
+    let run = job.open(&planned);
+    let mut browser = browser::Browser::start();
+    browser.open(&format!("{}/owner/review/pull/117", world().worker.url));
+    browser.wait_for(
+        "location.pathname === '/owner/review/pull/117' && document.readyState === 'complete'",
+    );
+    // A live connection of its own, keeping every message's number as it arrives.
+    browser.eval(
+        "new Promise((done) => { window.seen = []; \
+         const socket = new WebSocket(`ws://${location.host}/live/owner/review/pull/117`); \
+         socket.onmessage = (m) => window.seen.push(JSON.parse(m.data).seq); \
+         socket.onopen = () => done(true); })",
+    );
+    browser.wait_for("window.seen.length === 1");
+    // Every check ends at once, each with a look, which the host reads its pictures for
+    // before it tells pages.
+    let (look, files) = one_still(b"order before", b"order after");
+    let listed: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    std::thread::scope(|scope| {
+        for check in &planned {
+            let (job, run, listed) = (&job, &run.id, &listed);
+            let mut look = look.clone();
+            look["check"] = json!(check);
+            scope.spawn(move || {
+                let answer = job.finished_with_look(run, &entry(check, "passed"), listed, &look);
+                assert_eq!(answer.status, 200, "{}", answer.text());
+            });
+        }
+    });
+    browser.wait_for("window.seen.length === 17");
+    let seen: Vec<u64> = serde_json::from_value(browser.eval("window.seen")).unwrap();
+    let first = seen[0];
+    assert_eq!(
+        seen,
+        (first..=first + 16).collect::<Vec<_>>(),
+        "the snapshot, then each event once, one more than the one before"
+    );
+}
+
+/// The conclusion, or the status while it runs, of the check run of a review in `state`.
+fn conclusion(state: &Value) -> &'static str {
+    match state.as_str().unwrap() {
+        "ci" => "queued",
+        "running" => "in_progress",
+        "failed" | "needs_change" => "failure",
+        "cancelled" => "cancelled",
+        "waits" => "action_required",
+        "approved" => "success",
+        other => panic!("no review state {other}"),
+    }
+}
+
+fn runs_opening_at_once_write_one_comment_and_one_check_run() {
+    let head = commit("a118");
+    let job = Job::pull("owner/review", 118, "review/together").at(&head, 1118);
+    let legs: Vec<Job> = (0..4).map(|i| job.on(&format!("runner-{i}"))).collect();
+    std::thread::scope(|scope| {
+        for leg in &legs {
+            scope.spawn(move || leg.open(&["tests"]));
+        }
+    });
+    assert_eq!(
+        world().github.comments("owner/review", 118).len(),
+        1,
+        "one comment on the pull request"
+    );
+    let runs = world().github.check_runs("owner/review", &head);
+    assert_eq!(runs.len(), 1, "one check run of the head: {runs:?}");
+    assert_eq!(runs[0].state(), "in_progress");
+}
+
+fn a_verdict_and_done_at_once_leave_the_newest_review_on_github() {
+    for number in [119, 129, 133] {
+        let head = commit(&format!("a{number}"));
+        let job = Job::pull("owner/review", number, &format!("review/race-{number}"))
+            .at(&head, 1000 + number);
+        let run = job.open(&["screens"]);
+        let before = format!("race {number} before");
+        let after = format!("race {number} after");
+        let (look, files) = one_still(before.as_bytes(), after.as_bytes());
+        let listed: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+        job.finished_with_look(&run.id, &entry("screens", "passed"), &listed, &look);
+        for (_, bytes) in &listed {
+            job.send(bytes);
+        }
+        let writer = sign_in("writer-code", "/");
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let answer = say(
+                    &run.id,
+                    "verdicts",
+                    Some(&writer),
+                    &[],
+                    &looks_right("card/light.png"),
+                );
+                assert_eq!(answer.status, 201, "{}", answer.text());
+            });
+            scope.spawn(|| {
+                let looks = std::slice::from_ref(&look);
+                let answer = job.close_with(
+                    &run.id,
+                    &[entry("screens", "passed")],
+                    looks,
+                    &listed,
+                    &json!({}),
+                );
+                assert_eq!(answer.status, 200, "{}", answer.text());
+            });
+        });
+        let review = review_of(number);
+        assert_eq!(review["state"], "approved", "{review:#}");
+        let check = check_run(&head);
+        assert_eq!(
+            check.state(),
+            conclusion(&review["state"]),
+            "{:?}",
+            check.writes
+        );
+    }
 }
 
 fn a_queued_job_shows_as_waiting_for_a_runner() {

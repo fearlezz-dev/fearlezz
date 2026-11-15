@@ -9,13 +9,13 @@
 //!   closing the run that never said done. A local run has no job; `api::close_silent` closes
 //!   it once it said nothing for an hour.
 
-use fearlezz_proof::events::{Live, Source, WorkChange};
+use fearlezz_proof::events::Source;
 use serde::Deserialize;
 use wasm_bindgen::JsValue;
 use worker::{Env, Request, Response};
 
-use crate::work::{self, read};
-use crate::{Answer, Config, Refusal, api, crypto, jobs, now, review};
+use crate::work::{Derive, Event, Write, read};
+use crate::{Answer, Config, Refusal, api, crypto, jobs, now, room};
 
 #[derive(Deserialize)]
 struct Repository {
@@ -86,18 +86,14 @@ pub async fn receive(mut req: Request, env: &Env, config: &Config) -> Answer {
         Refusal::new(400, format!("a {event} event GitHub would not send: {e}"))
     };
     match event.as_str() {
-        "pull_request" => {
-            pull_request(env, config, serde_json::from_slice(&body).map_err(bad)?).await?
-        }
-        "workflow_job" => {
-            workflow_job(env, config, serde_json::from_slice(&body).map_err(bad)?).await?
-        }
+        "pull_request" => pull_request(env, serde_json::from_slice(&body).map_err(bad)?).await?,
+        "workflow_job" => workflow_job(env, serde_json::from_slice(&body).map_err(bad)?).await?,
         _ => {}
     }
     Ok(Response::empty()?.with_status(202))
 }
 
-async fn pull_request(env: &Env, config: &Config, event: PullEvent) -> worker::Result<()> {
+async fn pull_request(env: &Env, event: PullEvent) -> worker::Result<()> {
     let pull = &event.pull_request;
     let repository = &event.repository.full_name;
     let from = pull.head.repo.as_ref().map(|r| r.full_name.as_str());
@@ -144,7 +140,14 @@ async fn pull_request(env: &Env, config: &Config, event: PullEvent) -> worker::R
                 .first(Some("id"))
                 .await?;
             match id {
-                Some(id) => review::refresh(env, config, &id, false).await,
+                Some(id) => {
+                    let write = Write {
+                        statements: Vec::new(),
+                        event: None,
+                        derive: Derive::Review,
+                    };
+                    room::write(env, &id, &write).await
+                }
                 None => Ok(()),
             }
         }
@@ -152,7 +155,7 @@ async fn pull_request(env: &Env, config: &Config, event: PullEvent) -> worker::R
     }
 }
 
-async fn workflow_job(env: &Env, config: &Config, event: JobEvent) -> worker::Result<()> {
+async fn workflow_job(env: &Env, event: JobEvent) -> worker::Result<()> {
     let job = &event.workflow_job;
     let repo = event.repository.full_name.to_lowercase();
     let Some(branch) = &job.head_branch else {
@@ -177,7 +180,7 @@ async fn workflow_job(env: &Env, config: &Config, event: JobEvent) -> worker::Re
     .run()
     .await?;
     if event.action == "completed" {
-        cancel(env, config, &repo, job).await?;
+        cancel(env, &repo, job).await?;
     }
     let work: Option<String> = db
         .prepare("SELECT id FROM works WHERE repo = ?1 AND branch = ?2")
@@ -185,24 +188,18 @@ async fn workflow_job(env: &Env, config: &Config, event: JobEvent) -> worker::Re
         .first(Some("id"))
         .await?;
     if let Some(work) = work {
-        let waiting = jobs::waiting(&db, &work).await?;
-        let seq = work::commit(&db, vec![work::bump(&db, &work)?]).await?;
-        let change = WorkChange::Waiting { waiting };
-        work::notify(
-            env,
-            &work,
-            &Live::Work {
-                seq,
-                change: Box::new(change),
-            },
-        )
-        .await;
+        let write = Write {
+            statements: Vec::new(),
+            event: Some(Event::Waiting),
+            derive: Derive::No,
+        };
+        room::write(env, &work, &write).await?;
     }
     Ok(())
 }
 
 /// Closes, as cancelled, the run of `repo` still running that the completed `job` was.
-async fn cancel(env: &Env, config: &Config, repo: &str, job: &WorkflowJob) -> worker::Result<()> {
+async fn cancel(env: &Env, repo: &str, job: &WorkflowJob) -> worker::Result<()> {
     #[derive(Deserialize)]
     struct Row {
         id: String,
@@ -239,7 +236,7 @@ async fn cancel(env: &Env, config: &Config, repo: &str, job: &WorkflowJob) -> wo
             Source::Local { .. } => false,
         };
         if own {
-            api::cancel(env, config, &db, &row.id, &row.work, false).await?;
+            api::cancel(env, &row.id, &row.work, false).await?;
         }
     }
     Ok(())

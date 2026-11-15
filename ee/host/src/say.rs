@@ -9,7 +9,7 @@
 //! site cannot send with the cookie. Only CI runs are reviewed; a local run never is, though
 //! a person may leave notes on its pictures (`notes.rs`).
 
-use fearlezz_proof::events::{Live, Source, WorkChange};
+use fearlezz_proof::events::{Source, WorkChange};
 use fearlezz_proof::look::Look;
 use fearlezz_proof::review::Role;
 use fearlezz_proof::review::{self, Verdict};
@@ -19,8 +19,8 @@ use serde_json::json;
 use worker::{D1Database, Env, Request, Response};
 
 use crate::session::{self, Session};
-use crate::work::{self, read};
-use crate::{Answer, Config, Refusal, cache, github, jobs, now, pages, review as hosted};
+use crate::work::{self, Derive, Event, Statement, Write, read};
+use crate::{Answer, Config, Refusal, cache, github, jobs, now, pages, room};
 
 /// How long the host trusts GitHub's word on what a person may do.
 const ROLE_SECONDS: i64 = 300;
@@ -249,14 +249,11 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
         run: id.to_owned(),
         head: run.head,
     };
-    let seq = work::commit(
-        &db,
-        vec![
-            db.prepare(
-                "INSERT INTO verdicts (work, check_id, picture, key, login, at, run, head) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-                 ON CONFLICT (work, check_id, picture, key) DO UPDATE SET login = excluded.login, at = excluded.at, run = excluded.run, head = excluded.head",
-            )
-            .bind(&[
+    let write = Write {
+        statements: vec![Statement::new(
+            "INSERT INTO verdicts (work, check_id, picture, key, login, at, run, head) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             ON CONFLICT (work, check_id, picture, key) DO UPDATE SET login = excluded.login, at = excluded.at, run = excluded.run, head = excluded.head",
+            [
                 run.work.as_str().into(),
                 verdict.check.as_str().into(),
                 verdict.picture.as_str().into(),
@@ -265,24 +262,14 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
                 verdict.at.into(),
                 verdict.run.as_str().into(),
                 verdict.head.as_str().into(),
-            ])?,
-            work::bump(&db, &run.work)?,
-        ],
-    )
-    .await?;
-    let change = WorkChange::Verdict {
-        verdict: verdict.clone(),
+            ],
+        )],
+        event: Some(Event::work(WorkChange::Verdict {
+            verdict: verdict.clone(),
+        })),
+        derive: Derive::Review,
     };
-    work::notify(
-        env,
-        &run.work,
-        &Live::Work {
-            seq,
-            change: Box::new(change),
-        },
-    )
-    .await;
-    hosted::refresh(env, config, &run.work, false).await?;
+    room::write(env, &run.work, &write).await?;
     Ok(Response::from_json(&json!({ "verdict": verdict }))?.with_status(201))
 }
 
@@ -316,20 +303,23 @@ pub async fn accept(req: Request, env: &Env, config: &Config, id: &str) -> Answe
         by: person.login,
         at: now() as f64,
     };
-    db.prepare(
-        "INSERT INTO accepts (work, head, weakened, login, at) VALUES (?1, ?2, ?3, ?4, ?5) \
-         ON CONFLICT (work, head) DO UPDATE SET weakened = excluded.weakened, login = excluded.login, at = excluded.at",
-    )
-    .bind(&[
-        run.work.as_str().into(),
-        run.head.as_str().into(),
-        serde_json::to_string(&accept.weakened)?.into(),
-        accept.by.as_str().into(),
-        accept.at.into(),
-    ])?
-    .run()
-    .await?;
-    hosted::refresh(env, config, &run.work, false).await?;
+    // The accept is no event of its own: the review it moves is.
+    let write = Write {
+        statements: vec![Statement::new(
+            "INSERT INTO accepts (work, head, weakened, login, at) VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT (work, head) DO UPDATE SET weakened = excluded.weakened, login = excluded.login, at = excluded.at",
+            [
+                run.work.as_str().into(),
+                run.head.as_str().into(),
+                serde_json::to_string(&accept.weakened)?.into(),
+                accept.by.as_str().into(),
+                accept.at.into(),
+            ],
+        )],
+        event: None,
+        derive: Derive::Review,
+    };
+    room::write(env, &run.work, &write).await?;
     if let Err(error) = rerun(config, &run).await {
         worker::console_error!(
             "the proof job of {} did not run again: {error}",

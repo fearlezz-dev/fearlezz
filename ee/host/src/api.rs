@@ -1,8 +1,8 @@
 //! The protocol, version 2: CI, or a signed in CLI, asks whether its repository is installed,
 //! opens a run before any check runs, says when each check starts and ends with the files it
 //! made, sends the blobs the host lacks, asks whether an admin accepted what its change weakens,
-//! and closes the run with `proof.json`. Every write lands in D1 first and then goes to the pages
-//! open on the work.
+//! and closes the run with `proof.json`. Every write is a `work::Write` the work's room runs,
+//! one at a time, landing in D1 and then going to the pages open on the work.
 //!
 //! CI writes with its OIDC token, which acts for one repository and ref. A person's CLI writes
 //! with its host token (`cli.rs`), and only that person's local runs of repositories they may
@@ -12,21 +12,20 @@
 use std::collections::BTreeSet;
 
 use fearlezz_proof::events::{
-    Accepted, Change, Closed, Done, Files, Keys, Live, Missing, Open, Opened, Run, RunCheck,
-    RunState, Source, Step, Weakened,
+    Accepted, Change, Closed, Done, Files, Keys, Missing, Open, Opened, Run, RunCheck, RunState,
+    Source, Step, Weakened,
 };
 use fearlezz_proof::look::Look;
-use fearlezz_proof::review as reviews;
 use fearlezz_proof::{Check, SCHEMA};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use wasm_bindgen::JsValue;
-use worker::{D1Database, D1PreparedStatement, Data, Env, Request, Response};
+use worker::{D1Database, Data, Env, Request, Response};
 
 use crate::cli::{self, Person};
 use crate::oidc::{self, Token};
-use crate::work::{self, WorkRow};
-use crate::{Answer, Config, Refusal, crypto, github, now, review, say};
+use crate::work::{self, Derive, Event, Statement, WorkRow, Write};
+use crate::{Answer, Config, Refusal, crypto, github, now, review, room, say};
 
 /// Who writes a run.
 enum Writer {
@@ -190,32 +189,24 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
             planned.push(check);
         }
     }
-    let mut statements = vec![
-        db.prepare(
-            "INSERT INTO runs (id, work, git_ref, head, base, source, state, opened, touched) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7, ?7)",
-        )
-        .bind(&[
+    let mut statements = vec![Statement::new(
+        "INSERT INTO runs (id, work, git_ref, head, base, source, state, opened, touched) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7, ?7)",
+        [
             id.as_str().into(),
             work.id.as_str().into(),
-            writer.git_ref().as_str().into(),
+            writer.git_ref().into(),
             open.head.as_str().into(),
             open.base.as_str().into(),
-            source.as_str().into(),
+            source.into(),
             opened.into(),
-        ])?,
-    ];
+        ],
+    )];
     for (position, check) in planned.iter().enumerate() {
-        statements.push(
-            db.prepare("INSERT INTO checks (run, id, position) VALUES (?1, ?2, ?3)")
-                .bind(&[
-                    id.as_str().into(),
-                    check.as_str().into(),
-                    (position as f64).into(),
-                ])?,
-        );
+        statements.push(Statement::new(
+            "INSERT INTO checks (run, id, position) VALUES (?1, ?2, ?3)",
+            [id.as_str().into(), check.as_str().into(), position.into()],
+        ));
     }
-    statements.push(work::bump(&db, &work.id)?);
-    let seq = work::commit(&db, statements).await?;
 
     let run = Run {
         id: id.clone(),
@@ -239,10 +230,12 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
         work: work.work(),
         run,
     };
-    notify(env, &work.id, seq, &id, change).await;
-    if !local {
-        refresh(env, config, &work.id, true).await;
-    }
+    let write = Write {
+        statements,
+        event: Some(Event::run(id.as_str(), change)),
+        derive: if local { Derive::No } else { Derive::FirstRun },
+    };
+    room::write(env, &work.id, &write).await?;
     let url = work::page_url(
         config,
         &work.repository,
@@ -346,9 +339,11 @@ async fn writable(
 
 /// The statement that notes a run just said something, for the rule that closes a silent
 /// local run: every write for a run counts, a blob upload too (`touch_naming`).
-fn touch(db: &D1Database, run: &str) -> worker::Result<D1PreparedStatement> {
-    db.prepare("UPDATE runs SET touched = ?2 WHERE id = ?1")
-        .bind(&[run.into(), (now() as f64).into()])
+fn touch(run: &str) -> Statement {
+    Statement::new(
+        "UPDATE runs SET touched = ?2 WHERE id = ?1",
+        [run.into(), now().into()],
+    )
 }
 
 /// Notes that the writer's open runs of `repo` that name the blob `sha256` just said
@@ -385,17 +380,17 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     let run = writable(env, config, &db, &writer, id).await?;
     // A check the run did not plan joins at the end.
     let place = "(SELECT COALESCE(MAX(position), -1) + 1 FROM checks WHERE run = ?1)";
-    let (statements, change, files) = match step {
+    let (mut statements, change, files) = match step {
         Step::Started { check } => {
             refuse_empty(&check)?;
             let at = now() as f64;
-            let sql = format!(
-                "INSERT INTO checks (run, id, position, started) VALUES (?1, ?2, {place}, ?3) \
-                 ON CONFLICT (run, id) DO UPDATE SET started = excluded.started"
+            let statement = Statement::new(
+                format!(
+                    "INSERT INTO checks (run, id, position, started) VALUES (?1, ?2, {place}, ?3) \
+                     ON CONFLICT (run, id) DO UPDATE SET started = excluded.started"
+                ),
+                [id.into(), check.as_str().into(), at.into()],
             );
-            let statement =
-                db.prepare(&sql)
-                    .bind(&[id.into(), check.as_str().into(), at.into()])?;
             (vec![statement], Change::Started { check, at }, Files::new())
         }
         Step::Finished { check, files, look } => {
@@ -409,11 +404,11 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
                     format!("the look is of {}, not of {}", look.check, check.id),
                 ));
             }
-            let mut statements = vec![entry(&db, id, &check)?];
+            let mut statements = vec![entry(id, &check)?];
             if let Some(look) = &look {
-                statements.push(record_look(&db, id, look)?);
+                statements.push(record_look(id, look)?);
             }
-            statements.extend(record_files(&db, id, &files)?);
+            statements.extend(record_files(id, &files));
             let change = Change::Finished {
                 check: *check,
                 look,
@@ -422,31 +417,19 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
             (statements, change, files)
         }
     };
-    let mut statements = statements;
-    statements.push(touch(&db, id)?);
-    statements.push(work::bump(&db, &run.work)?);
-    let seq = work::commit(&db, statements).await?;
-    // A look whose pictures are not all in yet reaches pages with the upload that completes it.
-    let change = match change {
-        Change::Finished {
-            check,
-            look: Some(look),
-            ..
-        } => {
-            let (look, keys) = work::shown(*look, &work::held(&db, id).await?).unzip();
-            Change::Finished {
-                check,
-                look: look.map(Box::new),
-                keys: keys.unwrap_or_default(),
-            }
-        }
-        change => change,
+    statements.push(touch(id));
+    // A look moves the review once its pictures are all in, which the room tells.
+    let looks = matches!(&change, Change::Finished { look: Some(_), .. });
+    let write = Write {
+        statements,
+        event: Some(Event::run(id, change)),
+        derive: if looks && !run.local() {
+            Derive::Review
+        } else {
+            Derive::No
+        },
     };
-    let shows_look = matches!(&change, Change::Finished { look: Some(_), .. });
-    notify(env, &run.work, seq, id, change).await;
-    if shows_look && !run.local() {
-        refresh(env, config, &run.work, false).await;
-    }
+    room::write(env, &run.work, &write).await?;
     let missing = lacks(&db, &run.repo, &files).await?;
     Ok(Response::from_json(&Missing { missing })?)
 }
@@ -475,52 +458,52 @@ pub async fn weakenings(mut req: Request, env: &Env, config: &Config, id: &str) 
 }
 
 /// The statement that records a check's entry, adding the check when the run did not plan it.
-fn entry(db: &D1Database, run: &str, check: &Check) -> worker::Result<D1PreparedStatement> {
+fn entry(run: &str, check: &Check) -> worker::Result<Statement> {
     let place = "(SELECT COALESCE(MAX(position), -1) + 1 FROM checks WHERE run = ?1)";
-    let sql = format!(
-        "INSERT INTO checks (run, id, position, entry) VALUES (?1, ?2, {place}, ?3) \
-         ON CONFLICT (run, id) DO UPDATE SET entry = excluded.entry"
-    );
-    db.prepare(&sql).bind(&[
-        run.into(),
-        check.id.as_str().into(),
-        serde_json::to_string(check)?.into(),
-    ])
+    Ok(Statement::new(
+        format!(
+            "INSERT INTO checks (run, id, position, entry) VALUES (?1, ?2, {place}, ?3) \
+             ON CONFLICT (run, id) DO UPDATE SET entry = excluded.entry"
+        ),
+        [
+            run.into(),
+            check.id.as_str().into(),
+            serde_json::to_string(check)?.into(),
+        ],
+    ))
 }
 
 /// The statement that records a check's look, adding the check when the run did not plan it.
-fn record_look(db: &D1Database, run: &str, look: &Look) -> worker::Result<D1PreparedStatement> {
+fn record_look(run: &str, look: &Look) -> worker::Result<Statement> {
     let place = "(SELECT COALESCE(MAX(position), -1) + 1 FROM checks WHERE run = ?1)";
-    let sql = format!(
-        "INSERT INTO checks (run, id, position, look) VALUES (?1, ?2, {place}, ?3) \
-         ON CONFLICT (run, id) DO UPDATE SET look = excluded.look"
-    );
-    db.prepare(&sql).bind(&[
-        run.into(),
-        look.check.as_str().into(),
-        serde_json::to_string(look)?.into(),
-    ])
+    Ok(Statement::new(
+        format!(
+            "INSERT INTO checks (run, id, position, look) VALUES (?1, ?2, {place}, ?3) \
+             ON CONFLICT (run, id) DO UPDATE SET look = excluded.look"
+        ),
+        [
+            run.into(),
+            look.check.as_str().into(),
+            serde_json::to_string(look)?.into(),
+        ],
+    ))
 }
 
 /// The statements that record a run's files, a later one replacing an earlier at its path.
-fn record_files(
-    db: &D1Database,
-    run: &str,
-    files: &Files,
-) -> worker::Result<Vec<D1PreparedStatement>> {
+fn record_files(run: &str, files: &Files) -> Vec<Statement> {
     files
         .iter()
         .map(|(path, file)| {
-            db.prepare(
+            Statement::new(
                 "INSERT INTO files (run, path, sha256, size) VALUES (?1, ?2, ?3, ?4) \
                  ON CONFLICT (run, path) DO UPDATE SET sha256 = excluded.sha256, size = excluded.size",
+                [
+                    run.into(),
+                    path.as_str().into(),
+                    file.sha256.as_str().into(),
+                    file.size.into(),
+                ],
             )
-            .bind(&[
-                run.into(),
-                path.as_str().into(),
-                file.sha256.as_str().into(),
-                (file.size as f64).into(),
-            ])
         })
         .collect()
 }
@@ -576,7 +559,10 @@ pub async fn done(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     {
         return Err(Refusal::new(403, "the proof is of another repository"));
     }
-    let recorded = record_files(&db, id, &done.files)?;
+    let recorded = record_files(id, &done.files)
+        .iter()
+        .map(|s| s.prepare(&db))
+        .collect::<worker::Result<Vec<_>>>()?;
     if !recorded.is_empty() {
         db.batch(recorded).await?;
     }
@@ -588,36 +574,33 @@ pub async fn done(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
         });
         return Ok(Response::from_json(&answer)?.with_status(409));
     }
-    let mut statements = vec![
-        db.prepare("UPDATE runs SET state = 'done', proof = ?2 WHERE id = ?1")
-            .bind(&[id.into(), serde_json::to_string(&done.proof)?.into()])?,
-    ];
+    let mut statements = vec![Statement::new(
+        "UPDATE runs SET state = 'done', proof = ?2 WHERE id = ?1",
+        [id.into(), serde_json::to_string(&done.proof)?.into()],
+    )];
     // The proof's entries are the final word: red before green and instability come last.
     for check in &done.proof.checks {
-        statements.push(entry(&db, id, check)?);
+        statements.push(entry(id, check)?);
     }
     for look in &done.proof.looks {
-        statements.push(record_look(&db, id, look)?);
+        statements.push(record_look(id, look)?);
     }
-    statements.push(touch(&db, id)?);
-    statements.push(work::bump(&db, &run.work)?);
-    let seq = work::commit(&db, statements).await?;
-    let held = work::held(&db, id).await?;
-    let keys = done
-        .proof
-        .looks
-        .iter()
-        .map(|look| (look.check.clone(), reviews::keys(&look.items, &held)))
-        .collect();
+    statements.push(touch(id));
     let change = Change::Done {
         checks: done.proof.checks.clone(),
         looks: done.proof.looks.clone(),
-        keys,
+        keys: Default::default(),
     };
-    notify(env, &run.work, seq, id, change).await;
-    if !run.local() {
-        refresh(env, config, &run.work, false).await;
-    }
+    let write = Write {
+        statements,
+        event: Some(Event::run(id, change)),
+        derive: if run.local() {
+            Derive::No
+        } else {
+            Derive::Review
+        },
+    };
+    room::write(env, &run.work, &write).await?;
     let url = work::page_url(
         config,
         &run.repository,
@@ -644,23 +627,6 @@ async fn run_lacks(db: &D1Database, repo: &str, run: &str) -> worker::Result<Vec
         .into_iter()
         .map(|row| row.sha256)
         .collect())
-}
-
-/// Derives the work's review again after a run changed; a failure is logged, and never fails
-/// CI's call.
-async fn refresh(env: &Env, config: &Config, work: &str, first_run: bool) {
-    if let Err(error) = review::refresh(env, config, work, first_run).await {
-        worker::console_error!("the review of work {work} was not derived again: {error}");
-    }
-}
-
-async fn notify(env: &Env, work: &str, seq: u64, run: &str, change: Change) {
-    let live = Live::Event {
-        seq,
-        run: run.to_owned(),
-        change: Box::new(change),
-    };
-    work::notify(env, work, &live).await;
 }
 
 pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Answer {
@@ -741,7 +707,7 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
         .await?;
     touch_naming(&db, &writer, &repo, sha256).await?;
     if held.is_none() {
-        show_completed_looks(env, config, &db, &repo, sha256).await?;
+        show_completed_looks(env, &db, &repo, sha256).await?;
     }
     Ok(Response::empty()?.with_status(204))
 }
@@ -776,7 +742,6 @@ async fn local_blob_repo(
 /// complete before changes nothing on a page.
 async fn show_completed_looks(
     env: &Env,
-    config: &Config,
     db: &D1Database,
     repo: &str,
     sha256: &str,
@@ -799,48 +764,40 @@ async fn show_completed_looks(
         .results::<Row>()?;
     for row in rows {
         let look: Look = work::read(&row.look)?;
-        let Some((look, keys)) = work::shown(look, &work::held(db, &row.run).await?) else {
+        if !work::complete(&look, &work::held(db, &row.run).await?) {
             continue;
-        };
-        let check: Check = work::read(&row.entry)?;
-        let seq = work::commit(db, vec![work::bump(db, &row.work)?]).await?;
-        let change = Change::Finished {
-            check,
-            look: Some(Box::new(look)),
-            keys,
-        };
-        notify(env, &row.work, seq, &row.run, change).await;
-        if !row.git_ref.starts_with("local:") {
-            refresh(env, config, &row.work, false).await;
         }
+        let change = Change::Finished {
+            check: work::read(&row.entry)?,
+            look: Some(Box::new(look)),
+            keys: Keys::new(),
+        };
+        let write = Write {
+            statements: Vec::new(),
+            event: Some(Event::run(row.run, change)),
+            derive: if row.git_ref.starts_with("local:") {
+                Derive::No
+            } else {
+                Derive::Review
+            },
+        };
+        room::write(env, &row.work, &write).await?;
     }
     Ok(())
 }
 
 /// Closes run `run` of work `work` as cancelled, while it still runs: it ended without saying
 /// done. Its pages hear it; the review moves only for a CI run.
-pub async fn cancel(
-    env: &Env,
-    config: &Config,
-    db: &D1Database,
-    run: &str,
-    work: &str,
-    local: bool,
-) -> worker::Result<()> {
-    let seq = work::commit(
-        db,
-        vec![
-            db.prepare("UPDATE runs SET state = 'cancelled' WHERE id = ?1 AND state = 'running'")
-                .bind(&[run.into()])?,
-            work::bump(db, work)?,
-        ],
-    )
-    .await?;
-    notify(env, work, seq, run, Change::Cancelled {}).await;
-    if !local {
-        review::refresh(env, config, work, false).await?;
-    }
-    Ok(())
+pub async fn cancel(env: &Env, run: &str, work: &str, local: bool) -> worker::Result<()> {
+    let write = Write {
+        statements: vec![Statement::new(
+            "UPDATE runs SET state = 'cancelled' WHERE id = ?1 AND state = 'running'",
+            [run.into()],
+        )],
+        event: Some(Event::run(run, Change::Cancelled {})),
+        derive: if local { Derive::No } else { Derive::Review },
+    };
+    room::write(env, work, &write).await
 }
 
 /// How long a local run may stay silent before it is closed as cancelled.
@@ -849,7 +806,7 @@ const SILENT_SECONDS: f64 = 3600.0;
 /// The one rule for a local run that never says done, beside CI's (a run is closed when its
 /// job ends, `webhook.rs`): it has no job, so once it said nothing for an hour it is closed
 /// as cancelled. Run on the host's schedule.
-pub async fn close_silent(env: &Env, config: &Config) -> worker::Result<()> {
+pub async fn close_silent(env: &Env) -> worker::Result<()> {
     #[derive(Deserialize)]
     struct Row {
         id: String,
@@ -865,7 +822,7 @@ pub async fn close_silent(env: &Env, config: &Config) -> worker::Result<()> {
         .await?
         .results::<Row>()?;
     for row in rows {
-        cancel(env, config, &db, &row.id, &row.work, true).await?;
+        cancel(env, &row.id, &row.work, true).await?;
     }
     Ok(())
 }

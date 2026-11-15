@@ -5,15 +5,15 @@
 //! token. Every change goes to the work's open pages and moves its review, whose check run
 //! summary lists the open notes.
 
-use fearlezz_proof::events::{Live, WorkChange};
+use fearlezz_proof::events::WorkChange;
 use fearlezz_proof::look::Look;
 use fearlezz_proof::notes::{Ask, Note, NoteState, Side, WORDS_MAX};
 use serde_json::json;
-use worker::{D1Database, Env, Request, Response};
+use worker::{Env, Request, Response};
 
 use crate::say::{self, Act};
-use crate::work::{self, NOTE_COLUMNS, NoteRow, read};
-use crate::{Answer, Config, Refusal, crypto, now, pages, review};
+use crate::work::{Derive, Event, NOTE_COLUMNS, NoteRow, Statement, Write, read};
+use crate::{Answer, Config, Refusal, crypto, now, pages, room};
 
 /// `POST /api/v2/runs/<run>/notes`: a person with write access notes what should change on a
 /// picture of a run. A local run takes notes too, though never a verdict: that is how feedback
@@ -108,12 +108,10 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
         Side::After => "after",
         Side::Both => "both",
     };
-    let insert = db
-        .prepare(
-            "INSERT INTO notes (id, work, check_id, picture, run, head, side, x, y, w, h, time, words, login, at, state) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'open')",
-        )
-        .bind(&[
+    let insert = Statement::new(
+        "INSERT INTO notes (id, work, check_id, picture, run, head, side, x, y, w, h, time, words, login, at, state) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'open')",
+        [
             note.id.as_str().into(),
             run.work.as_str().into(),
             note.check.as_str().into(),
@@ -125,12 +123,13 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
             note.region.y.into(),
             note.region.w.into(),
             note.region.h.into(),
-            note.time.map_or(wasm_bindgen::JsValue::NULL, Into::into),
+            note.time.into(),
             note.words.as_str().into(),
             note.by.as_str().into(),
             note.at.into(),
-        ])?;
-    changed(env, config, &db, &run.work, insert, &note).await?;
+        ],
+    );
+    changed(env, &run.work, insert, &note).await?;
     Ok(Response::from_json(&json!({ "note": note }))?.with_status(201))
 }
 
@@ -174,37 +173,22 @@ pub async fn resolve(req: Request, env: &Env, config: &Config, id: &str) -> Answ
     let mut note = row.note();
     note.state = NoteState::Resolved;
     note.resolved_by = Some(person.login);
-    let update = db
-        .prepare("UPDATE notes SET state = 'resolved', resolved_by = ?2 WHERE id = ?1")
-        .bind(&[
-            id.into(),
-            note.resolved_by.as_deref().unwrap_or_default().into(),
-        ])?;
-    changed(env, config, &db, &work_id, update, &note).await?;
+    let update = Statement::new(
+        "UPDATE notes SET state = 'resolved', resolved_by = ?2 WHERE id = ?1",
+        [id.into(), note.resolved_by.clone().into()],
+    );
+    changed(env, &work_id, update, &note).await?;
     Ok(Response::from_json(&json!({ "note": note }))?)
 }
 
-/// Writes a note's change with the work's next event, sends it to the open pages, and derives
+/// Writes a note's change with the work's next event, which goes to the open pages, and derives
 /// the review again.
-async fn changed(
-    env: &Env,
-    config: &Config,
-    db: &D1Database,
-    work: &str,
-    write: worker::D1PreparedStatement,
-    note: &Note,
-) -> Result<(), Refusal> {
-    let seq = work::commit(db, vec![write, work::bump(db, work)?]).await?;
-    let change = WorkChange::Note { note: note.clone() };
-    work::notify(
-        env,
-        work,
-        &Live::Work {
-            seq,
-            change: Box::new(change),
-        },
-    )
-    .await;
-    review::refresh(env, config, work, false).await?;
+async fn changed(env: &Env, work: &str, write: Statement, note: &Note) -> Result<(), Refusal> {
+    let write = Write {
+        statements: vec![write],
+        event: Some(Event::work(WorkChange::Note { note: note.clone() })),
+        derive: Derive::Review,
+    };
+    room::write(env, work, &write).await?;
     Ok(())
 }

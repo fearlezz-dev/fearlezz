@@ -37,7 +37,7 @@ use worker::{Env, Request, Response, Result, event};
 /// The host's schedule (`wrangler.toml`): closes the local runs that went silent.
 #[event(scheduled)]
 async fn scheduled(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
-    let closed = async { api::close_silent(&env, &Config::from(&env)?).await };
+    let closed = api::close_silent(&env);
     if let Err(error) = closed.await {
         worker::console_error!("silent local runs were not closed: {error}");
     }

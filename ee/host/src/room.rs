@@ -1,13 +1,17 @@
 //! Rooms: one Durable Object per piece of work and one per repository, each holding the
-//! WebSockets of the pages open on it and nothing else. A page that connects gets the snapshot
-//! from D1, the one record (a work's, or a repository's listing); each event the API wrote to D1
-//! then reaches every open page. The sockets hibernate with the object, so an idle room costs
-//! nothing while its pages stay connected.
+//! WebSockets of the pages open on it. A page that connects gets the snapshot from D1, the one
+//! record (a work's, or a repository's listing). A work's room also runs every write to its
+//! work (`work::Write`), one at a time, so its pages get the events in the order of their
+//! sequence numbers and the review is derived from the state the writes before it left. A
+//! repository's room sends each work as it now stands. The sockets hibernate with the object,
+//! so an idle room costs nothing while its pages stay connected.
 //!
 //! A work's room is named by the work's id, a repository's by `repo:<owner/name>`; ids are hex,
 //! so the two never meet. The class keeps its first name, `WorkRoom`.
 
 use fearlezz_proof::events::Live;
+use wasm_bindgen::{JsCast as _, JsValue};
+use worker::worker_sys::DurableObjectState;
 use worker::{
     DurableObject, Env, Method, Request, RequestInit, Response, Result, State, WebSocket,
     WebSocketIncomingMessage, WebSocketPair, durable_object,
@@ -15,12 +19,52 @@ use worker::{
 
 use crate::{repository, work};
 
+/// The pages open in a room, owned, so a write the room runs holds them.
+pub struct Pages(State);
+
+impl Pages {
+    fn of(state: &State) -> Pages {
+        let raw: &JsValue = state.as_raw().as_ref();
+        Pages(State::from(
+            raw.clone().unchecked_into::<DurableObjectState>(),
+        ))
+    }
+
+    /// Sends `text` to every open page.
+    pub async fn send(&self, text: &str) {
+        for socket in self.0.get_websockets() {
+            // A page that went away is cleaned up by its close; the rest still get it.
+            if let Err(error) = socket.send_with_str(text) {
+                worker::console_log!("a page missed an event: {error}");
+            }
+        }
+    }
+}
+
+/// Runs `write` on work `work` in its room, after every write to it sent before.
+pub async fn write(env: &Env, work: &str, write: &work::Write) -> Result<()> {
+    let mut url = url::Url::parse("https://room/write").map_err(worker::Error::from)?;
+    url.query_pairs_mut().append_pair("work", work);
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_body(Some(serde_json::to_string(write)?.into()));
+    let mut answer = fetch(env, work, url.as_str(), &init).await?;
+    if !(200..300).contains(&answer.status_code()) {
+        return Err(worker::Error::RustError(format!(
+            "the room of work {work} did not write: {}",
+            answer.text().await?
+        )));
+    }
+    Ok(())
+}
+
 /// The room of a repository (lowercased).
 pub fn of_repository(repo: &str) -> String {
     format!("repo:{repo}")
 }
 
-/// Sends `text` to every page open in room `room`.
+/// Sends `text` to every page open in room `room`: a repository's, whose pages keep the newest
+/// of each work by its sequence number.
 pub async fn send(env: &Env, room: &str, text: &str) -> Result<()> {
     let mut init = RequestInit::new();
     init.with_method(Method::Post).with_body(Some(text.into()));
@@ -97,8 +141,9 @@ impl DurableObject for WorkRoom {
     }
 
     /// `/connect?work=<id>` or `/connect?repo=<owner/name>` takes a page's socket and sends it
-    /// the snapshot; `/event` sends an event to every page; `/close?tag=` ends the pages with
-    /// that tag. Only the worker reaches these, never a page directly.
+    /// the snapshot; `/event` sends an event to every page (a repository's); `/write?work=<id>`
+    /// runs a write to the work; `/close?tag=` ends the pages with that tag. Only the worker
+    /// reaches these, never a page directly.
     async fn fetch(&self, mut req: Request) -> Result<Response> {
         let url = req.url()?;
         let param = |name: &str| {
@@ -131,14 +176,30 @@ impl DurableObject for WorkRoom {
                 Response::from_websocket(pair.client)
             }
             "/event" => {
-                let event = req.text().await?;
-                for socket in self.state.get_websockets() {
-                    // A page that went away is cleaned up by its close; the rest still get it.
-                    if let Err(error) = socket.send_with_str(&event) {
-                        worker::console_log!("a page missed an event: {error}");
-                    }
-                }
+                Pages::of(&self.state).send(&req.text().await?).await;
                 Response::empty()
+            }
+            "/write" => {
+                let Some(work) = param("work") else {
+                    return Response::error("write names no work", 400);
+                };
+                let write: work::Write = req.json().await?;
+                let (pages, env) = (Pages::of(&self.state), self.env.clone());
+                // No other event reaches the room until the write is done: writes to the work
+                // run one at a time. A failure is the answer's, never the gate's, which would
+                // reset the object and drop its pages.
+                let done = self
+                    .state
+                    .block_concurrency_while(async move {
+                        Ok(work::apply(&env, &pages, &work, write)
+                            .await
+                            .map_err(|e| e.to_string()))
+                    })
+                    .await?;
+                match done {
+                    Ok(()) => Response::empty(),
+                    Err(error) => Response::error(error, 500),
+                }
             }
             "/close" => {
                 let (Some(tag), why) = (param("tag"), param("why").unwrap_or_default()) else {

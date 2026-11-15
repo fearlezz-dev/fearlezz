@@ -1,21 +1,29 @@
 //! A piece of work as D1 records it, the one record of it: the work (one branch of one
-//! repository), its runs and each run's checks as they stream, and its review. Every write bumps the work's
-//! sequence number in the same batch, so a page can tell which events its snapshot already
-//! holds. The work's room (`room.rs`) holds only the open pages and fans each event out.
+//! repository), its runs and each run's checks as they stream, and its review.
+//!
+//! Every write to a work is a `Write` its room (`room.rs`) runs, one at a time per work: the
+//! statements and the bump of the work's sequence number in one batch, then the event to every
+//! page open on the work, then the review derived again when the write can move it. So pages get
+//! the events in the order of their sequence numbers, a page can tell which events its snapshot
+//! already holds, and the review last committed is derived from the newest state.
 
 use std::collections::BTreeMap;
 
-use fearlezz_proof::events::{Keys, Live, Run, RunCheck, RunState, Snapshot, Source, Work};
+use fearlezz_proof::events::{
+    Change, Keys, Live, Run, RunCheck, RunState, Snapshot, Source, Work, WorkChange,
+};
 use fearlezz_proof::look::Look;
 use fearlezz_proof::notes::{Note, NoteState, Region, Side};
 use fearlezz_proof::review::{self, Review, Verdict};
 use fearlezz_proof::{Check, Proof, Pull};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use wasm_bindgen::JsValue;
 use worker::{D1Database, D1PreparedStatement, D1Result, Env};
 
-use crate::{Config, jobs, repository, room};
+use crate::room::Pages;
+use crate::{Config, jobs, repository, review as reviews};
 
 /// How many runs a page shows, newest first.
 const RUNS_SHOWN: f64 = 20.0;
@@ -98,29 +106,187 @@ impl WorkRow {
     }
 }
 
-/// The statement that bumps a work's sequence number, answering the new one, and notes when
-/// it changed for the repository page; it ends every batch that changes the work.
-pub fn bump(db: &D1Database, work: &str) -> worker::Result<D1PreparedStatement> {
-    // In milliseconds, so works that change within one second still list in order.
-    let at = js_sys::Date::now() / 1000.0;
-    db.prepare("UPDATE works SET seq = seq + 1, active = ?2 WHERE id = ?1 RETURNING seq")
-        .bind(&[work.into(), at.into()])
+/// One D1 statement as data, so a write can travel to its work's room, which runs it.
+#[derive(Serialize, Deserialize)]
+pub struct Statement {
+    sql: String,
+    params: Vec<Value>,
 }
 
-/// Runs a batch that ends with `bump`, answering the work's new sequence number.
-pub async fn commit(db: &D1Database, statements: Vec<D1PreparedStatement>) -> worker::Result<u64> {
-    #[derive(Deserialize)]
-    struct Seq {
-        seq: f64,
+impl Statement {
+    /// `sql` with its `?1`, `?2`, ... bound to `params` in order: strings, numbers or null.
+    pub fn new(sql: impl Into<String>, params: impl IntoIterator<Item = Value>) -> Statement {
+        Statement {
+            sql: sql.into(),
+            params: params.into_iter().collect(),
+        }
     }
-    let results = db.batch(statements).await?;
+
+    pub fn prepare(&self, db: &D1Database) -> worker::Result<D1PreparedStatement> {
+        let binds: Vec<JsValue> = self
+            .params
+            .iter()
+            .map(|param| match param {
+                Value::Null => JsValue::NULL,
+                Value::Bool(b) => JsValue::from(*b),
+                Value::Number(n) => JsValue::from(n.as_f64().unwrap_or_default()),
+                Value::String(s) => JsValue::from(s.as_str()),
+                other => JsValue::from(other.to_string()),
+            })
+            .collect();
+        db.prepare(&self.sql).bind(&binds)
+    }
+}
+
+/// A write to one work, which the work's room runs while no other write to it runs.
+#[derive(Serialize, Deserialize)]
+pub struct Write {
+    /// What it changes, committed in one batch, with the bump of the work's sequence number
+    /// when it has an event.
+    pub statements: Vec<Statement>,
+    /// What pages hear of it, under the sequence number it bumped to.
+    pub event: Option<Event>,
+    /// Whether it can move the work's review.
+    pub derive: Derive,
+}
+
+/// What a write tells the work's pages, settled from D1 once it is committed.
+#[derive(Serialize, Deserialize)]
+pub enum Event {
+    /// A change of one run. A look in it reaches pages only once every picture it names is
+    /// held, with its pictures' keys.
+    Run { run: String, change: Box<Change> },
+    /// A change of the work as a whole.
+    Work(Box<WorkChange>),
+    /// The CI jobs that wait for a runner, as they stand once the write is in.
+    Waiting,
+}
+
+impl Event {
+    pub fn run(run: impl Into<String>, change: Change) -> Event {
+        Event::Run {
+            run: run.into(),
+            change: Box::new(change),
+        }
+    }
+
+    pub fn work(change: WorkChange) -> Event {
+        Event::Work(Box::new(change))
+    }
+}
+
+/// Whether a write derives the work's review again.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Derive {
+    No,
+    Review,
+    /// A CI run opened: the review, and the pull request's comment when it has none.
+    FirstRun,
+}
+
+/// Runs `write` on work `work` and sends what it changed to `pages`, the work's open pages,
+/// and to the repository's page. Only the work's room calls it, one write at a time, so pages
+/// get events in the order of their sequence numbers and a review is derived from the state
+/// the writes before it left. A review that cannot be derived, or reach GitHub, is logged: the
+/// write is in.
+pub async fn apply(env: &Env, pages: &Pages, work: &str, write: Write) -> worker::Result<()> {
+    let db = env.d1("DB")?;
+    commit(env, &db, pages, work, write.statements, write.event).await?;
+    if write.derive != Derive::No {
+        let config = Config::from(env)?;
+        let first_run = write.derive == Derive::FirstRun;
+        if let Err(error) = reviews::refresh(env, &config, pages, work, first_run).await {
+            worker::console_error!("the review of work {work} was not derived again: {error}");
+        }
+    }
+    Ok(())
+}
+
+/// Commits `statements` and, with an event, the bump of the work's sequence number in the same
+/// batch, then sends the event, settled from D1, to the work's pages and the work as it now
+/// stands to its repository's pages.
+pub async fn commit(
+    env: &Env,
+    db: &D1Database,
+    pages: &Pages,
+    work: &str,
+    statements: Vec<Statement>,
+    event: Option<Event>,
+) -> worker::Result<()> {
+    let mut batch = statements
+        .iter()
+        .map(|s| s.prepare(db))
+        .collect::<worker::Result<Vec<_>>>()?;
+    let Some(event) = event else {
+        if !batch.is_empty() {
+            db.batch(batch).await?;
+        }
+        return Ok(());
+    };
+    // In milliseconds, so works that change within one second still list in order.
+    let at = js_sys::Date::now() / 1000.0;
+    batch.push(
+        db.prepare("UPDATE works SET seq = seq + 1, active = ?2 WHERE id = ?1 RETURNING seq")
+            .bind(&[work.into(), at.into()])?,
+    );
+    let results = db.batch(batch).await?;
     let seq = results
         .last()
-        .map(|r| r.results::<Seq>())
+        .map(|r| r.results::<SeqRow>())
         .transpose()?
         .and_then(|rows| rows.first().map(|row| row.seq as u64))
-        .ok_or_else(|| worker::Error::RustError("the batch did not bump the work".into()))?;
-    Ok(seq)
+        .ok_or_else(|| worker::Error::RustError(format!("there is no work {work}")))?;
+    let live = settle(db, work, seq, event).await?;
+    pages.send(&serde_json::to_string(&live)?).await;
+    repository::changed(env, work).await;
+    Ok(())
+}
+
+/// The event as pages get it, read once the write is in.
+async fn settle(db: &D1Database, work: &str, seq: u64, event: Event) -> worker::Result<Live> {
+    Ok(match event {
+        Event::Run { run, change } => {
+            let change = match *change {
+                Change::Finished {
+                    check,
+                    look: Some(look),
+                    ..
+                } => {
+                    let (look, keys) = shown(*look, &held(db, &run).await?).unzip();
+                    Change::Finished {
+                        check,
+                        look: look.map(Box::new),
+                        keys: keys.unwrap_or_default(),
+                    }
+                }
+                Change::Done { checks, looks, .. } => {
+                    let held = held(db, &run).await?;
+                    let keys = looks
+                        .iter()
+                        .map(|look| (look.check.clone(), review::keys(&look.items, &held)))
+                        .collect();
+                    Change::Done {
+                        checks,
+                        looks,
+                        keys,
+                    }
+                }
+                change => change,
+            };
+            Live::Event {
+                seq,
+                run,
+                change: Box::new(change),
+            }
+        }
+        Event::Work(change) => Live::Work { seq, change },
+        Event::Waiting => Live::Work {
+            seq,
+            change: Box::new(WorkChange::Waiting {
+                waiting: jobs::waiting(db, work).await?,
+            }),
+        },
+    })
 }
 
 #[derive(Deserialize)]
@@ -475,16 +641,4 @@ pub fn state(word: &str) -> RunState {
 pub fn read<T: serde::de::DeserializeOwned>(json: &str) -> worker::Result<T> {
     serde_json::from_str(json)
         .map_err(|e| worker::Error::RustError(format!("a stored record does not read back: {e}")))
-}
-
-/// Hands an event to the work's room, which sends it to every page open on the work, and the
-/// work as it now stands to its repository's room. The event is in D1 already, so a room that
-/// cannot be reached loses nothing: a page that reconnects gets it in its snapshot. It is
-/// logged and the call goes on.
-pub async fn notify(env: &Env, work: &str, live: &Live) {
-    let sent = async { room::send(env, work, &serde_json::to_string(live)?).await };
-    if let Err(error) = sent.await {
-        worker::console_error!("the room of work {work} missed an event: {error}");
-    }
-    repository::changed(env, work).await;
 }

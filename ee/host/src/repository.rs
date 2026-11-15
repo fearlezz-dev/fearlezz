@@ -3,7 +3,7 @@
 //! open notes, a weakening to accept), live. Who sees it is the work page's rule.
 //!
 //! The listing is derived from D1 when a page connects, and again for one work each time that
-//! work changes (`work::notify`), which the repository's room sends to its open pages.
+//! work changes (`work::commit`), which the repository's room sends to its open pages.
 
 use fearlezz_proof::events::{Latest, Listed, Listing, Source};
 use fearlezz_proof::review::Review;
