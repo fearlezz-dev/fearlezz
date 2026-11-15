@@ -501,7 +501,7 @@ base_commit: string,
 base_result: string, 
 /**
  * Why there is no before (no base branch, the check fails on the base, the look
- * failed). Then every picture counts as new and needs approval.
+ * failed). Then every picture counts as new, for a person to look at.
  */
 no_before?: string | null, 
 /**
@@ -544,8 +544,7 @@ after: string | null,
  */
 comparison: Comparison | null, 
 /**
- * Named by the check's `flaky`: compared and shown, but never blocks or waits for
- * approval.
+ * Named by the check's `flaky`: compared and shown, but never waits for a person's look.
  */
 flaky?: boolean, };
 

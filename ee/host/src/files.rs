@@ -95,7 +95,7 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
     headers.set("X-Content-Type-Options", "nosniff")?;
     // The grant is in every URL here; a link out of the page must not carry it along.
     headers.set("Referrer-Policy", "no-referrer")?;
-    // Only the app's shell may frame the files. Browsers that know frame-ancestors ignore
+    // Only the app origin's pages may frame the files. Browsers that know frame-ancestors ignore
     // X-Frame-Options, which can name no other origin; older ones refuse the frame outright.
     headers.set(
         "Content-Security-Policy",

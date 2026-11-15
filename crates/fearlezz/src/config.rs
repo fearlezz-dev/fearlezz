@@ -129,8 +129,8 @@ pub(crate) struct Pictures {
     pub films: Option<MediaGlob>,
     /// For a check that records an app's window while its command runs.
     pub record: Option<crate::record::Spec>,
-    /// Pictures (ids or globs, as written) that are compared and shown but never block or
-    /// wait for approval.
+    /// Pictures (ids or globs, as written) that are compared and shown but never wait for a
+    /// person's look.
     pub flaky: Globs,
 }
 

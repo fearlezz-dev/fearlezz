@@ -58,8 +58,7 @@ pub struct Item {
     pub after: Option<String>,
     /// What comparing them found.
     pub comparison: Option<Comparison>,
-    /// Named by the check's `flaky`: compared and shown, but never blocks or waits for
-    /// approval.
+    /// Named by the check's `flaky`: compared and shown, but never waits for a person's look.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flaky: bool,
 }
@@ -82,7 +81,7 @@ pub struct Look {
     /// How the check did on the base commit.
     pub base_result: String,
     /// Why there is no before (no base branch, the check fails on the base, the look
-    /// failed). Then every picture counts as new and needs approval.
+    /// failed). Then every picture counts as new, for a person to look at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_before: Option<String>,
     /// Something about the comparison a person should know, such as a base run that passed

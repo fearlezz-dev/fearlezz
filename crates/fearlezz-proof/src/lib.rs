@@ -43,7 +43,8 @@ pub struct Proof {
     pub pull: Option<Pull>,
     /// The commit as people read it, with the merge it proved.
     pub commit: String,
-    /// The full commit people know: the pull request's head, or HEAD. Approvals bind to it.
+    /// The full commit people know: the pull request's head, or HEAD. An admin's accept on the
+    /// proof host binds to it.
     pub head: String,
     /// The base branch.
     pub base: String,
