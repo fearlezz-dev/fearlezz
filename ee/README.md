@@ -237,9 +237,9 @@ webhook secret before anything in it is read (`401` when the signature does not 
 **Deploying review.** In the GitHub App's settings, add the permissions and events above, set
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared
 in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
-deploy applies the D1 migrations (`0006_review.sql`, `0007_notes.sql`, `0008_local_runs.sql`,
-which ends the sign ins made before it, `0009_shares_and_activity.sql` and
-`0010_verdicts_without_kind.sql` and `0011_accept_weakenings.sql`) and the schedule (`[triggers]` in `wrangler.toml`). Existing installations
+deploy applies the D1 migration `0004_hosted_review.sql` (the whole schema of protocol 2 and
+review, over the deployed `0001` to `0003`) and the schedule (`[triggers]` in `wrangler.toml`).
+Existing installations
 must approve the new permissions (Actions write among them) before the host can write their
 check runs or run a proof job again. For
 `fearlezz setup login`, also tick **Enable Device Flow** in the app's settings.

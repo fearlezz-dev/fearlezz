@@ -860,7 +860,7 @@ pub async fn close_silent(env: &Env, config: &Config) -> worker::Result<()> {
     let db = env.d1("DB")?;
     let rows = db
         .prepare(
-            "SELECT id, work FROM runs WHERE state = 'running' AND git_ref LIKE 'local:%' AND COALESCE(touched, opened) < ?1",
+            "SELECT id, work FROM runs WHERE state = 'running' AND git_ref LIKE 'local:%' AND touched < ?1",
         )
         .bind(&[(now() as f64 - SILENT_SECONDS).into()])?
         .all()
