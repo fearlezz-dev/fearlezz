@@ -107,7 +107,11 @@ decided:
       The local approval (fearlezz say approve --said and --github) goes too. The final stage says
       pictures changed and a person reviews them on the pull request; it does not wait.
 
-open: []
+open:
+  - id: base-shell
+    ask: >-
+      A check's shell still comes from the change's [env] on the base checkout (same class as the
+      prepare fix f5d16d9). Fix it too? Raise at the next check-in.
 
 slices:
   - id: core-cut
