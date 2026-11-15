@@ -8,9 +8,10 @@ may settle it), so both always read one shape.
 ## Proof host
 
 A Cloudflare Worker written in Rust (`workers-rs`), with R2 for files, D1 for records and one
-Durable Object per piece of work for its open pages. CI streams a run to it while the run
-goes (`fearlezz run --ci`), and the host draws the work's page itself, live, for the people who
-may read the repository.
+Durable Object per piece of work, and per repository, for its open pages. CI streams a run to it
+while the run goes (`fearlezz run --ci`), and so does a signed in developer's `fearlezz run`; the
+host draws the work's page itself, live, for the people who may read the repository, who
+review it there, and for anyone a writer gave a share link.
 
 A repository opts in by installing the Fearlezz GitHub App and letting its workflow request
 GitHub's OIDC token (`permissions: id-token: write`). CI asks whether the repository is
@@ -77,14 +78,16 @@ request:
 
 | Path | Shows |
 | --- | --- |
+| `/<owner>/<repo>` | The repository page: every work of the repository (see below). |
 | `/<owner>/<repo>/work/<branch>` | The work's page (a branch with slashes keeps them, each segment escaped). |
 | `/<owner>/<repo>/pull/<n>` | The same page, by its pull request. |
-| `/live/<owner>/<repo>/...` | The page's live connection, at `/live` before the page's path. |
+| `/-/share/<token>` | The work's page through a share link: for anyone, view only (see Share links). A GitHub owner never starts with a dash, so `/-/` names no repository. |
+| `/live/...` | A page's live connection, at `/live` before the page's path. |
 | `/login`, `/callback`, `/logout` | GitHub sign in. |
 
 The page is a Solid app (`ee/app`) the worker serves from its static assets: the same
-`index.html` for every work, which draws itself from its live connection. An unknown work is
-`404`. It answers `no-store`, may not be framed, its `connect-src` is `'self'`, and its
+`index.html` for every page, which draws itself from its live connection. An unknown work, or a
+repository the host holds no work of, is `404`. It answers `no-store`, may not be framed, its `connect-src` is `'self'`, and its
 `img-src` and `media-src` name the files origin, the only place pictures load from.
 
 **Live.** D1 is the one record; the Durable Object of a work (`WorkRoom`) holds only the
@@ -107,6 +110,18 @@ A look reaches pages, in a snapshot or an event, only once every picture it name
 sends a check's end before the pictures the host lacks, so until then a page could only show
 them broken. The blob upload that completes a look sends it as a `finished` event of its check.
 
+**The repository page** lists every work of the repository, newest activity first (when the
+work last changed: `works.active`, set by every write that bumps its `seq`): its branch, its pull
+request's number and title when a run named one, where its newest run stands (running, passed,
+failed, stopped, and whether it is a local run, unproven, with who ran it), and what waits on
+it: pictures of its head without a verdict, open notes, and a weakening to accept. Each row
+leads to the work's page; the work page's repository name leads back. Who sees it is the work
+page's rule. Its live connection (`/live/<owner>/<repo>`, held by the repository's own Durable
+Object) sends `events::Listing`: first `{"kind": "snapshot", "repository", "works": [...]}`,
+then `{"kind": "work", ...}` with one work as it now stands each time that work changes; the
+page keeps the newest of each work by its `seq`. This replaces the old local overview page;
+`fearlezz --all` prints text.
+
 **Pictures.** The page shows every look of the run it shows as it arrives, so a person can
 start looking before the run ends: counts that filter, grouping by check or by the parts of a
 picture's name (screen, viewport, theme), changed pictures first, then new and gone, then
@@ -116,14 +131,15 @@ differ; films play on one clock with a lane per film and a jump to each change. 
 show, marked. `j` and `k` step between pictures, `1` to `5` pick the way to compare. The page
 gets a run's files with `GET /api/v2/runs/<run>/grant`, which answers
 `{"files": "<files origin>/<grant>/", "expires"}` to someone who may see the work (the page's
-rule: `401` without a session for a private repository, `404` otherwise) and is asked again
-before it ends.
+rule: `401` without a session for a private repository, `404` otherwise), or with
+`?share=<token>` to a share link of the run's work (`404` for any other run, or a link that does
+not hold), and is asked again before it ends.
 
 The room takes a socket before it reads the snapshot, so nothing written between the two is
 missed; the page drops events its snapshot already holds by `seq`. A dropped connection opens
 again with a fresh snapshot. Asked without upgrading, `/live/...` answers the snapshot as JSON.
 A live connection without access gets `401`, an unknown work `404`, and a work that is gone
-closes with `1008`.
+closes with `1008`, as does a share link's page when the link is revoked.
 
 **Types.** The page's TypeScript types (`ee/app/src/proof.ts`) are generated from
 `fearlezz-proof` with ts-rs; a test of `ee-tests` fails when they drift, and
@@ -212,9 +228,44 @@ webhook secret before anything in it is read (`401` when the signature does not 
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared
 in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
 deploy applies the D1 migrations (`0006_review.sql`, `0007_notes.sql`, `0008_local_runs.sql`,
-which ends the sign ins made before it) and the schedule (`[triggers]` in `wrangler.toml`). Existing installations
+which ends the sign ins made before it, and `0009_shares_and_activity.sql`) and the schedule (`[triggers]` in `wrangler.toml`). Existing installations
 must approve the new permissions before the host can write their check runs. For
 `fearlezz setup login`, also tick **Enable Device Flow** in the app's settings.
+
+### Share links
+
+A person with write access makes a link that shows anyone the work's live page, view only,
+until someone with write access revokes it. A link names the work (its branch, and so its pull
+request once it has one), not a run, so it follows new runs.
+
+- **The token** is 128 random bits in the link's URL, `<APP_ORIGIN>/-/share/<token>`. The host
+  keeps only its HMAC with `SIGNING_KEY` (`shares`: id, hash, work, who made it, when), like the
+  CLI's token, so the table alone opens nothing. The list therefore shows who made each link
+  and when, never the link again: it is shown once, when made. Revoking deletes the row and
+  closes the pages open on the link (`1008`, "This link was revoked."). An unknown or revoked
+  token gets a bare `404` that names no repository.
+- **Only that work.** The link skips the repository's access check for its work's page, live
+  connection and run grants alone. Everything else still needs what it needed before.
+- **It only views.** Through a link the page says so, offers no verdict, note, resolve, accept
+  or share, and asks no one to sign in, even a signed in writer. Every write still takes a
+  browser session (Review above), so the link gives none; as a bearer it is refused like any
+  other.
+- **The files** come from the files origin under the same one hour grant of one run as any
+  other view, asked afresh by each page; the token never reaches the files origin. The page
+  answers `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex, nofollow`.
+- **The Share control** shows beside the work's name for a signed in person with write access:
+  it makes a link and shows it to copy, and lists the work's live links, each with Revoke.
+
+Making and revoking take what a verdict takes (a session, `Origin` = `APP_ORIGIN`, a JSON body,
+no `Authorization` header); listing takes the session. Each needs write access to the
+repository (GitHub's collaborator permission, cached 5 minutes like every role): `403` without
+it, `404` for a work or private repository the person may not see, `401` without a session.
+
+| Call | Does |
+| --- | --- |
+| `POST /api/v2/shares` | Body `{"repository": "owner/name", "branch"}`. `201 {"url", "share": {"id", "made_by", "made_at"}}`. |
+| `GET /api/v2/shares?repository=<owner/name>&branch=<branch>` | `200 {"shares": [{"id", "made_by", "made_at"}]}`, newest first. |
+| `POST /api/v2/shares/<id>/revoke` | Body `{}`. `200 {"revoked": "<id>"}`; `404` for a link that is gone. |
 
 ### The CLI
 
@@ -264,7 +315,8 @@ for another run, gets `404`. Files answer with `Content-Security-Policy: frame-a
 
 Anyone for a public repository; otherwise a signed in person whom GitHub gives at least read
 access to the repository. Anyone else gets `404`, so a private repository's name is not
-confirmed. A person without a session is sent to sign in first.
+confirmed. A person without a session is sent to sign in first. A work's page, and the repository page, follow
+this rule alike; a share link opens one work's page to anyone holding it (Share links).
 
 - **Sessions** live in D1 (`sessions`): the person's login, GitHub user token and expiry (eight
   hours, as long as the token). The token stays on the server; it reads who may see a
@@ -287,3 +339,7 @@ or `PATH`) over the DevTools protocol on a pipe. Inside `devenv shell`,
 `cargo test --manifest-path ee/Cargo.toml` builds the worker and runs them, and
 `bun test ee/app` runs the page's own tests. Fearlezz proves it with the `ee-fmt`,
 `ee-clippy`, `ee-tests`, `ee-page-types` and `ee-page-tests` checks.
+
+The worker is built for size: `opt-level = "z"` with fat LTO and one codegen unit
+(`ee/Cargo.toml`), and wasm-opt `-Oz` (`ee/host/Cargo.toml`). Its wasm is about 410 KB gzip
+(1.0 MB raw); most of it is the host's own code and serde's code for the proof model's types.

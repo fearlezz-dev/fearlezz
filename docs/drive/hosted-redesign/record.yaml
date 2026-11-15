@@ -7,8 +7,8 @@ goal: >-
 
 pieces:
   - id: split
-    status: figuring-out
-    open: Per piece split is in inventory.html; free-ci-only-proves picked the direction.
+    status: done
+    open: Built; free CI only proves, hosted review lives on the host.
     tries:
       - id: free-only-proves
         what: Free CI only proves; all approval machinery leaves the core.
@@ -16,8 +16,8 @@ pieces:
         why: Chosen by the developer (option A of inventory.html).
         evidence: [docs/drive/hosted-redesign/inventory.html]
   - id: live-page
-    status: figuring-out
-    open: Protocol version 2, the live page and its pictures are built; verdicts come next.
+    status: done
+    open: Built; the work page, the repository page and share links are live.
     tries:
       - id: spike-live
         what: Throwaway Rust worker with a DO per PR, events in, live Solid page, under wrangler dev.
@@ -32,12 +32,12 @@ pieces:
         why: Rust Durable Object with hibernation works; no JS object or polling needed.
         evidence: [spike deleted after recording; numbers above]
   - id: authority
-    status: figuring-out
-    open: Where an approval lives and who sets the GitHub status in hosted mode.
+    status: done
+    open: Built; the host holds verdicts and accepts and writes the Fearlezz review check run (host-is-authority).
     tries: []
   - id: feedback
-    status: figuring-out
-    open: Note model drafted in model.md; how the agent reads it (fearlezz --notes) not yet shown.
+    status: done
+    open: Built; notes on the page, read by the agent with fearlezz --notes.
     tries:
       - id: mockup-1
         what: Live page mockup with region notes on before, after or both, and a verdict per picture.
@@ -160,7 +160,17 @@ slices:
       - ee/app/src/review.test.ts (who ran a local run)
     status: done
   - id: finish
-    tests: []
-    status: todo
+    tests:
+      - ee/host-tests/tests/host/share.rs (a_share_link_shows_the_live_work_and_follows_a_new_run, a_share_link_never_writes, a_revoked_share_link_is_not_found_and_names_no_repository, a_writer_makes_lists_and_revokes_share_links_and_a_reader_cannot, and the share shots of the ignored pictures)
+      - ee/host-tests/tests/host/repository.rs (the_repository_page_lists_its_works_with_what_waits, a_private_repository_page_needs_a_reader, the_repository_page_updates_live, and the repository shots of the ignored pictures)
+      - ee/host-tests/tests/host/local.rs (a_local_run_uploading_its_files_is_not_silent)
+      - ee/app/src/repository.test.ts (the listing, where the page is, the grant through a link, view only)
+    status: done
+    taught: >-
+      Worker wasm 482 KB gzip before, 410 KB with opt-level "z" and wasm-opt -Oz; the rest is the
+      host's own code and serde's code for the proof model, not settings. Share tokens are kept
+      as their HMAC, so a link is shown once and the list names who made it and when.
 
-next: Build the finish slice on refactor/hosted-proof-redesign.
+next: >-
+  Every slice is built. Before merging: change the GitHub App's settings, deploy, and prove the
+  host on this branch's pull request on real GitHub (ROADMAP Known problems).

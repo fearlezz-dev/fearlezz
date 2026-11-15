@@ -24,7 +24,8 @@ run_worker_first = ["/*", "!/assets/*"]
 html_handling = "none"
 not_found_handling = "none"
 
-# One room per piece of work, holding the live connections of the pages open on it.
+# One room per piece of work and one per repository, holding the live connections of the pages
+# open on it.
 [[durable_objects.bindings]]
 name = "WORK"
 class_name = "WorkRoom"

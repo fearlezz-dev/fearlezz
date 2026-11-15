@@ -1,5 +1,7 @@
 # Hosted proof pages
 
+> **Superseded in part.** The hosted redesign (`docs/drive/hosted-redesign/`, its decisions in `record.yaml`) replaces this record's decisions on approvals by comment (`/fearlezz approve` and `/fearlezz accept`, posted as the person), the shell that framed a CI written page, and the page CI wrote. The host now draws a live page itself and is the authority for review: verdicts per picture, notes and accepts are given on the host, which writes the `Fearlezz review` check run as the app. Read `ee/README.md` for the host as built.
+
 ## Goal
 
 The hosted parts in `ee/`: proof links and pages a team can open without the developer's machine. Looking at a page, a person should see two things: did anything break, and did it implement what they asked for. "Correctly is just my judgment; that is why the page exists."
