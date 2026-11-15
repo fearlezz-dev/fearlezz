@@ -8,11 +8,10 @@
 use fearlezz_proof::events::{Live, WorkChange};
 use fearlezz_proof::look::Look;
 use fearlezz_proof::notes::{Ask, Note, NoteState, Side, WORDS_MAX};
-use fearlezz_proof::review::Role;
 use serde_json::json;
 use worker::{D1Database, Env, Request, Response};
 
-use crate::say;
+use crate::say::{self, Act};
 use crate::work::{self, NOTE_COLUMNS, NoteRow, read};
 use crate::{Answer, Config, Refusal, crypto, now, pages, review};
 
@@ -42,7 +41,15 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     }
     let db = env.d1("DB")?;
     let run = say::run(&req, env, config, &db, id).await?;
-    writer(env, config, &person, &run.repository, "make notes").await?;
+    say::require(
+        env,
+        config,
+        &person.login,
+        &person.token,
+        &run.repository,
+        Act::Note,
+    )
+    .await?;
     let look: Option<String> = db
         .prepare("SELECT look FROM checks WHERE run = ?1 AND id = ?2")
         .bind(&[id.into(), ask.check.as_str().into()])?
@@ -154,7 +161,15 @@ pub async fn resolve(req: Request, env: &Env, config: &Config, id: &str) -> Answ
     if !pages::open(&req, env, config, &work.repo).await? {
         return Err(Refusal::new(404, "not found"));
     }
-    writer(env, config, &person, &work.repository, "resolve notes").await?;
+    say::require(
+        env,
+        config,
+        &person.login,
+        &person.token,
+        &work.repository,
+        Act::Resolve,
+    )
+    .await?;
     let work_id = row.work.clone();
     let mut note = row.note();
     note.state = NoteState::Resolved;
@@ -167,26 +182,6 @@ pub async fn resolve(req: Request, env: &Env, config: &Config, id: &str) -> Answ
         ])?;
     changed(env, config, &db, &work_id, update, &note).await?;
     Ok(Response::from_json(&json!({ "note": note }))?)
-}
-
-/// Refuses a person without write access to `repository`.
-async fn writer(
-    env: &Env,
-    config: &Config,
-    person: &crate::session::Session,
-    repository: &str,
-    what: &str,
-) -> Result<(), Refusal> {
-    if say::role(env, config, &person.login, &person.token, repository).await? < Role::Write {
-        return Err(Refusal::new(
-            403,
-            format!(
-                "@{} cannot {what} here: that needs write access to {repository} on GitHub",
-                person.login
-            ),
-        ));
-    }
-    Ok(())
 }
 
 /// Writes a note's change with the work's next event, sends it to the open pages, and derives

@@ -12,11 +12,11 @@
 //! token: the list shows who made each link and when, and the link itself is shown once, when
 //! it is made. Revoking deletes the row and ends the pages open on it.
 
-use fearlezz_proof::review::Role;
 use serde::Deserialize;
 use serde_json::json;
 use worker::{D1Database, Env, Headers, Request, Response};
 
+use crate::say::Act;
 use crate::session::{self, Session};
 use crate::work::{self, Place};
 use crate::{Answer, Config, Refusal, crypto, now, pages, repo_key, room, say};
@@ -93,27 +93,16 @@ async fn writable(
     let work = work::find(&db, &repo, &Place::Branch(named.branch.clone()))
         .await?
         .ok_or_else(not_found)?;
-    writer(env, config, person, &named.repository).await?;
+    say::require(
+        env,
+        config,
+        &person.login,
+        &person.token,
+        &named.repository,
+        Act::Share,
+    )
+    .await?;
     Ok((db, work, repo))
-}
-
-/// Refuses a person without write access to `repository`.
-async fn writer(
-    env: &Env,
-    config: &Config,
-    person: &Session,
-    repository: &str,
-) -> Result<(), Refusal> {
-    if say::role(env, config, &person.login, &person.token, repository).await? < Role::Write {
-        return Err(Refusal::new(
-            403,
-            format!(
-                "@{} cannot share this work: that needs write access to {repository} on GitHub",
-                person.login
-            ),
-        ));
-    }
-    Ok(())
 }
 
 /// `POST /api/v2/shares`: makes a link to a work. `201 {"url", "share": {"id", "made_by",
@@ -203,7 +192,15 @@ pub async fn revoke(req: Request, env: &Env, config: &Config, id: &str) -> Answe
     if !pages::open(&req, env, config, &row.repo).await? {
         return Err(not_found());
     }
-    writer(env, config, &person, &row.repository).await?;
+    say::require(
+        env,
+        config,
+        &person.login,
+        &person.token,
+        &row.repository,
+        Act::Share,
+    )
+    .await?;
     db.prepare("DELETE FROM shares WHERE id = ?1")
         .bind(&[id.into()])?
         .run()

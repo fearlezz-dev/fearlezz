@@ -17,7 +17,6 @@ use fearlezz_proof::events::{
 };
 use fearlezz_proof::look::Look;
 use fearlezz_proof::review as reviews;
-use fearlezz_proof::review::Role;
 use fearlezz_proof::{Check, SCHEMA};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -56,23 +55,22 @@ impl Writer {
     }
 }
 
-/// Refuses a person who may not write `repository`, as GitHub says, kept for a few minutes.
+/// Refuses a person who may not send local runs of `repository`.
 async fn may_write(
     env: &Env,
     config: &Config,
     person: &Person,
     repository: &str,
 ) -> Result<(), Refusal> {
-    if say::role(env, config, &person.login, &person.token, repository).await? < Role::Write {
-        return Err(Refusal::new(
-            403,
-            format!(
-                "@{} cannot send local runs of {repository}: that needs write access on GitHub",
-                person.login
-            ),
-        ));
-    }
-    Ok(())
+    say::require(
+        env,
+        config,
+        &person.login,
+        &person.token,
+        repository,
+        say::Act::LocalRun,
+    )
+    .await
 }
 
 pub async fn installed(req: &Request, env: &Env, config: &Config) -> Answer {

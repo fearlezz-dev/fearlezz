@@ -16,8 +16,8 @@ use crate::look::Item;
 use crate::notes::Note;
 use crate::{Proof, Ran, short};
 
-/// What a person may do on a repository, as GitHub's collaborator permission says it: a
-/// verdict, a note or a share link needs write access, an accept admin rights.
+/// What a person may do on a repository, as GitHub's collaborator permission says it. Which
+/// act needs which role is the host's one rule (`Act` in its `say.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
     /// Read, or nothing.
@@ -29,12 +29,22 @@ pub enum Role {
 }
 
 impl Role {
-    /// The role GitHub's `permission` field names: `admin`, `write`, or anything less.
+    /// The role GitHub's `permission` field names: `admin`, `write`, or anything less. It reads
+    /// back what `word` wrote.
     pub fn of(permission: &str) -> Role {
         match permission {
             "admin" => Role::Admin,
             "write" => Role::Write,
             _ => Role::Less,
+        }
+    }
+
+    /// The role's word, as GitHub says it: `admin`, `write` or `read`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Role::Admin => "admin",
+            Role::Write => "write",
+            Role::Less => "read",
         }
     }
 }

@@ -115,8 +115,68 @@ impl RunRow {
     }
 }
 
+/// What a person does on a repository through the host, each needing a role there: the one
+/// rule every endpoint asks through `require`.
+#[derive(Clone, Copy)]
+pub enum Act {
+    Verdict,
+    Note,
+    Resolve,
+    Share,
+    Accept,
+    LocalRun,
+}
+
+impl Act {
+    /// The role it needs on GitHub.
+    fn needs(self) -> Role {
+        match self {
+            Act::Accept => Role::Admin,
+            Act::Verdict | Act::Note | Act::Resolve | Act::Share | Act::LocalRun => Role::Write,
+        }
+    }
+
+    /// What it does, as a refusal says it: "cannot give verdicts on owner/name".
+    fn words(self) -> &'static str {
+        match self {
+            Act::Verdict => "give verdicts",
+            Act::Note => "make notes",
+            Act::Resolve => "resolve notes",
+            Act::Share => "share a work",
+            Act::Accept => "accept a weakened proof",
+            Act::LocalRun => "send local runs",
+        }
+    }
+}
+
+/// Refuses `login` the act on `repository` unless GitHub gives them the role it needs: `403`
+/// saying so, or `401` when their GitHub token no longer works.
+pub async fn require(
+    env: &Env,
+    config: &Config,
+    login: &str,
+    token: &str,
+    repository: &str,
+    act: Act,
+) -> Result<(), Refusal> {
+    if role(env, config, login, token, repository).await? >= act.needs() {
+        return Ok(());
+    }
+    let needs = match act.needs() {
+        Role::Admin => "admin rights",
+        Role::Write | Role::Less => "write access",
+    };
+    Err(Refusal::new(
+        403,
+        format!(
+            "@{login} cannot {} on {repository}: that needs {needs} on GitHub",
+            act.words()
+        ),
+    ))
+}
+
 /// What a person may do on a repository: GitHub's word, kept for a few minutes.
-pub async fn role(
+async fn role(
     env: &Env,
     config: &Config,
     login: &str,
@@ -133,12 +193,7 @@ pub async fn role(
             "your GitHub sign in expired; sign in again",
         ));
     };
-    let word = match role {
-        Role::Admin => "admin",
-        Role::Write => "write",
-        Role::Less => "read",
-    };
-    cache::put(env, &key, word, ROLE_SECONDS).await?;
+    cache::put(env, &key, role.word(), ROLE_SECONDS).await?;
     Ok(role)
 }
 
@@ -154,15 +209,15 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
     let db = env.d1("DB")?;
     let run = run(&req, env, config, &db, id).await?;
     run.reviewed("verdicts are given")?;
-    if role(env, config, &person.login, &person.token, &run.repository).await? < Role::Write {
-        return Err(Refusal::new(
-            403,
-            format!(
-                "@{} cannot give verdicts here: that needs write access to {} on GitHub",
-                person.login, run.repository
-            ),
-        ));
-    }
+    require(
+        env,
+        config,
+        &person.login,
+        &person.token,
+        &run.repository,
+        Act::Verdict,
+    )
+    .await?;
     let look: Option<String> = db
         .prepare("SELECT look FROM checks WHERE run = ?1 AND id = ?2")
         .bind(&[id.into(), ask.check.as_str().into()])?
@@ -241,15 +296,15 @@ pub async fn accept(req: Request, env: &Env, config: &Config, id: &str) -> Answe
     let db = env.d1("DB")?;
     let run = run(&req, env, config, &db, id).await?;
     run.reviewed("weakenings are accepted")?;
-    if role(env, config, &person.login, &person.token, &run.repository).await? < Role::Admin {
-        return Err(Refusal::new(
-            403,
-            format!(
-                "@{} cannot accept a weakened proof here: that needs admin rights on {} on GitHub",
-                person.login, run.repository
-            ),
-        ));
-    }
+    require(
+        env,
+        config,
+        &person.login,
+        &person.token,
+        &run.repository,
+        Act::Accept,
+    )
+    .await?;
     let proof = run.proof.as_deref().map(read::<Proof>).transpose()?;
     let weakened = proof
         .filter(|p| work::state(&run.state) == RunState::Done && !p.weakened.is_empty())
@@ -336,12 +391,8 @@ pub async fn viewer(req: &Request, env: &Env, config: &Config, owner: &str, name
     let answer = match session::read(req, env).await? {
         Some(person) => {
             let repository = format!("{owner}/{name}");
-            let role = match role(env, config, &person.login, &person.token, &repository).await? {
-                Role::Admin => "admin",
-                Role::Write => "write",
-                Role::Less => "read",
-            };
-            json!({"login": person.login, "role": role})
+            let role = role(env, config, &person.login, &person.token, &repository).await?;
+            json!({"login": person.login, "role": role.word()})
         }
         None => json!({"login": null}),
     };
