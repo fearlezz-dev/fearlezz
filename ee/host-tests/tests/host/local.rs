@@ -126,6 +126,7 @@ pub fn a_local_run_never_touches_the_check_run_or_the_comment() {
         "pull_request",
         &pull_request("opened", 130, "local/check", &head),
     );
+    published(130);
     let before = world().github.check_runs("owner/review", &head);
     assert_eq!(before.len(), 1, "the pull request waits for CI");
     let writes = before[0].writes.len();
@@ -174,7 +175,7 @@ pub fn a_note_on_a_local_run_shows_on_a_later_ci_run_of_the_work() {
     let job = Job::pull("owner/review", 131, "local/carry").at(&head, 1131);
     let (look, files) = one_still(b"carry before", b"carry after, on CI");
     proven(&job, &look, &files, &json!({}));
-    let review = review_of(131);
+    let review = published(131);
     assert_eq!(review["notes"][0]["id"], note.as_str(), "{review:#}");
     let page = snapshot("/owner/review/pull/131");
     let sources: Vec<&str> = page["runs"]

@@ -24,7 +24,7 @@ mod share;
 mod worker;
 
 use std::sync::OnceLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -358,6 +358,10 @@ fn main() {
         (
             "writes_at_once_reach_a_live_page_in_the_order_of_their_numbers",
             writes_at_once_reach_a_live_page_in_the_order_of_their_numbers,
+        ),
+        (
+            "github_hanging_or_failing_never_fails_a_write_nor_drops_a_page",
+            github_hanging_or_failing_never_fails_a_write_nor_drops_a_page,
         ),
         (
             "runs_opening_at_once_write_one_comment_and_one_check_run",
@@ -1995,6 +1999,41 @@ fn workflow_job(
     })
 }
 
+/// The work's review once GitHub holds it: the work's room publishes it just after the write
+/// that moved it, so this waits until the check run of its head says its state and nothing more
+/// reaches GitHub for the pull request for a moment.
+fn published(pull: u64) -> Value {
+    let github = &world().github;
+    let written = |head: &str| {
+        let checks: usize = github
+            .check_runs("owner/review", head)
+            .iter()
+            .map(|c| c.writes.len())
+            .sum();
+        let comments: usize = github
+            .comments("owner/review", pull)
+            .iter()
+            .map(|c| c.bodies.len())
+            .sum();
+        (checks, comments)
+    };
+    eventually(|| {
+        let review = review_of(pull);
+        let head = review["head"].as_str().unwrap_or_default().to_owned();
+        let before = written(&head);
+        let runs = github.check_runs("owner/review", &head);
+        let state = runs.last().map(github::CheckRun::state);
+        if state.as_deref() != Some(conclusion(&review["state"])) {
+            return Err(format!("{review:#} is {state:?} on GitHub"));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        if written(&head) != before || review_of(pull) != review {
+            return Err(format!("{review:#} is still being published"));
+        }
+        Ok(review)
+    })
+}
+
 /// The latest check run the app wrote for `head` of `owner/review`.
 fn check_run(head: &str) -> github::CheckRun {
     let runs = world().github.check_runs("owner/review", head);
@@ -2342,6 +2381,7 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
         &pull_request("synchronize", 107, "review/flow", &first),
     );
     assert_eq!(answer.status, 202, "{}", answer.text());
+    published(107);
     let check = check_run(&first);
     assert_eq!(check.field("name"), "Fearlezz review");
     assert_eq!(check.state(), "queued");
@@ -2358,6 +2398,7 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
     // CI opens its run: in progress.
     let job = Job::pull("owner/review", 107, "review/flow").at(&first, 1107);
     let run = job.open(&["screens"]);
+    published(107);
     assert_eq!(check_run(&first).state(), "in_progress");
 
     // Done, with a changed picture and a weakening: the proof fails on the weakening, and its
@@ -2379,6 +2420,7 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
         &weakened(),
     );
     assert_eq!(answer.status, 200, "{}", answer.text());
+    published(107);
     let check = check_run(&first);
     assert_eq!(check.state(), "failure", "{:?}", check.writes);
     let summary = check.field("output")["summary"]
@@ -2400,6 +2442,7 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
         &looks_right("card/light.png"),
     );
     assert_eq!(answer.status, 201, "{}", answer.text());
+    published(107);
     assert_eq!(check_run(&first).state(), "failure");
     let admin = sign_in("admin-code", "/");
     let answer = say(&run.id, "accept", Some(&admin), &[], &json!({}));
@@ -2413,6 +2456,7 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
         Some(11071)
     );
     let rerun = job.open(&["screens"]);
+    published(107);
     assert_eq!(check_run(&first).state(), "in_progress");
     let accepted = job.weakenings(&rerun.id, &weakenings()).json()["accepted"].clone();
     let look = one_still(b"flow before", b"flow after").0;
@@ -2425,6 +2469,7 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
         &weakened_and_accepted(&accepted),
     );
     assert_eq!(answer.status, 200, "{}", answer.text());
+    published(107);
     let check = check_run(&first);
     assert_eq!(check.state(), "success", "{:?}", check.writes);
     assert!(
@@ -2439,10 +2484,12 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
         "pull_request",
         &pull_request("synchronize", 107, "review/flow", &second),
     );
+    published(107);
     assert_eq!(check_run(&second).state(), "queued");
     let next = job.at(&second, 2107);
     let run = next.open(&["tests"]);
     next.done(&run.id, &[entry("tests", "failed")], &[]);
+    published(107);
     assert_eq!(check_run(&second).state(), "failure");
     assert_eq!(
         check_run(&first).state(),
@@ -2463,6 +2510,7 @@ fn one_comment_is_created_then_edited() {
     );
     let job = Job::pull("owner/review", 108, "review/comment").at(&first, 1108);
     let run = job.open(&["tests"]);
+    published(108);
     let comments = world().github.comments("owner/review", 108);
     assert_eq!(comments.len(), 1, "{comments:?}");
     let page = format!("{}/owner/review/pull/108", world().worker.url);
@@ -2470,9 +2518,12 @@ fn one_comment_is_created_then_edited() {
     assert!(comments[0].bodies[0].contains("proving"), "{comments:?}");
 
     job.done(&run.id, &[entry("tests", "passed")], &[]);
+    published(108);
     let next = job.at(&commit("b108"), 2108);
     let run = next.open(&["tests"]);
+    published(108);
     next.done(&run.id, &[entry("tests", "failed")], &[]);
+    published(108);
     let comments = world().github.comments("owner/review", 108);
     assert_eq!(comments.len(), 1, "one comment, edited: {comments:?}");
     let bodies = &comments[0].bodies;
@@ -2581,6 +2632,7 @@ fn a_job_that_ends_without_done_cancels_its_run() {
     let snapshot = live("/owner/review/pull/110", &[]).json();
     assert_eq!(snapshot["runs"][0]["state"], "cancelled", "{snapshot:#}");
     assert_eq!(snapshot["review"]["state"], "cancelled", "{snapshot:#}");
+    published(110);
     assert_eq!(check_run(&head).state(), "cancelled");
     let answer = job.finished(&run.id, &entry("tests", "passed"), &[]);
     assert_eq!(
@@ -2814,6 +2866,7 @@ fn a_cancelled_rerun_of_a_leg_keeps_its_older_run_in_review() {
         "the older run's picture stays: {review:#}"
     );
     assert_eq!(review["state"], "waits", "{review:#}");
+    published(138);
     assert_eq!(check_run(&head).state(), "action_required");
 }
 
@@ -2892,6 +2945,81 @@ fn conclusion(state: &Value) -> &'static str {
     }
 }
 
+fn github_hanging_or_failing_never_fails_a_write_nor_drops_a_page() {
+    let github = &world().github;
+    let head = commit("a139");
+    let job = Job::pull("owner/stalled", 139, "stalled/work").at(&head, 1139);
+    let mut browser = browser::Browser::start();
+    // A page of the host's origin, which opens the work's live connection once a run made it.
+    browser.open(&format!("{}/", world().worker.url));
+    browser.wait_for("document.readyState === 'complete'");
+    for stall in [github::Stall::Hang, github::Stall::Fail] {
+        github.stall("owner/stalled", Some(stall));
+        let quick = |what: &str, answer: Answer, at: Instant| {
+            assert_eq!(answer.status, 200, "{what}: {}", answer.text());
+            assert!(
+                at.elapsed() < Duration::from_secs(5),
+                "{what} waited {:?} for GitHub ({stall:?})",
+                at.elapsed()
+            );
+        };
+        let at = Instant::now();
+        let answer = job.open_answer(&job.opening(&["tests"]));
+        assert_eq!(answer.status, 201, "{}", answer.text());
+        assert!(
+            at.elapsed() < Duration::from_secs(5),
+            "open waited {:?} for GitHub ({stall:?})",
+            at.elapsed()
+        );
+        let run = answer.json()["run"].as_str().unwrap().to_owned();
+        browser.eval(
+            "new Promise((done) => { window.seen = []; window.socket = new WebSocket(\
+             `ws://${location.host}/live/owner/stalled/pull/139`); \
+             window.socket.onmessage = (m) => window.seen.push(JSON.parse(m.data)); \
+             window.socket.onopen = () => done(true); })",
+        );
+        browser.wait_for("window.seen.length === 1");
+        let at = Instant::now();
+        quick("started", job.started(&run, "tests"), at);
+        let at = Instant::now();
+        quick("done", job.done(&run, &[entry("tests", "passed")], &[]), at);
+        browser.wait_for("window.seen.some((m) => m.kind === 'event' && m.change.kind === 'done')");
+        assert_eq!(
+            browser.eval("window.socket.readyState"),
+            json!(1),
+            "the page stays open ({stall:?})"
+        );
+        browser.eval("window.socket.close()");
+    }
+
+    // Once GitHub writes again, the next write publishes the newest review.
+    github.stall("owner/stalled", None);
+    let again = job.again().on("runner-again");
+    let run = again.open(&["tests"]);
+    let answer = again.done(&run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    eventually(|| {
+        let runs = github.check_runs("owner/stalled", &head);
+        let state = runs.last().map(github::CheckRun::state);
+        (state.as_deref() == Some("success"))
+            .then_some(())
+            .ok_or(format!("{runs:?}"))
+    });
+}
+
+/// What `what` gives once it gives it, asked again for up to 20 seconds: GitHub hears of a
+/// review just after the write that moved it.
+fn eventually<T>(what: impl Fn() -> Result<T, String>) -> T {
+    let until = Instant::now() + Duration::from_secs(20);
+    loop {
+        match what() {
+            Ok(value) => return value,
+            Err(why) if Instant::now() > until => panic!("never came: {why}"),
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
 fn runs_opening_at_once_write_one_comment_and_one_check_run() {
     let head = commit("a118");
     let job = Job::pull("owner/review", 118, "review/together").at(&head, 1118);
@@ -2901,6 +3029,7 @@ fn runs_opening_at_once_write_one_comment_and_one_check_run() {
             scope.spawn(move || leg.open(&["tests"]));
         }
     });
+    published(118);
     assert_eq!(
         world().github.comments("owner/review", 118).len(),
         1,
@@ -2949,7 +3078,7 @@ fn a_verdict_and_done_at_once_leave_the_newest_review_on_github() {
                 assert_eq!(answer.status, 200, "{}", answer.text());
             });
         });
-        let review = review_of(number);
+        let review = published(number);
         assert_eq!(review["state"], "approved", "{review:#}");
         let check = check_run(&head);
         assert_eq!(

@@ -98,7 +98,9 @@ of its open pages, which hibernate with it, and runs every write to the work, on
 (`blockConcurrencyWhile`): the write and the bump of the work's `seq` in one D1 batch, then the
 event to its pages, then the review derived again when the write can move it. So pages get the
 events in the order of their `seq`, each one more than the one before, and the review last
-written is derived from the newest state. The live connection's messages are `events::Live`:
+written is derived from the newest state. Nothing in a write waits for GitHub: the room's alarm
+publishes the review right after (see Review), and every call to GitHub gives up after 10
+seconds. The live connection's messages are `events::Live`:
 
 - first `{"kind": "snapshot", "seq", "work", "runs"}`: the work and its newest 20 runs, each with
   its checks in order (planned, `started` at a time, or with their `entry`, and their `look`
@@ -162,8 +164,10 @@ out; a run that ended without done replaces nothing, so the leg's older run keep
 and pictures in review, and a leg with no run that said done keeps the review from approving), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
 Every write that can move it (a run opening, a look arriving, done, a cancel, a verdict, an
 accept, a push to the pull request) derives it again in the work's room, after the writes
-before it; when it changed, open pages get it live and GitHub gets it as the check run and the
-comment, so runs that open at once still make one comment and one check run.
+before it; when it changed, open pages get it live. GitHub gets it as the check run and the
+comment right after, from the room's alarm, which never runs twice at once and publishes the
+review last stored, so runs that open at once still make one comment and one check run, GitHub
+ends with the newest review, and a GitHub that hangs or fails never fails or holds a write.
 
 - **Verdicts are per picture**, on a CI run only, by a signed in person with write access.
   A picture to look at is changed, new, gone, timing or unreadable, and not flaky. A verdict is
@@ -356,8 +360,9 @@ this rule alike; a share link opens one work's page to anyone holding it (Share 
   an hour, fetched again once when a token names a key id the cached set lacks. So a change
   of access on GitHub shows here within 5 minutes.
 - **A live page follows the same rule while it stays open.** Its room asks again for each page
-  a person opened before every event it sends, and on an alarm at least every 5 minutes while
-  one is open, and closes with `1008` ("Your access to this page ended; sign in again to see
+  a person opened before every event it sends, from the cache only (a write never waits for
+  GitHub), and asks GitHub on an alarm right after an event the cache could not answer for, and
+  at least every 5 minutes while one is open, and closes with `1008` ("Your access to this page ended; sign in again to see
   it.") a page whose session ended (logged out or expired) or whose access GitHub took away.
   A share link's pages stay until the link is revoked.
 

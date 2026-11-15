@@ -40,13 +40,43 @@ pub async fn sees(
             None => {}
         }
     }
-    let key = format!("public:{repo}");
+    let key = public_key(repo);
     if let Some(public) = cache::get(env, &key).await? {
         return Ok(public == "yes");
     }
     let public = github::public(config, repo).await?;
     cache::put(env, &key, if public { "yes" } else { "no" }, SIGHT_SECONDS).await?;
     Ok(public)
+}
+
+/// What `sees` would say from GitHub's word the host already holds, never asking GitHub: None
+/// when that word is not enough. A work's room asks this while it runs a write, which must not
+/// wait for GitHub (`room.rs`).
+pub async fn known(
+    env: &Env,
+    session: Option<&Session>,
+    repo: &str,
+) -> Result<Option<bool>, Refusal> {
+    if let Some(session) = session {
+        match cache::get(env, &reads_key(&session.login, repo)).await? {
+            Some(reads) if reads == "yes" => return Ok(Some(true)),
+            Some(_) => return Err(not_found()),
+            None => {}
+        }
+    }
+    Ok(match cache::get(env, &public_key(repo)).await? {
+        Some(public) if public == "yes" => Some(true),
+        Some(_) if session.is_none() => Some(false),
+        _ => None,
+    })
+}
+
+fn public_key(repo: &str) -> String {
+    format!("public:{repo}")
+}
+
+fn reads_key(login: &str, repo: &str) -> String {
+    format!("reads:{}:{repo}", login.to_lowercase())
 }
 
 /// Whether `login` may read the repository `repo` (lowercased), as their GitHub `token` sees
@@ -58,7 +88,7 @@ pub async fn reads(
     token: &str,
     repo: &str,
 ) -> worker::Result<Option<bool>> {
-    let key = format!("reads:{}:{repo}", login.to_lowercase());
+    let key = reads_key(login, repo);
     if let Some(cached) = cache::get(env, &key).await? {
         return Ok(Some(cached == "yes"));
     }

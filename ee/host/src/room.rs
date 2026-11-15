@@ -6,11 +6,17 @@
 //! repository's room sends each work as it now stands. The sockets hibernate with the object,
 //! so an idle room costs nothing while its pages stay connected.
 //!
+//! Nothing a write runs waits for GitHub. A write that can move the review asks the room's
+//! alarm to publish it, right after: the alarm never runs twice at once and reads the review
+//! last stored, so the pull request gets one check run and one comment and always the newest
+//! review, and a GitHub that hangs or fails only delays it.
+//!
 //! A page stays open only while its viewer may still see it, the rule every page follows
-//! (`pages::sees`, GitHub's word cached 5 minutes): before each event, and on an alarm at least
-//! every 5 minutes, the room asks again for each page a person opened, and closes with `1008`
-//! the pages whose session ended or whose access GitHub took away. A share link's pages stay
-//! until the link is revoked.
+//! (`pages::sees`, GitHub's word cached 5 minutes): before each event the room asks the cache
+//! (`pages::known`), and on an alarm, at least every 5 minutes and right after an event the
+//! cache could not answer for, it asks GitHub for each page a person opened, and closes with
+//! `1008` the pages whose session ended or whose access GitHub took away. A share link's pages
+//! stay until the link is revoked.
 //!
 //! A work's room is named by the work's id, a repository's by `repo:<owner/name>`; ids are hex,
 //! so the two never meet. The class keeps its first name, `WorkRoom`.
@@ -27,7 +33,8 @@ use worker::{
 };
 
 use crate::pages::{self, SIGHT_SECONDS};
-use crate::{Config, repository, session, work};
+use crate::work::Derive;
+use crate::{Config, repository, review, session, work};
 
 /// Who a page's live connection is held for, which says how long it stays open.
 #[derive(Serialize, Deserialize)]
@@ -46,6 +53,37 @@ pub enum Viewer {
 /// Why a page whose viewer may no longer see it is closed.
 const ACCESS_ENDED: &str = "Your access to this page ended; sign in again to see it.";
 
+/// The review publish the room's alarm owes GitHub, kept in its storage.
+const PUBLISH: &str = "publish";
+
+/// A publish the alarm owes: the work's newest review, and whether a CI run opened since the
+/// last one, which creates the pull request's comment when it has none.
+#[derive(Serialize, Deserialize)]
+struct Publish {
+    work: String,
+    first_run: bool,
+}
+
+/// Where a room asks whether a viewer may still see a page.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Asking {
+    /// Only GitHub's word the host holds: a write never waits for GitHub.
+    Cache,
+    /// GitHub, when the host holds no word.
+    GitHub,
+}
+
+/// The room's own state, owned, so a write the room runs holds it.
+fn own(state: &State) -> State {
+    let raw: &JsValue = state.as_raw().as_ref();
+    State::from(raw.clone().unchecked_into::<DurableObjectState>())
+}
+
+/// Has the room's alarm run now, before the 5 minute one it may have set.
+async fn alarm_now(state: &State) -> Result<()> {
+    state.storage().set_alarm(Duration::ZERO).await
+}
+
 /// The pages open in a room, owned, so a write the room runs holds them.
 pub struct Pages {
     state: State,
@@ -54,36 +92,42 @@ pub struct Pages {
 
 impl Pages {
     fn of(state: &State, env: &Env) -> Pages {
-        let raw: &JsValue = state.as_raw().as_ref();
         Pages {
-            state: State::from(raw.clone().unchecked_into::<DurableObjectState>()),
+            state: own(state),
             env: env.clone(),
         }
     }
 
-    /// Sends `text` to every open page whose viewer may still see it.
+    /// Sends `text` to every open page whose viewer may still see it, as the cache says. When
+    /// it cannot say, the page gets it and the alarm asks GitHub right after.
     pub async fn send(&self, text: &str) {
-        for socket in self.admitted().await {
+        let (open, unknown) = self.admitted(Asking::Cache).await;
+        for socket in open {
             // A page that went away is cleaned up by its close; the rest still get it.
             if let Err(error) = socket.send_with_str(text) {
                 worker::console_log!("a page missed an event: {error}");
             }
         }
+        if unknown && let Err(error) = alarm_now(&self.state).await {
+            worker::console_error!("the room did not ask again who sees its pages: {error}");
+        }
     }
 
-    /// The open pages whose viewers may still see them, after closing the rest. A person's
-    /// access is asked once per session for all their pages; when the asking itself fails
-    /// (D1 or GitHub down), the page stays and is asked again next time.
-    async fn admitted(&self) -> Vec<WebSocket> {
+    /// The open pages whose viewers may still see them, after closing the rest, and whether
+    /// any was kept only because `asking` could not say. A person's access is asked once per
+    /// session for all their pages; when the asking itself fails (D1 or GitHub down), the page
+    /// stays and is asked again next time.
+    async fn admitted(&self, asking: Asking) -> (Vec<WebSocket>, bool) {
         let config = match Config::from(&self.env) {
             Ok(config) => config,
             Err(error) => {
                 worker::console_error!("the room cannot read its settings: {error}");
-                return self.state.get_websockets();
+                return (self.state.get_websockets(), false);
             }
         };
-        let mut asked: Vec<(Option<String>, String, bool)> = Vec::new();
+        let mut asked: Vec<(Option<String>, String, Option<bool>)> = Vec::new();
         let mut open = Vec::new();
+        let mut unknown = false;
         for socket in self.state.get_websockets() {
             let Ok(Some(Viewer::Person { session, repo })) = socket.deserialize_attachment() else {
                 open.push(socket);
@@ -96,18 +140,21 @@ impl Pages {
             let sees = match known {
                 Some(sees) => sees,
                 None => {
-                    let sees = sees(&self.env, &config, session.as_deref(), &repo).await;
+                    let sees = sees(&self.env, &config, session.as_deref(), &repo, asking).await;
                     asked.push((session, repo, sees));
                     sees
                 }
             };
-            if sees {
+            if sees == Some(false) {
+                if let Err(error) = socket.close(Some(1008), Some(ACCESS_ENDED)) {
+                    worker::console_log!("a page did not close: {error}");
+                }
+            } else {
+                unknown |= sees.is_none();
                 open.push(socket);
-            } else if let Err(error) = socket.close(Some(1008), Some(ACCESS_ENDED)) {
-                worker::console_log!("a page did not close: {error}");
             }
         }
-        open
+        (open, unknown)
     }
 
     /// Whether a person still has a page open here, whose access the alarm asks again.
@@ -122,21 +169,33 @@ impl Pages {
 }
 
 /// Whether the person of session `session` (gone once they log out or it expires), or anyone
-/// without one, may still see the repository `repo`'s pages.
-async fn sees(env: &Env, config: &Config, session: Option<&str>, repo: &str) -> bool {
+/// without one, may still see the repository `repo`'s pages, as `asking` can say: None when it
+/// cannot, so the page stays until it is asked again.
+async fn sees(
+    env: &Env,
+    config: &Config,
+    session: Option<&str>,
+    repo: &str,
+    asking: Asking,
+) -> Option<bool> {
     let asked = async {
         let session = match session {
             Some(id) => session::find(env, id).await?,
             None => None,
         };
-        pages::sees(env, config, session.as_ref(), repo).await
+        match asking {
+            Asking::Cache => pages::known(env, session.as_ref(), repo).await,
+            Asking::GitHub => pages::sees(env, config, session.as_ref(), repo)
+                .await
+                .map(Some),
+        }
     };
     match asked.await {
         Ok(sees) => sees,
-        Err(refusal) if refusal.status < 500 => false,
+        Err(refusal) if refusal.status < 500 => Some(false),
         Err(refusal) => {
             worker::console_error!("whether a page may stay open was not known: {refusal:?}");
-            true
+            Some(true)
         }
     }
 }
@@ -206,6 +265,16 @@ async fn fetch(env: &Env, room: &str, url: &str, init: &RequestInit) -> Result<R
     let stub = env.durable_object("WORK")?.id_from_name(room)?.get_stub()?;
     stub.fetch_with_request(Request::new_with_init(url, init)?)
         .await
+}
+
+/// Has the room's alarm publish the newest review of work `work` right after this write;
+/// `first_run` stays owed until a publish runs.
+async fn owe(state: &State, work: String, first_run: bool) -> Result<()> {
+    let storage = state.storage();
+    let owed = storage.get::<Publish>(PUBLISH).await?;
+    let first_run = first_run || owed.is_some_and(|p| p.first_run);
+    storage.put(PUBLISH, Publish { work, first_run }).await?;
+    alarm_now(state).await
 }
 
 #[durable_object]
@@ -305,15 +374,22 @@ impl DurableObject for WorkRoom {
                 };
                 let write: work::Write = req.json().await?;
                 let (pages, env) = (Pages::of(&self.state, &self.env), self.env.clone());
+                let state = own(&self.state);
                 // No other event reaches the room until the write is done: writes to the work
-                // run one at a time. A failure is the answer's, never the gate's, which would
-                // reset the object and drop its pages.
+                // run one at a time, and nothing in them waits for GitHub. A failure is the
+                // answer's, never the gate's, which would reset the object and drop its pages.
                 let done = self
                     .state
                     .block_concurrency_while(async move {
-                        Ok(work::apply(&env, &pages, &work, write)
-                            .await
-                            .map_err(|e| e.to_string()))
+                        let derive = write.derive;
+                        let applied = async {
+                            work::apply(&env, &pages, &work, write).await?;
+                            if derive != Derive::No {
+                                owe(&state, work, derive == Derive::FirstRun).await?;
+                            }
+                            Ok::<_, worker::Error>(())
+                        };
+                        Ok(applied.await.map_err(|e| e.to_string()))
                     })
                     .await?;
                 match done {
@@ -336,11 +412,17 @@ impl DurableObject for WorkRoom {
         }
     }
 
-    /// Asks again whether each person with a page open may still see it, and keeps asking
-    /// while one has.
+    /// Publishes the review it owes GitHub, if any, then asks GitHub again whether each person
+    /// with a page open may still see it, and keeps asking while one has.
     async fn alarm(&self) -> Result<Response> {
+        let storage = self.state.storage();
+        if let Some(publish) = storage.get::<Publish>(PUBLISH).await? {
+            // Taken before it runs: a write meanwhile owes the next one, with its newer review.
+            storage.delete(PUBLISH).await?;
+            review::publish(&self.env, &publish.work, publish.first_run).await;
+        }
         let pages = Pages::of(&self.state, &self.env);
-        pages.admitted().await;
+        pages.admitted(Asking::GitHub).await;
         if pages.has_people() {
             self.watch().await?;
         }

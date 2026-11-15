@@ -144,10 +144,11 @@ pub fn an_open_note_makes_its_picture_need_change_and_fails_the_check_run() {
         &looks_right("card/light.png"),
     );
     assert_eq!(answer.status, 201, "{}", answer.text());
+    published(121);
     assert_eq!(check_run(&head).state(), "success");
 
     let id = noted(&run, "The button text is cut off");
-    let review = review_of(121);
+    let review = published(121);
     assert_eq!(review["state"], "needs_change", "{review:#}");
     assert_eq!(
         review["pictures"][0]["standing"], "needs_change",
@@ -165,7 +166,7 @@ pub fn an_open_note_makes_its_picture_need_change_and_fails_the_check_run() {
     // Resolving the last note: the looks right verdict on its content holds again.
     let answer = resolve(&id, Some(&writer), &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
-    let review = review_of(121);
+    let review = published(121);
     assert_eq!(review["state"], "approved", "{review:#}");
     assert!(review["notes"].as_array().is_none_or(Vec::is_empty));
     let check = check_run(&head);

@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use worker::{Env, Fetch, Request, Url};
 
-use crate::{Config, Refusal, cache, crypto, now};
+use crate::{Config, Refusal, cache, crypto, github, now};
 
 /// What a token says about the CI run that holds it.
 pub struct Token {
@@ -139,7 +139,7 @@ async fn key(env: &Env, config: &Config, kid: &str) -> Result<web_sys::CryptoKey
     let mut jwk = cached.as_deref().and_then(|jwks| find(jwks, kid));
     if jwk.is_none() {
         let url = Url::parse(&config.oidc_jwks).map_err(worker::Error::from)?;
-        let mut response = Fetch::Url(url).send().await?;
+        let mut response = Fetch::Url(url).send_with_signal(&github::timeout()).await?;
         let jwks = response.text().await?;
         if response.status_code() == 200 && serde_json::from_str::<Jwks>(&jwks).is_ok() {
             cache::put(env, JWKS, &jwks, JWKS_SECONDS).await?;

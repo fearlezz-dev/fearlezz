@@ -7,7 +7,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use worker::{Fetch, Headers, Method, Request, RequestInit, Result};
+use worker::{AbortSignal, Fetch, Headers, Method, Request, RequestInit, Result};
 
 use fearlezz_proof::review::Role;
 
@@ -17,6 +17,12 @@ use crate::{Config, crypto, now};
 struct Reply {
     status: u16,
     body: Value,
+}
+
+/// What every call to GitHub carries: it gives up after 10 seconds, so a GitHub that hangs
+/// never holds the host.
+pub fn timeout() -> AbortSignal {
+    AbortSignal::from(web_sys::AbortSignal::timeout_with_u32(10_000))
 }
 
 async fn call(
@@ -39,7 +45,7 @@ async fn call(
         init.with_body(Some(body.to_string().into()));
     }
     let mut response = Fetch::Request(Request::new_with_init(url, &init)?)
-        .send()
+        .send_with_signal(&timeout())
         .await?;
     let status = response.status_code();
     let body = response.json().await.unwrap_or(Value::Null);

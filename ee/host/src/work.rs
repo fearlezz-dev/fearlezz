@@ -187,17 +187,15 @@ pub enum Derive {
 /// Runs `write` on work `work` and sends what it changed to `pages`, the work's open pages,
 /// and to the repository's page. Only the work's room calls it, one write at a time, so pages
 /// get events in the order of their sequence numbers and a review is derived from the state
-/// the writes before it left. A review that cannot be derived, or reach GitHub, is logged: the
-/// write is in.
+/// the writes before it left. It never asks GitHub: the room publishes the review after it
+/// (`room.rs`). A review that cannot be derived is logged: the write is in.
 pub async fn apply(env: &Env, pages: &Pages, work: &str, write: Write) -> worker::Result<()> {
     let db = env.d1("DB")?;
     commit(env, &db, pages, work, write.statements, write.event).await?;
-    if write.derive != Derive::No {
-        let config = Config::from(env)?;
-        let first_run = write.derive == Derive::FirstRun;
-        if let Err(error) = reviews::refresh(env, &config, pages, work, first_run).await {
-            worker::console_error!("the review of work {work} was not derived again: {error}");
-        }
+    if write.derive != Derive::No
+        && let Err(error) = reviews::refresh(env, pages, work).await
+    {
+        worker::console_error!("the review of work {work} was not derived again: {error}");
     }
     Ok(())
 }

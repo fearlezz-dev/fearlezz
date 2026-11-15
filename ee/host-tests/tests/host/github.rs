@@ -101,6 +101,17 @@ pub struct State {
     pub jobs: Vec<ActionsJob>,
     /// Every job the app asked to run again: its repository, id and the token that asked.
     pub reruns: Vec<(String, u64, String)>,
+    /// The repositories whose check runs GitHub cannot write, and how it fails them.
+    pub stalls: BTreeMap<String, Stall>,
+}
+
+/// How GitHub fails to write a repository's check runs.
+#[derive(Clone, Copy, Debug)]
+pub enum Stall {
+    /// It answers nothing for half a minute, then drops the connection.
+    Hang,
+    /// It answers `500` at once.
+    Fail,
 }
 
 /// An Actions job of a workflow run.
@@ -163,6 +174,8 @@ impl FakeGitHub {
                     "owner/watched".to_owned(),
                     repo(true, Some(10), &["watcher", "leaver"]),
                 ),
+                // Its check runs fail or hang when a test says so.
+                ("owner/stalled".to_owned(), reviewed(false, 11)),
                 // The local run tests: each CLI test signs in as a login of its own.
                 (
                     "owner/local".to_owned(),
@@ -193,6 +206,7 @@ impl FakeGitHub {
             refreshes: BTreeMap::new(),
             jobs: Vec::new(),
             reruns: Vec::new(),
+            stalls: BTreeMap::new(),
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -303,6 +317,15 @@ impl FakeGitHub {
             .collect()
     }
 
+    /// GitHub fails every write to `repo`'s check runs as `stall` says, or writes them again.
+    pub fn stall(&self, repo: &str, stall: Option<Stall>) {
+        let mut state = self.state.lock().unwrap();
+        match stall {
+            Some(stall) => state.stalls.insert(repo.to_owned(), stall),
+            None => state.stalls.remove(repo),
+        };
+    }
+
     /// Publishes another Actions OIDC key, as GitHub does when it rotates them.
     pub fn publish(&self, kid: &str, key: RsaPublicKey) {
         let mut state = self.state.lock().unwrap();
@@ -336,6 +359,35 @@ fn serve(stream: TcpStream, state: &Mutex<State>, keys: &Keys) {
     let mut body = vec![0; length];
     reader.read_exact(&mut body).unwrap();
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let stall = match path
+        .trim_matches('/')
+        .split('/')
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["repos", owner, name, "check-runs", ..] if method != "GET" => {
+            let stalls = &state.lock().unwrap().stalls;
+            stalls.get(&format!("{owner}/{name}")).copied()
+        }
+        _ => None,
+    };
+    match stall {
+        Some(Stall::Hang) => {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            return;
+        }
+        Some(Stall::Fail) => {
+            let mut stream = stream;
+            let answer = r#"{"message":"Server Error"}"#;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 500 X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                answer.len()
+            );
+            return;
+        }
+        None => {}
+    }
     let token = auth
         .strip_prefix("Bearer ")
         .or_else(|| auth.strip_prefix("token "))

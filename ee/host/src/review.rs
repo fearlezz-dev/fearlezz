@@ -1,12 +1,13 @@
 //! A work's review, where the host is the authority: derived again on every event that can
 //! change it (a run opening, a look arriving, done, a cancelled job, a verdict, an accept, a new
-//! head), sent to the work's open pages when it changed, and written to GitHub as the app: one
-//! check run per pull request head, `Fearlezz review`, and one comment on the pull request.
+//! head), sent to the work's open pages when it changed, and written to GitHub as the app, by
+//! the work room's alarm right after: one check run per pull request head, `Fearlezz review`,
+//! and one comment on the pull request.
 //!
 //! The check run says `queued` until a CI run of the head opens, `in_progress` while one runs,
 //! `failure` when the proof failed (what it weakens fails it until an admin accepts it, and the
-//! accept runs the proof job again, see `say.rs`), `cancelled` when every run of the head ended
-//! without its proof, `failure` too while an open note says a picture needs change (its summary lists the notes),
+//! accept runs the proof job again, see `say.rs`), `cancelled` when a job of the head has no run
+//! that said done, `failure` too while an open note says a picture needs change (its summary lists the notes),
 //! `action_required` while a picture waits for a look,
 //! and `success` once nothing waits. `action_required` needs no requested actions: it
 //! completes the check run (so a required check blocks the merge), and GitHub sends people to
@@ -36,26 +37,15 @@ struct Row {
     review: Option<String>,
 }
 
-/// Derives the review of work `work` again and sends it where it shows: to the work's pages when
-/// it changed, and to its pull request on GitHub. `first_run` is said by a CI run opening, which
-/// creates the pull request's comment when it has none; everything else only edits it. Only the
-/// work's room calls it, while no other write to the work runs (`work::apply`), so it reads the
-/// newest state and two never write one comment or check run twice. GitHub failing is logged
-/// and never fails the write that changed the work.
-pub async fn refresh(
-    env: &Env,
-    config: &Config,
-    pages: &Pages,
-    work: &str,
-    first_run: bool,
-) -> worker::Result<()> {
+/// Derives the review of work `work` again, stores it and sends it to the work's pages when it
+/// changed. Only the work's room calls it, while no other write to the work runs
+/// (`work::apply`), so it reads the newest state; it never asks GitHub, which hears of the
+/// review from `publish`.
+pub async fn refresh(env: &Env, pages: &Pages, work: &str) -> worker::Result<()> {
     let db = env.d1("DB")?;
-    let row: Option<Row> = db
-        .prepare("SELECT repo, repository, branch, pull, head, review FROM works WHERE id = ?1")
-        .bind(&[work.into()])?
-        .first(None)
-        .await?;
-    let Some(row) = row else { return Ok(()) };
+    let Some(row) = row(&db, work).await? else {
+        return Ok(());
+    };
     let Some(head) = &row.head else { return Ok(()) };
     let of = work::of_head(&db, work, head).await?;
     let accept = accept(&db, work, head).await?;
@@ -85,12 +75,38 @@ pub async fn refresh(
         )
         .await?;
     }
-    if let Some(pull) = row.pull
-        && let Err(error) = publish(&db, config, &row, pull as u64, &review, first_run).await
-    {
-        worker::console_error!("the review of {} did not reach GitHub: {error}", row.repo);
-    }
     Ok(())
+}
+
+async fn row(db: &D1Database, work: &str) -> worker::Result<Option<Row>> {
+    db.prepare("SELECT repo, repository, branch, pull, head, review FROM works WHERE id = ?1")
+        .bind(&[work.into()])?
+        .first(None)
+        .await
+}
+
+/// Writes the review of work `work` last stored to its pull request on GitHub. `first_run` is
+/// said once a CI run opened, which creates the pull request's comment when it has none;
+/// otherwise it only edits it. Only the work room's alarm calls it, which never runs twice at
+/// once and runs again after every write that can move the review, so two never write one
+/// comment or check run twice and GitHub ends with the newest review. GitHub failing is logged:
+/// the write that moved the review is in, and the next one publishes again.
+pub async fn publish(env: &Env, work: &str, first_run: bool) {
+    let published = async {
+        let db = env.d1("DB")?;
+        let Some(row) = row(&db, work).await? else {
+            return Ok(());
+        };
+        let (Some(pull), Some(review)) = (row.pull, &row.review) else {
+            return Ok(());
+        };
+        let review: Review = serde_json::from_str(review)?;
+        let config = Config::from(env)?;
+        write(&db, &config, &row, pull as u64, &review, first_run).await
+    };
+    if let Err(error) = published.await {
+        worker::console_error!("the review of work {work} did not reach GitHub: {error}");
+    }
 }
 
 /// The accept of a head's weakenings, if an admin gave one.
@@ -147,7 +163,7 @@ fn status(state: State) -> (&'static str, Option<&'static str>) {
 /// Writes the review to its pull request as the app: the head's check run, created when the
 /// head has none or a completed one would go back to running, updated otherwise; and the
 /// comment, created only by a run's first word. Nothing unchanged is written again.
-async fn publish(
+async fn write(
     db: &D1Database,
     config: &Config,
     row: &Row,
