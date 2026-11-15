@@ -349,7 +349,7 @@ fn lint_weakened(host: &FakeHost) -> Value {
     };
     json!([{
         "check": "lint",
-        "how": "it runs another command",
+        "hows": ["it runs another command"],
         "was": check("echo all clean"),
         "now": check("echo all clean anyway"),
     }])
@@ -419,7 +419,7 @@ fn an_accept_of_other_weakenings_or_another_head_fails() {
     for (what, accepted) in [
         (
             "other weakenings",
-            json!([{"check": "tests", "how": "it is gone"}]),
+            json!([{"check": "tests", "hows": ["it is gone"]}]),
         ),
         ("fewer weakenings", json!([])),
     ] {

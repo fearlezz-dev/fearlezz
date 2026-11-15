@@ -301,7 +301,7 @@ fn a_new_or_gone_film_is_keyed_by_its_bytes() {
 fn gone(check: &str) -> Weakening {
     Weakening {
         part: Part::Check(check.into()),
-        how: "it is gone".into(),
+        hows: vec!["it is gone".into()],
         was: None,
         now: None,
     }

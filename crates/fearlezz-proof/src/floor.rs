@@ -5,7 +5,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// What a change weakens about the proof the base branch requires.
+/// What a change weakens about one part of the proof the base branch requires: every way it
+/// weakened, and the part as it was and is now, once.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Weakening {
@@ -13,8 +14,8 @@ pub struct Weakening {
     #[serde(flatten)]
     #[cfg_attr(feature = "ts", ts(flatten))]
     pub part: Part,
-    /// How it weakened, such as `it runs another command`.
-    pub how: String,
+    /// Each way it weakened, such as `it runs another command`, in the order found.
+    pub hows: Vec<String>,
     /// The part as the base branch's config has it, as TOML (`[check.tests]` with its fields,
     /// or `no_proof = [...]`), absent where it has no such part.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,11 +73,16 @@ impl Weakening {
     pub fn block_fix(base: &str) -> String {
         format!("keep the proof {base} requires; {PAST}")
     }
+
+    /// Every way it weakened, for a reader: `it runs another command; it is gone`.
+    pub fn why(&self) -> String {
+        self.hows.join("; ")
+    }
 }
 
-/// ``check `tests` is weaker: it runs another command``.
+/// ``check `tests` is weaker: it runs another command; it moves to a later stage than working``.
 impl fmt::Display for Weakening {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.what(), self.how)
+        write!(f, "{}: {}", self.what(), self.why())
     }
 }

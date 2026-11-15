@@ -282,8 +282,8 @@ function Weakenings(props: { review: Review; runs: Run[]; viewer: Viewer | undef
   );
 }
 
-/** One weakening: what weakened and how, and on request the change itself, its part of the
- * config on the base and on the head, and why it waits for a person. */
+/** One weakened part: its name and each way it weakened, and on request the change itself,
+ * its part of the config on the base and on the head, and why it waits for a person. */
 function WeakeningRow(props: { weakening: Weakening }) {
   const [open, setOpen] = createSignal(false);
   const w = () => props.weakening;
@@ -296,7 +296,14 @@ function WeakeningRow(props: { weakening: Weakening }) {
     <li data-weakening data-open={String(open())}>
       <div class="weakening-row">
         <code class="name">{name()}</code>
-        <span class="how">{w().how.replace(/^it /, "")}</span>
+        <For each={w().hows}>
+          {(how, i) => (
+            <span class="how" data-how>
+              {how.replace(/^it /, "")}
+              {i() < w().hows.length - 1 ? "," : ""}
+            </span>
+          )}
+        </For>
         <Show when={shown()}>
           <button type="button" class="plain" data-show-change aria-expanded={open()} onClick={() => setOpen(!open())}>
             {open() ? "Hide change" : "Show change"}

@@ -54,7 +54,7 @@ describe("waitsFor", () => {
       { check: "screens", name: "a.png", key: "1", standing: "waits" },
       { check: "screens", name: "b.png", key: "2", standing: "waits" },
     ],
-    weakened: [{ check: "tests", how: "it is gone" }],
+    weakened: [{ check: "tests", hows: ["it is gone"] }],
   };
 
   test("it says what this person can settle; a weakening fails the proof instead of waiting", () => {
@@ -64,7 +64,7 @@ describe("waitsFor", () => {
 });
 
 describe("failedFor", () => {
-  const review: Review = { head: "aaa1111bbb", state: "failed", pictures: [], weakened: [{ check: "tests", how: "it is gone" }] };
+  const review: Review = { head: "aaa1111bbb", state: "failed", pictures: [], weakened: [{ check: "tests", hows: ["it is gone"] }] };
 
   test("a proof that fails on what it weakens says it waits for an admin's accept", () => {
     expect(failedFor(review, { login: "w", role: "write" })).toBe(

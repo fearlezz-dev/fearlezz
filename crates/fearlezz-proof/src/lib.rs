@@ -277,7 +277,7 @@ impl Proof {
         }));
         items.extend(self.blocking_weakenings().map(|w| Item {
             what: w.what(),
-            why: w.how.clone(),
+            why: w.why(),
             fix: Weakening::block_fix(&self.base),
         }));
         items.extend(

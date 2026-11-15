@@ -271,6 +271,26 @@ fn the_job_summary_shows_each_weakening_as_a_diff_of_the_config() {
 }
 
 #[test]
+fn the_job_summary_shows_a_check_weakened_two_ways_as_one_diff() {
+    let repo = branch_with_change();
+    with_checks(
+        &repo,
+        &CHECKS.replace("test ! -e src/broken", "true").replacen(
+            "stage = \"working\"",
+            "stage = \"merge\"",
+            1,
+        ),
+    );
+    let (out, text) = summary(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert_eq!(text.matches("```diff").count(), 1, "{text}");
+    assert!(
+        text.contains("`tests`: it runs another command; it moves to a later stage than working"),
+        "{text}"
+    );
+}
+
+#[test]
 fn the_status_comment_is_gone() {
     let repo = branch_with_change();
     assert!(!repo.fz(&["run", "--ci", "--comment", "x.md"]).ok);

@@ -228,7 +228,7 @@ pub(crate) fn summary(
     Ok(text)
 }
 
-/// Each weakening that names its part as it was and is now, as a diff of the config.
+/// Each weakened part that names itself as it was and is now, as one diff of the config.
 fn diffs(proof: &Proof, text: &mut String) -> std::fmt::Result {
     for w in &proof.weakened {
         if w.was.is_none() && w.now.is_none() {
@@ -245,7 +245,7 @@ fn diffs(proof: &Proof, text: &mut String) -> std::fmt::Result {
             .max()
             .unwrap_or(0);
         let fence = "`".repeat(ticks.max(2) + 1);
-        writeln!(text, "`{}`: {}\n", w.part.name(), cell(&w.how))?;
+        writeln!(text, "`{}`: {}\n", w.part.name(), cell(&w.why()))?;
         writeln!(text, "{fence}diff")?;
         for line in &lines {
             writeln!(text, "{line}")?;

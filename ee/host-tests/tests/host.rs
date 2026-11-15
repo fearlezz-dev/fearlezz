@@ -1928,7 +1928,7 @@ fn looks_right(picture: &str) -> Value {
 fn weakenings() -> Value {
     json!([{
         "check": "tests",
-        "how": "it runs another command",
+        "hows": ["it runs another command"],
         "was": "[check.tests]\nrun = \"cargo test\"\n",
         "now": "[check.tests]\nrun = \"cargo test --lib\"\n",
     }])
@@ -2349,8 +2349,8 @@ fn a_run_asks_whether_exactly_its_weakenings_of_its_head_are_accepted() {
         answer.text()
     );
     let more = json!([
-        {"check": "tests", "how": "it runs another command"},
-        {"check": "lint", "how": "it is gone"},
+        {"check": "tests", "hows": ["it runs another command"]},
+        {"check": "lint", "hows": ["it is gone"]},
     ]);
     let answer = job.weakenings(&again.id, &more);
     assert!(
