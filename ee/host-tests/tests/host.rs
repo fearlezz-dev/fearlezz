@@ -272,6 +272,10 @@ fn main() {
             a_look_that_arrives_shows_without_a_reload,
         ),
         (
+            "a_look_shows_only_once_its_pictures_have_arrived",
+            a_look_shows_only_once_its_pictures_have_arrived,
+        ),
+        (
             "pictures_group_by_the_parts_of_their_names",
             pictures_group_by_the_parts_of_their_names,
         ),
@@ -1538,6 +1542,74 @@ fn a_look_that_arrives_shows_without_a_reload() {
         browser.eval("window.stayed === true"),
         json!(true),
         "no reload"
+    );
+}
+
+fn a_look_shows_only_once_its_pictures_have_arrived() {
+    // CI sends a check's end with its look, then the pictures the host lacks. Until the last
+    // one is in, a page could only show them broken, so the look waits for them.
+    let job = Job::push("owner/repo", "feat/waits");
+    let run = job.open(&["screens"]);
+    let page = "/owner/repo/work/feat/waits";
+    let mut browser = browser::Browser::start();
+    browser.open(&format!("{}{page}", world().worker.url));
+    browser.wait_for(&shows("screens", "planned"));
+    browser.eval("window.stayed = true");
+    // Bytes no other test sends, since the host keeps files per repository.
+    let before = media::still(&media::card(150, "0x8a4fbf"));
+    let after = media::still(&media::card(190, "0x8a4fbf"));
+    let files: Vec<(&str, &[u8])> = vec![
+        ("looks/screens/before/card/light.png", &before),
+        ("looks/screens/after/card/light.png", &after),
+    ];
+    let look = look_of(
+        "screens",
+        &[still(
+            "card/light.png",
+            "changed",
+            Some(files[0].0),
+            Some(files[1].0),
+        )],
+    );
+    let answer = job.finished_with_look(&run.id, &entry("screens", "passed"), &files, &look);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    browser.wait_for(&shows("screens", "passed"));
+    let pictures = "document.querySelectorAll('[data-picture]').length";
+    assert_eq!(
+        browser.eval(pictures),
+        json!(0),
+        "no picture before its files"
+    );
+    let snapshot = live(page, &[]).json();
+    assert!(
+        snapshot["runs"][0]["checks"][0].get("look").is_none(),
+        "{snapshot:#}"
+    );
+    // Every file but the last: still nothing.
+    let (last, rest) = files.split_last().unwrap();
+    for (_, bytes) in rest {
+        assert_eq!(job.send(bytes).status, 204);
+    }
+    assert!(
+        live(page, &[]).json()["runs"][0]["checks"][0]
+            .get("look")
+            .is_none()
+    );
+    assert_eq!(browser.eval(pictures), json!(0));
+    // The last one shows the look, live, every picture loaded.
+    assert_eq!(job.send(last.1).status, 204);
+    browser.wait_for(r#"!!document.querySelector('[data-picture="screens/card/light.png"]')"#);
+    browser.wait_for(&loaded("img", "before"));
+    browser.wait_for(&loaded("img", "after"));
+    assert_eq!(
+        browser.eval("window.stayed === true"),
+        json!(true),
+        "no reload"
+    );
+    let snapshot = live(page, &[]).json();
+    assert_eq!(
+        snapshot["runs"][0]["checks"][0]["look"]["check"], "screens",
+        "{snapshot:#}"
     );
 }
 

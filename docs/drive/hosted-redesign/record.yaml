@@ -100,6 +100,12 @@ decided:
       A verdict follows the picture: keyed by check, picture and content (films by which states
       changed), so an unchanged picture keeps its verdict across pushes.
 
+  - id: look-waits-for-its-files
+    what: >-
+      The host sends a look to open pages, and includes it in snapshots, only once every file
+      it names has arrived; the blob upload that completes the set sends it. The page never
+      retries a picture.
+
   - id: one-pr
     what: All slices on one branch, one pull request; hosted never breaks on main.
   - id: no-local-approval
@@ -108,14 +114,6 @@ decided:
       pictures changed and a person reviews them on the pull request; it does not wait.
 
 open:
-  - id: look-before-its-files
-    ask: >-
-      A finished event carries the look before CI has sent the pictures the host lacks (the
-      host answers missing, then CI sends them), so a page open at that moment asks for a
-      picture the host does not hold yet, gets 404 and shows it broken until reload. Seen as a
-      flake of a_look_that_arrives_shows_without_a_reload. Remove the cause on the host (send the
-      look live only once every file it names is held, from the blob upload that completes it),
-      or let the page wait for and retry a picture that is not there yet? Not settled.
   - id: base-shell
     ask: >-
       A check's shell still comes from the change's [env] on the base checkout (same class as the
@@ -138,9 +136,9 @@ slices:
   - id: pictures-on-page
     tests:
       - crates/fearlezz/tests/host.rs (a_finished_check_sends_its_look_with_the_pictures)
-      - ee/host-tests/tests/host.rs (a_finished_check_brings_its_look_to_the_page, a_look_of_another_check_is_refused, the_files_origin_serves_only_pictures_and_films, the_page_gets_a_grant_for_the_files_of_a_run_it_shows, the_work_page_is_served_for_a_navigation (CSP), the_page_shows_a_changed_picture_with_its_before_and_after, the_compare_modes_switch_by_click_and_by_key, a_film_shows_its_lanes_on_one_clock, a_flaky_picture_is_shown_and_marked, a_look_that_arrives_shows_without_a_reload, pictures_group_by_the_parts_of_their_names, and the ignored pictures, which writes page pictures to ee/target/tmp)
+      - ee/host-tests/tests/host.rs (a_finished_check_brings_its_look_to_the_page, a_look_of_another_check_is_refused, the_files_origin_serves_only_pictures_and_films, the_page_gets_a_grant_for_the_files_of_a_run_it_shows, the_work_page_is_served_for_a_navigation (CSP), the_page_shows_a_changed_picture_with_its_before_and_after, the_compare_modes_switch_by_click_and_by_key, a_film_shows_its_lanes_on_one_clock, a_flaky_picture_is_shown_and_marked, a_look_that_arrives_shows_without_a_reload, a_look_shows_only_once_its_pictures_have_arrived, pictures_group_by_the_parts_of_their_names, and the ignored pictures, which writes page pictures to ee/target/tmp)
       - ee/app/src/pictures.test.ts (name parts, order, grouping, counts, live looks, film lanes and outlines)
-    status: built
+    status: done
   - id: verdicts-and-check
     tests: []
     status: todo

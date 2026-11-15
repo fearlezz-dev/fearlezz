@@ -242,6 +242,16 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     let mut statements = statements;
     statements.push(work::bump(&db, &run.work)?);
     let seq = work::commit(&db, statements).await?;
+    // A look whose pictures are not all in yet reaches pages with the upload that completes it.
+    let change = match change {
+        Change::Finished {
+            check,
+            look: Some(look),
+        } if !work::complete(&look, &work::held(&db, id).await?) => {
+            Change::Finished { check, look: None }
+        }
+        change => change,
+    };
     notify(env, &run.work, seq, id, change).await;
     let missing = lacks(&db, &token.repo(), &files).await?;
     Ok(Response::from_json(&Missing { missing })?)
@@ -474,11 +484,59 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
         }
         return Err(error.into());
     }
+    let held: Option<f64> = db
+        .prepare("SELECT 1 AS held FROM blobs WHERE repo = ?1 AND sha256 = ?2")
+        .bind(&[repo.as_str().into(), sha256.into()])?
+        .first(Some("held"))
+        .await?;
     db.prepare("INSERT OR IGNORE INTO blobs (repo, sha256) VALUES (?1, ?2)")
         .bind(&[repo.as_str().into(), sha256.into()])?
         .run()
         .await?;
+    if held.is_none() {
+        show_completed_looks(env, &db, &repo, sha256).await?;
+    }
     Ok(Response::empty()?.with_status(204))
+}
+
+/// Sends pages each look the blob `sha256` may have just completed: every look of a run of
+/// `repo` with a file of these bytes that now holds every file it names. Sending one that was
+/// complete before changes nothing on a page.
+async fn show_completed_looks(
+    env: &Env,
+    db: &D1Database,
+    repo: &str,
+    sha256: &str,
+) -> worker::Result<()> {
+    #[derive(Deserialize)]
+    struct Row {
+        run: String,
+        work: String,
+        entry: String,
+        look: String,
+    }
+    let rows = db
+        .prepare(
+            "SELECT c.run, r.work, c.entry, c.look FROM checks c JOIN runs r ON r.id = c.run JOIN works w ON w.id = r.work WHERE w.repo = ?1 AND c.look IS NOT NULL AND c.entry IS NOT NULL AND EXISTS (SELECT 1 FROM files f WHERE f.run = c.run AND f.sha256 = ?2)",
+        )
+        .bind(&[repo.into(), sha256.into()])?
+        .all()
+        .await?
+        .results::<Row>()?;
+    for row in rows {
+        let look: Look = work::read(&row.look)?;
+        if !work::complete(&look, &work::held(db, &row.run).await?) {
+            continue;
+        }
+        let check: Check = work::read(&row.entry)?;
+        let seq = work::commit(db, vec![work::bump(db, &row.work)?]).await?;
+        let change = Change::Finished {
+            check,
+            look: Some(Box::new(look)),
+        };
+        notify(env, &row.work, seq, &row.run, change).await;
+    }
+    Ok(())
 }
 
 fn refuse_empty(check: &str) -> Result<(), Refusal> {

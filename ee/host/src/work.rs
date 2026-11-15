@@ -7,6 +7,8 @@ use fearlezz_proof::Check;
 use fearlezz_proof::Pull;
 use fearlezz_proof::events::{Live, Run, RunCheck, RunState, Snapshot, Source, Work};
 use fearlezz_proof::look::Look;
+use std::collections::HashSet;
+
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
 use wasm_bindgen::JsValue;
@@ -129,6 +131,37 @@ struct CheckRow {
 }
 
 #[derive(Deserialize)]
+struct HeldRow {
+    run: String,
+    path: String,
+}
+
+/// The paths of a run's files whose bytes the host holds.
+pub async fn held(db: &D1Database, run: &str) -> worker::Result<HashSet<String>> {
+    Ok(db
+        .prepare(
+            "SELECT f.run, f.path FROM files f JOIN runs r ON r.id = f.run JOIN works w ON w.id = r.work JOIN blobs b ON b.repo = w.repo AND b.sha256 = f.sha256 WHERE f.run = ?1",
+        )
+        .bind(&[run.into()])?
+        .all()
+        .await?
+        .results::<HeldRow>()?
+        .into_iter()
+        .map(|row| row.path)
+        .collect())
+}
+
+/// Whether every picture a look names is held: until then a page could only show it broken,
+/// so pages get a look only once its files are all in.
+pub fn complete(look: &Look, held: &HashSet<String>) -> bool {
+    look.items
+        .iter()
+        .flat_map(|item| [&item.before, &item.after])
+        .flatten()
+        .all(|path| held.contains(path))
+}
+
+#[derive(Deserialize)]
 struct SeqRow {
     seq: f64,
 }
@@ -150,10 +183,14 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
             db.prepare(
                 "SELECT c.run, c.id, c.started, c.entry, c.look FROM checks c WHERE c.run IN (SELECT id FROM runs WHERE work = ?1 ORDER BY opened DESC, rowid DESC LIMIT ?2) ORDER BY c.position",
             )
+            .bind(&[work.into(), JsValue::clone(&shown)])?,
+            db.prepare(
+                "SELECT f.run, f.path FROM files f JOIN runs r ON r.id = f.run JOIN works w ON w.id = r.work JOIN blobs b ON b.repo = w.repo AND b.sha256 = f.sha256 WHERE f.run IN (SELECT id FROM runs WHERE work = ?1 ORDER BY opened DESC, rowid DESC LIMIT ?2)",
+            )
             .bind(&[work.into(), shown])?,
         ])
         .await?;
-    let [works, runs, checks] = results.as_slice() else {
+    let [works, runs, checks, held] = results.as_slice() else {
         return Err(worker::Error::RustError(
             "D1 answered another number of results".into(),
         ));
@@ -166,33 +203,44 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
         .first()
         .map_or(0, |s| s.seq as u64);
     let checks = checks.results::<CheckRow>()?;
-    let runs = runs
-        .results::<RunRow>()?
-        .into_iter()
-        .map(|run| {
-            let checks = checks
-                .iter()
-                .filter(|c| c.run == run.id)
-                .map(|c| {
-                    Ok(RunCheck {
-                        id: c.id.clone(),
-                        started: c.started,
-                        entry: c.entry.as_deref().map(read::<Check>).transpose()?,
-                        look: c.look.as_deref().map(read::<Look>).transpose()?,
-                    })
+    let held = held.results::<HeldRow>()?;
+    let runs =
+        runs.results::<RunRow>()?
+            .into_iter()
+            .map(|run| {
+                let checks =
+                    checks
+                        .iter()
+                        .filter(|c| c.run == run.id)
+                        .map(|c| {
+                            Ok(RunCheck {
+                                id: c.id.clone(),
+                                started: c.started,
+                                entry: c.entry.as_deref().map(read::<Check>).transpose()?,
+                                look: c.look.as_deref().map(read::<Look>).transpose()?.filter(
+                                    |look| {
+                                        let paths = held
+                                            .iter()
+                                            .filter(|h| h.run == run.id)
+                                            .map(|h| h.path.clone())
+                                            .collect();
+                                        complete(look, &paths)
+                                    },
+                                ),
+                            })
+                        })
+                        .collect::<worker::Result<Vec<_>>>()?;
+                Ok(Run {
+                    source: read::<Source>(&run.source)?,
+                    state: state(&run.state),
+                    id: run.id,
+                    head: run.head,
+                    base: run.base,
+                    opened: run.opened,
+                    checks,
                 })
-                .collect::<worker::Result<Vec<_>>>()?;
-            Ok(Run {
-                source: read::<Source>(&run.source)?,
-                state: state(&run.state),
-                id: run.id,
-                head: run.head,
-                base: run.base,
-                opened: run.opened,
-                checks,
             })
-        })
-        .collect::<worker::Result<Vec<_>>>()?;
+            .collect::<worker::Result<Vec<_>>>()?;
     Ok(Some(Snapshot {
         seq,
         work: row.work(),

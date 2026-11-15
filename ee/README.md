@@ -76,6 +76,10 @@ are `events::Live`:
   (a new run), `started`, `finished` (with the check's look, if any) or `done` (with every
   look).
 
+A look reaches pages, in a snapshot or an event, only once every picture it names is held: CI
+sends a check's end before the pictures the host lacks, so until then a page could only show
+them broken. The blob upload that completes a look sends it as a `finished` event of its check.
+
 **Pictures.** The page shows every look of the run it shows as it arrives, so a person can
 start looking before the run ends: counts that filter, grouping by check or by the parts of a
 picture's name (screen, viewport, theme), changed pictures first, then new and gone, then
