@@ -785,7 +785,7 @@ impl CommitReport {
     /// A check could not run here.
     fn not_run(&mut self, check: &config::Check, stage: &str, why: &str) {
         let entry = proof::not_run(check, stage, why);
-        self.stream_step(|s| s.finished(&entry));
+        self.stream_step(|s| s.finished(&entry, None));
         self.proof.checks.push(entry);
     }
 
@@ -800,7 +800,14 @@ impl CommitReport {
         }
     }
 
-    fn ran(&mut self, check: &config::Check, stage: &str, result: &store::RunResult) {
+    /// A check ended, with its pictures compared with the base when it takes pictures.
+    fn ran(
+        &mut self,
+        check: &config::Check,
+        stage: &str,
+        result: &store::RunResult,
+        look: Option<&look::Look>,
+    ) {
         let word = match result.outcome {
             Outcome::Passed => "passed",
             Outcome::Failed => "failed",
@@ -819,7 +826,7 @@ impl CommitReport {
         println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
         let failure = (result.outcome == Outcome::Failed).then(|| failure_item(result));
         let entry = proof::ran(check, stage, result, failure);
-        self.stream_step(|s| s.finished(&entry));
+        self.stream_step(|s| s.finished(&entry, look));
         self.proof.checks.push(entry);
     }
 
@@ -1039,6 +1046,9 @@ fn run_checks(
     let env = ctx.env();
     let mut prepared = false;
     let mut held = None;
+    let mut looks = Vec::new();
+    // Opened once, on the first check with pictures.
+    let mut base = None;
     let (mut not_run, mut cannot_record) = (0, 0);
     for check in &targets {
         let inputs = wt.inputs(check)?;
@@ -1127,9 +1137,16 @@ fn run_checks(
             },
         )?;
         reused += usize::from(was_reused);
+        // Compared as soon as the check passed, so its look goes with it to the proof host.
+        let look = if result.outcome == Outcome::Passed {
+            look_at(ctx, &wt, check, &result, &stage, &mut base)?
+        } else {
+            None
+        };
         if let Some(r) = report.as_mut() {
-            r.ran(check, stages.name(check.stage), &result);
+            r.ran(check, stages.name(check.stage), &result, look.as_ref());
         }
+        looks.extend(look);
         match result.outcome {
             Outcome::Passed => {
                 passed += 1;
@@ -1151,7 +1168,6 @@ fn run_checks(
     for (_, r) in &green {
         print_findings(r);
     }
-    let looks = look_at_media(ctx, &wt, &green, &stage)?;
     if let Some(r) = report.as_mut() {
         r.proof.looks = looks;
         for id in &unstable {
@@ -1262,71 +1278,74 @@ fn red_before_green(
     Ok(blocks)
 }
 
-/// Compares the stills and films of green checks with the base commit, one line per check,
-/// and records each comparison against it. Returns each look it made.
-fn look_at_media(
+/// Compares the stills and films of a green check with the base commit (`base`, opened on the
+/// first check that needs it), says what it found, and records the comparison against it. The
+/// look it made, if any.
+fn look_at(
     ctx: &Ctx,
     wt: &Worktree,
-    green: &[(&config::Check, store::RunResult)],
+    check: &config::Check,
+    result: &store::RunResult,
     stage: &str,
-) -> Result<Vec<look::Look>> {
-    let mut looks = Vec::new();
-    // Opened once, on the first check with pictures.
-    let mut base: Option<Result<look::Base>> = None;
-    for (check, result) in green {
-        // A check that takes pictures is compared even without any, so all gone shows.
-        let has_media = look::has_media(result);
-        if !has_media && !ctx.config.takes_pictures(check) {
-            continue;
+    base: &mut Option<Result<look::Base>>,
+) -> Result<Option<look::Look>> {
+    // A check that takes pictures is compared even without any, so all gone shows.
+    let has_media = look::has_media(result);
+    if !has_media && !ctx.config.takes_pictures(check) {
+        return Ok(None);
+    }
+    let base =
+        base.get_or_insert_with(|| look::Base::at(&ctx.git, &ctx.config, wt.base.clone(), ""));
+    let outcome = match base {
+        Ok(base) => look::look(&ctx.store, check, result, base, stage, &ctx.env()),
+        Err(e) => Err(anyhow::anyhow!("the base checkout failed: {e:#}")),
+    };
+    // Without a before every picture is new; a failed look never ends the run. A run
+    // without pictures whose base cannot be compared has nothing to show.
+    let outcome = outcome.or_else(|e| {
+        if !has_media {
+            return Ok(look::LookOutcome::NoMedia);
         }
-        let base =
-            base.get_or_insert_with(|| look::Base::at(&ctx.git, &ctx.config, wt.base.clone(), ""));
-        let outcome = match base {
-            Ok(base) => look::look(&ctx.store, check, result, base, stage, &ctx.env()),
-            Err(e) => Err(anyhow::anyhow!("the base checkout failed: {e:#}")),
-        };
-        // Without a before every picture is new; a failed look never ends the run. A run
-        // without pictures whose base cannot be compared has nothing to show.
-        let outcome = outcome.or_else(|e| {
-            if !has_media {
-                return Ok(look::LookOutcome::NoMedia);
-            }
-            look::without_before(check, result, &ctx.git.common, &format!("{e:#}"))
-                .map(look::LookOutcome::Done)
-        });
-        let looked = match &outcome {
-            Ok(look::LookOutcome::NoMedia | look::LookOutcome::SameInputs) => {
-                Some(store::Looked::Nothing)
-            }
-            Ok(look::LookOutcome::Done(l)) => Some(store::Looked::At(l.dir.clone())),
-            Err(_) => None,
-        };
-        if let Some(looked) = looked {
-            store::AgainstBase::update(result, &wt.base, |a| a.look = Some(looked))?;
+        look::without_before(check, result, &ctx.git.common, &format!("{e:#}"))
+            .map(look::LookOutcome::Done)
+    });
+    let looked = match &outcome {
+        Ok(look::LookOutcome::NoMedia | look::LookOutcome::SameInputs) => {
+            Some(store::Looked::Nothing)
         }
-        match outcome {
-            Ok(look::LookOutcome::NoMedia) => {}
-            Ok(look::LookOutcome::SameInputs) => println!(
+        Ok(look::LookOutcome::Done(l)) => Some(store::Looked::At(l.dir.clone())),
+        Err(_) => None,
+    };
+    if let Some(looked) = looked {
+        store::AgainstBase::update(result, &wt.base, |a| a.look = Some(looked))?;
+    }
+    match outcome {
+        Ok(look::LookOutcome::NoMedia) => Ok(None),
+        Ok(look::LookOutcome::SameInputs) => {
+            println!(
                 "look {}: inputs are the same as on the base, so the pictures are too",
                 check.id
-            ),
-            Ok(look::LookOutcome::Done(l)) => {
-                match &l.no_before {
-                    Some(why) => println!("look {}: no before ({why}); {}", check.id, l.counts()),
-                    None => println!("look {}: {}", check.id, l.counts()),
-                }
-                if let Some(note) = &l.note {
-                    println!("  note: {note}");
-                }
-                for line in look::lines(&l) {
-                    println!("{line}");
-                }
-                looks.push(l);
+            );
+            Ok(None)
+        }
+        Ok(look::LookOutcome::Done(l)) => {
+            match &l.no_before {
+                Some(why) => println!("look {}: no before ({why}); {}", check.id, l.counts()),
+                None => println!("look {}: {}", check.id, l.counts()),
             }
-            Err(e) => println!("look {} failed: {e:#}", check.id),
+            if let Some(note) = &l.note {
+                println!("  note: {note}");
+            }
+            for line in look::lines(&l) {
+                println!("{line}");
+            }
+            Ok(Some(l))
+        }
+        Err(e) => {
+            println!("look {} failed: {e:#}", check.id);
+            Ok(None)
         }
     }
-    Ok(looks)
 }
 
 fn print_status(ctx: &Ctx, v: &View) {

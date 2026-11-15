@@ -326,3 +326,78 @@ fn every_call_to_the_host_asks_for_a_fresh_token() {
         .count();
     assert_eq!(tokens, host.api().len(), "one token for each call");
 }
+
+/// A check that takes two stills, the first in the colour `src/color.txt` names.
+const STILLS: &str = r#"set -e
+still() {
+  ffmpeg -v error -nostdin -f lavfi -i "color=c=$2:s=64x48" -frames:v 1 "$FEARLEZZ_OUT/$1.png"
+  echo "{\"kind\":\"still\",\"file\":\"$1.png\"}" >> "$FEARLEZZ_OUT/proof.jsonl"
+}
+still home "$(cat src/color.txt)"
+still about white
+"#;
+
+#[test]
+fn a_finished_check_sends_its_look_with_the_pictures() {
+    // A look arrives with its check, so a person can start looking before the run ends.
+    let host = FakeHost::start();
+    let config = format!(
+        "{}\n[check.screens]\nrun = \"sh record.sh\"\nstage = \"working\"\ninputs = [\"src/**\", \"record.sh\"]\n\n[host]\nurl = \"{}\"\n",
+        checks(&host),
+        host.url
+    );
+    let repo = Repo::new(
+        &config,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", STILLS),
+            ("src/a.txt", "a\n"),
+            ("src/color.txt", "red"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/x");
+    repo.write("src/color.txt", "blue");
+    repo.commit("blue");
+    let (out, _) = ci(&repo, &host.token_env());
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+
+    let finished = host
+        .api()
+        .into_iter()
+        .map(|r| serde_json::from_slice::<serde_json::Value>(&r.body).unwrap_or_default())
+        .find(|b| b["finished"]["check"]["id"] == "screens")
+        .expect("a finished screens check");
+    let look = &finished["finished"]["look"];
+    assert_eq!(look["check"], "screens", "{finished:#}");
+    let home = look["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["name"] == "home.png")
+        .unwrap_or_else(|| panic!("{finished:#}"));
+    assert_eq!(home["change"], "changed", "{finished:#}");
+    assert!(
+        look.get("dir").is_none(),
+        "no folder of this machine: {finished:#}"
+    );
+    // Its pictures are named as in the bundle, and go with the check.
+    let held = host.state.lock().unwrap().blobs.clone();
+    for side in ["before", "after"] {
+        let path = home[side].as_str().unwrap();
+        assert!(path.starts_with("looks/"), "{path}");
+        let file = &finished["finished"]["files"][path];
+        let sha = file["sha256"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{finished:#}"));
+        assert!(held.contains_key(sha), "{side} was sent");
+    }
+    // And done names the same pictures at the same paths.
+    let done = host.sent("POST", "/api/v2/runs/r1/done");
+    let path = home["after"].as_str().unwrap();
+    assert!(done["files"].get(path).is_some(), "{done:#}");
+    assert_eq!(
+        done["proof"]["looks"][0]["items"], look["items"],
+        "{done:#}"
+    );
+}

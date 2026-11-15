@@ -225,6 +225,22 @@ fn main() {
             the_files_origin_ignores_cookies_and_sets_none,
         ),
         (
+            "the_files_origin_serves_only_pictures_and_films",
+            the_files_origin_serves_only_pictures_and_films,
+        ),
+        (
+            "the_page_gets_a_grant_for_the_files_of_a_run_it_shows",
+            the_page_gets_a_grant_for_the_files_of_a_run_it_shows,
+        ),
+        (
+            "a_finished_check_brings_its_look_to_the_page",
+            a_finished_check_brings_its_look_to_the_page,
+        ),
+        (
+            "a_look_of_another_check_is_refused",
+            a_look_of_another_check_is_refused,
+        ),
+        (
             "a_page_shows_a_check_move_from_running_to_passed_live",
             a_page_shows_a_check_move_from_running_to_passed_live,
         ),
@@ -572,7 +588,7 @@ fn a_closed_run_takes_nothing_more() {
 fn done_refuses_a_proof_of_an_unknown_schema() {
     let job = Job::push("owner/repo", "feat/schema");
     let run = job.open(&["tests"]);
-    let mut body = job.closing(&[], &[]);
+    let mut body = job.closing(&[], &[], &[]);
     body["proof"]["schema"] = json!(99);
     let path = format!("/api/v2/runs/{}/done", run.id);
     let answer = api("POST", &path, &job.token(), Some(body.to_string().into()));
@@ -604,6 +620,11 @@ fn the_work_page_is_served_for_a_navigation() {
         assert_eq!(script.status, 200, "{}", &html[start..end]);
         let policy = answer.header("content-security-policy").unwrap();
         assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
+        // Pictures and films load from the files origin only.
+        let files = &world().worker.files;
+        for directive in [format!("img-src {files}"), format!("media-src {files}")] {
+            assert!(policy.contains(&directive), "{policy}");
+        }
     }
 }
 
@@ -625,14 +646,14 @@ fn the_app_origin_serves_no_files_and_the_files_origin_no_pages() {
     job.finished(
         &run.id,
         &entry("tests", "passed"),
-        &[("outputs/tests.log", log)],
+        &[("looks/tests/home.png", log)],
     );
     job.send(log);
     let page = "/owner/repo/work/feat/origins";
     let answer = navigate(page, &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert!(!answer.text().contains("steal"));
-    let answer = get(&format!("{page}/outputs/tests.log"), &[]);
+    let answer = get(&format!("{page}/looks/tests/home.png"), &[]);
     assert_eq!(answer.status, 404, "{}", answer.text());
     // The files origin answers none of the app's paths.
     for path in [
@@ -644,11 +665,13 @@ fn the_app_origin_serves_no_files_and_the_files_origin_no_pages() {
         let answer = get_url(&format!("{}{path}", world().worker.files), &[]);
         assert_eq!(answer.status, 404, "{path}: {}", answer.text());
     }
-    // Under a grant, the file is there, as a file.
+    // Under a grant, the file is there, as the picture its name says and nothing else.
     let grant = files_base("owner/repo", &run.id, &[]);
-    let answer = get_url(&format!("{grant}outputs/tests.log"), &[]);
+    let answer = get_url(&format!("{grant}looks/tests/home.png"), &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(answer.body, log);
+    assert_eq!(answer.header("content-type").unwrap(), "image/png");
+    assert_eq!(answer.header("x-content-type-options").unwrap(), "nosniff");
     let policy = answer.header("content-security-policy").unwrap();
     assert!(
         policy.contains(&format!("frame-ancestors {}", world().worker.url)),
@@ -862,23 +885,23 @@ fn a_file_is_served_in_ranges_under_a_grant() {
 }
 
 fn the_files_origin_refuses_a_missing_tampered_or_expired_grant() {
-    let run = run_with_file("feat/grant", "outputs/tests.log", b"granted bytes");
+    let run = run_with_file("feat/grant", "looks/tests/home.png", b"granted bytes");
     let files = &world().worker.files;
     for path in [
-        "/outputs/tests.log".to_owned(),
-        format!("/{run}/outputs/tests.log"),
+        "/looks/tests/home.png".to_owned(),
+        format!("/{run}/looks/tests/home.png"),
     ] {
         let answer = get_url(&format!("{files}{path}"), &[]);
         assert_eq!(answer.status, 404, "{path}: {}", answer.text());
     }
     let fresh = files_base("owner/repo", &run, &[]);
     assert_eq!(
-        get_url(&format!("{fresh}outputs/tests.log"), &[]).status,
+        get_url(&format!("{fresh}looks/tests/home.png"), &[]).status,
         200
     );
     let expired = files_base("owner/repo", &run, &[("exp", json!(now() - 1))]);
     assert_eq!(
-        get_url(&format!("{expired}outputs/tests.log"), &[]).status,
+        get_url(&format!("{expired}looks/tests/home.png"), &[]).status,
         404
     );
     // A later expiry under the old seal, and a seal changed by one character.
@@ -892,47 +915,50 @@ fn the_files_origin_refuses_a_missing_tampered_or_expired_grant() {
     let mut claims: Value = serde_json::from_slice(&decoded).unwrap();
     claims["exp"] = json!(claims["exp"].as_i64().unwrap() + 86400);
     let longer = URL_SAFE_NO_PAD.encode(claims.to_string());
-    let answer = get_url(&format!("{files}/{longer}.{mac}/outputs/tests.log"), &[]);
+    let answer = get_url(&format!("{files}/{longer}.{mac}/looks/tests/home.png"), &[]);
     assert_eq!(answer.status, 404, "{}", answer.text());
     let mut mac = mac.to_owned();
     let last = mac.pop().unwrap();
     mac.push(if last == 'A' { 'B' } else { 'A' });
-    let answer = get_url(&format!("{files}/{payload}.{mac}/outputs/tests.log"), &[]);
+    let answer = get_url(
+        &format!("{files}/{payload}.{mac}/looks/tests/home.png"),
+        &[],
+    );
     assert_eq!(answer.status, 404, "{}", answer.text());
 }
 
 fn the_files_origin_refuses_a_grant_for_another_run() {
-    let mine = run_with_file("feat/mine", "outputs/tests.log", b"mine");
+    let mine = run_with_file("feat/mine", "looks/tests/home.png", b"mine");
     let job = Job::push("owner/secret", "feat/theirs");
     let theirs = job.open(&["tests"]);
     job.finished(
         &theirs.id,
         &entry("tests", "passed"),
-        &[("outputs/tests.log", b"theirs")],
+        &[("looks/tests/home.png", b"theirs")],
     );
     job.send(b"theirs");
     let base = files_base("owner/repo", &mine, &[]);
     assert_eq!(
-        get_url(&format!("{base}outputs/tests.log"), &[]).body,
+        get_url(&format!("{base}looks/tests/home.png"), &[]).body,
         b"mine"
     );
     // A grant naming a run of another repository than its own opens nothing.
     let crossed = files_base("owner/repo", &theirs.id, &[]);
-    let answer = get_url(&format!("{crossed}outputs/tests.log"), &[]);
+    let answer = get_url(&format!("{crossed}looks/tests/home.png"), &[]);
     assert_eq!(answer.status, 404, "{}", answer.text());
     let unknown = files_base("owner/repo", "0123456789abcdef0123456789abcdef", &[]);
     assert_eq!(
-        get_url(&format!("{unknown}outputs/tests.log"), &[]).status,
+        get_url(&format!("{unknown}looks/tests/home.png"), &[]).status,
         404
     );
 }
 
 fn the_files_origin_ignores_cookies_and_sets_none() {
-    let run = run_with_file("feat/cookies", "outputs/tests.log", b"cookies");
+    let run = run_with_file("feat/cookies", "looks/tests/home.png", b"cookies");
     let session = sign_in("reader-code", "/");
     let base = files_base("owner/repo", &run, &[]);
     for headers in [vec![("Cookie", session.as_str())], vec![]] {
-        let answer = get_url(&format!("{base}outputs/tests.log"), &headers);
+        let answer = get_url(&format!("{base}looks/tests/home.png"), &headers);
         assert_eq!(answer.status, 200, "{}", answer.text());
         assert!(answer.header("set-cookie").is_none());
     }
@@ -943,6 +969,172 @@ fn the_files_origin_ignores_cookies_and_sets_none() {
         &[("Cookie", &session)],
     );
     assert_eq!(answer.status, 404, "{}", answer.text());
+}
+
+fn the_files_origin_serves_only_pictures_and_films() {
+    let job = Job::push("owner/repo", "feat/types");
+    let run = job.open(&["screens"]);
+    let served: &[(&str, &[u8], &str)] = &[
+        ("looks/s/a.png", b"types: a png", "image/png"),
+        ("looks/s/b.JPG", b"types: a jpg", "image/jpeg"),
+        ("looks/s/c.jpeg", b"types: a jpeg", "image/jpeg"),
+        ("looks/s/d.webp", b"types: a webp", "image/webp"),
+        ("looks/s/e.gif", b"types: a gif", "image/gif"),
+        ("looks/s/f.avif", b"types: an avif", "image/avif"),
+        ("looks/s/g.mp4", b"types: an mp4", "video/mp4"),
+        ("looks/s/h.webm", b"types: a webm", "video/webm"),
+    ];
+    // What CI wrote is content of a pull request: anything a browser could run, or guess at,
+    // is never served.
+    let refused: &[(&str, &[u8])] = &[
+        ("looks/s/evil.svg", b"<svg onload=alert(1)></svg>"),
+        ("looks/s/evil.html", b"<script>alert(1)</script> html"),
+        ("looks/s/evil.htm", b"<script>alert(1)</script> htm"),
+        ("looks/s/evil.xml", b"<x/> xml"),
+        ("outputs/screens.log", b"types: a log"),
+        ("looks/s/clip.mov", b"types: a mov"),
+        ("looks/s/blob.bin", b"types: a bin"),
+        ("looks/s/noextension", b"types: none"),
+    ];
+    let mut files: Vec<(&str, &[u8])> = served.iter().map(|(p, b, _)| (*p, *b)).collect();
+    files.extend_from_slice(refused);
+    job.finished(&run.id, &entry("screens", "passed"), &files);
+    for (_, bytes) in &files {
+        assert_eq!(job.send(bytes).status, 204);
+    }
+    let base = files_base("owner/repo", &run.id, &[]);
+    for (path, bytes, kind) in served {
+        let answer = get_url(&format!("{base}{path}"), &[]);
+        assert_eq!(answer.status, 200, "{path}: {}", answer.text());
+        assert_eq!(answer.body, *bytes, "{path}");
+        assert_eq!(answer.header("content-type").unwrap(), *kind, "{path}");
+        assert_eq!(
+            answer.header("x-content-type-options").unwrap(),
+            "nosniff",
+            "{path}"
+        );
+    }
+    for (path, _) in refused {
+        let answer = get_url(&format!("{base}{path}"), &[]);
+        assert_eq!(answer.status, 404, "{path}: {}", answer.text());
+        assert!(answer.body.len() < 40, "{path}: {}", answer.text());
+    }
+}
+
+fn the_page_gets_a_grant_for_the_files_of_a_run_it_shows() {
+    let still: &[u8] = b"a still of a public work";
+    let mine = run_with_file("feat/granted", "looks/s/home.png", still);
+    let answer = get(&format!("/api/v2/runs/{mine}/grant"), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.header("cache-control").unwrap(), "no-store");
+    let grant = answer.json();
+    let files = grant["files"].as_str().unwrap();
+    assert!(
+        files.starts_with(&format!("{}/", world().worker.files)) && files.ends_with('/'),
+        "{grant}"
+    );
+    let expires = grant["expires"].as_i64().unwrap();
+    assert!(
+        (now() + 3000..=now() + 3700).contains(&expires),
+        "an hour: {grant}"
+    );
+    let answer = get_url(&format!("{files}looks/s/home.png"), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.body, still);
+
+    // The grant opens its own run only.
+    let other: &[u8] = b"a still of another run";
+    let theirs = run_with_file("feat/granted-other", "looks/s/home.png", other);
+    let answer = get_url(&format!("{files}looks/s/home.png"), &[]);
+    assert_eq!(answer.body, still);
+    let answer = get(&format!("/api/v2/runs/{theirs}/grant"), &[]);
+    let files = answer.json()["files"].as_str().unwrap().to_owned();
+    assert_eq!(
+        get_url(&format!("{files}looks/s/home.png"), &[]).body,
+        other
+    );
+
+    // A private work's grant goes only to someone who may read it.
+    let job = Job::push("owner/secret", "feat/granted");
+    let secret = job.open(&["screens"]);
+    let path = format!("/api/v2/runs/{}/grant", secret.id);
+    assert_eq!(get(&path, &[]).status, 401);
+    let stranger = sign_in("stranger-code", "/");
+    assert_eq!(get(&path, &[("Cookie", &stranger)]).status, 404);
+    let reader = sign_in("reader-code", "/");
+    let answer = get(&path, &[("Cookie", &reader)]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(
+        get("/api/v2/runs/0123456789abcdef0123456789abcdef/grant", &[]).status,
+        404
+    );
+}
+
+// Looks.
+
+fn a_finished_check_brings_its_look_to_the_page() {
+    let job = Job::push("owner/repo", "feat/look");
+    let run = job.open(&["fmt", "screens"]);
+    let before: &[u8] = b"look: the before";
+    let after: &[u8] = b"look: the after";
+    let look = look_of(
+        "screens",
+        &[still(
+            "home.png",
+            "changed",
+            Some("looks/screens/before/home.png"),
+            Some("looks/screens/after/home.png"),
+        )],
+    );
+    let answer = job.finished_with_look(
+        &run.id,
+        &entry("screens", "passed"),
+        &[
+            ("looks/screens/before/home.png", before),
+            ("looks/screens/after/home.png", after),
+        ],
+        &look,
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    job.send(before);
+    job.send(after);
+    let page = "/owner/repo/work/feat/look";
+    let snapshot = live(page, &[]).json();
+    let checks = &snapshot["runs"][0]["checks"];
+    assert!(checks[0].get("look").is_none(), "{snapshot:#}");
+    assert_eq!(
+        checks[1]["look"]["items"][0]["name"], "home.png",
+        "{snapshot:#}"
+    );
+
+    // Done's looks are the final word.
+    let mut last = look.clone();
+    last["items"][0]["flaky"] = json!(true);
+    let answer = job.close(
+        &run.id,
+        &[entry("fmt", "passed"), entry("screens", "passed")],
+        &[last],
+        &[
+            ("looks/screens/before/home.png", before),
+            ("looks/screens/after/home.png", after),
+        ],
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let snapshot = live(page, &[]).json();
+    let look = &snapshot["runs"][0]["checks"][1]["look"];
+    assert_eq!(look["items"][0]["flaky"], true, "{snapshot:#}");
+}
+
+fn a_look_of_another_check_is_refused() {
+    let job = Job::push("owner/repo", "feat/look-other");
+    let run = job.open(&["screens"]);
+    let answer = job.finished_with_look(
+        &run.id,
+        &entry("screens", "passed"),
+        &[],
+        &look_of("tests", &[]),
+    );
+    assert_eq!(answer.status, 400, "{}", answer.text());
 }
 
 // The live page, in a browser.
@@ -1161,14 +1353,26 @@ impl Job {
         )
     }
 
+    /// A check that took pictures ends, with its look.
+    fn finished_with_look(
+        &self,
+        run: &str,
+        check: &Value,
+        files: &[(&str, &[u8])],
+        look: &Value,
+    ) -> Answer {
+        let finished = json!({"check": check, "files": manifest(files), "look": look});
+        self.step(run, &json!({ "finished": finished }))
+    }
+
     /// The bytes of one file, by content.
     fn send(&self, bytes: &[u8]) -> Answer {
         let path = format!("/api/v2/blobs/{}", sha256(bytes));
         api("PUT", &path, &self.token(), Some(bytes.to_vec()))
     }
 
-    /// What the job sends to close a run whose checks came out as `checks`.
-    fn closing(&self, checks: &[Value], files: &[(&str, &[u8])]) -> Value {
+    /// What the job sends to close a run whose checks came out as `checks`, with `looks`.
+    fn closing(&self, checks: &[Value], looks: &[Value], files: &[(&str, &[u8])]) -> Value {
         let mut proof = json!({
             "schema": 1,
             "repository": self.repository,
@@ -1177,7 +1381,7 @@ impl Job {
             "base": "main",
             "checks": checks,
             "weakened": [],
-            "looks": [],
+            "looks": looks,
         });
         if let Some(n) = self.pull {
             proof["pull"] = json!({"number": n, "title": format!("Pull request {n}")});
@@ -1186,8 +1390,18 @@ impl Job {
     }
 
     fn done(&self, run: &str, checks: &[Value], files: &[(&str, &[u8])]) -> Answer {
+        self.close(run, checks, &[], files)
+    }
+
+    fn close(
+        &self,
+        run: &str,
+        checks: &[Value],
+        looks: &[Value],
+        files: &[(&str, &[u8])],
+    ) -> Answer {
         let path = format!("/api/v2/runs/{run}/done");
-        let body = self.closing(checks, files);
+        let body = self.closing(checks, looks, files);
         api(
             "POST",
             &path,
@@ -1205,6 +1419,29 @@ fn entry(id: &str, outcome: &str) -> Value {
         "stage": "working",
         "outcome": outcome,
         "seconds": 1.5,
+    })
+}
+
+/// A check's look: its pictures compared with the base commit.
+fn look_of(check: &str, items: &[Value]) -> Value {
+    json!({
+        "check": check,
+        "base_commit": "0123456789abcdef0123456789abcdef01234567",
+        "base_result": "passed",
+        "items": items,
+    })
+}
+
+/// One still of a look, compared as `change`.
+fn still(name: &str, change: &str, before: Option<&str>, after: Option<&str>) -> Value {
+    json!({
+        "name": name,
+        "kind": "still",
+        "change": change,
+        "summary": format!("{name} {change}"),
+        "before": before,
+        "after": after,
+        "comparison": null,
     })
 }
 

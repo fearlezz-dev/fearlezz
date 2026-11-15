@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::look::Look;
 use crate::{Check, Proof, Pull};
 
 /// The files a call names, by their path in the proof bundle.
@@ -83,9 +84,13 @@ pub enum Step {
     Finished {
         /// Its entry in the proof; `output` names its output among `files`.
         check: Box<Check>,
-        /// The files it made.
+        /// The files it made, its pictures among them.
         #[serde(default)]
         files: Files,
+        /// Its pictures compared with the base commit, for a check that takes pictures; their
+        /// paths are among `files`. `done` carries every look again, as the final word.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        look: Option<Box<Look>>,
     },
 }
 
@@ -148,6 +153,9 @@ pub struct RunCheck {
     /// Its entry in the proof, once it ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<Check>,
+    /// Its pictures compared with the base commit, once compared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<Look>,
 }
 
 /// One run of the work, as a page shows it.
@@ -206,12 +214,17 @@ pub enum Change {
     Finished {
         /// Its entry.
         check: Check,
+        /// Its pictures compared with the base commit, when it takes pictures.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        look: Option<Box<Look>>,
     },
     /// The run closed, with each check's final entry (red before green and instability are
-    /// known only at the end).
+    /// known only at the end) and every look.
     Done {
         /// Every check's entry.
         checks: Vec<Check>,
+        /// Every look, each of the check named by its `check`.
+        looks: Vec<Look>,
     },
 }
 

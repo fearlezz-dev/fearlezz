@@ -9,6 +9,7 @@ use anyhow::{Context as _, Result};
 
 pub(crate) use fearlezz_proof::{Check, Item, Proof, Pull, RED_NEXT, Ran, Red, Verdict};
 
+use crate::look::Look;
 use crate::store::{Outcome, RunResult};
 
 /// The entry of a check that ran, with why it failed when it did.
@@ -82,23 +83,36 @@ pub(crate) fn write(proof: &Proof, dir: &Path) -> Result<()> {
         check.output = Some(rel);
     }
     for look in &mut out.looks {
-        let from = look.dir.clone();
-        let folder = from
-            .file_name()
-            .map_or_else(|| look.check.clone(), |f| f.to_string_lossy().to_string());
-        for item in &mut look.items {
-            for rel in [&mut item.before, &mut item.after].into_iter().flatten() {
-                let to = format!("looks/{folder}/{rel}");
-                copy(&from.join(&*rel), &dir.join(&to))?;
-                *rel = to;
-            }
+        let (in_bundle, files) = bundled(look);
+        for (rel, from) in files {
+            copy(&from, &dir.join(rel))?;
         }
-        // The folder of this machine means nothing in the bundle.
-        look.dir = PathBuf::new();
+        *look = in_bundle;
     }
     let path = dir.join("proof.json");
     fs::write(&path, serde_json::to_string_pretty(&out)?)
         .with_context(|| format!("writing {}", path.display()))
+}
+
+/// A look as the bundle names it, its pictures at `looks/<folder>/<path>`, with each
+/// picture's path in the bundle and its file on this machine.
+pub(crate) fn bundled(look: &Look) -> (Look, Vec<(String, PathBuf)>) {
+    let mut out = look.clone();
+    let mut files = Vec::new();
+    let folder = look
+        .dir
+        .file_name()
+        .map_or_else(|| look.check.clone(), |f| f.to_string_lossy().to_string());
+    for item in &mut out.items {
+        for rel in [&mut item.before, &mut item.after].into_iter().flatten() {
+            let to = format!("looks/{folder}/{rel}");
+            files.push((to.clone(), look.dir.join(&*rel)));
+            *rel = to;
+        }
+    }
+    // The folder of this machine means nothing in the bundle.
+    out.dir = PathBuf::new();
+    (out, files)
 }
 
 fn copy(from: &Path, to: &Path) -> Result<()> {

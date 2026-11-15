@@ -14,6 +14,7 @@ use fearlezz_proof::events::{self, Done, Files, Missing, Open, Opened, Step};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::look::Look;
 use crate::proof::Check;
 
 /// The host a project sends to unless its config names another.
@@ -120,9 +121,9 @@ impl Stream {
         self.step(&step, &[])
     }
 
-    /// Sends a check's entry once it ended, with its output, and the output's bytes when the
-    /// host lacks them.
-    pub(crate) fn finished(&self, check: &Check) -> Result<()> {
+    /// Sends a check's entry once it ended, with its output and its look, and the bytes of
+    /// each of their files the host lacks.
+    pub(crate) fn finished(&self, check: &Check, look: Option<&Look>) -> Result<()> {
         let mut entry = check.clone();
         let mut local = Vec::new();
         if let Some(log) = &check.log {
@@ -130,9 +131,20 @@ impl Stream {
             entry.output = Some(path.clone());
             local.push(Local::of(path, log.clone())?);
         }
+        let look = match look {
+            Some(look) => {
+                let (in_bundle, files) = crate::proof::bundled(look);
+                for (path, on_disk) in files {
+                    local.push(Local::of(path, on_disk)?);
+                }
+                Some(Box::new(in_bundle))
+            }
+            None => None,
+        };
         let step = Step::Finished {
             check: Box::new(entry),
             files: manifest(&local),
+            look,
         };
         self.step(&step, &local)
     }

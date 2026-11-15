@@ -49,11 +49,19 @@ at: number, } | { "kind": "finished",
 /**
  * Its entry.
  */
-check: Check, } | { "kind": "done", 
+check: Check, 
+/**
+ * Its pictures compared with the base commit, when it takes pictures.
+ */
+look?: Look | null, } | { "kind": "done", 
 /**
  * Every check's entry.
  */
-checks: Array<Check>, };
+checks: Array<Check>, 
+/**
+ * Every look, each of the check named by its `check`.
+ */
+looks: Array<Look>, };
 
 export type Work = { 
 /**
@@ -137,7 +145,180 @@ started?: number | null,
 /**
  * Its entry in the proof, once it ended.
  */
-entry?: Check | null, };
+entry?: Check | null, 
+/**
+ * Its pictures compared with the base commit, once compared.
+ */
+look?: Look | null, };
+
+export type Look = { 
+/**
+ * The check that took the pictures.
+ */
+check: string, 
+/**
+ * The base commit it was compared with.
+ */
+base_commit: string, 
+/**
+ * How the check did on the base commit.
+ */
+base_result: string, 
+/**
+ * Why there is no before (no base branch, the check fails on the base, the look
+ * failed). Then every picture counts as new and needs approval.
+ */
+no_before?: string | null, 
+/**
+ * Something about the comparison a person should know, such as a base run that passed
+ * without taking any pictures.
+ */
+note?: string | null, 
+/**
+ * Every picture.
+ */
+items: Array<Picture>, };
+
+export type Picture = { 
+/**
+ * Its path below the check's media folder.
+ */
+name: string, 
+/**
+ * `still` or `film`.
+ */
+kind: string, 
+/**
+ * How it differs from its before.
+ */
+change: PictureChange, 
+/**
+ * The comparison in one line.
+ */
+summary: string, 
+/**
+ * The copy of the before inside the look folder, relative to it.
+ */
+before: string | null, 
+/**
+ * The copy of the after inside the look folder, relative to it.
+ */
+after: string | null, 
+/**
+ * What comparing them found.
+ */
+comparison: Comparison | null, 
+/**
+ * Named by the check's `flaky`: compared and shown, but never blocks or waits for
+ * approval.
+ */
+flaky?: boolean, };
+
+export type PictureChange = "changed" | "timing" | "new" | "gone" | "unreadable" | "same";
+
+export type Comparison = { 
+/**
+ * What it comes to.
+ */
+verdict: Likeness, 
+/**
+ * A still rather than a film.
+ */
+still: boolean, 
+/**
+ * Width and height before.
+ */
+size_before: [number, number], 
+/**
+ * Width and height after.
+ */
+size_after: [number, number], 
+/**
+ * Length of the before film, in seconds.
+ */
+total_before: number, 
+/**
+ * Length of the after film, in seconds.
+ */
+total_after: number, 
+/**
+ * The largest shift of a held state, in seconds, and where it is in the before film.
+ */
+max_shift: number, 
+/**
+ * Where the largest shift is in the before film, in seconds.
+ */
+max_shift_at: number | null, 
+/**
+ * How many stable states the before film holds.
+ */
+states_before: number, 
+/**
+ * How many stable states the after film holds.
+ */
+states_after: number, 
+/**
+ * Where the pictures differ.
+ */
+moments: Array<Moment>, 
+/**
+ * The states matched between the films.
+ */
+pairs: Array<Pair>, };
+
+export type Likeness = "same" | "timing" | "changed";
+
+export type Moment = { 
+/**
+ * Start and end in the before film, in seconds.
+ */
+before: [number, number], 
+/**
+ * Start and end in the after film, in seconds.
+ */
+after: [number, number], 
+/**
+ * Where they differ.
+ */
+box: [number, number, number, number], 
+/**
+ * How many pixels differ.
+ */
+px: number, };
+
+export type Pair = { 
+/**
+ * The state's index in the before film.
+ */
+before: number, 
+/**
+ * The state's index in the after film.
+ */
+after: number, 
+/**
+ * Frame index of the state in the before film.
+ */
+before_frame: number, 
+/**
+ * Frame index of the state in the after film.
+ */
+after_frame: number, 
+/**
+ * Start time of the state in the before film, in seconds.
+ */
+before_at: number, 
+/**
+ * Start time of the state in the after film, in seconds.
+ */
+after_at: number, 
+/**
+ * How many pixels differ.
+ */
+px: number, 
+/**
+ * Where they differ.
+ */
+boxes: Array<[number, number, number, number]>, };
 
 export type Check = { 
 /**

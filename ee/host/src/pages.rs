@@ -8,7 +8,7 @@ use worker::{Env, Headers, Request, RequestInit, Response};
 
 use crate::session::{self, to_sign_in};
 use crate::work::{self, Place};
-use crate::{Answer, Config, Refusal, cache, github, repo_key};
+use crate::{Answer, Config, Refusal, cache, files, github, repo_key};
 
 /// How long the host trusts GitHub's word on who may see a repository.
 const SIGHT_SECONDS: i64 = 300;
@@ -84,9 +84,13 @@ pub async fn page(
     headers.set("Content-Type", "text/html; charset=utf-8")?;
     // Who may see the work can change, so the page is asked for each time.
     headers.set("Cache-Control", "no-store")?;
+    // Pictures and films are a pull request's content: they load from the files origin only.
+    let files = &config.files_origin;
     headers.set(
         "Content-Security-Policy",
-        "default-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+        &format!(
+            "default-src 'self'; connect-src 'self'; img-src {files} 'self' data:; media-src {files}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+        ),
     )?;
     headers.set("X-Frame-Options", "DENY")?;
     headers.set("Referrer-Policy", "same-origin")?;
@@ -124,6 +128,26 @@ pub async fn live(
     init.with_headers(req.headers().clone());
     let connect = Request::new_with_init(&format!("https://room/connect?work={id}"), &init)?;
     Ok(stub.fetch_with_request(connect).await?)
+}
+
+/// A grant to the files of a run, for a page that shows it: the run's folder on the files
+/// origin, under a seal that lasts an hour. Who may have it is the page's rule; without a
+/// session a private repository answers `401`, and a run the person may not see is `404`.
+pub async fn grant(req: &Request, env: &Env, config: &Config, run: &str) -> Answer {
+    let repo: Option<String> = env
+        .d1("DB")?
+        .prepare("SELECT w.repo FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1")
+        .bind(&[run.into()])?
+        .first(Some("repo"))
+        .await?;
+    let repo = repo.ok_or_else(not_found)?;
+    if !open(req, env, config, &repo).await? {
+        return Err(Refusal::new(401, "sign in to see this work"));
+    }
+    let granted = files::grant(config, &repo, run).await?;
+    let headers = Headers::new();
+    headers.set("Cache-Control", "no-store")?;
+    Ok(Response::from_json(&granted)?.with_headers(headers))
 }
 
 /// The place a page's path names after `/<owner>/<repo>/`: `work/<branch>` (a branch may hold

@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use fearlezz_proof::events::{
     Change, Closed, Done, Files, Live, Missing, Open, Opened, Run, RunCheck, RunState, Step,
 };
+use fearlezz_proof::look::Look;
 use fearlezz_proof::{Check, SCHEMA};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -135,6 +136,7 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
                 id: check.clone(),
                 started: None,
                 entry: None,
+                look: None,
             })
             .collect(),
     };
@@ -214,12 +216,26 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
                     .bind(&[id.into(), check.as_str().into(), at.into()])?;
             (vec![statement], Change::Started { check, at }, Files::new())
         }
-        Step::Finished { check, files } => {
+        Step::Finished { check, files, look } => {
             refuse_empty(&check.id)?;
             refuse_bad_files(&files)?;
+            if let Some(look) = &look
+                && look.check != check.id
+            {
+                return Err(Refusal::new(
+                    400,
+                    format!("the look is of {}, not of {}", look.check, check.id),
+                ));
+            }
             let mut statements = vec![entry(&db, id, &check)?];
+            if let Some(look) = &look {
+                statements.push(record_look(&db, id, look)?);
+            }
             statements.extend(record_files(&db, id, &files)?);
-            let change = Change::Finished { check: *check };
+            let change = Change::Finished {
+                check: *check,
+                look,
+            };
             (statements, change, files)
         }
     };
@@ -242,6 +258,20 @@ fn entry(db: &D1Database, run: &str, check: &Check) -> worker::Result<D1Prepared
         run.into(),
         check.id.as_str().into(),
         serde_json::to_string(check)?.into(),
+    ])
+}
+
+/// The statement that records a check's look, adding the check when the run did not plan it.
+fn record_look(db: &D1Database, run: &str, look: &Look) -> worker::Result<D1PreparedStatement> {
+    let place = "(SELECT COALESCE(MAX(position), -1) + 1 FROM checks WHERE run = ?1)";
+    let sql = format!(
+        "INSERT INTO checks (run, id, position, look) VALUES (?1, ?2, {place}, ?3) \
+         ON CONFLICT (run, id) DO UPDATE SET look = excluded.look"
+    );
+    db.prepare(&sql).bind(&[
+        run.into(),
+        look.check.as_str().into(),
+        serde_json::to_string(look)?.into(),
     ])
 }
 
@@ -339,10 +369,14 @@ pub async fn done(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     for check in &done.proof.checks {
         statements.push(entry(&db, id, check)?);
     }
+    for look in &done.proof.looks {
+        statements.push(record_look(&db, id, look)?);
+    }
     statements.push(work::bump(&db, &run.work)?);
     let seq = work::commit(&db, statements).await?;
     let change = Change::Done {
         checks: done.proof.checks.clone(),
+        looks: done.proof.looks.clone(),
     };
     notify(env, &run.work, seq, id, change).await;
     let url = work::page_url(

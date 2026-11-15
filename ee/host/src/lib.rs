@@ -48,6 +48,7 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         ("POST", ["api", "v2", "runs", run, "checks"]) => api::step(req, env, config, run).await,
         ("POST", ["api", "v2", "runs", run, "done"]) => api::done(req, env, config, run).await,
         ("PUT", ["api", "v2", "blobs", sha256]) => api::blob(req, env, config, sha256).await,
+        ("GET", ["api", "v2", "runs", run, "grant"]) => pages::grant(&req, env, config, run).await,
         ("GET", ["login"]) => session::login(&req, config).await,
         ("GET", ["callback"]) => session::callback(&req, env, config).await,
         ("GET", ["logout"]) => session::logout(&req, env).await,

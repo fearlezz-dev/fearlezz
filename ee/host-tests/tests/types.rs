@@ -7,6 +7,8 @@ use std::path::Path;
 
 use fearlezz_proof::events::{Change, Live, Run, RunCheck, RunState, Snapshot, Source, Work};
 use fearlezz_proof::findings::{Finding, Level};
+use fearlezz_proof::look::{Change as PictureChange, Item as Picture, Look};
+use fearlezz_proof::media::{Comparison, Moment, Pair, Verdict as Likeness};
 use fearlezz_proof::{Case, Check, Item, Pull, Ran, Red, Verdict};
 use ts_rs::{Config, TS};
 
@@ -24,6 +26,13 @@ fn declarations() -> String {
         RunState::decl(&cfg),
         Source::decl(&cfg),
         RunCheck::decl(&cfg),
+        Look::decl(&cfg),
+        Picture::decl(&cfg),
+        PictureChange::decl(&cfg),
+        Comparison::decl(&cfg),
+        Likeness::decl(&cfg),
+        Moment::decl(&cfg),
+        Pair::decl(&cfg),
         Check::decl(&cfg),
         Ran::decl(&cfg),
         Case::decl(&cfg),

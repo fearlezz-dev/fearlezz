@@ -6,6 +6,7 @@
 use fearlezz_proof::Check;
 use fearlezz_proof::Pull;
 use fearlezz_proof::events::{Live, Run, RunCheck, RunState, Snapshot, Source, Work};
+use fearlezz_proof::look::Look;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
 use wasm_bindgen::JsValue;
@@ -124,6 +125,7 @@ struct CheckRow {
     id: String,
     started: Option<f64>,
     entry: Option<String>,
+    look: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -146,7 +148,7 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
             )
             .bind(&[work.into(), JsValue::clone(&shown)])?,
             db.prepare(
-                "SELECT c.run, c.id, c.started, c.entry FROM checks c WHERE c.run IN (SELECT id FROM runs WHERE work = ?1 ORDER BY opened DESC, rowid DESC LIMIT ?2) ORDER BY c.position",
+                "SELECT c.run, c.id, c.started, c.entry, c.look FROM checks c WHERE c.run IN (SELECT id FROM runs WHERE work = ?1 ORDER BY opened DESC, rowid DESC LIMIT ?2) ORDER BY c.position",
             )
             .bind(&[work.into(), shown])?,
         ])
@@ -176,6 +178,7 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
                         id: c.id.clone(),
                         started: c.started,
                         entry: c.entry.as_deref().map(read::<Check>).transpose()?,
+                        look: c.look.as_deref().map(read::<Look>).transpose()?,
                     })
                 })
                 .collect::<worker::Result<Vec<_>>>()?;

@@ -9,6 +9,7 @@ use crate::media::Comparison;
 
 /// How a picture differs from its before.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "PictureChange"))]
 #[serde(rename_all = "snake_case")]
 pub enum Change {
     /// Other pictures.
@@ -41,6 +42,7 @@ impl Change {
 
 /// One still or film of a look.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "Picture"))]
 pub struct Item {
     /// Its path below the check's media folder.
     pub name: String,
@@ -64,6 +66,7 @@ pub struct Item {
 
 /// One check's pictures compared with its run on the base commit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Look {
     /// The check that took the pictures.
     pub check: String,
@@ -84,6 +87,7 @@ pub struct Look {
     /// The folder it is saved in on this machine, which its pictures are relative to; empty
     /// in a proof bundle, whose pictures are relative to the bundle.
     #[serde(default, skip_serializing_if = "no_path")]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub dir: PathBuf,
 }
 
