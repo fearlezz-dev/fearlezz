@@ -147,8 +147,12 @@ slices:
       - ee/app/src/review.test.ts, ee/app/src/live.test.ts (verdicts, carry over and what waits, as the page words them)
     status: done
   - id: notes
-    tests: []
-    status: todo
+    tests:
+      - crates/fearlezz-proof/tests/review.rs (a_picture_that_needs_change_fails_the_review_and_the_summary_lists_the_notes, a_needs_change_verdict_holds_only_for_the_content_it_was_given_on)
+      - crates/fearlezz/tests/notes.rs (login_keeps_a_token_only_the_user_can_read_and_logout_removes_it, status_shows_what_waits_on_the_host_and_leads_to_the_notes, without_a_sign_in_status_asks_nothing_of_the_host, a_host_that_cannot_be_reached_is_one_line_and_status_goes_on, notes_saves_each_notes_pictures_with_its_region_drawn, notes_without_a_sign_in_leads_to_login, open_notes_hold_the_agent_from_stopping_once)
+      - ee/host-tests/tests/host/notes.rs (a_note_needs_a_session_write_access_and_a_picture_of_the_run, needs_change_needs_an_open_note_and_fails_the_check_run, an_open_note_follows_the_work_until_a_writer_resolves_it, a_cli_token_reads_but_never_writes, the_cli_signs_in_through_the_host_with_githubs_device_flow, the_cli_reads_open_notes_with_their_pictures, a_note_drawn_on_the_page_is_saved_and_shows_in_another_tab, a_film_note_takes_the_moment_of_the_film_clock, an_old_note_shows_dashed_with_its_run_on_a_later_run, and the note shots of the ignored pictures)
+      - ee/app/src/notes.test.ts, ee/app/src/review.test.ts (numbering, old notes, regions, sides, needs change as the page words it)
+    status: done
   - id: local-runs
     tests: []
     status: todo
@@ -156,4 +160,4 @@ slices:
     tests: []
     status: todo
 
-next: Build notes on refactor/hosted-proof-redesign: a needs_change verdict with notes beside looks_right.
+next: Build local runs on refactor/hosted-proof-redesign.
