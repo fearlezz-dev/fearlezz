@@ -12,6 +12,7 @@ const WORDS: Record<Standing, string> = {
   none: "no run yet",
   running: "running",
   passed: "passed",
+  waits: "waits for a person",
   failed: "failed",
   cancelled: "stopped",
 };

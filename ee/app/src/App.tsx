@@ -158,7 +158,8 @@ function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer 
     if (localBy(props.run)) return "local";
     if (props.run.state === "running") return "run";
     const state = props.review?.state;
-    if (state === "waits") return "look";
+    // A weakening that waits for an accept is a decision, not a failure: it reads as one.
+    if (state === "waits" || (state === "failed" && props.review?.weakened.length && !props.review.accept)) return "look";
     if (state === "needs_change") return "bad";
     if (state === "approved") return "ok";
     if (failed() || state === "failed" || props.run.state === "cancelled") return "bad";

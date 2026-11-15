@@ -1,36 +1,38 @@
 /* The proof host's pages. Parts are told apart by tone and space, never by shadows: the page is
    one flat surface, the few things a person acts on sit on raised white (a weakening, a note
-   being written), and pictures sit on a neutral grey plate, as photo editors show work, so
-   their colours are judged true. Each kind of change has one colour, used for its dot, its
-   word, its outlines and its marks on a film's lane. Words are few: what a control does is its
-   label, and the rest is its title. Atkinson Hyperlegible is made for reading with low vision;
-   its mono sets commands, commits and check ids. */
+   being written), and pictures sit on a plate a step darker than the page, so their colours
+   are judged true. One accent, indigo, marks what changed and the one action that answers it
+   (Accept, Looks right); green says only that something passed and red only that it failed
+   or needs change. Everything else is ink and grey, so colour always means something. Words
+   are few: what a control does is its label, and the rest is its title. Atkinson Hyperlegible
+   is made for reading with low vision; its mono sets commands, commits and check ids. */
 @import "@fontsource-variable/atkinson-hyperlegible-next";
 @import "@fontsource-variable/atkinson-hyperlegible-mono";
 
 :root {
-  --page: #eef0f2;
+  --page: #f4f5f7;
   --raised: #ffffff;
-  --sunk: #e2e5e9;
-  --ink: #121417;
-  --quiet: #5f6672;
-  --line: #d6dadf;
-  --plate: #7e8084;
-  --on-plate: #f4f4f4;
-  --changed: #c8106f;
-  --timing: #9a5300;
-  --new: #1f5fd1;
-  --gone: #6b7280;
-  --same: #17804f;
-  --ok: #17804f;
-  --bad: #c0261a;
-  --run: #1f5fd1;
-  --focus: #1f5fd1;
+  --sunk: #e9ebef;
+  --ink: #15171c;
+  --quiet: #646a76;
+  --line: #dde0e6;
+  --plate: #e9ebef;
+  --on-plate: #646a76;
+  --accent: #4f46e5;
+  --changed: var(--accent);
+  --new: #8b85ef;
+  --timing: #8b909b;
+  --gone: #8b909b;
+  --same: #a3a8b2;
+  --ok: #2f7d55;
+  --bad: #c2372e;
+  --run: var(--accent);
+  --focus: var(--accent);
   --on-accent: #ffffff;
-  --was: #fdecea;
-  --was-mark: #f5bcb5;
-  --now: #e2f4e9;
-  --now-mark: #a9dfbf;
+  --was: #fbe9e9;
+  --was-mark: #f2c4c4;
+  --now: #e6f2ea;
+  --now-mark: #c1dfcb;
   --sans: "Atkinson Hyperlegible Next Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "Atkinson Hyperlegible Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -38,28 +40,26 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --page: #141619;
-    --raised: #1e2125;
-    --sunk: #272b30;
-    --ink: #eceef1;
-    --quiet: #a0a7b2;
-    --line: #30353c;
-    --plate: #3c3e42;
-    --on-plate: #e6e6e6;
-    --changed: #ff5aae;
-    --timing: #f5a524;
-    --new: #7aa7ff;
-    --gone: #9aa1ad;
-    --same: #4fd08a;
-    --ok: #4fd08a;
-    --bad: #ff7a66;
-    --run: #7aa7ff;
-    --focus: #7aa7ff;
-    --on-accent: #0d0f12;
-    --was: #3a1f1d;
-    --was-mark: #6e2f29;
-    --now: #17311f;
-    --now-mark: #245c37;
+    --page: #121318;
+    --raised: #1b1d24;
+    --sunk: #252832;
+    --ink: #eceef3;
+    --quiet: #9aa0ad;
+    --line: #2d313b;
+    --plate: #0b0c10;
+    --on-plate: #9aa0ad;
+    --accent: #9d98ff;
+    --new: #6f6ac4;
+    --timing: #737986;
+    --gone: #737986;
+    --same: #5b606c;
+    --ok: #6fc496;
+    --bad: #ff8576;
+    --on-accent: #121318;
+    --was: #3a2326;
+    --was-mark: #6b2e33;
+    --now: #1c3126;
+    --now-mark: #2c5a3f;
   }
 }
 
@@ -127,9 +127,9 @@ h1 { font-size: clamp(1.45rem, 3.2vw, 1.9rem); font-weight: 700; letter-spacing:
 }
 .btn:hover:not(:disabled) { background: color-mix(in srgb, currentColor 10%, transparent); }
 .btn:active:not(:disabled) { transform: scale(0.97); }
-.btn.ok { color: var(--ok); }
-.btn.ok:hover:not(:disabled) { background: var(--ok); color: var(--on-accent); }
-.btn[aria-pressed="true"].ok { background: var(--ok); color: var(--on-accent); }
+.btn.ok { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.ok:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 86%, var(--ink)); }
+.btn[aria-pressed="true"].ok { background: var(--accent); color: var(--on-accent); }
 .plain {
   border: 0; background: none; padding: 4px 6px; border-radius: 6px; font-weight: 700; font-size: 0.87rem;
   color: var(--ink); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px;
@@ -241,7 +241,8 @@ h1 { font-size: clamp(1.45rem, 3.2vw, 1.9rem); font-weight: 700; letter-spacing:
 .earlier > summary::-webkit-details-marker { display: none; }
 .earlier > summary:hover { color: var(--ink); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; display: inline-block; }
-.dot.passed, .dot.same { background: var(--same); }
+.dot.passed { background: var(--ok); }
+.dot.same { background: var(--same); }
 .dot.failed { background: var(--bad); }
 .dot.running { background: var(--run); }
 .dot.changed, .dot.unreadable { background: var(--changed); }
@@ -254,7 +255,7 @@ h1 { font-size: clamp(1.45rem, 3.2vw, 1.9rem); font-weight: 700; letter-spacing:
 .timing { color: var(--timing); }
 .new { color: var(--new); }
 .gone { color: var(--gone); }
-.same { color: var(--same); }
+.same { color: var(--quiet); }
 
 /* Pictures: counts that filter, a contact sheet, the picture on its plate, the decision. */
 .pictures { min-width: 0; }
@@ -277,7 +278,7 @@ p.unproven {
 }
 
 .navigator { display: grid; gap: 10px; margin: 0 0 14px; }
-.group h3 { font-size: 0.82rem; font-weight: 700; margin: 0 0 6px; display: inline-flex; align-items: center; gap: 6px; }
+.group h3 { color: var(--ink); font-size: 0.82rem; font-weight: 700; margin: 0 0 6px; display: inline-flex; align-items: center; gap: 6px; }
 .group h3 .n { color: var(--quiet); font-weight: 400; }
 details.group > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; border-radius: 6px; }
 details.group > summary::-webkit-details-marker { display: none; }
@@ -383,7 +384,7 @@ details.group[open] > summary::before { transform: translateY(-6px) rotate(45deg
 .lane[data-lane="before"] { top: 3px; }
 .lane[data-lane="after"] { top: 28px; }
 .lane i { position: absolute; top: 3px; bottom: 3px; border-radius: 3px; background: var(--line); }
-.lane i[data-differs="true"] { background: var(--changed); }
+.lane i[data-differs="true"] { background: color-mix(in srgb, var(--changed) 55%, transparent); }
 .lane em { position: absolute; left: 8px; top: 0; font-style: normal; font-size: 0.75rem; font-weight: 700; line-height: 20px; color: var(--ink); }
 @media (prefers-reduced-motion: no-preference) {
   .lane i { transform-origin: left; animation: grow 0.5s var(--ease) both; }
@@ -461,6 +462,7 @@ details.group[open] > summary::before { transform: translateY(-6px) rotate(45deg
 }
 .work-row a:hover { background: var(--raised); }
 .work-row .dot { width: 9px; height: 9px; }
+.work-row .dot.waits { background: var(--accent); }
 .work-row .dot.cancelled, .work-row .dot.none { background: var(--gone); }
 .work-row .what { min-width: 0; display: grid; gap: 1px; }
 .work-row .title { font-weight: 700; overflow-wrap: anywhere; }
