@@ -509,3 +509,59 @@ fn an_open_note_outweighs_looks_right_until_it_is_resolved() {
     assert_eq!(review.state, State::Waits);
     assert_eq!(review.waiting().count(), 1);
 }
+
+/// Which leg each run is, as the webhook named its job: `a*` the linux leg, `b*` the macos one.
+fn two_legs() -> BTreeMap<String, String> {
+    [
+        ("a1", "proof (linux)"),
+        ("a2", "proof (linux)"),
+        ("b1", "proof (macos)"),
+        ("b2", "proof (macos)"),
+    ]
+    .into_iter()
+    .map(|(run, name)| (run.to_owned(), name.to_owned()))
+    .collect()
+}
+
+#[test]
+fn a_cancelled_rerun_of_a_leg_leaves_its_older_run_in_review() {
+    let runs = [
+        run("a2", "aaa", RunState::Cancelled, &[]),
+        run("b1", "aaa", RunState::Done, &[]),
+        run(
+            "a1",
+            "aaa",
+            RunState::Done,
+            &[still("card.png", Change::Changed)],
+        ),
+    ];
+    let review = review::review("aaa", &runs, &two_legs(), &[], &[], None);
+    assert_eq!(review.state, State::Waits, "{review:#?}");
+    let waiting: Vec<&str> = review.waiting().map(|p| p.name.as_str()).collect();
+    assert_eq!(waiting, ["card.png"]);
+
+    let (a1, proof) = run("a1", "aaa", RunState::Done, &[]);
+    let mut proof = proof.unwrap();
+    proof.checks.push(entry("tests", Ran::Failed));
+    let runs = [
+        run("a2", "aaa", RunState::Cancelled, &[]),
+        run("b1", "aaa", RunState::Done, &[]),
+        (a1, Some(proof)),
+    ];
+    let review = review::review("aaa", &runs, &two_legs(), &[], &[], None);
+    assert_eq!(review.state, State::Failed, "{review:#?}");
+}
+
+#[test]
+fn a_leg_whose_every_run_ended_without_its_proof_keeps_the_review_from_approving() {
+    let runs = [
+        run("a1", "aaa", RunState::Cancelled, &[]),
+        run("b1", "aaa", RunState::Done, &[]),
+    ];
+    let review = review::review("aaa", &runs, &two_legs(), &[], &[], None);
+    assert_eq!(review.state, State::Cancelled, "{review:#?}");
+    assert_eq!(
+        review.title(),
+        "A CI job of aaa ended without its proof: run it again"
+    );
+}

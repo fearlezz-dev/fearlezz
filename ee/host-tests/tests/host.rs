@@ -348,6 +348,10 @@ fn main() {
             a_run_whose_leg_is_not_known_keeps_its_pictures,
         ),
         (
+            "a_cancelled_rerun_of_a_leg_keeps_its_older_run_in_review",
+            a_cancelled_rerun_of_a_leg_keeps_its_older_run_in_review,
+        ),
+        (
             "a_job_its_workflow_names_is_matched_and_its_rerun_replaces_it",
             a_job_its_workflow_names_is_matched_and_its_rerun_replaces_it,
         ),
@@ -2772,6 +2776,47 @@ fn a_run_whose_leg_is_not_known_keeps_its_pictures() {
     assert!(!keys(&review).contains(&first[0]), "{review:#}");
 }
 
+fn a_cancelled_rerun_of_a_leg_keeps_its_older_run_in_review() {
+    let head = commit("a138");
+    let linux = Job::pull("owner/review", 138, "review/cancelled-rerun")
+        .at(&head, 1138)
+        .on("runner-linux");
+    let macos = linux.on("runner-macos");
+    linux.picked_up("proof (linux)");
+    macos.picked_up("proof (macos-latest)");
+    let (look, files) = one_still(b"rerun before", b"rerun after on linux");
+    proven(&linux, &look, &files, &json!({}));
+    let (mut same, files) = one_still(b"rerun same", b"rerun same");
+    same["items"][0]["change"] = json!("same");
+    proven(&macos, &same, &files, &json!({}));
+    let first = keys(&review_of(138));
+    assert_eq!(first.len(), 1, "the linux leg's picture");
+
+    // The linux leg runs again and its job is cancelled before it says done.
+    let again = linux.again().on("runner-linux-2");
+    again.picked_up("proof (linux)");
+    let run = again.open(&["screens"]);
+    assert_eq!(review_of(138)["state"], "running");
+    again.ended("proof (linux)");
+    let snapshot = live("/owner/review/pull/138", &[]).json();
+    let state = snapshot["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == run.id.as_str())
+        .unwrap()["state"]
+        .clone();
+    assert_eq!(state, "cancelled", "{snapshot:#}");
+    let review = snapshot["review"].clone();
+    assert_eq!(
+        keys(&review),
+        first,
+        "the older run's picture stays: {review:#}"
+    );
+    assert_eq!(review["state"], "waits", "{review:#}");
+    assert_eq!(check_run(&head).state(), "action_required");
+}
+
 fn a_job_its_workflow_names_is_matched_and_its_rerun_replaces_it() {
     // The workflow names the job `Proof` with `name:`; its GITHUB_JOB is `proof`.
     let job = Job::pull("owner/review", 137, "review/named")
@@ -3239,11 +3284,26 @@ impl Job {
     /// GitHub's `workflow_job` webhook saying the job's runner took it, under its display
     /// `name` (`proof (macos-latest)` for a matrix leg).
     fn picked_up(&self, name: &str) {
+        self.job_event("in_progress", name);
+    }
+
+    /// GitHub's `workflow_job` webhook saying the job, under its display `name`, ended
+    /// cancelled.
+    fn ended(&self, name: &str) {
+        self.job_event("completed", name);
+    }
+
+    fn job_event(&self, action: &str, name: &str) {
         let id = self.workflow_run * 1000
             + u64::from(self.attempt) * 100
             + self.runner.bytes().map(u64::from).sum::<u64>() % 100;
+        let conclusion = if action == "completed" {
+            json!("cancelled")
+        } else {
+            Value::Null
+        };
         let payload = json!({
-            "action": "in_progress",
+            "action": action,
             "workflow_job": {
                 "id": id,
                 "run_id": self.workflow_run,
@@ -3252,8 +3312,8 @@ impl Job {
                 "name": name,
                 "head_sha": self.head,
                 "head_branch": self.branch,
-                "status": "in_progress",
-                "conclusion": null,
+                "status": action,
+                "conclusion": conclusion,
                 "html_url": format!("https://github.com/{}/actions/runs/{}/job/{id}", self.repository, self.workflow_run),
             },
             "repository": {"full_name": self.repository},

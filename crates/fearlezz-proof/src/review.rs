@@ -109,7 +109,7 @@ pub enum State {
     Running,
     /// The proof of the head failed: a check, or what it weakens while no admin accepted it.
     Failed,
-    /// Every CI run of the head ended without its proof.
+    /// A CI job of the head has no proof: every run of it ended without one.
     Cancelled,
     /// An open note says what should change: the agent has notes to act on.
     NeedsChange,
@@ -222,8 +222,11 @@ pub fn key(item: &Item, sha: impl Fn(&str) -> Option<String>) -> Option<String> 
 
 /// The review of `head` from the work's runs (newest first, each with its proof once done),
 /// the display names GitHub gives their jobs (`legs`, by run id, see [`Leg`]), its verdicts,
-/// its notes and the head's accept. Only CI runs of the head count, the newest of each leg: a
-/// workflow run again replaces the legs it ran, and every other leg keeps its newest run.
+/// its notes and the head's accept. Only CI runs of the head count, the newest of each leg that
+/// did not end without its proof: a workflow run again replaces the legs it ran, every other leg
+/// keeps its newest run, and a run again that is cancelled replaces nothing, so the older run's
+/// failure and pictures stay in review. A leg whose every run was cancelled has no proof, which
+/// keeps the review from approving.
 pub fn review(
     head: &str,
     runs: &[(Run, Option<Proof>)],
@@ -232,22 +235,19 @@ pub fn review(
     notes: &[Note],
     accept: Option<&Accept>,
 ) -> Review {
-    let mut seen: Vec<Leg<'_>> = Vec::new();
-    let mut counted: Vec<&(Run, Option<Proof>)> = Vec::new();
+    let mut seen: Vec<(Leg<'_>, Option<&(Run, Option<Proof>)>)> = Vec::new();
     for entry in runs {
         let Some(leg) = Leg::of(&entry.0, head, legs) else {
             continue;
         };
-        if !seen.contains(&leg) {
-            seen.push(leg);
-            counted.push(entry);
+        let counts = (entry.0.state != RunState::Cancelled).then_some(entry);
+        match seen.iter_mut().find(|(l, _)| *l == leg) {
+            Some((_, chosen)) => *chosen = chosen.or(counts),
+            None => seen.push((leg, counts)),
         }
     }
-    let live: Vec<&(Run, Option<Proof>)> = counted
-        .iter()
-        .copied()
-        .filter(|(run, _)| run.state != RunState::Cancelled)
-        .collect();
+    let unproven = seen.iter().any(|(_, chosen)| chosen.is_none());
+    let live: Vec<&(Run, Option<Proof>)> = seen.iter().filter_map(|(_, chosen)| *chosen).collect();
 
     let open: Vec<&Note> = notes.iter().filter(|n| n.is_open()).collect();
     let mut pictures: Vec<Picture> = Vec::new();
@@ -308,14 +308,14 @@ pub fn review(
                 p.to_fix() > 0 || weakened || p.checks.iter().any(|c| c.outcome == Ran::Failed)
             })
     });
-    let state = if counted.is_empty() {
+    let state = if seen.is_empty() {
         State::Ci
     } else if live.iter().any(|(run, _)| run.state == RunState::Running) {
         State::Running
-    } else if live.is_empty() {
-        State::Cancelled
     } else if failed {
         State::Failed
+    } else if unproven {
+        State::Cancelled
     } else if !open.is_empty() {
         State::NeedsChange
     } else if pictures.iter().any(|p| p.standing == Standing::Waits) {
@@ -408,7 +408,7 @@ impl Review {
                 format!("The proof of {head} failed: what it weakens waits for an admin's accept")
             }
             State::Failed => format!("The proof of {head} failed"),
-            State::Cancelled => format!("The CI run of {head} ended without its proof"),
+            State::Cancelled => format!("A CI job of {head} ended without its proof: run it again"),
             State::NeedsChange => {
                 let n = self.noted().len();
                 let verb = if n == 1 { "needs" } else { "need" };

@@ -158,7 +158,8 @@ review of a work's head is derived from the head's CI runs (the newest run of ea
 the job with the display name GitHub gives it, `proof (macos-latest)`, so every leg of a matrix
 counts, and a run again, whole or of failed jobs only, replaces just the legs it ran; until the
 `workflow_job` webhook names a run's job, the run is a leg of its own, so its pictures never drop
-out), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
+out; a run that ended without done replaces nothing, so the leg's older run keeps its failure
+and pictures in review, and a leg with no run that said done keeps the review from approving), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
 Every write that can move it (a run opening, a look arriving, done, a cancel, a verdict, an
 accept, a push to the pull request) derives it again in the work's room, after the writes
 before it; when it changed, open pages get it live and GitHub gets it as the check run and the
@@ -211,7 +212,7 @@ permission, cached 5 minutes per login and repository.
 | a CI run is running | `in_progress` | CI is proving `<head>` |
 | the proof failed | completed, `failure` | The proof of `<head>` failed (and, when it weakens what no admin accepted, that it waits for an admin's accept) |
 | an open note says a picture needs change | completed, `failure` | "1 picture needs change at `<head>`" |
-| every run ended without done | completed, `cancelled` | The CI run of `<head>` ended without its proof |
+| a job whose every run ended without done (a run again that ends so replaces nothing) | completed, `cancelled` | A CI job of `<head>` ended without its proof: run it again |
 | a picture waits for a look | completed, `action_required` | for example "2 pictures wait for a look" |
 | everything looks right | completed, `success` | Everything looks right |
 
