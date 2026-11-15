@@ -41,9 +41,16 @@ impl Floor {
             return Ok(Floor::default());
         }
         let base = Config::load(&base.root, &git.common)?;
-        Ok(Floor {
-            weakened: weakenings(&base, head, &wt.files),
-        })
+        let mut weakened = weakenings(&base, head, &wt.files);
+        for w in &mut weakened {
+            let path = match &w.part {
+                Part::Check(id) => format!("check.{id}"),
+                Part::Setting(path) => path.clone(),
+            };
+            w.was = base.part(&path);
+            w.now = head.part(&path);
+        }
+        Ok(Floor { weakened })
     }
 
     pub(crate) fn holds(&self) -> bool {
@@ -93,6 +100,8 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<Weakening> 
             found.push(Weakening {
                 part: Part::Check(b.id.clone()),
                 how,
+                was: None,
+                now: None,
             });
         };
         let Some(h) = head.checks.iter().find(|h| h.id == b.id) else {
@@ -183,6 +192,8 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<Weakening> 
         found.push(Weakening {
             part: Part::Setting("no_proof".into()),
             how,
+            was: None,
+            now: None,
         });
     }
     found
@@ -193,6 +204,8 @@ fn settings(found: Vec<(String, String)>) -> impl Iterator<Item = Weakening> {
     found.into_iter().map(|(path, how)| Weakening {
         part: Part::Setting(path),
         how,
+        was: None,
+        now: None,
     })
 }
 

@@ -302,6 +302,8 @@ fn gone(check: &str) -> Weakening {
     Weakening {
         part: Part::Check(check.into()),
         how: "it is gone".into(),
+        was: None,
+        now: None,
     }
 }
 

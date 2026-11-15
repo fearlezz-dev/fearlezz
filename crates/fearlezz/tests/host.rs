@@ -338,9 +338,21 @@ fn accept(head: &str, weakened: &Value) -> Value {
     json!({"head": head, "weakened": weakened, "by": "admin", "at": 9.0})
 }
 
-/// What `weakening` weakens.
-fn lint_weakened() -> Value {
-    json!([{"check": "lint", "how": "it runs another command"}])
+/// What `weakening` weakens, with the check as it was and is now.
+fn lint_weakened(host: &FakeHost) -> Value {
+    let check = |run: &str| {
+        format!(
+            "[check.lint]\ninputs = [\"src/**\"]\nrun = \"curl -s {}/mark/lint > /dev/null && \
+             {run}\"\nstage = \"working\"\n",
+            host.url
+        )
+    };
+    json!([{
+        "check": "lint",
+        "how": "it runs another command",
+        "was": check("echo all clean"),
+        "now": check("echo all clean anyway"),
+    }])
 }
 
 #[test]
@@ -363,7 +375,7 @@ fn a_weakening_fails_the_proof_while_no_admin_accepted_it() {
         out.stdout
     );
     let asked = host.sent("POST", "/api/v2/runs/r1/weakenings");
-    assert_eq!(asked["weakened"], lint_weakened(), "{asked:#}");
+    assert_eq!(asked["weakened"], lint_weakened(&host), "{asked:#}");
     let calls = host.calls();
     let ask = calls
         .iter()
@@ -383,7 +395,7 @@ fn an_accepted_weakening_of_this_head_passes() {
     let host = FakeHost::start();
     let repo = weakening(&host);
     let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
-    host.state.lock().unwrap().accepted = Some(accept(&head, &lint_weakened()));
+    host.state.lock().unwrap().accepted = Some(accept(&head, &lint_weakened(&host)));
     let (out, text) = ci(&repo, &host.token_env());
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
@@ -421,7 +433,7 @@ fn an_accept_of_other_weakenings_or_another_head_fails() {
     }
     let host = FakeHost::start();
     let repo = weakening(&host);
-    host.state.lock().unwrap().accepted = Some(accept(&"0".repeat(40), &lint_weakened()));
+    host.state.lock().unwrap().accepted = Some(accept(&"0".repeat(40), &lint_weakened(&host)));
     let (out, _) = ci(&repo, &host.token_env());
     assert!(!out.ok, "another head: {}\n{}", out.stdout, out.stderr);
 }
@@ -469,7 +481,7 @@ fn a_weakening_fails_the_proof_when_the_host_cannot_say_it_was_accepted() {
         let repo = weakening(&host);
         let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
         let mut state = host.state.lock().unwrap();
-        state.accepted = Some(accept(&head, &lint_weakened()));
+        state.accepted = Some(accept(&head, &lint_weakened(&host)));
         if broken == "not installed" {
             state.installed = false;
         } else {

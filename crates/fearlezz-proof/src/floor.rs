@@ -15,6 +15,15 @@ pub struct Weakening {
     pub part: Part,
     /// How it weakened, such as `it runs another command`.
     pub how: String,
+    /// The part as the base branch's config has it, as TOML (`[check.tests]` with its fields,
+    /// or `no_proof = [...]`), absent where it has no such part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub was: Option<String>,
+    /// The part as the change's config has it, as TOML, absent where it is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub now: Option<String>,
 }
 
 /// A part of the config that can weaken.
