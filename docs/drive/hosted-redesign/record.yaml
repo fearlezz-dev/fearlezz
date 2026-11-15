@@ -112,6 +112,10 @@ decided:
     what: >-
       The local approval (fearlezz say approve --said and --github) goes too. The final stage says
       pictures changed and a person reviews them on the pull request; it does not wait.
+  - id: base-env-fix-here
+    what: >-
+      Fix in this branch: a base checkout (red before green and looks) is prepared with the base
+      commit's own [env] (f5d16d9), found while building host-v2-foundation.
 
 open:
   - id: base-shell
