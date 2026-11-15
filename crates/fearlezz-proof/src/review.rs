@@ -60,16 +60,32 @@ pub struct Verdict {
     pub head: String,
 }
 
-/// An admin's accept of every weakening of one head.
+/// An admin's accept of exactly the weakenings of one head their proof showed. A CI run of that
+/// head asks for it before it judges what it weakens, and passes when it covers that.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Accept {
     /// The commit it accepts the weakenings of.
     pub head: String,
+    /// What it accepts, as the proof it was given on showed it.
+    pub weakened: Vec<Weakening>,
     /// Their GitHub login.
     pub by: String,
     /// When, in seconds since the epoch.
     pub at: f64,
+}
+
+impl Accept {
+    /// Whether it accepts exactly `weakened` at `head`: nothing more, nothing less.
+    pub fn covers(&self, head: &str, weakened: &[Weakening]) -> bool {
+        let sorted = |w: &[Weakening]| {
+            let mut w = w.to_vec();
+            w.sort();
+            w.dedup();
+            w
+        };
+        self.head == head && sorted(&self.weakened) == sorted(weakened)
+    }
 }
 
 /// Where review of a head stands.
@@ -81,13 +97,13 @@ pub enum State {
     Ci,
     /// A CI run of the head is running.
     Running,
-    /// The proof of the head failed.
+    /// The proof of the head failed: a check, or what it weakens while no admin accepted it.
     Failed,
     /// Every CI run of the head ended without its proof.
     Cancelled,
     /// An open note says what should change: the agent has notes to act on.
     NeedsChange,
-    /// A picture waits for a verdict, or a weakening for an admin's accept.
+    /// A picture waits for a look.
     Waits,
     /// Every picture to look at looks right and every weakening is accepted.
     Approved,
@@ -134,9 +150,10 @@ pub struct Review {
     pub state: State,
     /// Every picture to look at, in the order of its runs and looks.
     pub pictures: Vec<Picture>,
-    /// What the head weakens, waiting for an admin's accept.
+    /// What the head weakens, as its proofs show it: it fails the proof until an admin accepts
+    /// it, and the accept runs the proof job again.
     pub weakened: Vec<Weakening>,
-    /// The accept of those weakenings, once an admin gave it.
+    /// The accept of exactly those weakenings, once an admin gave it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept: Option<Accept>,
     /// The work's open notes, oldest first: they follow the work, not the head.
@@ -259,10 +276,7 @@ pub fn review(
         }
     }
     let mut weakened: Vec<Weakening> = Vec::new();
-    for (_, proof) in &live {
-        let Some(proof) = proof.as_ref().filter(|p| p.weakenings_wait) else {
-            continue;
-        };
+    for proof in live.iter().filter_map(|(_, proof)| proof.as_ref()) {
         for w in &proof.weakened {
             if !weakened.contains(w) {
                 weakened.push(w.clone());
@@ -270,13 +284,17 @@ pub fn review(
         }
     }
     let accept = accept
-        .filter(|a| a.head == head && !weakened.is_empty())
+        .filter(|a| !weakened.is_empty() && a.covers(head, &weakened))
         .cloned();
 
+    // What a proof weakens fails it unless the host's own accept covers it: the accept a
+    // proof names is the run's word, so the host never takes it alone.
     let failed = live.iter().any(|(run, proof)| {
         run.state == RunState::Done
             && proof.as_ref().is_none_or(|p| {
-                !p.blockers().is_empty() || p.checks.iter().any(|c| c.outcome == Ran::Failed)
+                let weakened = !p.weakened.is_empty()
+                    && accept.as_ref().is_none_or(|a| !a.covers(head, &p.weakened));
+                p.to_fix() > 0 || weakened || p.checks.iter().any(|c| c.outcome == Ran::Failed)
             })
     });
     let state = if counted.is_empty() {
@@ -289,9 +307,7 @@ pub fn review(
         State::Failed
     } else if !open.is_empty() {
         State::NeedsChange
-    } else if pictures.iter().any(|p| p.standing == Standing::Waits)
-        || (!weakened.is_empty() && accept.is_none())
-    {
+    } else if pictures.iter().any(|p| p.standing == Standing::Waits) {
         State::Waits
     } else {
         State::Approved
@@ -350,6 +366,9 @@ impl Review {
         match self.state {
             State::Ci => format!("Waiting for CI to prove {head}"),
             State::Running => format!("CI is proving {head}"),
+            State::Failed if self.weakenings_wait() => {
+                format!("The proof of {head} failed: what it weakens waits for an admin's accept")
+            }
             State::Failed => format!("The proof of {head} failed"),
             State::Cancelled => format!("The CI run of {head} ended without its proof"),
             State::NeedsChange => {
@@ -357,18 +376,10 @@ impl Review {
                 let verb = if n == 1 { "needs" } else { "need" };
                 format!("{} {verb} change at {head}", pictures(n))
             }
-            State::Waits => {
-                let waiting = self.waiting().count();
-                match (waiting, self.weakenings_wait()) {
-                    (0, _) => format!("A weakened proof waits for an admin's accept at {head}"),
-                    (1, false) => format!("1 picture waits for a look at {head}"),
-                    (n, false) => format!("{n} pictures wait for a look at {head}"),
-                    (n, true) => format!(
-                        "{} for a look and a weakened proof for an admin at {head}",
-                        pictures(n)
-                    ),
-                }
-            }
+            State::Waits => match self.waiting().count() {
+                1 => format!("1 picture waits for a look at {head}"),
+                n => format!("{n} pictures wait for a look at {head}"),
+            },
             State::Approved if self.pictures.is_empty() && self.weakened.is_empty() => {
                 format!("Proven at {head}, with nothing to review")
             }
@@ -417,7 +428,9 @@ impl Review {
         if !self.weakened.is_empty() {
             lines.push(match &self.accept {
                 Some(a) => format!("\nWhat it weakens, accepted by {}:", a.by),
-                None => "\nWhat it weakens, waiting for an admin's accept:".into(),
+                None => "\nWhat it weakens, which fails the proof until an admin accepts it on \
+                         the work's page:"
+                    .into(),
             });
             lines.extend(self.weakened.iter().map(|w| format!("- {w}")));
         }

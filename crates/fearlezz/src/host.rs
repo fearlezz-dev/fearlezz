@@ -3,7 +3,8 @@
 //! `fearlezz setup login`, asks the host whether the repository installed the app, and only
 //! then streams its run: it opens the run before any check runs, says when each check starts
 //! and ends (its entry with the files it made, each sent by content when the host lacks it),
-//! and closes the run with `proof.json`. A local run is the agent's word: the host shows it
+//! asks, on CI, whether an admin accepted what the change weakens at this head, and closes the
+//! run with `proof.json`. A local run is the agent's word: the host shows it
 //! unproven and never reviews it. Talks through curl, which every runner has.
 
 use std::fs;
@@ -12,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
-use fearlezz_proof::events::{self, Done, Files, Missing, Open, Opened, Step};
+use fearlezz_proof::events::{self, Accepted, Done, Files, Missing, Open, Opened, Step, Weakened};
+use fearlezz_proof::floor::Weakening;
+use fearlezz_proof::review::Accept;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -210,6 +213,25 @@ impl Stream {
             bail!("the host refused a check ({status}){}", said(&answer));
         }
         self.send(&missing(answer)?, local)
+    }
+
+    /// The admin's accept of exactly `weakened` at the run's head, as the host answers it; None
+    /// when no admin accepted that.
+    pub(crate) fn accepted(&self, weakened: &[Weakening]) -> Result<Option<Accept>> {
+        let path = format!("/api/v2/runs/{}/weakenings", self.run);
+        let ask = Weakened {
+            weakened: weakened.to_vec(),
+        };
+        let (status, answer) = self.host.call("POST", &path, json(&ask)?)?;
+        if status != 200 {
+            bail!(
+                "the host answered {status} when asked about the weakenings{}",
+                said(&answer)
+            );
+        }
+        let accepted: Accepted = serde_json::from_value(answer)
+            .context("the host answered without saying whether they are accepted")?;
+        Ok(accepted.accepted)
     }
 
     /// Closes the run with the bundle written in `dir`: its `proof.json`, and every other

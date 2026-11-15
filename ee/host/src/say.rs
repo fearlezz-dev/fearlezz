@@ -1,6 +1,6 @@
 //! What a person says on a work's page: a verdict on a picture (write access), an accept of a
-//! head's weakenings (admin rights), and who the page is shown to, so it offers only what they
-//! may do.
+//! head's weakenings (admin rights), which runs its failed proof job again, and who the page is
+//! shown to, so it offers only what they may do.
 //!
 //! Only a person in a browser says these. A verdict or an accept takes the session cookie and
 //! nothing else: a request that carries an `Authorization` header is refused, whatever token
@@ -20,7 +20,7 @@ use worker::{D1Database, Env, Request, Response};
 
 use crate::session::{self, Session};
 use crate::work::{self, read};
-use crate::{Answer, Config, Refusal, cache, github, now, pages, review as hosted};
+use crate::{Answer, Config, Refusal, cache, github, jobs, now, pages, review as hosted};
 
 /// How long the host trusts GitHub's word on what a person may do.
 const ROLE_SECONDS: i64 = 300;
@@ -231,8 +231,11 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
     Ok(Response::from_json(&json!({ "verdict": verdict }))?.with_status(201))
 }
 
-/// `POST /api/v2/runs/<run>/accept`: an admin accepts every weakening of a CI run's head, which
-/// waits for it.
+/// `POST /api/v2/runs/<run>/accept`: an admin accepts exactly what a finished CI run's change
+/// weakens at its head, which failed its proof job. The host keeps it and runs that failed job
+/// again as the app, so the job asks for the accept (`api::weakenings`) and passes with it: the
+/// job stays the one gate. When GitHub does not run it again, the accept is kept and the answer
+/// says to run the job again on GitHub.
 pub async fn accept(req: Request, env: &Env, config: &Config, id: &str) -> Answer {
     let person = person(&req, env, config, "accept a weakened proof").await?;
     let db = env.d1("DB")?;
@@ -248,34 +251,79 @@ pub async fn accept(req: Request, env: &Env, config: &Config, id: &str) -> Answe
         ));
     }
     let proof = run.proof.as_deref().map(read::<Proof>).transpose()?;
-    let waits = work::state(&run.state) == RunState::Done
-        && proof.is_some_and(|p| p.weakenings_wait && !p.weakened.is_empty());
-    if !waits {
-        return Err(Refusal::new(
-            409,
-            "nothing this run weakens waits for an accept",
-        ));
-    }
-    let at = now() as f64;
+    let weakened = proof
+        .filter(|p| work::state(&run.state) == RunState::Done && !p.weakened.is_empty())
+        .map(|p| p.weakened)
+        .ok_or_else(|| Refusal::new(409, "this run weakens nothing to accept"))?;
+    let accept = review::Accept {
+        head: run.head.clone(),
+        weakened,
+        by: person.login,
+        at: now() as f64,
+    };
     db.prepare(
-        "INSERT INTO accepts (work, head, login, at) VALUES (?1, ?2, ?3, ?4) \
-         ON CONFLICT (work, head) DO UPDATE SET login = excluded.login, at = excluded.at",
+        "INSERT INTO accepts (work, head, weakened, login, at) VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT (work, head) DO UPDATE SET weakened = excluded.weakened, login = excluded.login, at = excluded.at",
     )
     .bind(&[
         run.work.as_str().into(),
         run.head.as_str().into(),
-        person.login.as_str().into(),
-        at.into(),
+        serde_json::to_string(&accept.weakened)?.into(),
+        accept.by.as_str().into(),
+        accept.at.into(),
     ])?
     .run()
     .await?;
     hosted::refresh(env, config, &run.work, false).await?;
-    let accept = review::Accept {
-        head: run.head,
-        by: person.login,
-        at,
-    };
+    if let Err(error) = rerun(config, &run).await {
+        worker::console_error!(
+            "the proof job of {} did not run again: {error}",
+            run.repository
+        );
+        return Err(Refusal::new(
+            502,
+            format!(
+                "accepted, but GitHub did not run the proof job again ({error}); run it again on GitHub"
+            ),
+        ));
+    }
     Ok(Response::from_json(&json!({ "accept": accept }))?.with_status(201))
+}
+
+/// Runs the failed proof job of a CI run again, as the app: each failed job of its workflow
+/// run whose name is the run's job, alone or in a matrix.
+async fn rerun(config: &Config, run: &RunRow) -> worker::Result<()> {
+    let Source::Ci {
+        job,
+        run_url: Some(url),
+    } = read::<Source>(&run.source)?
+    else {
+        return Err(worker::Error::RustError(
+            "the run names no workflow run".into(),
+        ));
+    };
+    let workflow_run = url
+        .rsplit_once("/actions/runs/")
+        .and_then(|(_, rest)| rest.split('/').next()?.parse::<u64>().ok())
+        .ok_or_else(|| worker::Error::RustError(format!("{url} names no workflow run")))?;
+    let Some(token) = github::installation_token(config, &run.repository).await? else {
+        return Err(worker::Error::RustError("the app is not installed".into()));
+    };
+    let failed = github::failed_jobs(&token, config, &run.repository, workflow_run).await?;
+    let mine: Vec<u64> = failed
+        .into_iter()
+        .filter(|(_, name)| jobs::runs(name, &job))
+        .map(|(id, _)| id)
+        .collect();
+    if mine.is_empty() {
+        return Err(worker::Error::RustError(format!(
+            "no failed job {job} in workflow run {workflow_run}"
+        )));
+    }
+    for id in mine {
+        github::rerun_job(&token, config, &run.repository, id).await?;
+    }
+    Ok(())
 }
 
 /// `GET /api/v2/viewer/<owner>/<repo>`: who the page is shown to and what they may do there,

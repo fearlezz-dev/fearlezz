@@ -2,7 +2,7 @@
 //! installation on a repository and its installation tokens, a repository as a token sees it, a
 //! person's permission on it, the OAuth code exchange and the signed in user), kept in memory,
 //! and what the app writes (check runs and pull request comments), recorded with the token that
-//! wrote them. It checks the app's JWT with the app's public key, so a test proves the host signs
+//! wrote them, and the Actions jobs of workflow runs with the re-runs the app asks for. It checks the app's JWT with the app's public key, so a test proves the host signs
 //! it as GitHub expects. It also sends webhooks, signed as GitHub signs them.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -97,6 +97,20 @@ pub struct State {
     pub devices: BTreeMap<String, (String, Option<String>)>,
     /// Refresh tokens of user tokens and their login; each renews once.
     pub refreshes: BTreeMap<String, String>,
+    /// The Actions jobs of workflow runs, as GitHub lists them.
+    pub jobs: Vec<ActionsJob>,
+    /// Every job the app asked to run again: its repository, id and the token that asked.
+    pub reruns: Vec<(String, u64, String)>,
+}
+
+/// An Actions job of a workflow run.
+#[derive(Clone, Debug)]
+pub struct ActionsJob {
+    pub repo: String,
+    pub run: u64,
+    pub id: u64,
+    pub name: String,
+    pub conclusion: String,
 }
 
 pub struct FakeGitHub {
@@ -167,6 +181,8 @@ impl FakeGitHub {
             next_id: 1000,
             devices: BTreeMap::new(),
             refreshes: BTreeMap::new(),
+            jobs: Vec::new(),
+            reruns: Vec::new(),
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -233,6 +249,29 @@ impl FakeGitHub {
         let mut state = self.state.lock().unwrap();
         let prefix = format!("person-{login}-");
         state.tokens.retain(|token, _| !token.starts_with(&prefix));
+    }
+
+    /// Job `id` named `name` of workflow run `run` ended with `conclusion`.
+    pub fn job_ended(&self, repo: &str, run: u64, id: u64, name: &str, conclusion: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.jobs.push(ActionsJob {
+            repo: repo.to_owned(),
+            run,
+            id,
+            name: name.to_owned(),
+            conclusion: conclusion.to_owned(),
+        });
+    }
+
+    /// The jobs of `repo` the app asked to run again, in order, each with the token that asked.
+    pub fn reruns(&self, repo: &str) -> Vec<(u64, String)> {
+        let state = self.state.lock().unwrap();
+        state
+            .reruns
+            .iter()
+            .filter(|(r, _, _)| r == repo)
+            .map(|(_, id, token)| (*id, token.clone()))
+            .collect()
     }
 
     /// Publishes another Actions OIDC key, as GitHub does when it rotates them.
@@ -419,6 +458,38 @@ fn answer(
                 }
                 None => (404, json!({"message": "Not Found"})),
             }
+        }
+        ("GET", ["repos", owner, name, "actions", "runs", run, "jobs"]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            let run: u64 = run.parse().unwrap_or_default();
+            let jobs: Vec<Value> = state
+                .jobs
+                .iter()
+                .filter(|j| j.repo == repo && j.run == run)
+                .map(|j| json!({"id": j.id, "run_id": j.run, "name": j.name, "status": "completed", "conclusion": j.conclusion}))
+                .collect();
+            (200, json!({"total_count": jobs.len(), "jobs": jobs}))
+        }
+        ("POST", ["repos", owner, name, "actions", "jobs", id, "rerun"]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            let id: u64 = id.parse().unwrap_or_default();
+            if !state.jobs.iter().any(|j| j.repo == repo && j.id == id) {
+                return (404, json!({"message": "Not Found"}));
+            }
+            state.reruns.push((repo, id, token.to_owned()));
+            (201, json!({}))
         }
         ("POST", ["repos", owner, name, "issues", issue, "comments"]) => {
             let repo = format!("{owner}/{name}");

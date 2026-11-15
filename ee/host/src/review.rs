@@ -4,9 +4,10 @@
 //! check run per pull request head, `Fearlezz review`, and one comment on the pull request.
 //!
 //! The check run says `queued` until a CI run of the head opens, `in_progress` while one runs,
-//! `failure` when the proof failed, `cancelled` when every run of the head ended without its
-//! proof, `failure` too while an open note says a picture needs change (its summary lists the notes),
-//! `action_required` while a picture waits for a verdict or a weakening for an admin's accept,
+//! `failure` when the proof failed (what it weakens fails it until an admin accepts it, and the
+//! accept runs the proof job again, see `say.rs`), `cancelled` when every run of the head ended
+//! without its proof, `failure` too while an open note says a picture needs change (its summary lists the notes),
+//! `action_required` while a picture waits for a look,
 //! and `success` once nothing waits. `action_required` needs no requested actions: it
 //! completes the check run (so a required check blocks the merge), and GitHub sends people to
 //! its `details_url`, the work's page, which is where they act.
@@ -95,19 +96,24 @@ pub async fn accept(
 ) -> worker::Result<Option<review::Accept>> {
     #[derive(Deserialize)]
     struct AcceptRow {
+        weakened: String,
         login: String,
         at: f64,
     }
     let row: Option<AcceptRow> = db
-        .prepare("SELECT login, at FROM accepts WHERE work = ?1 AND head = ?2")
+        .prepare("SELECT weakened, login, at FROM accepts WHERE work = ?1 AND head = ?2")
         .bind(&[work.into(), head.into()])?
         .first(None)
         .await?;
-    Ok(row.map(|r| review::Accept {
-        head: head.to_owned(),
-        by: r.login,
-        at: r.at,
-    }))
+    row.map(|r| {
+        Ok(review::Accept {
+            head: head.to_owned(),
+            weakened: serde_json::from_str(&r.weakened)?,
+            by: r.login,
+            at: r.at,
+        })
+    })
+    .transpose()
 }
 
 /// What the app last wrote on a pull request.

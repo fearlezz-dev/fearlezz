@@ -5,10 +5,21 @@
 
 use anyhow::Result;
 use fearlezz_proof::floor::{PAST, Part, Weakening};
+use fearlezz_proof::review::Accept;
 
 use crate::config::{self, Builtin, Config, Env, Ports, Widening};
 use crate::findings::Scope;
 use crate::state::Worktree;
+
+/// Where what a change weakens gets past the job that judges it.
+pub(crate) enum Gate {
+    /// Nowhere but the job: an admin merges past the required check.
+    Job,
+    /// The proof host took the run: an admin's accept on its page runs the job again.
+    Host,
+    /// An admin accepted exactly this on the proof page.
+    Accepted(Accept),
+}
 
 /// What a change takes away from the proof the base branch requires.
 #[derive(Default)]
@@ -36,19 +47,28 @@ impl Floor {
         self.weakened.is_empty()
     }
 
-    /// The lines a run prints: what fails the floor and how to get past it, or, where the
-    /// proof host took the run (`hosted`), that it waits there for an admin's accept.
-    pub(crate) fn lines(&self, hosted: bool) -> Vec<String> {
+    /// Whether it holds at `gate`: nothing weakens, or an admin accepted what does.
+    pub(crate) fn holds_at(&self, gate: &Gate) -> bool {
+        self.holds() || matches!(gate, Gate::Accepted(_))
+    }
+
+    /// The lines a run prints: what weakens, and how it gets past `gate` or that it did.
+    pub(crate) fn lines(&self, gate: &Gate) -> Vec<String> {
         let mut lines: Vec<String> = self
             .weakened
             .iter()
             .map(|w| format!("weakens {}: {}", w.part.name(), w.how))
             .collect();
         if !self.weakened.is_empty() {
-            lines.push(if hosted {
-                "  it waits for an admin's accept on the proof page, which holds the review".into()
-            } else {
-                format!("  fix: keep the proof the base branch requires; {PAST}")
+            lines.push(match gate {
+                Gate::Accepted(accept) => {
+                    format!("  accepted by {} on the proof page", accept.by)
+                }
+                Gate::Host => "  fix: keep the proof the base branch requires; when it must \
+                               change, an admin accepts it on the proof page, which runs this \
+                               job again"
+                    .into(),
+                Gate::Job => format!("  fix: keep the proof the base branch requires; {PAST}"),
             });
         }
         lines

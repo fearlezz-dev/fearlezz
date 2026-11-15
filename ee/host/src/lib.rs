@@ -68,6 +68,9 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         ("GET", ["api", "v2", "installed"]) => api::installed(&req, env, config).await,
         ("POST", ["api", "v2", "runs"]) => api::open(req, env, config).await,
         ("POST", ["api", "v2", "runs", run, "checks"]) => api::step(req, env, config, run).await,
+        ("POST", ["api", "v2", "runs", run, "weakenings"]) => {
+            api::weakenings(req, env, config, run).await
+        }
         ("POST", ["api", "v2", "runs", run, "done"]) => api::done(req, env, config, run).await,
         ("PUT", ["api", "v2", "blobs", sha256]) => api::blob(req, env, config, sha256).await,
         ("GET", ["api", "v2", "runs", run, "grant"]) => pages::grant(&req, env, config, run).await,

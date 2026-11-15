@@ -128,10 +128,9 @@ fn a_signed_in_run_opens_a_local_run_before_its_checks_and_streams_them() {
     assert_eq!(ids, ["lint", "tests"], "{done:#}");
     assert_eq!(done["proof"]["repository"], "owner/repo", "{done:#}");
     assert!(
-        done["proof"]
-            .get("weakenings_wait")
-            .is_none_or(|w| w == false),
-        "a local run is never approvable: {done:#}"
+        done["proof"].get("accepted").is_none()
+            && !host.calls().iter().any(|c| c.ends_with("/weakenings")),
+        "a local run never asks for an accept: {done:#}"
     );
 
     // The page once, with the one line way to stop, and next: last.

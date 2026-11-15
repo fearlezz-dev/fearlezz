@@ -1,7 +1,8 @@
 //! The protocol, version 2: CI, or a signed in CLI, asks whether its repository is installed,
 //! opens a run before any check runs, says when each check starts and ends with the files it
-//! made, sends the blobs the host lacks, and closes the run with `proof.json`. Every write lands
-//! in D1 first and then goes to the pages open on the work.
+//! made, sends the blobs the host lacks, asks whether an admin accepted what its change weakens,
+//! and closes the run with `proof.json`. Every write lands in D1 first and then goes to the pages
+//! open on the work.
 //!
 //! CI writes with its OIDC token, which acts for one repository and ref. A person's CLI writes
 //! with its host token (`cli.rs`), and only that person's local runs of repositories they may
@@ -11,8 +12,8 @@
 use std::collections::BTreeSet;
 
 use fearlezz_proof::events::{
-    Change, Closed, Done, Files, Keys, Live, Missing, Open, Opened, Run, RunCheck, RunState,
-    Source, Step,
+    Accepted, Change, Closed, Done, Files, Keys, Live, Missing, Open, Opened, Run, RunCheck,
+    RunState, Source, Step, Weakened,
 };
 use fearlezz_proof::look::Look;
 use fearlezz_proof::review as reviews;
@@ -283,6 +284,7 @@ fn ci_may_open(token: &Token, open: &Open) -> Result<(), Refusal> {
 #[derive(Deserialize)]
 struct RunRow {
     work: String,
+    head: String,
     git_ref: String,
     state: String,
     repo: String,
@@ -309,7 +311,7 @@ async fn writable(
     writer: &Writer,
     id: &str,
 ) -> Result<RunRow, Refusal> {
-    let select = "SELECT r.work, r.git_ref, r.state, w.repo, w.repository, w.branch, w.pull FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1";
+    let select = "SELECT r.work, r.head, r.git_ref, r.state, w.repo, w.repository, w.branch, w.pull FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1";
     let row: Option<RunRow> = match writer {
         Writer::Ci(token) => {
             db.prepare(format!("{select} AND w.repo = ?2"))
@@ -449,6 +451,29 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     }
     let missing = lacks(&db, &run.repo, &files).await?;
     Ok(Response::from_json(&Missing { missing })?)
+}
+
+/// `POST /api/v2/runs/<run>/weakenings`: a CI run asks, before it judges what its change
+/// weakens, whether an admin accepted exactly that at its head. `200 {"accepted": <accept> |
+/// null}`; a local run is refused, since it is never reviewed.
+pub async fn weakenings(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
+    let writer = Writer::of(&req, env, config).await?;
+    let ask: Weakened = req
+        .json()
+        .await
+        .map_err(|e| Refusal::new(400, format!("send {{\"weakened\": [...]}}: {e}")))?;
+    let db = env.d1("DB")?;
+    let run = writable(env, config, &db, &writer, id).await?;
+    if run.local() {
+        return Err(Refusal::new(
+            409,
+            "a local run is never reviewed, so nothing it weakens is accepted",
+        ));
+    }
+    let accepted = review::accept(&db, &run.work, &run.head)
+        .await?
+        .filter(|a| a.covers(&run.head, &ask.weakened));
+    Ok(Response::from_json(&Accepted { accepted })?)
 }
 
 /// The statement that records a check's entry, adding the check when the run did not plan it.

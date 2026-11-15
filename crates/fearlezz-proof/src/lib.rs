@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::findings::Finding;
 use crate::floor::Weakening;
 use crate::look::Look;
+use crate::review::Accept;
 
 /// The version of `proof.json`; a reader refuses one it does not know.
 pub const SCHEMA: u32 = 1;
@@ -53,10 +54,10 @@ pub struct Proof {
     pub checks: Vec<Check>,
     /// What the change weakens about the proof, against the base branch's config.
     pub weakened: Vec<Weakening>,
-    /// Whether what it weakens waits for an admin's accept instead of keeping the commit from
-    /// being proven: on a pull request whose run holds the `fearlezz/approval` status.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub weakenings_wait: bool,
+    /// An admin's accept of exactly these weakenings of the head, as the proof host answered
+    /// it before the run judged them; then they do not keep the commit from being proven.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted: Option<Accept>,
     /// Every comparison of pictures with the base commit, unchanged ones too.
     pub looks: Vec<Look>,
 }
@@ -236,7 +237,7 @@ impl Proof {
             run_url: None,
             checks: Vec::new(),
             weakened: Vec::new(),
-            weakenings_wait: false,
+            accepted: None,
             looks: Vec::new(),
         }
     }
@@ -260,8 +261,8 @@ impl Proof {
     }
 
     /// What keeps the commit from being proven: failed checks, unstable ones, what the change
-    /// weakens (unless it waits for an admin's accept), and fixes its tests do not prove, in
-    /// that order.
+    /// weakens (unless an admin accepted exactly that of its head), and fixes its tests do not
+    /// prove, in that order.
     pub fn blockers(&self) -> Vec<Item> {
         let mut items: Vec<Item> = self
             .checks
@@ -287,13 +288,17 @@ impl Proof {
         items
     }
 
-    /// What the change weakens when nothing can wait for an admin's accept, so it blocks.
+    /// What the change weakens, unless an admin accepted exactly that of its head.
     fn blocking_weakenings(&self) -> impl Iterator<Item = &Weakening> {
-        self.weakened.iter().filter(|_| !self.weakenings_wait)
+        let accepted = self
+            .accepted
+            .as_ref()
+            .is_some_and(|a| a.covers(&self.head, &self.weakened));
+        self.weakened.iter().filter(move |_| !accepted)
     }
 
     /// How many blockers the change itself has to fix: all but what it weakens, which only a
-    /// person settles (by accepting it where it waits, by asking an admin where it blocks).
+    /// person settles (an admin's accept on the proof page, or a merge past the required check).
     pub fn to_fix(&self) -> usize {
         self.blockers().len() - self.blocking_weakenings().count()
     }

@@ -930,17 +930,26 @@ impl Report {
         self.proof.checks.push(entry);
     }
 
-    /// Writes the bundle when asked, closes the run on the proof host with it, and writes the
-    /// job summary GitHub Actions names, when it names one. True when the host took the whole
-    /// run of CI, what the change weakens with it: then the weakening waits there for an
-    /// admin's accept instead of failing the proof. A local run is never approvable, so what
-    /// it weakens never waits.
-    fn finish(mut self, floor: &floor::Floor) -> Result<bool> {
+    /// Judges what the change weakens, writes the bundle when asked, closes the run on the
+    /// proof host with it, and writes the job summary GitHub Actions names, when it names one.
+    /// Before it judges, a CI run the host took asks it whether an admin accepted exactly what
+    /// the change weakens at this head; a host that does not answer means not accepted. A
+    /// local run never asks. The gate it answers says where the weakening got past, or can.
+    fn finish(mut self, floor: &floor::Floor) -> Result<floor::Gate> {
         use std::io::Write as _;
         self.proof.weakened.clone_from(&floor.weakened);
-        // Fail safe: it waits only once the host has it, so it is set before done and taken
-        // back when done does not reach the host.
-        self.proof.weakenings_wait = self.ci && self.stream.is_some() && !floor.holds();
+        let hosted = self.ci && self.stream.is_some();
+        if hosted && !floor.holds() {
+            let head = self.proof.head.clone();
+            let mut accepted = None;
+            self.stream_step(|s| {
+                accepted = s
+                    .accepted(&floor.weakened)?
+                    .filter(|a| a.covers(&head, &floor.weakened));
+                Ok(())
+            });
+            self.proof.accepted = accepted;
+        }
         let temp = match (&self.bundle, &self.stream) {
             (None, Some(_)) => Some(tempfile::tempdir()?),
             _ => None,
@@ -955,12 +964,6 @@ impl Report {
         if let Some(dir) = &bundle {
             self.stream_step(|s| s.done(dir));
         }
-        if self.proof.weakenings_wait && self.stream.is_none() {
-            self.proof.weakenings_wait = false;
-            if let Some(dir) = &self.bundle {
-                proof::write(&self.proof, dir)?;
-            }
-        }
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY").filter(|_| self.ci) {
             let summary = action::summary(&self.proof, self.page.as_deref())?;
             std::fs::OpenOptions::new()
@@ -969,7 +972,11 @@ impl Report {
                 .open(Path::new(&path))?
                 .write_all(summary.as_bytes())?;
         }
-        Ok(self.proof.weakenings_wait)
+        Ok(match self.proof.accepted {
+            Some(accept) => floor::Gate::Accepted(accept),
+            None if hosted => floor::Gate::Host,
+            None => floor::Gate::Job,
+        })
     }
 }
 
@@ -1099,8 +1106,8 @@ fn run_checks(
         floor::Floor::default()
     };
     let answers_for_work = !in_memory && ids.is_empty() && stage == final_stage;
-    // The floor holds when nothing weakens, or when the proof host holds what weakens for an
-    // admin's accept (`hosted`, which the commit report says once it closed the run).
+    // The floor holds when nothing weakens, or when an admin accepted on the proof host
+    // exactly what weakens at this head (the gate the commit report answers).
     let settled = |view: &View, floor_holds: bool| {
         floor_holds && (!answers_for_work || view.next == state::READY || view.checks.is_empty())
     };
@@ -1114,11 +1121,11 @@ fn run_checks(
         }
     };
     let finish = |report: Option<Report>| -> Result<bool> {
-        let hosted = report.map_or(Ok(false), |r| r.finish(&floor))?;
-        for line in floor.lines(hosted) {
+        let gate = report.map_or(Ok(floor::Gate::Job), |r| r.finish(&floor))?;
+        for line in floor.lines(&gate) {
             println!("{line}");
         }
-        Ok(floor.holds() || hosted)
+        Ok(floor.holds_at(&gate))
     };
     let mut report = match out {
         Some(out) => Some(Report::start(ctx, &wt, &targets, out)?),

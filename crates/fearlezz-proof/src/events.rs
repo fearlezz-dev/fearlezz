@@ -11,9 +11,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::floor::Weakening;
 use crate::look::Look;
 use crate::notes::Note;
-use crate::review::{Job, Review, Verdict};
+use crate::review::{Accept, Job, Review, Verdict};
 use crate::{Check, Proof, Pull};
 
 /// The content keys of a look's pictures (`review::key`), by picture name.
@@ -111,6 +112,22 @@ pub enum Step {
 pub struct Missing {
     /// Their SHA-256s.
     pub missing: Vec<String>,
+}
+
+/// What a CI run's change weakens, asked before the run judges it: whether an admin accepted
+/// exactly that of the run's head.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Weakened {
+    /// What it weakens.
+    pub weakened: Vec<Weakening>,
+}
+
+/// What asking about the weakenings answers: the admin's accept of exactly those of the run's
+/// head, or none.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Accepted {
+    /// The accept.
+    pub accepted: Option<Accept>,
 }
 
 /// Closes a run with its proof. Refused while a file of the run is missing.

@@ -22,7 +22,7 @@ installed before it sends anything. The app needs these repository permissions:
 | **Metadata** read | who may read a repository, and who may write or administer it |
 | **Checks** write | the `Fearlezz review` check run |
 | **Pull requests** write | the one review comment on each pull request |
-| **Actions** read | the `workflow_job` webhook |
+| **Actions** write | the `workflow_job` webhook, and running a failed proof job again once an admin accepts what it weakens |
 
 and subscribes to the webhook events **Pull request** and **Workflow job**, sent to
 `<APP_ORIGIN>/api/github/webhook` with the webhook secret.
@@ -55,6 +55,7 @@ The bodies are the serde types of `crates/fearlezz-proof/src/events.rs`.
 | `GET /api/v2/installed` | `200 {"installed": true}`, or `200 {"installed": false, "install": "<url>"}`. |
 | `POST /api/v2/runs` | Body `Open` (an OIDC token opens only a CI source, a CLI token only a local one with no `pull`, `400` otherwise): `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?}, "checks": ["<id>", ...]}`, the checks it plans in order. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
 | `POST /api/v2/runs/<run>/checks` | Body `{"started": {"check": "<id>"}}` when a check starts, or `{"finished": {"check": <proof.json check entry>, "files": {"<path>": {"sha256", "size"}}, "look"?: <look>}}` when it ends, with the files it made (its output at `outputs/<id>.log`, its pictures at `looks/<folder>/...`) and, for a check that takes pictures, its look: the pictures compared with the base commit, as in `proof.json` (`400` when the look is of another check). A check the run did not plan joins at the end. `200 {"missing": ["<sha256>", ...]}`: the blobs the host does not hold yet. |
+| `POST /api/v2/runs/<run>/weakenings` | A CI run asks this before it judges what its change weakens. Body `{"weakened": [<weakening>, ...]}`. `200 {"accepted": <accept> \| null}`: the admin's accept of the run's head (`{"head", "weakened", "by", "at"}`) when it covers exactly these weakenings, nothing more or less, else `null`. `409` for a local run. |
 | `PUT /api/v2/blobs/<sha256>` | The bytes of one missing file, with `Content-Length`. Stored by content, per repository, so a file that did not change is sent once. `204`. |
 | `POST /api/v2/runs/<run>/done` | Body `{"proof": <proof.json>, "files": {...}}`: every file of the bundle. `409 {"error", "missing": [...]}` while a blob is missing (send them and say done again); otherwise the run is done, the proof's entries and looks are the checks' final word, and it answers `200 {"url": "<page url>"}`. |
 
@@ -64,10 +65,11 @@ the host cannot read (an unknown `proof.json` schema, bytes that do not hash to 
 `Content-Length` other than the file's size), `404` for a run of another repository, and `409`
 for a run that is done, or a blob no run of the repository names.
 
-**A host error never fails the proof**, with one exception that fails safe. When the host took
-the run (opened it and answered done), what the change weakens waits for an admin's accept on
-the page (see Review) and does not fail the job; when the host cannot be reached or refuses,
-the weakening fails the job as it does without a host. CI prints `proof page: <url>` in its log and links the
+**A host error never fails the proof**, and a host never loosens it. What the change weakens
+fails the job exactly as without a host, unless the host answers `weakenings` with an admin's
+accept of exactly those weakenings at this head; the proof then names the accept
+(`proof.json`'s `accepted`) and passes. A host that cannot be reached, refuses or answers
+anything else means not accepted. CI prints `proof page: <url>` in its log and links the
 page in the job summary; when a call fails it prints `proof page not sent: <why>` and stops
 sending for that run, and the proof goes on.
 
@@ -170,14 +172,20 @@ and GitHub gets it as the check run and the comment.
   fractions of the picture), at a moment of a film, with the person's words. A note is kept by
   check and picture, so an open note shows on every later run of the work until a person with
   write access resolves it.
-- **An accept is per head**, by an admin of the repository, and covers every weakening of it.
+- **An accept is per head**, by an admin of the repository, of exactly what a finished CI run
+  of it weakens, which failed its proof job. The host keeps it and runs that failed job again
+  as the app: it lists the jobs of the run's workflow run (`GET /repos/{owner}/{repo}/actions/
+  runs/{run_id}/jobs`) and re-runs each failed one whose name is the run's job, alone or with a
+  matrix's values (`POST /repos/{owner}/{repo}/actions/jobs/{job_id}/rerun`). The job asks for
+  the accept before it judges its weakenings (Protocol above) and passes, so the required job
+  stays the one gate and the host's review honours only its own accept, never one a proof names.
 
 | Call | Does |
 | --- | --- |
 | `POST /api/v2/runs/<run>/verdicts` | Body `{"check", "picture"}`: it looks right. `201 {"verdict"}`. `403` without write access; `409` for a local run, a picture with nothing to look at, or one whose files are not all in yet. |
 | `POST /api/v2/runs/<run>/notes` | On a CI or a local run. Body `{"check", "picture", "side": "before" \| "after" \| "both", "region": {"x", "y", "w", "h"}, "time"?, "words"}`. `201 {"note"}`. `400` for empty words (at most 2000 characters), a region outside the picture, a side the picture lacks, or a time on a still; `403` without write access; `409` for a picture the run does not have. |
 | `POST /api/v2/notes/<id>/resolve` | Body `{}`. `200 {"note"}`. `403` without write access. |
-| `POST /api/v2/runs/<run>/accept` | Body `{}`. `201 {"accept"}`. `403` unless admin, `409` unless the run is done with weakenings that wait. |
+| `POST /api/v2/runs/<run>/accept` | Body `{}`. `201 {"accept"}`, once GitHub runs the failed proof job again. `403` unless admin, `409` unless the run is done with weakenings; `502` when the accept is kept but GitHub did not run the job again (run it again on GitHub). |
 | `GET /api/v2/viewer/<owner>/<repo>` | `{"login", "role": "admin" \| "write" \| "read"}`, or `{"login": null}` signed out. |
 
 Every write takes only a browser session: a request with an `Authorization` header is `403`
@@ -192,11 +200,11 @@ permission, cached 5 minutes per login and repository.
 | --- | --- | --- |
 | no CI run of the head yet | `queued` | Waiting for CI to prove `<head>` |
 | a CI run is running | `in_progress` | CI is proving `<head>` |
-| the proof failed | completed, `failure` | The proof of `<head>` failed |
+| the proof failed | completed, `failure` | The proof of `<head>` failed (and, when it weakens what no admin accepted, that it waits for an admin's accept) |
 | an open note says a picture needs change | completed, `failure` | "1 picture needs change at `<head>`" |
 | every run ended without done | completed, `cancelled` | The CI run of `<head>` ended without its proof |
-| a picture or a weakening waits | completed, `action_required` | what waits, for example "2 pictures wait for a look" |
-| everything looks right and is accepted | completed, `success` | Everything looks right |
+| a picture waits for a look | completed, `action_required` | for example "2 pictures wait for a look" |
+| everything looks right | completed, `success` | Everything looks right |
 
 Waiting is `action_required`, not `neutral`: it completes the check run, so a required check
 blocks the merge, and GitHub shows it as asking for something; `neutral` would let a required
@@ -231,8 +239,9 @@ the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SE
 in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
 deploy applies the D1 migrations (`0006_review.sql`, `0007_notes.sql`, `0008_local_runs.sql`,
 which ends the sign ins made before it, `0009_shares_and_activity.sql` and
-`0010_verdicts_without_kind.sql`) and the schedule (`[triggers]` in `wrangler.toml`). Existing installations
-must approve the new permissions before the host can write their check runs. For
+`0010_verdicts_without_kind.sql` and `0011_accept_weakenings.sql`) and the schedule (`[triggers]` in `wrangler.toml`). Existing installations
+must approve the new permissions (Actions write among them) before the host can write their
+check runs or run a proof job again. For
 `fearlezz setup login`, also tick **Enable Device Flow** in the app's settings.
 
 ### Share links

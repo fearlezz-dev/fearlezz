@@ -57,19 +57,21 @@ export function carried(verdict: PictureVerdict, run: Run): string {
 
 const pictures = (n: number) => `${n} ${n === 1 ? "picture" : "pictures"}`;
 
-/** What waits, said to the person looking: what they can settle, and what waits for others. */
+/** The pictures that wait for a look, said to the person looking. */
 export function waitsFor(review: Review, viewer: Viewer | undefined): string {
-  const head = review.head.slice(0, 7);
   const looks = review.pictures.filter((p) => p.standing === "waits").length;
-  const weakened = review.weakened.length > 0 && !review.accept;
-  const parts: string[] = [];
-  if (looks) {
-    const verb = looks === 1 ? "waits" : "wait";
-    parts.push(canSay(viewer) ? `${pictures(looks)} ${verb} for your look` : `${pictures(looks)} ${verb} for a look`);
-  }
-  if (weakened) parts.push(canAccept(viewer) ? "a weakened proof waits for your accept" : "a weakened proof waits for an admin");
-  const text = parts.join(", and ");
-  return `${text.charAt(0).toUpperCase()}${text.slice(1)} at ${head}`;
+  const verb = looks === 1 ? "waits" : "wait";
+  const whose = canSay(viewer) ? "your" : "a";
+  return `${pictures(looks)} ${verb} for ${whose} look at ${review.head.slice(0, 7)}`;
+}
+
+/** A failed proof, said to the person looking: what it weakens fails it until an admin accepts
+ * it, and the accept runs the proof job again. */
+export function failedFor(review: Review, viewer: Viewer | undefined): string {
+  const failed = `The proof of ${review.head.slice(0, 7)} failed`;
+  if (!review.weakened.length) return failed;
+  if (review.accept) return failed;
+  return `${failed}: what it weakens waits for ${canAccept(viewer) ? "your" : "an admin's"} accept`;
 }
 
 /** Where review stands when open notes say pictures need change, in one line. */

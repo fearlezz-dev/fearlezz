@@ -65,9 +65,7 @@ impl Row {
             latest,
             pictures: review.as_ref().map_or(0, |r| r.waiting().count() as u32),
             notes: self.notes as u32,
-            weakened: review
-                .as_ref()
-                .is_some_and(|r| !r.weakened.is_empty() && r.accept.is_none()),
+            weakened: review.as_ref().is_some_and(Review::weakenings_wait),
         })
     }
 }

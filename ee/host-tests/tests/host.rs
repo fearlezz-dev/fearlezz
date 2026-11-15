@@ -307,7 +307,14 @@ fn main() {
             "a_film_verdict_follows_its_changed_states",
             a_film_verdict_follows_its_changed_states,
         ),
-        ("accept_needs_an_admin", accept_needs_an_admin),
+        (
+            "accept_needs_an_admin_and_runs_the_failed_proof_job_again",
+            accept_needs_an_admin_and_runs_the_failed_proof_job_again,
+        ),
+        (
+            "a_run_asks_whether_exactly_its_weakenings_of_its_head_are_accepted",
+            a_run_asks_whether_exactly_its_weakenings_of_its_head_are_accepted,
+        ),
         (
             "the_check_run_follows_the_review_through_a_whole_flow",
             the_check_run_follows_the_review_through_a_whole_flow,
@@ -1873,12 +1880,19 @@ fn looks_right(picture: &str) -> Value {
     json!({"check": "screens", "picture": picture, "kind": "looks_right"})
 }
 
-/// A weakening that waits for an admin's accept, as a hosted CI run closes with it.
+/// What a CI run's change weakens, as its proof shows it.
+fn weakenings() -> Value {
+    json!([{"check": "tests", "how": "it runs another command"}])
+}
+
+/// A proof that weakens `weakenings()`, which fails it while no admin accepted it.
 fn weakened() -> Value {
-    json!({
-        "weakened": [{"check": "tests", "how": "it runs another command"}],
-        "weakenings_wait": true,
-    })
+    json!({ "weakened": weakenings() })
+}
+
+/// The proof of a rerun that weakens the same and names the accept the host answered.
+fn weakened_and_accepted(accept: &Value) -> Value {
+    json!({ "weakened": weakenings(), "accepted": accept })
 }
 
 /// Sends a GitHub webhook of `event`, signed with the app's webhook secret.
@@ -2137,32 +2151,133 @@ fn a_film_verdict_follows_its_changed_states() {
     assert_eq!(review_of(105)["state"], "waits");
 }
 
-fn accept_needs_an_admin() {
-    let job = Job::pull("owner/review", 106, "review/accept").at(&commit("a106"), 1106);
+fn accept_needs_an_admin_and_runs_the_failed_proof_job_again() {
+    let head = commit("a106");
+    let job = Job::pull("owner/review", 106, "review/accept").at(&head, 1106);
+    // The workflow run's jobs: this proof job failed, a matrix sibling passed, another job
+    // failed for its own reasons.
+    let github = &world().github;
+    github.job_ended("owner/review", 1106, 11061, "proof", "failure");
+    github.job_ended(
+        "owner/review",
+        1106,
+        11062,
+        "proof (macos-latest)",
+        "success",
+    );
+    github.job_ended("owner/review", 1106, 11063, "lint", "failure");
     let (look, files) = one_still(b"accept before", b"accept before");
     let mut look = look;
     look["items"][0]["change"] = json!("same");
     let run = proven(&job, &look, &files, &weakened());
     let review = review_of(106);
-    assert_eq!(review["state"], "waits", "{review:#}");
+    assert_eq!(review["state"], "failed", "the job holds it: {review:#}");
     assert_eq!(review["weakened"][0]["check"], "tests", "{review:#}");
 
     let writer = sign_in("writer-code", "/");
     let answer = say(&run, "accept", Some(&writer), &[], &json!({}));
     assert_eq!(answer.status, 403, "{}", answer.text());
     assert!(answer.text().contains("admin"), "{}", answer.text());
+    assert!(github.reruns("owner/review").is_empty());
     let admin = sign_in("admin-code", "/");
     let answer = say(&run, "accept", Some(&admin), &[], &json!({}));
     assert_eq!(answer.status, 201, "{}", answer.text());
+    let accept = answer.json()["accept"].clone();
+    assert_eq!(accept["by"], "admin", "{accept:#}");
+    assert_eq!(accept["weakened"], weakenings(), "{accept:#}");
+    assert_eq!(
+        github.reruns("owner/review"),
+        [(11061, "installation-6".to_owned())],
+        "only the failed proof job runs again, as the app"
+    );
     let review = review_of(106);
-    assert_eq!(review["state"], "approved", "{review:#}");
     assert_eq!(review["accept"]["by"], "admin", "{review:#}");
+    assert_eq!(
+        review["state"], "approved",
+        "the host holds its own accept: {review:#}"
+    );
+
+    // The job runs again: it asks, gets the accept, and its proof passes.
+    let rerun = job.open(&["screens"]);
+    let answer = job.weakenings(&rerun.id, &weakenings());
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let accepted = answer.json()["accepted"].clone();
+    assert_eq!(accepted["by"], "admin", "{accepted:#}");
+    let listed: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    job.finished_with_look(&rerun.id, &entry("screens", "passed"), &listed, &look);
+    let answer = job.close_with(
+        &rerun.id,
+        &[entry("screens", "passed")],
+        std::slice::from_ref(&look),
+        &listed,
+        &weakened_and_accepted(&accepted),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(review_of(106)["state"], "approved");
 
     // A run that weakens nothing has nothing to accept.
     let plain = job.at(&commit("b106"), 2106);
     let other = proven(&plain, &look, &files, &json!({}));
     let answer = say(&other, "accept", Some(&admin), &[], &json!({}));
     assert_eq!(answer.status, 409, "{}", answer.text());
+}
+
+fn a_run_asks_whether_exactly_its_weakenings_of_its_head_are_accepted() {
+    let head = commit("a114");
+    let job = Job::pull("owner/review", 114, "review/asks").at(&head, 1114);
+    world()
+        .github
+        .job_ended("owner/review", 1114, 11141, "proof", "failure");
+    let first = job.open(&["tests"]);
+    let answer = job.weakenings(&first.id, &weakenings());
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert!(answer.json()["accepted"].is_null(), "nothing accepted yet");
+    job.close_with(
+        &first.id,
+        &[entry("tests", "passed")],
+        &[],
+        &[],
+        &weakened(),
+    );
+    let admin = sign_in("admin-code", "/");
+    let answer = say(&first.id, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+
+    let again = job.open(&["tests"]);
+    let answer = job.weakenings(&again.id, &weakenings());
+    assert_eq!(
+        answer.json()["accepted"]["by"],
+        "admin",
+        "{}",
+        answer.text()
+    );
+    let more = json!([
+        {"check": "tests", "how": "it runs another command"},
+        {"check": "lint", "how": "it is gone"},
+    ]);
+    let answer = job.weakenings(&again.id, &more);
+    assert!(
+        answer.json()["accepted"].is_null(),
+        "more: {}",
+        answer.text()
+    );
+    let answer = job.weakenings(&again.id, &json!([]));
+    assert!(
+        answer.json()["accepted"].is_null(),
+        "less: {}",
+        answer.text()
+    );
+
+    // Another head of the same pull request has no accept.
+    let later = job.at(&commit("b114"), 2114);
+    let run = later.open(&["tests"]);
+    let answer = later.weakenings(&run.id, &weakenings());
+    assert!(answer.json()["accepted"].is_null(), "{}", answer.text());
+
+    // Only the run's own token asks, and only for a CI run.
+    let stranger = Job::pull("owner/review", 115, "review/other").at(&head, 1114);
+    let answer = stranger.weakenings(&again.id, &weakenings());
+    assert_eq!(answer.status, 403, "{}", answer.text());
 }
 
 fn the_check_run_follows_the_review_through_a_whole_flow() {
@@ -2192,7 +2307,11 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
     let run = job.open(&["screens"]);
     assert_eq!(check_run(&first).state(), "in_progress");
 
-    // Done, with a changed picture and a weakening: both wait for a person.
+    // Done, with a changed picture and a weakening: the proof fails on the weakening, and its
+    // summary says it waits for an admin's accept besides the picture.
+    world()
+        .github
+        .job_ended("owner/review", 1107, 11071, "proof", "failure");
     let (look, files) = one_still(b"flow before", b"flow after");
     let listed: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
     job.finished_with_look(&run.id, &entry("screens", "passed"), &listed, &look);
@@ -2208,15 +2327,17 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
     );
     assert_eq!(answer.status, 200, "{}", answer.text());
     let check = check_run(&first);
-    assert_eq!(check.state(), "action_required", "{:?}", check.writes);
+    assert_eq!(check.state(), "failure", "{:?}", check.writes);
     let summary = check.field("output")["summary"]
         .as_str()
         .unwrap()
         .to_owned();
     assert!(summary.contains("card/light.png"), "{summary}");
     assert!(summary.contains("check `tests` is weaker"), "{summary}");
+    assert!(summary.contains("waits for an admin's accept"), "{summary}");
 
-    // A writer's verdict leaves the weakening waiting; an admin's accept settles the head.
+    // A writer's verdict leaves the weakening failing the proof; an admin's accept runs the job
+    // again, which passes with it.
     let writer = sign_in("writer-code", "/");
     let answer = say(
         &run.id,
@@ -2226,10 +2347,27 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
         &looks_right("card/light.png"),
     );
     assert_eq!(answer.status, 201, "{}", answer.text());
-    assert_eq!(check_run(&first).state(), "action_required");
+    assert_eq!(check_run(&first).state(), "failure");
     let admin = sign_in("admin-code", "/");
     let answer = say(&run.id, "accept", Some(&admin), &[], &json!({}));
     assert_eq!(answer.status, 201, "{}", answer.text());
+    assert_eq!(
+        world().github.reruns("owner/review").last().map(|r| r.0),
+        Some(11071)
+    );
+    let rerun = job.open(&["screens"]);
+    assert_eq!(check_run(&first).state(), "in_progress");
+    let accepted = job.weakenings(&rerun.id, &weakenings()).json()["accepted"].clone();
+    let look = one_still(b"flow before", b"flow after").0;
+    job.finished_with_look(&rerun.id, &entry("screens", "passed"), &listed, &look);
+    let answer = job.close_with(
+        &rerun.id,
+        &[entry("screens", "passed")],
+        &[look],
+        &listed,
+        &weakened_and_accepted(&accepted),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
     let check = check_run(&first);
     assert_eq!(check.state(), "success", "{:?}", check.writes);
     assert!(
@@ -2810,6 +2948,19 @@ impl Job {
         for (name, value) in extra.as_object().unwrap() {
             body["proof"][name] = value.clone();
         }
+        api(
+            "POST",
+            &path,
+            &self.token(),
+            Some(body.to_string().into_bytes()),
+        )
+    }
+
+    /// Asks whether an admin accepted exactly `weakened` at the run's head, as CI does before it
+    /// judges what its change weakens.
+    fn weakenings(&self, run: &str, weakened: &Value) -> Answer {
+        let path = format!("/api/v2/runs/{run}/weakenings");
+        let body = json!({ "weakened": weakened });
         api(
             "POST",
             &path,

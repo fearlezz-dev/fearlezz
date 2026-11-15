@@ -11,6 +11,7 @@ mod common;
 
 use common::Repo;
 use common::host::{FakeHost, OIDC};
+use serde_json::{Value, json};
 
 /// Two checks, each calling the fake host when its command runs, so the calls show when.
 fn checks(host: &FakeHost) -> String {
@@ -325,12 +326,57 @@ fn weakening(host: &FakeHost) -> Repo {
     repo
 }
 
+/// An admin's accept of `weakened` at `head`, as the host answers it.
+fn accept(head: &str, weakened: &Value) -> Value {
+    json!({"head": head, "weakened": weakened, "by": "admin", "at": 9.0})
+}
+
+/// What `weakening` weakens.
+fn lint_weakened() -> Value {
+    json!([{"check": "lint", "how": "it runs another command"}])
+}
+
 #[test]
-fn a_weakening_waits_for_an_admin_when_the_host_took_the_run() {
-    // The host holds the review: the weakening waits in its check for an admin's accept, so the
-    // proof job itself passes.
+fn a_weakening_fails_the_proof_while_no_admin_accepted_it() {
+    // The host took the run, but the job is the gate: the weakening fails it as without a host,
+    // and the run asked the host first, with what it weakens.
     let host = FakeHost::start();
     let repo = weakening(&host);
+    let (out, text) = ci(&repo, &host.token_env());
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("weakens lint: it runs another command"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("an admin accepts it on the proof page, which runs this job again"),
+        "{}",
+        out.stdout
+    );
+    let asked = host.sent("POST", "/api/v2/runs/r1/weakenings");
+    assert_eq!(asked["weakened"], lint_weakened(), "{asked:#}");
+    let calls = host.calls();
+    let ask = calls
+        .iter()
+        .position(|c| c.ends_with("/weakenings"))
+        .unwrap();
+    let done = calls.iter().position(|c| c.ends_with("/done")).unwrap();
+    assert!(ask < done, "it asks before it judges: {calls:#?}");
+    let done = host.sent("POST", "/api/v2/runs/r1/done");
+    assert!(done["proof"].get("accepted").is_none(), "{done:#}");
+    assert_eq!(done["proof"]["weakened"][0]["check"], "lint", "{done:#}");
+    assert!(text.contains("**Not proven**"), "{text}");
+    assert!(text.contains("accept what it weakens on"), "{text}");
+}
+
+#[test]
+fn an_accepted_weakening_of_this_head_passes() {
+    let host = FakeHost::start();
+    let repo = weakening(&host);
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    host.state.lock().unwrap().accepted = Some(accept(&head, &lint_weakened()));
     let (out, text) = ci(&repo, &host.token_env());
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
@@ -339,37 +385,67 @@ fn a_weakening_waits_for_an_admin_when_the_host_took_the_run() {
         out.stdout
     );
     assert!(
-        out.stdout
-            .contains("waits for an admin's accept on the proof page"),
+        out.stdout.contains("accepted by admin on the proof page"),
         "{}",
         out.stdout
     );
     let done = host.sent("POST", "/api/v2/runs/r1/done");
-    assert_eq!(done["proof"]["weakenings_wait"], true, "{done:#}");
-    assert_eq!(done["proof"]["weakened"][0]["check"], "lint", "{done:#}");
+    assert_eq!(done["proof"]["accepted"]["by"], "admin", "{done:#}");
     assert!(text.contains("**Proven**"), "{text}");
-    assert!(text.contains("waits for an admin's accept"), "{text}");
+    assert!(text.contains("accepted by admin"), "{text}");
 }
 
 #[test]
-fn a_weakening_fails_the_proof_when_the_host_did_not_take_the_run() {
-    // Fail safe: without a host that took the whole run, nothing holds the weakening for an
-    // admin, so it fails the proof as it does without a host.
-    for broken in ["/api/v2/runs", "/api/v2/runs/r1/done", "not installed"] {
+fn an_accept_of_other_weakenings_or_another_head_fails() {
+    for (what, accepted) in [
+        (
+            "other weakenings",
+            json!([{"check": "tests", "how": "it is gone"}]),
+        ),
+        ("fewer weakenings", json!([])),
+    ] {
         let host = FakeHost::start();
-        if broken == "not installed" {
-            host.state.lock().unwrap().installed = false;
-        } else {
-            host.state.lock().unwrap().broken.insert(broken.into());
-        }
         let repo = weakening(&host);
+        let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+        host.state.lock().unwrap().accepted = Some(accept(&head, &accepted));
         let (out, text) = ci(&repo, &host.token_env());
+        assert!(!out.ok, "{what}: {}\n{}", out.stdout, out.stderr);
+        assert!(text.contains("**Not proven**"), "{what}: {text}");
+    }
+    let host = FakeHost::start();
+    let repo = weakening(&host);
+    host.state.lock().unwrap().accepted = Some(accept(&"0".repeat(40), &lint_weakened()));
+    let (out, _) = ci(&repo, &host.token_env());
+    assert!(!out.ok, "another head: {}\n{}", out.stdout, out.stderr);
+}
+
+#[test]
+fn a_weakening_fails_the_proof_when_the_host_cannot_say_it_was_accepted() {
+    // Fail safe: a host that cannot be reached or refuses means not accepted.
+    for broken in [
+        "/api/v2/runs",
+        "/api/v2/runs/r1/weakenings",
+        "/api/v2/runs/r1/done",
+        "not installed",
+    ] {
+        let host = FakeHost::start();
+        let repo = weakening(&host);
+        let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+        let mut state = host.state.lock().unwrap();
+        state.accepted = Some(accept(&head, &lint_weakened()));
+        if broken == "not installed" {
+            state.installed = false;
+        } else {
+            state.broken.insert(broken.into());
+        }
+        drop(state);
+        let (out, text) = ci(&repo, &host.token_env());
+        if broken == "/api/v2/runs/r1/done" {
+            // The accept was read before done, so the proof holds though done failed.
+            assert!(out.ok, "{broken}: {}\n{}", out.stdout, out.stderr);
+            continue;
+        }
         assert!(!out.ok, "{broken}: {}\n{}", out.stdout, out.stderr);
-        assert!(
-            out.stdout.contains("merges past the required check"),
-            "{broken}: {}",
-            out.stdout
-        );
         assert!(text.contains("**Not proven**"), "{broken}: {text}");
     }
 }

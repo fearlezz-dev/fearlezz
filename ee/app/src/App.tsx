@@ -7,7 +7,7 @@ import { type CheckState, Feed, type Status, connect, stateOf } from "./live";
 import { PicturesPanel } from "./PicturesPanel";
 import { picturesOf } from "./pictures";
 import type { Job, Review, Run, RunCheck, Snapshot } from "./proof";
-import { type Viewer, accept, canAccept, canSay, localBy, maySignIn, signIn, standing, toLookAt, viewerOf, waitsFor } from "./review";
+import { type Viewer, accept, canAccept, canSay, failedFor, localBy, maySignIn, signIn, standing, toLookAt, viewerOf, waitsFor } from "./review";
 import { ShareControl } from "./ShareControl";
 import { ago } from "./ago";
 
@@ -171,7 +171,7 @@ function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer 
     if (props.run.state === "cancelled") return `The run of ${head()} ended without its proof`;
     if (failed()) return `${failed()} ${failed() === 1 ? "check" : "checks"} failed at ${head()}`;
     const review = props.review;
-    if (review?.state === "failed") return `The proof of ${head()} failed`;
+    if (review?.state === "failed") return failedFor(review, props.viewer);
     if (review?.state === "needs_change") return standing(review);
     if (review?.state === "waits") return waitsFor(review, props.viewer);
     if (review?.state === "approved") {
@@ -238,7 +238,9 @@ function Weakenings(props: { review: Review; runs: Run[]; viewer: Viewer | undef
             <button type="button" class="btn ok" data-accept disabled={sending() || !run()} onClick={() => void send()}>
               Accept
             </button>
-            <span class="hint">One accept covers every weakening of {props.review.head.slice(0, 7)}.</span>
+            <span class="hint">
+              It accepts exactly these weakenings of {props.review.head.slice(0, 7)} and runs its proof job again, which then passes.
+            </span>
           </div>
         </Match>
         <Match when={props.viewer?.login}>

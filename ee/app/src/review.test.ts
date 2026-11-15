@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { picturesOf } from "./pictures";
 import type { Picture, Review, Run, Snapshot } from "./proof";
-import { carried, localBy, standing, standingOf, verdictOf, waitsFor } from "./review";
+import { carried, failedFor, localBy, standing, standingOf, verdictOf, waitsFor } from "./review";
 
 const picture: Picture = {
   name: "card.png",
@@ -57,14 +57,25 @@ describe("waitsFor", () => {
     weakened: [{ check: "tests", how: "it is gone" }],
   };
 
-  test("it says what this person can settle, and what waits for others", () => {
-    expect(waitsFor(review, { login: "w", role: "write" })).toBe(
-      "2 pictures wait for your look, and a weakened proof waits for an admin at aaa1111",
+  test("it says what this person can settle; a weakening fails the proof instead of waiting", () => {
+    expect(waitsFor(review, { login: "w", role: "write" })).toBe("2 pictures wait for your look at aaa1111");
+    expect(waitsFor(review, { login: null })).toBe("2 pictures wait for a look at aaa1111");
+  });
+});
+
+describe("failedFor", () => {
+  const review: Review = { head: "aaa1111bbb", state: "failed", pictures: [], weakened: [{ check: "tests", how: "it is gone" }] };
+
+  test("a proof that fails on what it weakens says it waits for an admin's accept", () => {
+    expect(failedFor(review, { login: "w", role: "write" })).toBe(
+      "The proof of aaa1111 failed: what it weakens waits for an admin's accept",
     );
-    expect(waitsFor(review, { login: "a", role: "admin" })).toBe(
-      "2 pictures wait for your look, and a weakened proof waits for your accept at aaa1111",
+    expect(failedFor(review, { login: "a", role: "admin" })).toBe(
+      "The proof of aaa1111 failed: what it weakens waits for your accept",
     );
-    expect(waitsFor({ ...review, weakened: [] }, { login: null })).toBe("2 pictures wait for a look at aaa1111");
+    const accept = { head: "aaa1111bbb", weakened: review.weakened, by: "admin", at: 1 };
+    expect(failedFor({ ...review, accept }, undefined)).toBe("The proof of aaa1111 failed");
+    expect(failedFor({ ...review, weakened: [] }, undefined)).toBe("The proof of aaa1111 failed");
   });
 });
 

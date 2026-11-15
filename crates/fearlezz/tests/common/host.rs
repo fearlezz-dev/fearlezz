@@ -50,6 +50,9 @@ pub(crate) struct State {
     pub pictures: BTreeMap<String, Vec<u8>>,
     /// Takes every protocol request and answers none, as a host that hangs.
     pub hangs: bool,
+    /// What `POST /api/v2/runs/r1/weakenings` answers as the admin's accept, whatever the run
+    /// asks, so a test can show the CLI holds it to its own weakenings and head.
+    pub accepted: Option<Value>,
 }
 
 pub(crate) struct FakeHost {
@@ -292,6 +295,7 @@ fn answer(
                 )
             }
         }
+        ("POST", "/api/v2/runs/r1/weakenings") => (200, json!({ "accepted": s.accepted })),
         ("PUT", blob) if blob.starts_with("/api/v2/blobs/") => {
             let sha = blob.trim_start_matches("/api/v2/blobs/").to_string();
             s.blobs.insert(sha.clone(), body.to_vec());

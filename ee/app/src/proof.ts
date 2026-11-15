@@ -189,11 +189,12 @@ state: ReviewState,
  */
 pictures: Array<ReviewPicture>, 
 /**
- * What the head weakens, waiting for an admin's accept.
+ * What the head weakens, as its proofs show it: it fails the proof until an admin accepts
+ * it, and the accept runs the proof job again.
  */
 weakened: Array<Weakening>, 
 /**
- * The accept of those weakenings, once an admin gave it.
+ * The accept of exactly those weakenings, once an admin gave it.
  */
 accept?: Accept | null, 
 /**
@@ -262,6 +263,10 @@ export type Accept = {
  * The commit it accepts the weakenings of.
  */
 head: string, 
+/**
+ * What it accepts, as the proof it was given on showed it.
+ */
+weakened: Array<Weakening>, 
 /**
  * Their GitHub login.
  */

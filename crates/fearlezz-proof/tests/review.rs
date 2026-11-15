@@ -280,31 +280,80 @@ fn a_new_or_gone_film_is_keyed_by_its_bytes() {
     }
 }
 
-#[test]
-fn weakenings_wait_for_an_admins_accept_of_the_head() {
-    let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
-    let mut proof = proof.unwrap();
-    proof.weakened = vec![Weakening {
-        part: Part::Check("tests".into()),
-        how: "it runs another command".into(),
-    }];
-    proof.weakenings_wait = true;
-    let runs = [(r, Some(proof))];
-    let review = review::review("aaa", &runs, &[], &[], None);
-    assert_eq!(review.state, State::Waits);
-    assert_eq!(review.weakened.len(), 1);
-    let accept = Accept {
-        head: "aaa".into(),
+fn gone(check: &str) -> Weakening {
+    Weakening {
+        part: Part::Check(check.into()),
+        how: "it is gone".into(),
+    }
+}
+
+fn accept(head: &str, weakened: &[Weakening]) -> Accept {
+    Accept {
+        head: head.into(),
+        weakened: weakened.to_vec(),
         by: "admin".into(),
         at: 9.0,
-    };
-    let review = review::review("aaa", &runs, &[], &[], Some(&accept));
+    }
+}
+
+#[test]
+fn a_weakening_fails_the_review_until_the_hosts_accept_covers_it() {
+    let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
+    let mut proof = proof.unwrap();
+    proof.weakened = vec![gone("tests")];
+    let runs = [(r.clone(), Some(proof.clone()))];
+    let review = review::review("aaa", &runs, &[], &[], None);
+    assert_eq!(review.state, State::Failed);
+    assert_eq!(
+        review.title(),
+        "The proof of aaa failed: what it weakens waits for an admin's accept"
+    );
+    assert!(
+        review.summary().contains("until an admin accepts it"),
+        "{}",
+        review.summary()
+    );
+
+    // The rerun's proof names the accept; the host holds it to its own.
+    proof.accepted = Some(accept("aaa", &proof.weakened));
+    let rerun = [(r, Some(proof))];
+    let review = review::review("aaa", &rerun, &[], &[], None);
+    assert_eq!(
+        review.state,
+        State::Failed,
+        "a proof's own word is not enough"
+    );
+    let given = accept("aaa", &[gone("tests")]);
+    let review = review::review("aaa", &rerun, &[], &[], Some(&given));
     assert_eq!(review.state, State::Approved);
     assert!(
         review.summary().contains("accepted by admin"),
         "{}",
         review.summary()
     );
+    // An accept of other weakenings, or of another head, covers nothing here.
+    let other = accept("aaa", &[gone("lint")]);
+    let review = review::review("aaa", &rerun, &[], &[], Some(&other));
+    assert_eq!(review.state, State::Failed);
+    assert!(review.accept.is_none());
+    let elsewhere = accept("bbb", &[gone("tests")]);
+    assert_eq!(
+        review::review("aaa", &rerun, &[], &[], Some(&elsewhere)).state,
+        State::Failed
+    );
+}
+
+#[test]
+fn a_proof_holds_its_weakenings_unless_its_accept_covers_exactly_them_at_its_head() {
+    let mut proof = Proof::new("aaa".into(), "aaa".into(), "main".into());
+    proof.weakened = vec![gone("tests"), gone("lint")];
+    assert_eq!(proof.blockers().len(), 2);
+    proof.accepted = Some(accept("aaa", &[gone("lint"), gone("tests")]));
+    assert!(proof.blockers().is_empty(), "in any order");
+    proof.accepted = Some(accept("aaa", &[gone("tests")]));
+    assert_eq!(proof.blockers().len(), 2, "fewer");
+    proof.accepted = Some(accept("bbb", &[gone("tests"), gone("lint")]));
+    assert_eq!(proof.blockers().len(), 2, "another head");
 }
 
 #[test]
@@ -314,18 +363,6 @@ fn a_failed_check_fails_the_review_even_without_its_reason() {
     let mut failed = entry("tests", Ran::Passed);
     failed.outcome = Ran::Failed;
     proof.checks.push(failed);
-    let review = review::review("aaa", &[(r, Some(proof))], &[], &[], None);
-    assert_eq!(review.state, State::Failed);
-}
-
-#[test]
-fn a_weakening_where_nothing_waits_fails_the_review() {
-    let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
-    let mut proof = proof.unwrap();
-    proof.weakened = vec![Weakening {
-        part: Part::Check("tests".into()),
-        how: "it is gone".into(),
-    }];
     let review = review::review("aaa", &[(r, Some(proof))], &[], &[], None);
     assert_eq!(review.state, State::Failed);
 }

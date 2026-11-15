@@ -1,6 +1,7 @@
 //! What the host asks GitHub and writes there: whether the app is installed on a repository,
 //! whether a repository is public or a person may read it, what a person may do on it, who
-//! signed in, and, as the app, its check runs and pull request comments.
+//! signed in, and, as the app, its check runs and pull request comments, and running a failed
+//! Actions job again.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -196,6 +197,47 @@ pub async fn write(
         (200 | 201, Some(id)) => Ok(id),
         (status, _) => Err(worker::Error::RustError(format!(
             "GitHub answered {status} to {path}: {}",
+            reply.body["message"].as_str().unwrap_or_default()
+        ))),
+    }
+}
+
+/// The jobs of workflow run `run` on `repo` that failed, in its latest attempt, as id and name.
+pub async fn failed_jobs(
+    token: &str,
+    config: &Config,
+    repo: &str,
+    run: u64,
+) -> Result<Vec<(u64, String)>> {
+    let url = format!(
+        "{}/repos/{repo}/actions/runs/{run}/jobs?filter=latest&per_page=100",
+        config.github_api
+    );
+    let reply = call(Method::Get, &url, Some(token), None).await?;
+    if reply.status != 200 {
+        return Err(worker::Error::RustError(format!(
+            "GitHub answered {} for the jobs of workflow run {run}: {}",
+            reply.status,
+            reply.body["message"].as_str().unwrap_or_default()
+        )));
+    }
+    Ok(reply.body["jobs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|job| job["conclusion"] == "failure")
+        .filter_map(|job| Some((job["id"].as_u64()?, job["name"].as_str()?.to_owned())))
+        .collect())
+}
+
+/// Runs Actions job `id` of `repo` again, as the app (Actions write).
+pub async fn rerun_job(token: &str, config: &Config, repo: &str, id: u64) -> Result<()> {
+    let url = format!("{}/repos/{repo}/actions/jobs/{id}/rerun", config.github_api);
+    let reply = call(Method::Post, &url, Some(token), Some(&json!({}))).await?;
+    match reply.status {
+        200..=299 => Ok(()),
+        status => Err(worker::Error::RustError(format!(
+            "GitHub answered {status} to running job {id} again: {}",
             reply.body["message"].as_str().unwrap_or_default()
         ))),
     }
