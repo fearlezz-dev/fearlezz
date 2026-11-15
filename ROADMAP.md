@@ -76,7 +76,6 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 ## Known problems
 
 - **Self hosted runners that run several jobs of one attempt.** The host ties a GitHub job to its run by run id, attempt and runner; when one runner ran several jobs of an attempt and only one of them is known, a job that ends can cancel the other's run. GitHub's hosted runners run one job each, so it does not happen there. A queued job named with `name:` does not show as waiting for a runner.
-
 - **Sync never removes a rule a piece dropped.** Biome's `linter.rules` keeps stale keys and the `settings` check calls it in sync.
 - **Monorepos.** `setup init` and the language pieces look only at the repository root.
 - **Films stop working until replayd restarts.** On the developer's machine, after a few dozen films (27 in one series, during a load spike), every film fails with "failure to process first sample buffer" while stills still work, with the 0.2.0 build as well; killing `replayd` (launchd restarts it) brings films back. Its cause is unknown. Every film is noted in the machine's film log (`films.jsonl` in Fearlezz's cache folder: repository, check, how it went, the `replayd` pid and the load), so how often it happens can be counted; failures in a row under one `replayd` pid are this problem.
