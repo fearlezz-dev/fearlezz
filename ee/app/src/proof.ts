@@ -23,6 +23,68 @@ seq: number,
  */
 change: WorkChange, };
 
+export type Listing = { "kind": "snapshot", 
+/**
+ * `owner/name` as GitHub spells it.
+ */
+repository: string, 
+/**
+ * Its works, newest activity first.
+ */
+works: Array<Listed>, } | { "kind": "work" } & Listed;
+
+export type Listed = { 
+/**
+ * The work.
+ */
+work: Work, 
+/**
+ * Its page's path on the host: its pull request's, or its branch's.
+ */
+path: string, 
+/**
+ * Its last event: a listing of the work with a higher one replaces this.
+ */
+seq: number, 
+/**
+ * When it last changed, in seconds since the epoch.
+ */
+active: number, 
+/**
+ * Its newest run, none before its first.
+ */
+latest?: Latest | null, 
+/**
+ * How many pictures of its head wait for a verdict.
+ */
+pictures: number, 
+/**
+ * How many notes on it are open.
+ */
+notes: number, 
+/**
+ * Whether what its head weakens waits for an admin's accept.
+ */
+weakened: boolean, };
+
+export type Latest = { 
+/**
+ * The commit it proves.
+ */
+head: string, 
+/**
+ * Where it runs: a local run is unproven.
+ */
+source: Source, 
+/**
+ * Whether it still runs.
+ */
+state: RunState, 
+/**
+ * How many of its checks failed so far.
+ */
+failed: number, };
+
 export type Snapshot = { 
 /**
  * The last event it includes; a page applies only later ones.

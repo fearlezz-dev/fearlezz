@@ -90,8 +90,9 @@ function upsert(checks: RunCheck[], id: string, fields: Partial<RunCheck>): RunC
   return checks.map((c) => (c.id === id ? { ...c, ...fields } : c));
 }
 
-/** What a page's connection hands on: the work as of now, or that it is not connected. */
-export type Status = { kind: "connecting" } | { kind: "live"; state: Snapshot } | { kind: "gone"; why: string };
+/** What a page's connection hands on: what it shows as of now (a work, or a repository's
+ * listing), or that it is not connected. */
+export type Status<S = Snapshot> = { kind: "connecting" } | { kind: "live"; state: S } | { kind: "gone"; why: string };
 
 /** Takes the messages of one live connection in order, keeping events that arrive before
  * the snapshot (the room takes a socket before it reads the snapshot) until it comes. */
@@ -120,18 +121,24 @@ function step(state: Snapshot, message: Exclude<Live, { kind: "snapshot" }>): Sn
     : applyWork(state, message.seq, message.change);
 }
 
-/** Keeps a live connection to the work at `path` (the page's own path) open, handing on each
- * state, and opens a fresh one, with a fresh snapshot, when it drops. */
-export function connect(path: string, on: (status: Status) => void): () => void {
+/** Keeps a live connection to the page at `path` (the page's own path) open, taking its
+ * messages with a fresh `feed` for each connection and handing on each state, and opens a
+ * fresh one, with a fresh snapshot, when it drops. A close with 1008 says the page is gone
+ * for good: a work that is not here, or a share link that was revoked. */
+export function connect<M, S>(
+  path: string,
+  feed: () => { take(message: M): S | undefined },
+  on: (status: Status<S>) => void,
+): () => void {
   let socket: WebSocket | undefined;
   let stopped = false;
   let wait = 500;
   const open = () => {
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-    const feed = new Feed();
+    const taking = feed();
     socket = new WebSocket(`${scheme}//${location.host}/live${path}`);
     socket.onmessage = (event) => {
-      const state = feed.take(JSON.parse(String(event.data)) as Live);
+      const state = taking.take(JSON.parse(String(event.data)) as M);
       if (state) {
         wait = 500;
         on({ kind: "live", state });

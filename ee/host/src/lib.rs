@@ -6,10 +6,11 @@
 //! The host is the authority for review and writes it to GitHub as the app. `ee/README.md` is
 //! the protocol.
 //!
-//! It answers on two origins. The app origin holds sign in, the API, the work pages (the app
-//! in `ee/app`, served from static assets) and their live connections, each held by the work's
-//! Durable Object; the files origin serves the runs' files, which CI wrote, so nothing of them
-//! ever runs where the session cookie lives.
+//! It answers on two origins. The app origin holds sign in, the API, the pages (the app in
+//! `ee/app`, served from static assets: a work's page, a repository's list of works, and a
+//! work's page through a share link, which only views) and their live connections, each held by
+//! a Durable Object of the work or the repository; the files origin serves the runs' files,
+//! which CI wrote, so nothing of them ever runs where the session cookie lives.
 
 mod api;
 mod cache;
@@ -21,10 +22,12 @@ mod jobs;
 mod notes;
 mod oidc;
 mod pages;
+mod repository;
 mod review;
 mod room;
 mod say;
 mod session;
+mod share;
 mod webhook;
 mod work;
 
@@ -88,14 +91,24 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         ("GET", ["api", "v2", "viewer", owner, repo]) => {
             say::viewer(&req, env, config, owner, repo).await
         }
+        ("POST", ["api", "v2", "shares"]) => share::make(req, env, config).await,
+        ("GET", ["api", "v2", "shares"]) => share::list(&req, env, config).await,
+        ("POST", ["api", "v2", "shares", id, "revoke"]) => {
+            share::revoke(req, env, config, id).await
+        }
         ("POST", ["api", "github", "webhook"]) => webhook::receive(req, env, config).await,
         ("GET", ["login"]) => session::login(&req, config).await,
         ("GET", ["callback"]) => session::callback(&req, env, config).await,
         ("GET", ["logout"]) => session::logout(&req, env).await,
+        // A GitHub owner never starts with a dash, so `/-/` names no repository.
+        ("GET", ["-", "share", token]) => share::page(env, config, token).await,
+        ("GET", ["live", "-", "share", token]) => share::live(&req, env, config, token).await,
+        ("GET", ["live", owner, repo]) => repository::live(&req, env, config, owner, repo).await,
         ("GET", ["live", owner, repo, rest @ ..]) => match pages::place(rest) {
             Some(place) => pages::live(&req, env, config, owner, repo, &place).await,
             None => Err(Refusal::new(404, "not found")),
         },
+        ("GET", [owner, repo]) => repository::page(&req, env, config, owner, repo).await,
         ("GET", [owner, repo, rest @ ..]) => match pages::place(rest) {
             Some(place) => pages::page(&req, env, config, owner, repo, &place).await,
             None => Err(Refusal::new(404, "not found")),

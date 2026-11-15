@@ -13,9 +13,9 @@ use fearlezz_proof::{Check, Proof, Pull};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
 use wasm_bindgen::JsValue;
-use worker::{D1Database, D1PreparedStatement, D1Result, Env, Method, Request, RequestInit};
+use worker::{D1Database, D1PreparedStatement, D1Result, Env};
 
-use crate::{Config, jobs};
+use crate::{Config, jobs, repository, room};
 
 /// How many runs a page shows, newest first.
 const RUNS_SHOWN: f64 = 20.0;
@@ -42,11 +42,20 @@ const SEGMENT: &AsciiSet = &CONTROLS
 /// The host's page of a work: its pull request's when it has one, its branch's otherwise. The
 /// host builds every URL; the CLI never does.
 pub fn page_url(config: &Config, repository: &str, branch: &str, pull: Option<u64>) -> String {
+    format!(
+        "{}{}",
+        config.app_origin,
+        page_path(repository, branch, pull)
+    )
+}
+
+/// The path of a work's page on the app origin, as `page_url` names it.
+pub fn page_path(repository: &str, branch: &str, pull: Option<u64>) -> String {
     match pull {
-        Some(number) => format!("{}/{repository}/pull/{number}", config.app_origin),
+        Some(number) => format!("/{repository}/pull/{number}"),
         None => {
             let branch = utf8_percent_encode(branch, SEGMENT);
-            format!("{}/{repository}/work/{branch}", config.app_origin)
+            format!("/{repository}/work/{branch}")
         }
     }
 }
@@ -89,11 +98,13 @@ impl WorkRow {
     }
 }
 
-/// The statement that bumps a work's sequence number, answering the new one; it ends every
-/// batch that changes the work.
+/// The statement that bumps a work's sequence number, answering the new one, and notes when
+/// it changed for the repository page; it ends every batch that changes the work.
 pub fn bump(db: &D1Database, work: &str) -> worker::Result<D1PreparedStatement> {
-    db.prepare("UPDATE works SET seq = seq + 1 WHERE id = ?1 RETURNING seq")
-        .bind(&[work.into()])
+    // In milliseconds, so works that change within one second still list in order.
+    let at = js_sys::Date::now() / 1000.0;
+    db.prepare("UPDATE works SET seq = seq + 1, active = ?2 WHERE id = ?1 RETURNING seq")
+        .bind(&[work.into(), at.into()])
 }
 
 /// Runs a batch that ends with `bump`, answering the work's new sequence number.
@@ -467,20 +478,14 @@ pub fn read<T: serde::de::DeserializeOwned>(json: &str) -> worker::Result<T> {
         .map_err(|e| worker::Error::RustError(format!("a stored record does not read back: {e}")))
 }
 
-/// Hands an event to the work's room, which sends it to every page open on the work. The
-/// event is in D1 already, so a room that cannot be reached loses nothing: a page that
-/// reconnects gets it in its snapshot. It is logged and the call goes on.
+/// Hands an event to the work's room, which sends it to every page open on the work, and the
+/// work as it now stands to its repository's room. The event is in D1 already, so a room that
+/// cannot be reached loses nothing: a page that reconnects gets it in its snapshot. It is
+/// logged and the call goes on.
 pub async fn notify(env: &Env, work: &str, live: &Live) {
-    let sent = async {
-        let stub = env.durable_object("WORK")?.id_from_name(work)?.get_stub()?;
-        let mut init = RequestInit::new();
-        init.with_method(Method::Post)
-            .with_body(Some(serde_json::to_string(live)?.into()));
-        let request = Request::new_with_init("https://room/event", &init)?;
-        stub.fetch_with_request(request).await?;
-        Ok::<(), worker::Error>(())
-    };
+    let sent = async { room::send(env, work, &serde_json::to_string(live)?).await };
     if let Err(error) = sent.await {
         worker::console_error!("the room of work {work} missed an event: {error}");
     }
+    repository::changed(env, work).await;
 }

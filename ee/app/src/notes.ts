@@ -4,6 +4,7 @@
 // marked as old, until a person resolves them.
 
 import type { Note, NoteSide, Region, Run, Snapshot } from "./proof";
+import { post, refusal } from "./api";
 
 /** One side of a pair of pictures. */
 export type Side = "before" | "after";
@@ -56,24 +57,8 @@ export async function makeNote(
   run: string,
   ask: { check: string; picture: string; side: NoteSide; region: Region; time?: number; words: string },
 ): Promise<string | undefined> {
-  return post(`/api/v2/runs/${encodeURIComponent(run)}/notes`, ask);
+  return refusal(await post(`/api/v2/runs/${encodeURIComponent(run)}/notes`, ask));
 }
 
 /** Resolves note `id`. The error the host gave, if it refused. */
-export const resolveNote = (id: string) => post(`/api/v2/notes/${encodeURIComponent(id)}/resolve`, {});
-
-async function post(path: string, body: object): Promise<string | undefined> {
-  try {
-    const answer = await fetch(path, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (answer.ok) return undefined;
-    const refused = (await answer.json().catch(() => ({}))) as { error?: string };
-    return refused.error ?? `the host answered ${answer.status}`;
-  } catch {
-    return "the host could not be reached; try again";
-  }
-}
+export const resolveNote = async (id: string) => refusal(await post(`/api/v2/notes/${encodeURIComponent(id)}/resolve`, {}));

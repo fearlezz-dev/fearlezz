@@ -16,6 +16,10 @@ mod local;
 mod media;
 #[path = "host/notes.rs"]
 mod notes;
+#[path = "host/repository.rs"]
+mod repository;
+#[path = "host/share.rs"]
+mod share;
 #[path = "host/worker.rs"]
 mod worker;
 
@@ -403,6 +407,34 @@ fn main() {
         (
             "the_page_marks_a_local_run_unproven_and_offers_only_notes",
             local::the_page_marks_a_local_run_unproven_and_offers_only_notes,
+        ),
+        (
+            "a_share_link_shows_the_live_work_and_follows_a_new_run",
+            share::a_share_link_shows_the_live_work_and_follows_a_new_run,
+        ),
+        (
+            "a_share_link_never_writes",
+            share::a_share_link_never_writes,
+        ),
+        (
+            "a_revoked_share_link_is_not_found_and_names_no_repository",
+            share::a_revoked_share_link_is_not_found_and_names_no_repository,
+        ),
+        (
+            "a_writer_makes_lists_and_revokes_share_links_and_a_reader_cannot",
+            share::a_writer_makes_lists_and_revokes_share_links_and_a_reader_cannot,
+        ),
+        (
+            "the_repository_page_lists_its_works_with_what_waits",
+            repository::the_repository_page_lists_its_works_with_what_waits,
+        ),
+        (
+            "a_private_repository_page_needs_a_reader",
+            repository::a_private_repository_page_needs_a_reader,
+        ),
+        (
+            "the_repository_page_updates_live",
+            repository::the_repository_page_updates_live,
         ),
     ];
     let mut trials: Vec<Trial> = tests
@@ -2556,6 +2588,8 @@ fn pictures() {
 
     notes::pictures(&shoot);
     local::pictures(&shoot);
+    share::pictures(&shoot);
+    repository::pictures(&shoot);
 }
 
 // Helpers.

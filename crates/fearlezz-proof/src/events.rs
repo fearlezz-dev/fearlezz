@@ -317,3 +317,58 @@ pub enum Live {
         change: Box<WorkChange>,
     },
 }
+
+/// One work as its repository's page lists it: where its newest run stands and what waits on
+/// it. The host sends it again whenever the work changes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Listed {
+    /// The work.
+    pub work: Work,
+    /// Its page's path on the host: its pull request's, or its branch's.
+    pub path: String,
+    /// Its last event: a listing of the work with a higher one replaces this.
+    pub seq: u64,
+    /// When it last changed, in seconds since the epoch.
+    pub active: f64,
+    /// Its newest run, none before its first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<Latest>,
+    /// How many pictures of its head wait for a verdict.
+    pub pictures: u32,
+    /// How many notes on it are open.
+    pub notes: u32,
+    /// Whether what its head weakens waits for an admin's accept.
+    pub weakened: bool,
+}
+
+/// The newest run of a listed work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Latest {
+    /// The commit it proves.
+    pub head: String,
+    /// Where it runs: a local run is unproven.
+    pub source: Source,
+    /// Whether it still runs.
+    pub state: RunState,
+    /// How many of its checks failed so far.
+    pub failed: u32,
+}
+
+/// One message on a repository page's live connection: every work first, newest activity
+/// first, then each work again as it changes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Listing {
+    /// Every work of the repository as of now.
+    Snapshot {
+        /// `owner/name` as GitHub spells it.
+        repository: String,
+        /// Its works, newest activity first.
+        works: Vec<Listed>,
+    },
+    /// One work as it is now.
+    Work(Listed),
+}

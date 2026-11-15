@@ -3,6 +3,7 @@
 // minutes before it ends, so pictures keep loading on a page left open.
 
 import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
+import { sharedBy } from "./place";
 
 /** What the host answers for a grant: the run's folder on the files origin, and when the grant
  * ends, in seconds since the epoch. */
@@ -16,6 +17,13 @@ export function fileUrl(files: string, path: string): string {
   return files + path.split("/").map(encodeURIComponent).join("/");
 }
 
+/** Where the page asks for a grant to the files of run `run`: through a share link, with its
+ * token, which the host takes for the runs of the link's work alone. */
+export function grantPath(run: string, share: string | undefined): string {
+  const path = `/api/v2/runs/${encodeURIComponent(run)}/grant`;
+  return share ? `${path}?share=${encodeURIComponent(share)}` : path;
+}
+
 /** The folder of the files of run `run()` on the files origin, once granted; empty until then
  * and when the host refuses (the page then shows the pictures as not loaded). */
 export function grantOf(run: Accessor<string>): Accessor<string> {
@@ -26,7 +34,7 @@ export function grantOf(run: Accessor<string>): Accessor<string> {
     let stopped = false;
     const ask = async (wait: number) => {
       try {
-        const answer = await fetch(`/api/v2/runs/${encodeURIComponent(id)}/grant`, { credentials: "same-origin" });
+        const answer = await fetch(grantPath(id, sharedBy(location.pathname)), { credentials: "same-origin" });
         if (!answer.ok) throw new Error(`the host answered ${answer.status}`);
         const granted = (await answer.json()) as Granted;
         if (stopped) return;

@@ -4,11 +4,11 @@
 //! public repository, people who may read it for a private one, and `404` for everyone else,
 //! so a private repository's name is not confirmed.
 
-use worker::{Env, Headers, Request, RequestInit, Response};
+use worker::{Env, Headers, Request, Response};
 
 use crate::session::{self, to_sign_in};
 use crate::work::{self, Place};
-use crate::{Answer, Config, Refusal, cache, files, github, repo_key};
+use crate::{Answer, Config, Refusal, cache, files, github, repo_key, room, share};
 
 /// How long the host trusts GitHub's word on who may see a repository.
 const SIGHT_SECONDS: i64 = 300;
@@ -78,6 +78,12 @@ pub async fn page(
     }
     let db = env.d1("DB")?;
     work::find(&db, &repo, place).await?.ok_or_else(not_found)?;
+    app(env, config, &Headers::new()).await
+}
+
+/// The app from the static assets, the same for every page, which draws itself from its live
+/// connection, with `extra` headers over the ones every page gets.
+pub async fn app(env: &Env, config: &Config, extra: &Headers) -> Answer {
     let mut index = env
         .assets("ASSETS")?
         .fetch("https://assets.local/index.html", None)
@@ -103,7 +109,17 @@ pub async fn page(
     )?;
     headers.set("X-Frame-Options", "DENY")?;
     headers.set("Referrer-Policy", "same-origin")?;
+    for (name, value) in extra.entries() {
+        headers.set(&name, &value)?;
+    }
     Ok(Response::ok(index.text().await?)?.with_headers(headers))
+}
+
+/// Whether a live connection asks to upgrade to a WebSocket; otherwise it gets its snapshot as
+/// JSON.
+pub fn upgrades(req: &Request) -> worker::Result<bool> {
+    let upgrade = req.headers().get("Upgrade")?.unwrap_or_default();
+    Ok(upgrade.eq_ignore_ascii_case("websocket"))
 }
 
 /// A work's live connection, at `/live` before its page's path: a WebSocket that gets the
@@ -124,36 +140,57 @@ pub async fn live(
     }
     let db = env.d1("DB")?;
     let id = work::find(&db, &repo, place).await?.ok_or_else(not_found)?;
-    let upgrade = req.headers().get("Upgrade")?.unwrap_or_default();
-    if !upgrade.eq_ignore_ascii_case("websocket") {
-        let snapshot = work::snapshot(&db, &id).await?.ok_or_else(not_found)?;
+    connect(req, env, &id, None).await
+}
+
+/// The live connection to the work `id`, once the caller decided the request may see it.
+/// `tag` marks the socket, so a share link's pages can be ended when it is revoked.
+pub async fn connect(req: &Request, env: &Env, id: &str, tag: Option<&str>) -> Answer {
+    if !upgrades(req)? {
+        let db = env.d1("DB")?;
+        let snapshot = work::snapshot(&db, id).await?.ok_or_else(not_found)?;
         let live = fearlezz_proof::events::Live::Snapshot(snapshot);
         let headers = Headers::new();
         headers.set("Cache-Control", "no-store")?;
         return Ok(Response::from_json(&live)?.with_headers(headers));
     }
-    let stub = env.durable_object("WORK")?.id_from_name(&id)?.get_stub()?;
-    let mut init = RequestInit::new();
-    init.with_headers(req.headers().clone());
-    let connect = Request::new_with_init(&format!("https://room/connect?work={id}"), &init)?;
-    Ok(stub.fetch_with_request(connect).await?)
+    Ok(room::connect(env, req, id, ("work", id), tag).await?)
 }
 
 /// A grant to the files of a run, for a page that shows it: the run's folder on the files
 /// origin, under a seal that lasts an hour. Who may have it is the page's rule; without a
 /// session a private repository answers `401`, and a run the person may not see is `404`.
+/// Through a share link (`?share=<token>`) it is given for the runs of the link's work alone,
+/// and a link that does not hold is `404`.
 pub async fn grant(req: &Request, env: &Env, config: &Config, run: &str) -> Answer {
-    let repo: Option<String> = env
-        .d1("DB")?
-        .prepare("SELECT w.repo FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1")
-        .bind(&[run.into()])?
-        .first(Some("repo"))
-        .await?;
-    let repo = repo.ok_or_else(not_found)?;
-    if !open(req, env, config, &repo).await? {
-        return Err(Refusal::new(401, "sign in to see this work"));
+    #[derive(serde::Deserialize)]
+    struct Row {
+        repo: String,
+        work: String,
     }
-    let granted = files::grant(config, &repo, run).await?;
+    let row: Option<Row> = env
+        .d1("DB")?
+        .prepare("SELECT w.repo, r.work FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1")
+        .bind(&[run.into()])?
+        .first(None)
+        .await?;
+    let row = row.ok_or_else(not_found)?;
+    let url = req.url()?;
+    let shared = url.query_pairs().find(|(name, _)| name == "share");
+    match shared {
+        Some((_, token)) => {
+            let link = share::find(env, config, &token).await?;
+            if link.is_none_or(|link| link.work != row.work) {
+                return Err(not_found());
+            }
+        }
+        None => {
+            if !open(req, env, config, &row.repo).await? {
+                return Err(Refusal::new(401, "sign in to see this work"));
+            }
+        }
+    }
+    let granted = files::grant(config, &row.repo, run).await?;
     let headers = Headers::new();
     headers.set("Cache-Control", "no-store")?;
     Ok(Response::from_json(&granted)?.with_headers(headers))

@@ -5,9 +5,17 @@
 
 import type { PictureVerdict, Review, Run, Snapshot, VerdictKind } from "./proof";
 import type { Shown } from "./pictures";
+import { post, refusal } from "./api";
 
-/** Who the page is shown to: nobody signed in, or a login and what GitHub lets them do. */
-export type Viewer = { login: null } | { login: string; role: "admin" | "write" | "read" };
+/** Who the page is shown to: nobody signed in (or anyone, through a share link, which only
+ * views), or a login and what GitHub lets them do. */
+export type Viewer = { login: null; shared?: boolean } | { login: string; role: "admin" | "write" | "read" };
+
+/** Whether the page only views, through a share link: nothing to press, no one asked to sign in. */
+export const onlyViews = (viewer: Viewer | undefined) => viewer?.login === null && !!viewer.shared;
+
+/** Whether to offer `viewer` a way to sign in: someone signed out, not through a share link. */
+export const maySignIn = (viewer: Viewer | undefined) => viewer?.login === null && !viewer.shared;
 
 /** Whether `viewer` may give verdicts (write access) or accept weakenings (admin rights). */
 export const canSay = (viewer: Viewer | undefined) => !!viewer?.login && viewer.role !== "read";
@@ -61,23 +69,10 @@ export function standing(review: Review): string {
   return `${pictures(n)} ${n === 1 ? "needs" : "need"} change at ${review.head.slice(0, 7)}`;
 }
 
-/** Sends what a person says about run `run` (`verdicts` or `accept`): JSON from this page, with
- * its session. The error the host gave, if it refused. */
-async function say(run: string, what: "verdicts" | "accept", body: object): Promise<string | undefined> {
-  try {
-    const answer = await fetch(`/api/v2/runs/${encodeURIComponent(run)}/${what}`, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (answer.ok) return undefined;
-    const refused = (await answer.json().catch(() => ({}))) as { error?: string };
-    return refused.error ?? `the host answered ${answer.status}`;
-  } catch {
-    return "the host could not be reached; try again";
-  }
-}
+/** Sends what a person says about run `run` (`verdicts` or `accept`). The error the host gave,
+ * if it refused. */
+const say = async (run: string, what: "verdicts" | "accept", body: object) =>
+  refusal(await post(`/api/v2/runs/${encodeURIComponent(run)}/${what}`, body));
 
 export const verdict = (run: string, p: Shown, kind: VerdictKind) =>
   say(run, "verdicts", { check: p.check, picture: p.picture.name, kind });

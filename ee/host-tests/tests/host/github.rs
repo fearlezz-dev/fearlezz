@@ -137,6 +137,10 @@ impl FakeGitHub {
                 ("owner/open".to_owned(), repo(false, Some(5), &[])),
                 // The review tests: verdicts, accepts, the check run and the comment.
                 ("owner/review".to_owned(), reviewed(false, 6)),
+                // Private, so a share link is the only way in without a sign in.
+                ("owner/shared".to_owned(), reviewed(true, 8)),
+                // The repository page, private so it needs a reader.
+                ("owner/listing".to_owned(), reviewed(true, 9)),
                 // The local run tests: each CLI test signs in as a login of its own.
                 (
                     "owner/local".to_owned(),

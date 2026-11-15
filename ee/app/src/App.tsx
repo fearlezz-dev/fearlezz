@@ -3,11 +3,13 @@
 
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { type CheckState, type Status, connect, stateOf } from "./live";
+import { type CheckState, Feed, type Status, connect, stateOf } from "./live";
 import { PicturesPanel } from "./PicturesPanel";
 import { picturesOf } from "./pictures";
 import type { Job, Review, Run, RunCheck, Snapshot } from "./proof";
-import { type Viewer, accept, canAccept, localBy, signIn, standing, viewerOf, waitsFor } from "./review";
+import { type Viewer, accept, canAccept, canSay, localBy, maySignIn, signIn, standing, viewerOf, waitsFor } from "./review";
+import { ShareControl } from "./ShareControl";
+import { ago } from "./ago";
 
 const WORDS: Record<CheckState, string> = {
   planned: "waiting",
@@ -17,7 +19,8 @@ const WORDS: Record<CheckState, string> = {
   not_run: "not run",
 };
 
-export function App() {
+/** A work's page; through a share link (`shared`, its token) it only views. */
+export function App(props: { shared?: string | undefined }) {
   const [status, setStatus] = createSignal<Status["kind"]>("connecting");
   const [gone, setGone] = createSignal("");
   const [work, setWork] = createStore<{ state?: Snapshot }>({});
@@ -26,7 +29,7 @@ export function App() {
   // Running checks show their time as it passes.
   const [now, setNow] = createSignal(Date.now() / 1000);
   const tick = setInterval(() => setNow(Date.now() / 1000), 1000);
-  const stop = connect(location.pathname, (next) => {
+  const stop = connect(location.pathname, () => new Feed(), (next: Status) => {
     setStatus(next.kind);
     if (next.kind === "live") setWork("state", reconcile(next.state, { key: "id" }));
     if (next.kind === "gone") setGone(next.why);
@@ -42,7 +45,17 @@ export function App() {
   // Who looks, asked once the work says its repository.
   const [viewer, setViewer] = createSignal<Viewer>();
   const repository = createMemo(() => work.state?.work.repository);
-  createEffect(on(repository, (repo) => repo && void viewerOf(repo).then(setViewer), { defer: false }));
+  // Through a share link the page only views, whoever looks: the host is not asked.
+  createEffect(
+    on(
+      repository,
+      (repo) => {
+        if (props.shared) setViewer({ login: null, shared: true });
+        else if (repo) void viewerOf(repo).then(setViewer);
+      },
+      { defer: false },
+    ),
+  );
   // The review, when it is of the head of the run shown.
   const review = createMemo(() => {
     const r = work.state?.review;
@@ -59,10 +72,23 @@ export function App() {
           {(state) => (
             <>
               <header class="top">
-                <p class="repo">
-                  {state().work.repository} <span class="branch">{state().work.branch}</span>
+                <div class="repo">
+                  <Show when={!props.shared} fallback={state().work.repository}>
+                    <a href={`/${state().work.repository}`} data-repository>
+                      {state().work.repository}
+                    </a>
+                  </Show>{" "}
+                  <span class="branch">{state().work.branch}</span>
                   <span class={`live ${status()}`}>{status() === "live" ? "live" : "reconnecting"}</span>
-                </p>
+                  <Show when={!props.shared && canSay(viewer())}>
+                    <ShareControl work={state().work} />
+                  </Show>
+                </div>
+                <Show when={props.shared}>
+                  <p class="shared" data-shared>
+                    A shared link: this page only views.
+                  </p>
+                </Show>
                 <h1 data-title>{title(state())}</h1>
                 <Show when={shown()}>{(run) => <Standing run={run()} review={review()} viewer={viewer()} />}</Show>
               </header>
@@ -220,7 +246,7 @@ function Weakenings(props: { review: Review; runs: Run[]; viewer: Viewer | undef
             Only an admin of {props.repository} can accept a weakened proof.
           </p>
         </Match>
-        <Match when={props.viewer}>
+        <Match when={maySignIn(props.viewer)}>
           <p class="hint">
             <a href={signIn()} data-sign-in>
               Sign in
@@ -331,13 +357,6 @@ function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => v
   );
 }
 
-/** How long ago, roughly, as people say it. */
-function ago(seconds: number): string {
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
-  return `${Math.floor(seconds / 86400)} days ago`;
-}
 
 function CheckView(props: { check: RunCheck; now: number }) {
   const state = () => stateOf(props.check);

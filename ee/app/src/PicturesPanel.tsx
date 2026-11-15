@@ -19,8 +19,9 @@ import {
 } from "./pictures";
 import { type Draft, type Shown as Noted, fromWhere, makeNote, notesOn, resolveNote, sidesOf } from "./notes";
 import type { PictureChange, Run, Snapshot, VerdictKind } from "./proof";
-import { type Viewer, canSay, carried, localBy, signIn, toLookAt, verdict as say, verdictOf } from "./review";
+import { type Viewer, canSay, carried, localBy, maySignIn, onlyViews, signIn, toLookAt, verdict as say, verdictOf } from "./review";
 import { MODES, type Mode, type Noting, Stage } from "./Stage";
+import { ago } from "./ago";
 
 // The way to compare and the grouping stay as a person moves between pictures and runs.
 const [mode, setMode] = createSignal<Mode>("side");
@@ -447,6 +448,9 @@ function ReviewBar(props: {
         <Match when={never()}>
           <p class="hint">{never()}</p>
         </Match>
+        <Match when={onlyViews(props.viewer)}>
+          <p class="hint">Verdicts are given on the work's own page.</p>
+        </Match>
         <Match when={canSay(props.viewer)}>
           <div class="act verdicts">
             <button
@@ -479,7 +483,7 @@ function ReviewBar(props: {
             Giving a verdict needs write access to {props.repository}.
           </p>
         </Match>
-        <Match when={props.viewer}>
+        <Match when={maySignIn(props.viewer)}>
           <p class="hint">
             <a href={signIn()} data-sign-in>
               Sign in
@@ -495,12 +499,4 @@ function ReviewBar(props: {
       </Show>
     </div>
   );
-}
-
-/** How long ago, roughly, as people say it. */
-function ago(seconds: number): string {
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
-  return `${Math.floor(seconds / 86400)} days ago`;
 }

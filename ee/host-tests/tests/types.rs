@@ -6,7 +6,8 @@
 use std::path::Path;
 
 use fearlezz_proof::events::{
-    Change, Live, Run, RunCheck, RunState, Snapshot, Source, Work, WorkChange,
+    Change, Latest, Listed, Listing, Live, Run, RunCheck, RunState, Snapshot, Source, Work,
+    WorkChange,
 };
 use fearlezz_proof::findings::{Finding, Level};
 use fearlezz_proof::look::{Change as PictureChange, Item as Picture, Look};
@@ -26,6 +27,9 @@ fn declarations() -> String {
     let cfg = Config::new().with_large_int("number");
     let decls = [
         Live::decl(&cfg),
+        Listing::decl(&cfg),
+        Listed::decl(&cfg),
+        Latest::decl(&cfg),
         Snapshot::decl(&cfg),
         Change::decl(&cfg),
         WorkChange::decl(&cfg),
