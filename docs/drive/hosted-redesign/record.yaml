@@ -133,6 +133,8 @@ open:
     ask: >-
       A check's shell still comes from the change's [env] on the base checkout (same class as the
       prepare fix f5d16d9). Fix it too? Raise at the next check-in.
+  - id: matrix-review
+    ask: The review counts only the newest run per job, so of two matrix legs only one is reviewed. Count every leg of the newest attempt?
 
 slices:
   - id: core-cut
