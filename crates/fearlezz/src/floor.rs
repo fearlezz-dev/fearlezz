@@ -43,10 +43,7 @@ impl Floor {
         let base = Config::load(&base.root, &git.common)?;
         let mut weakened = weakenings(&base, head, &wt.files);
         for w in &mut weakened {
-            let path = match &w.part {
-                Part::Check(id) => format!("check.{id}"),
-                Part::Setting(path) => path.clone(),
-            };
+            let path = w.part.path();
             w.was = base.part(&path);
             w.now = head.part(&path);
         }

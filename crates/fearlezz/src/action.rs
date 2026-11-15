@@ -228,8 +228,6 @@ pub(crate) fn summary(
     Ok(text)
 }
 
-/// The pictures that differ from the base, each check with its counts and then each picture,
-/// for a person to review on the pull request. They never keep the commit from being proven.
 /// Each weakening that names its part as it was and is now, as a diff of the config.
 fn diffs(proof: &Proof, text: &mut String) -> std::fmt::Result {
     for w in &proof.weakened {
@@ -305,6 +303,8 @@ fn diff(was: &[&str], now: &[&str]) -> Vec<String> {
     lines
 }
 
+/// The pictures that differ from the base, each check with its counts and then each picture,
+/// for a person to review on the pull request. They never keep the commit from being proven.
 fn pictures(proof: &Proof, text: &mut String) -> std::fmt::Result {
     let looks: Vec<_> = proof.looks.iter().filter(|l| l.to_look_at() > 0).collect();
     if looks.is_empty() {

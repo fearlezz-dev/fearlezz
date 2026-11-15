@@ -45,6 +45,14 @@ impl Part {
             Part::Check(name) | Part::Setting(name) => name,
         }
     }
+
+    /// Its path in the config: `check.<id>` for a check, the setting's own path otherwise.
+    pub fn path(&self) -> String {
+        match self {
+            Part::Check(id) => format!("check.{id}"),
+            Part::Setting(path) => path.clone(),
+        }
+    }
 }
 
 /// How a weakening gets past where nothing can wait for an admin's accept.
