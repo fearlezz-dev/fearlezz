@@ -1,0 +1,67 @@
+# docs/drive/page-design/record.yaml: the working state of one piece of work.
+goal: >
+  A weakening shows what changed and why it matters: "you should be able to click it and then
+  view, like, okay, what changed and why does this matter?". And the host's pages get a real
+  design pass with the frontend design skill: "it looks quite shitty", "all of the shadows
+  don't make sense", "the layout is semi-decent", "slightly noisy", "can be massively improved".
+
+pieces:
+  - id: weakening-diff
+    status: building
+    open: what a weakening carries so the page can show the change (was and now) and why it matters
+    tries:
+      - id: config-snippets
+        what: >
+          the floor keeps each config's merged TOML table and gives every weakening the TOML of
+          its part on the base and on the head (was, now); the page shows a line diff with the
+          changed words marked
+        state: picked
+        why: the user picked it ("1, was and now")
+        evidence: [crates/fearlezz/src/config.rs:458, crates/fearlezz/src/floor.rs:89]
+      - id: typed-kinds
+        what: every way of weakening becomes a typed variant with its own fields and its own why
+        state: dropped
+        why: not picked; about 40 sites each with their own fields and UI
+        evidence: [about 40 sites in floor.rs, config.rs, lints.rs, rules.rs, settings.rs]
+  - id: page-design
+    status: building
+    open: the visual direction of the work page and the repository page
+    tries:
+      - id: light-table
+        what: pictures on a neutral grey plate, a contact sheet beside them, the decision under the picture, runs as one header line
+        taught: liked in parts
+        state: dropped
+        why: "I don't think any of them are that good ... there is still a lot of subtext"
+      - id: waits-for-you
+        what: one column of decisions that open in place, done items folded
+        taught: liked in parts
+        state: dropped
+        why: same; parts of it to keep
+      - id: calm-current
+        what: today's layout without shadows and cards, runs in a side column
+        taught: the runs on the side are liked
+        state: dropped
+        why: same; the side column for runs to keep
+      - id: merged
+        what: take from all three; above all cut the subtext and text noise
+        state: picked
+        why: the user built on it ("Yes, build on it")
+
+decided:
+  - id: was-and-now
+    what: a weakening carries the config of its part on the base and on the head ("1, was and now")
+  - id: less-text
+    what: "there's a lot of subtext constantly ... just a lot of noise, text. And that's part of the biggest problem"
+  - id: take-from-all
+    what: "there are good parts in all of them ... you should take from all of them", including the runs on the side from C
+open: []
+slices:
+  - id: core-was-now
+    what: Weakening gains was and now, filled in Floor::read; the job summary shows a diff
+    commit: 3cefaeb
+    evidence: [crates/fearlezz/tests/proof.rs, crates/fearlezz/tests/ci.rs, crates/fearlezz-proof/tests/floor.rs]
+  - id: page
+    what: the redesigned work and repository pages, a status pill, weakenings folded behind Show change with a word diff, runs aside, a contact sheet, one review row, no shadows
+    commit: 12b876c
+    evidence: [ee/app/src/diff.test.ts, ee/host-tests/tests/host.rs, ee/target/tmp/page-*.png]
+next: code health review, then a check-in with screenshots
