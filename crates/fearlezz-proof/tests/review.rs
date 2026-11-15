@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use fearlezz_proof::events::{Run, RunCheck, RunState, Source};
 use fearlezz_proof::look::{Change, Item, Look};
 use fearlezz_proof::media::{Comparison, Pair, Verdict as Likeness};
+use fearlezz_proof::notes::{Note, NoteState, Region, Side};
 use fearlezz_proof::review::{self, Accept, State, Verdict, VerdictKind};
 use fearlezz_proof::waits::{Part, Weakening};
 use fearlezz_proof::{Check, Proof, Ran};
@@ -150,7 +151,7 @@ fn verdict(picture: &str, key: &str, head: &str) -> Verdict {
 
 #[test]
 fn a_head_without_a_run_waits_for_ci() {
-    let review = review::review("aaa", &[], &[], None);
+    let review = review::review("aaa", &[], &[], &[], None);
     assert_eq!(review.state, State::Ci);
 }
 
@@ -161,11 +162,11 @@ fn a_running_run_of_the_head_is_running_and_another_heads_runs_do_not_count() {
         run("r1", "aaa", RunState::Done, &[]),
     ];
     assert_eq!(
-        review::review("bbb", &runs, &[], None).state,
+        review::review("bbb", &runs, &[], &[], None).state,
         State::Running
     );
     assert_eq!(
-        review::review("aaa", &runs, &[], None).state,
+        review::review("aaa", &runs, &[], &[], None).state,
         State::Approved
     );
 }
@@ -175,7 +176,7 @@ fn a_failed_proof_fails_the_review() {
     let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
     let mut proof = proof.unwrap();
     proof.checks.push(entry("tests", Ran::Failed));
-    let review = review::review("aaa", &[(r, Some(proof))], &[], None);
+    let review = review::review("aaa", &[(r, Some(proof))], &[], &[], None);
     assert_eq!(review.state, State::Failed);
 }
 
@@ -191,7 +192,7 @@ fn changed_new_and_gone_pictures_wait_and_flaky_and_unchanged_ones_do_not() {
         flaky,
     ];
     let runs = [run("r1", "aaa", RunState::Done, &items)];
-    let review = review::review("aaa", &runs, &[], None);
+    let review = review::review("aaa", &runs, &[], &[], None);
     assert_eq!(review.state, State::Waits);
     let waiting: Vec<&str> = review.waiting().map(|p| p.name.as_str()).collect();
     assert_eq!(waiting, ["card.png", "new.png", "gone.png"]);
@@ -206,7 +207,7 @@ fn every_picture_looking_right_approves_the_head() {
         &[still("card.png", Change::Changed)],
     )];
     let key = runs[0].0.checks[0].keys["card.png"].clone();
-    let review = review::review("aaa", &runs, &[verdict("card.png", &key, "aaa")], None);
+    let review = review::review("aaa", &runs, &[verdict("card.png", &key, "aaa")], &[], None);
     assert_eq!(review.state, State::Approved);
     assert_eq!(review.pictures[0].verdict.as_ref().unwrap().by, "writer");
 }
@@ -221,7 +222,7 @@ fn a_verdict_follows_the_pictures_content_across_heads() {
         &[still("card.png", Change::Changed)],
     );
     let given = verdict("card.png", &same.0.checks[0].keys["card.png"], "aaa");
-    let review = review::review("bbb", &[same], std::slice::from_ref(&given), None);
+    let review = review::review("bbb", &[same], std::slice::from_ref(&given), &[], None);
     assert_eq!(review.state, State::Approved);
     assert_eq!(review.pictures[0].verdict.as_ref().unwrap().head, "aaa");
 
@@ -231,7 +232,7 @@ fn a_verdict_follows_the_pictures_content_across_heads() {
         RunState::Done,
         &[still("card.png", Change::Changed)],
     );
-    let review = review::review("ccc", &[other], &[given], None);
+    let review = review::review("ccc", &[other], &[given], &[], None);
     assert_eq!(review.state, State::Waits);
 }
 
@@ -268,7 +269,7 @@ fn weakenings_wait_for_an_admins_accept_of_the_head() {
     }];
     proof.weakenings_wait = true;
     let runs = [(r, Some(proof))];
-    let review = review::review("aaa", &runs, &[], None);
+    let review = review::review("aaa", &runs, &[], &[], None);
     assert_eq!(review.state, State::Waits);
     assert_eq!(review.weakened.len(), 1);
     let accept = Accept {
@@ -276,7 +277,7 @@ fn weakenings_wait_for_an_admins_accept_of_the_head() {
         by: "admin".into(),
         at: 9.0,
     };
-    let review = review::review("aaa", &runs, &[], Some(&accept));
+    let review = review::review("aaa", &runs, &[], &[], Some(&accept));
     assert_eq!(review.state, State::Approved);
     assert!(
         review.summary().contains("accepted by admin"),
@@ -292,7 +293,7 @@ fn a_failed_check_fails_the_review_even_without_its_reason() {
     let mut failed = entry("tests", Ran::Passed);
     failed.outcome = Ran::Failed;
     proof.checks.push(failed);
-    let review = review::review("aaa", &[(r, Some(proof))], &[], None);
+    let review = review::review("aaa", &[(r, Some(proof))], &[], &[], None);
     assert_eq!(review.state, State::Failed);
 }
 
@@ -304,17 +305,17 @@ fn a_weakening_where_nothing_waits_fails_the_review() {
         part: Part::Check("tests".into()),
         how: "it is gone".into(),
     }];
-    let review = review::review("aaa", &[(r, Some(proof))], &[], None);
+    let review = review::review("aaa", &[(r, Some(proof))], &[], &[], None);
     assert_eq!(review.state, State::Failed);
 }
 
 #[test]
 fn a_cancelled_run_ends_the_review_without_a_proof_and_a_newer_run_counts() {
     let cancelled = run("r1", "aaa", RunState::Cancelled, &[]);
-    let review = review::review("aaa", std::slice::from_ref(&cancelled), &[], None);
+    let review = review::review("aaa", std::slice::from_ref(&cancelled), &[], &[], None);
     assert_eq!(review.state, State::Cancelled);
     let again = run("r2", "aaa", RunState::Running, &[]);
-    let review = review::review("aaa", &[again, cancelled], &[], None);
+    let review = review::review("aaa", &[again, cancelled], &[], &[], None);
     assert_eq!(review.state, State::Running);
 }
 
@@ -326,11 +327,94 @@ fn the_summary_lists_what_waits() {
         RunState::Done,
         &[still("card.png", Change::Changed)],
     )];
-    let review = review::review("aaa1234", &runs, &[], None);
+    let review = review::review("aaa1234", &runs, &[], &[], None);
     assert_eq!(review.title(), "1 picture waits for a look at aaa1234");
     assert!(
         review.summary().contains("`screens` card.png"),
         "{}",
         review.summary()
     );
+}
+
+fn note(picture: &str, words: &str, state: NoteState) -> Note {
+    Note {
+        id: format!("n-{words}"),
+        check: "screens".into(),
+        picture: picture.into(),
+        run: "r0".into(),
+        head: "aaa".into(),
+        side: Side::After,
+        region: Region {
+            x: 0.1,
+            y: 0.6,
+            w: 0.3,
+            h: 0.2,
+        },
+        time: None,
+        words: words.into(),
+        by: "writer".into(),
+        at: 4.0,
+        state,
+        resolved_by: None,
+    }
+}
+
+#[test]
+fn a_picture_that_needs_change_fails_the_review_and_the_summary_lists_the_notes() {
+    let runs = [run(
+        "r1",
+        "aaa1234",
+        RunState::Done,
+        &[
+            still("card.png", Change::Changed),
+            still("menu.png", Change::Changed),
+        ],
+    )];
+    let key = runs[0].0.checks[0].keys["card.png"].clone();
+    let mut said = verdict("card.png", &key, "aaa1234");
+    said.kind = VerdictKind::NeedsChange;
+    let notes = [
+        note(
+            "card.png",
+            "The button text is *cut* off @someone",
+            NoteState::Open,
+        ),
+        note("card.png", "an old one", NoteState::Resolved),
+    ];
+    let review = review::review("aaa1234", &runs, &[said], &notes, None);
+    assert_eq!(review.state, State::NeedsChange);
+    assert_eq!(review.title(), "1 picture needs change at aaa1234");
+    assert_eq!(review.notes.len(), 1, "only open notes wait");
+    let summary = review.summary();
+    assert!(summary.contains("Pictures that need change"), "{summary}");
+    assert!(summary.contains("`screens` card.png, after"), "{summary}");
+    // A person's words never become markup or a mention.
+    assert!(summary.contains(r"\*cut\*"), "{summary}");
+    assert!(summary.contains(r"\@someone"), "{summary}");
+    assert!(!summary.contains("an old one"), "{summary}");
+}
+
+#[test]
+fn a_needs_change_verdict_holds_only_for_the_content_it_was_given_on() {
+    // The agent changed the picture: its new content waits for a fresh verdict, while the
+    // open notes on it stay.
+    let first = run(
+        "r1",
+        "aaa",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let mut said = verdict("card.png", &first.0.checks[0].keys["card.png"], "aaa");
+    said.kind = VerdictKind::NeedsChange;
+    let notes = [note("card.png", "too tight", NoteState::Open)];
+    let later = run(
+        "r2",
+        "bbb",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let review = review::review("bbb", &[later], &[said], &notes, None);
+    assert_eq!(review.state, State::Waits);
+    assert!(review.pictures[0].verdict.is_none());
+    assert_eq!(review.notes[0].words, "too tight");
 }

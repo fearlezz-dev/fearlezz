@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::look::Look;
+use crate::notes::Note;
 use crate::review::{Job, Review, Verdict};
 use crate::{Check, Proof, Pull};
 
@@ -209,6 +210,9 @@ pub struct Snapshot {
     /// Its CI jobs that wait for a runner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waiting: Vec<Job>,
+    /// Its open notes, oldest first, on whichever run they were made.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
 }
 
 /// What changed in a run.
@@ -271,6 +275,11 @@ pub enum WorkChange {
         /// The review, none while the work has no head.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         review: Option<Review>,
+    },
+    /// Someone made a note or resolved one; a resolved note leaves the page.
+    Note {
+        /// The note as it is now.
+        note: Note,
     },
     /// The CI jobs that wait for a runner now.
     Waiting {

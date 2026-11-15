@@ -11,6 +11,7 @@ pub mod events;
 pub mod findings;
 pub mod look;
 pub mod media;
+pub mod notes;
 pub mod review;
 pub mod waits;
 

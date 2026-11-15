@@ -12,16 +12,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::{Run, RunState, Source};
 use crate::look::{Change, Item};
+use crate::notes::Note;
 use crate::waits::{Weakening, short};
 use crate::{Proof, Ran};
 
-/// What a person says of a picture. Notes, and with them `needs_change`, come later.
+/// What a person says of a picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum VerdictKind {
     /// The picture looks right.
     LooksRight,
+    /// It does not look right yet: what should change is in the open notes on it, which a
+    /// person makes before saying this.
+    NeedsChange,
+}
+
+impl VerdictKind {
+    /// How it is stored and sent: `looks_right` or `needs_change`.
+    pub fn word(self) -> &'static str {
+        match self {
+            VerdictKind::LooksRight => "looks_right",
+            VerdictKind::NeedsChange => "needs_change",
+        }
+    }
+
+    /// The kind a stored word names; anything else is the one before notes came.
+    pub fn of(word: &str) -> VerdictKind {
+        match word {
+            "needs_change" => VerdictKind::NeedsChange,
+            _ => VerdictKind::LooksRight,
+        }
+    }
 }
 
 /// A person's verdict on one picture, as its content was when they gave it.
@@ -71,6 +93,8 @@ pub enum State {
     Failed,
     /// Every CI run of the head ended without its proof.
     Cancelled,
+    /// A person said a picture needs change: the agent has notes to act on.
+    NeedsChange,
     /// A picture waits for a verdict, or a weakening for an admin's accept.
     Waits,
     /// Every picture to look at looks right and every weakening is accepted.
@@ -108,6 +132,9 @@ pub struct Review {
     /// The accept of those weakenings, once an admin gave it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept: Option<Accept>,
+    /// The work's open notes, oldest first: they follow the work, not the head.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
 }
 
 /// A CI job that waits for a runner, before Fearlezz in it opens a run.
@@ -168,11 +195,13 @@ pub fn key(item: &Item, sha: impl Fn(&str) -> Option<String>) -> Option<String> 
 }
 
 /// The review of `head` from the work's runs (newest first, each with its proof once done),
-/// its verdicts and the head's accept. Only CI runs of the head count, the newest of each job.
+/// its verdicts, its notes and the head's accept. Only CI runs of the head count, the newest of
+/// each job.
 pub fn review(
     head: &str,
     runs: &[(Run, Option<Proof>)],
     verdicts: &[Verdict],
+    notes: &[Note],
     accept: Option<&Accept>,
 ) -> Review {
     let mut jobs: Vec<&str> = Vec::new();
@@ -249,6 +278,8 @@ pub fn review(
         State::Cancelled
     } else if failed {
         State::Failed
+    } else if pictures.iter().any(Picture::needs_change) {
+        State::NeedsChange
     } else if pictures.iter().any(|p| p.verdict.is_none())
         || (!weakened.is_empty() && accept.is_none())
     {
@@ -262,6 +293,23 @@ pub fn review(
         pictures,
         weakened,
         accept,
+        notes: notes.iter().filter(|n| n.is_open()).cloned().collect(),
+    }
+}
+
+impl Picture {
+    /// Whether a person said its content needs change.
+    pub fn needs_change(&self) -> bool {
+        self.verdict
+            .as_ref()
+            .is_some_and(|v| v.kind == VerdictKind::NeedsChange)
+    }
+
+    /// Whether a person said its content looks right.
+    pub fn looks_right(&self) -> bool {
+        self.verdict
+            .as_ref()
+            .is_some_and(|v| v.kind == VerdictKind::LooksRight)
     }
 }
 
@@ -293,6 +341,11 @@ impl Review {
             State::Running => format!("CI is proving {head}"),
             State::Failed => format!("The proof of {head} failed"),
             State::Cancelled => format!("The CI run of {head} ended without its proof"),
+            State::NeedsChange => {
+                let n = self.pictures.iter().filter(|p| p.needs_change()).count();
+                let verb = if n == 1 { "needs" } else { "need" };
+                format!("{} {verb} change at {head}", pictures(n))
+            }
             State::Waits => {
                 let waiting = self.waiting().count();
                 match (waiting, self.weakenings_wait()) {
@@ -324,9 +377,38 @@ impl Review {
                     .map(|p| format!("- `{}` {}", p.check, p.name)),
             );
         }
+        let changes: Vec<(&Picture, &Verdict)> = self
+            .pictures
+            .iter()
+            .filter(|p| p.needs_change())
+            .filter_map(|p| Some((p, p.verdict.as_ref()?)))
+            .collect();
+        if !changes.is_empty() {
+            lines.push("\nPictures that need change:".into());
+            lines.extend(
+                changes
+                    .iter()
+                    .map(|(p, v)| format!("- `{}` {}, by {}", p.check, p.name, v.by)),
+            );
+        }
+        if !self.notes.is_empty() {
+            lines.push("\nOpen notes:".into());
+            lines.extend(self.notes.iter().map(|n| {
+                let at = n.time.map(|t| format!(" at {t:.2} s")).unwrap_or_default();
+                format!(
+                    "- `{}` {}, {}{at}: {} ({})",
+                    n.check,
+                    n.picture,
+                    n.side.label(),
+                    quote(&n.words),
+                    n.by
+                )
+            }));
+        }
         let right: Vec<(&Picture, &Verdict)> = self
             .pictures
             .iter()
+            .filter(|p| p.looks_right())
             .filter_map(|p| Some((p, p.verdict.as_ref()?)))
             .collect();
         if !right.is_empty() {
@@ -346,6 +428,24 @@ impl Review {
         }
         lines.join("\n") + "\n"
     }
+}
+
+/// A person's words on one line of Markdown, quoted, with every character Markdown gives a
+/// meaning escaped, so they never become a link, a picture, a mention or markup of their own.
+fn quote(words: &str) -> String {
+    let mut line = String::new();
+    for (i, word) in words.split_whitespace().enumerate() {
+        if i > 0 {
+            line.push(' ');
+        }
+        for c in word.chars() {
+            if "\\`*_{}[]()#+-.!|<>~@&:".contains(c) {
+                line.push('\\');
+            }
+            line.push(c);
+        }
+    }
+    format!("\u{201c}{line}\u{201d}")
 }
 
 /// The content key of each picture of a look, by name, from the SHA-256s of the run's files
