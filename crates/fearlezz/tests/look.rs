@@ -711,3 +711,27 @@ fn the_base_commit_is_prepared_with_its_own_env_for_the_look() {
         out.stdout
     );
 }
+
+#[test]
+fn the_base_commit_runs_in_its_own_shell_for_the_look() {
+    let repo = stills_repo();
+    // The change adds a shell that needs a folder only the change has.
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{}\n[env]\nshell = \"test -d newdir &&\"\n\n[settings.skill]\nagents = \
+             []\n\n[settings.hooks]\nagents = []\n",
+            stills_config("stills = \"stills/**/*.png\"")
+        ),
+    );
+    repo.write("newdir/keep", "\n");
+    repo.write("src/color.txt", "blue");
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("look screens: 1 changed"),
+        "{}",
+        out.stdout
+    );
+}

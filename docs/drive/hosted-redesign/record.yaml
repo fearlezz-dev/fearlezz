@@ -128,11 +128,28 @@ decided:
       Resolving the last note brings the picture back to not looked at yet.
     why: The verdict and the notes drifted apart (review finding).
   - id: every-matrix-leg
-    what: The review counts every leg of the newest run attempt of each job.
+    what: >-
+      The review counts every leg of the newest run attempt of each job: of each job id, every
+      CI run of the head whose workflow run and attempt are those of the job's newest run.
+      Legs within one attempt need no identity of their own; a newer attempt replaces them all.
+    built: ee/host-tests/tests/host.rs (every_leg_of_the_newest_attempt_is_reviewed)
   - id: base-shell-fix
-    what: A base checkout uses the base commit's own shell, like the prepare fix, in this branch.
+    what: >-
+      A base checkout uses the base commit's own shell, like the prepare fix, in this branch. The
+      shell is no longer copied into each check: a checkout's Worktree carries the shell of the
+      [env] it runs in (look::Base reads the base commit's), and the reuse key and the run both
+      take it from there.
+    built: crates/fearlezz/tests/red_green.rs (the_base_commit_runs_in_its_own_shell), crates/fearlezz/tests/look.rs (the_base_commit_runs_in_its_own_shell_for_the_look)
 
-open: []
+open:
+  - id: partial-rerun
+    ask: >-
+      An attempt that reruns only some legs (an admin's accept reruns only the asking run's job;
+      a person's "re-run failed jobs" reruns only failed ones) drops the other legs from the
+      review, so their pictures stop waiting. Keeping them needs a leg identity across attempts:
+      the job's display name (proof (macos-latest)), which only GitHub knows (the workflow_job
+      webhook or the jobs API by run, attempt and runner). Name each run's leg by it and count
+      the newest run of each leg instead?
 
 slices:
   - id: core-cut

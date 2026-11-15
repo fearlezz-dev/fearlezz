@@ -738,3 +738,27 @@ fn the_base_commit_is_prepared_with_its_own_env() {
         out.stdout
     );
 }
+
+#[test]
+fn the_base_commit_runs_in_its_own_shell() {
+    let repo = repo();
+    // The change adds a shell that needs a folder only the change has.
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{CHECKS}\n[env]\nshell = \"test -d newdir &&\"\n\n[settings.skill]\nagents = \
+             []\n\n[settings.hooks]\nagents = []\n"
+        ),
+    );
+    repo.write("newdir/keep", "\n");
+    change(&repo, SHOWS_IT, "fix: the value is two");
+    // Adding a shell weakens the floor, which holds the run; only red before green is the
+    // subject here.
+    let out = repo.fz(FINAL);
+    assert!(
+        out.stdout
+            .contains("red before green tests: tests/new.sh fails on the base commit"),
+        "{}",
+        out.stdout
+    );
+}

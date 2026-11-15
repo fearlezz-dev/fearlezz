@@ -1247,6 +1247,7 @@ fn run_checks(
             }
             let at = run::Where {
                 root: &wt.git.root,
+                shell: wt.shell.as_deref(),
                 tree: &wt.tree,
                 journal: &j.name,
                 stage: &stage,

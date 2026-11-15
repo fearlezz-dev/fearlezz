@@ -23,11 +23,21 @@ pub(crate) struct Worktree {
     pub files: Vec<String>,
     pub tree: String,
     pub committed: bool,
+    /// The shell of the `[env]` its checks run in: the change's own for the change's
+    /// worktree, the base commit's for a base checkout (see `look::Base`).
+    pub shell: Option<String>,
     pub hasher: Hasher,
 }
 
 impl Worktree {
+    /// The worktree `git` names, whose checks run in `config`'s `[env]`.
     pub(crate) fn read(git: Git, config: &Config) -> Result<Worktree> {
+        Worktree::read_in(git, config, &config.env)
+    }
+
+    /// The worktree `git` names, compared with `config`'s base branch, whose checks run in
+    /// `env`.
+    pub(crate) fn read_in(git: Git, config: &Config, env: &crate::config::Env) -> Result<Worktree> {
         let base = git.base_commit(&config.base)?;
         Ok(Worktree {
             changed: git.changed(&base)?,
@@ -37,6 +47,7 @@ impl Worktree {
             tree: git.tree()?,
             committed: git.committed()?,
             git,
+            shell: env.shell.clone(),
             hasher: Hasher::default(),
         })
     }
@@ -48,8 +59,13 @@ impl Worktree {
             .as_ref()
             .filter(|f| f.on == crate::findings::Scope::Changed)
             .map(|_| self.lines.digest(|p| check.reads(p)));
-        self.hasher
-            .inputs(&self.git.root, check, &self.files, scope.as_deref())
+        self.hasher.inputs(
+            &self.git.root,
+            check,
+            self.shell.as_deref(),
+            &self.files,
+            scope.as_deref(),
+        )
     }
 }
 

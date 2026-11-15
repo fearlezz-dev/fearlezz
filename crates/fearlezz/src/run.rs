@@ -30,6 +30,8 @@ pub(crate) const BASE_ENV: [&str; 11] = [
 
 pub(crate) struct Where<'a> {
     pub root: &'a Path,
+    /// The shell of the `[env]` the checkout at `root` runs its commands in.
+    pub shell: Option<&'a str>,
     pub tree: &'a str,
     pub journal: &'a str,
     pub stage: &'a str,
@@ -133,7 +135,7 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
         _ => out.try_clone()?,
     };
     // Inside a shell the command travels in a variable, so no quoting can break it.
-    let script = match &check.shell {
+    let script = match at.shell {
         Some(shell) => format!("{shell} sh -c \"$FEARLEZZ_RUN\""),
         None => check.run.clone(),
     };

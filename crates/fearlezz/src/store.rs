@@ -136,11 +136,13 @@ pub(crate) struct Hasher {
 }
 
 impl Hasher {
-    /// `changed_lines` is the digest of the lines a findings check is judged on, if any.
+    /// `changed_lines` is the digest of the lines a findings check is judged on, if any;
+    /// `shell` is the shell of the `[env]` the checkout at `root` runs its commands in.
     pub(crate) fn inputs(
         &mut self,
         root: &Path,
         check: &Check,
+        shell: Option<&str>,
         files: &[String],
         changed_lines: Option<&str>,
     ) -> Result<Inputs> {
@@ -176,7 +178,7 @@ impl Hasher {
         if let Some(pictures) = check.pictures.taken() {
             parts.insert("(pictures)".into(), definition(&pictures));
         }
-        if let Some(shell) = &check.shell {
+        if let Some(shell) = shell.filter(|_| check.builtin.is_none()) {
             parts.insert("(shell)".into(), sha256(shell.as_bytes()));
         }
         if let Some(services) = &check.services {

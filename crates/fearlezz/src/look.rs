@@ -61,7 +61,8 @@ pub(crate) struct Base {
     pub commit: String,
     pub wt: Worktree,
     /// The base commit's own `[env]`: its code ran in that environment, so its checkout is
-    /// prepared and its services run by it, never by the change's.
+    /// prepared, its services run and its checks run inside its shell by it, never by the
+    /// change's.
     env: Env,
     prepared: bool,
     /// Keeps other commands from removing the worktree while this one uses it.
@@ -78,7 +79,7 @@ impl Base {
         } else {
             Env::default()
         };
-        let wt = Worktree::read(base, config)?;
+        let wt = Worktree::read_in(base, config, &env)?;
         Ok(Base {
             commit,
             wt,
@@ -90,7 +91,7 @@ impl Base {
 
     /// Reads the worktree again after its files changed.
     pub(crate) fn reread(&mut self, config: &Config) -> Result<()> {
-        self.wt = Worktree::read(self.wt.git.clone(), config)?;
+        self.wt = Worktree::read_in(self.wt.git.clone(), config, &self.env)?;
         Ok(())
     }
 }
@@ -288,7 +289,7 @@ fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf 
 }
 
 /// Runs a check on the base checkout: prepared like any checkout, with its own services
-/// for this one run, both by the base commit's own `[env]`.
+/// for this one run and inside its shell, all by the base commit's own `[env]`.
 pub(crate) fn run_on_base(
     store: &Store,
     check: &Check,
@@ -316,6 +317,7 @@ pub(crate) fn run_on_base(
     }
     let at = run::Where {
         root: &root,
+        shell: base.wt.shell.as_deref(),
         tree: &base.wt.tree,
         journal: BASE_JOURNAL,
         stage,
