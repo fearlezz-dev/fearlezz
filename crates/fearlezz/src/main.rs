@@ -934,7 +934,8 @@ impl Report {
     /// proof host with it, and writes the job summary GitHub Actions names, when it names one.
     /// Before it judges, a CI run the host took asks it whether an admin accepted exactly what
     /// the change weakens at this head; a host that does not answer means not accepted. A
-    /// local run never asks. The gate it answers says where the weakening got past, or can.
+    /// local run never asks. The gate it answers says where the weakening got past, or can: a
+    /// host that failed the ask or done holds no run an accept can reach.
     fn finish(mut self, floor: &floor::Floor) -> Result<floor::Gate> {
         use std::io::Write as _;
         self.proof.weakened.clone_from(&floor.weakened);
@@ -964,19 +965,21 @@ impl Report {
         if let Some(dir) = &bundle {
             self.stream_step(|s| s.done(dir));
         }
+        let gate = match self.proof.accepted.clone() {
+            Some(accept) => floor::Gate::Accepted(accept),
+            None if hosted && self.stream.is_some() => floor::Gate::Host,
+            None if hosted => floor::Gate::Unasked,
+            None => floor::Gate::Job,
+        };
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY").filter(|_| self.ci) {
-            let summary = action::summary(&self.proof, self.page.as_deref())?;
+            let summary = action::summary(&self.proof, self.page.as_deref(), &gate)?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(Path::new(&path))?
                 .write_all(summary.as_bytes())?;
         }
-        Ok(match self.proof.accepted {
-            Some(accept) => floor::Gate::Accepted(accept),
-            None if hosted => floor::Gate::Host,
-            None => floor::Gate::Job,
-        })
+        Ok(gate)
     }
 }
 

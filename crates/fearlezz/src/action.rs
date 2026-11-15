@@ -119,8 +119,14 @@ impl Workflow {
 /// The job summary of a proof: whether the commit is proven, what keeps it from being proven
 /// and what to do, what a reader should know, the changed pictures for a person to review on
 /// the pull request, every check, and the end of each failing output. `page` is the proof
-/// host's page of the work, when the host opened the run.
-pub(crate) fn summary(proof: &Proof, page: Option<&str>) -> Result<String, std::fmt::Error> {
+/// host's page of the work, when the host opened the run, and `gate` where what the change
+/// weakens got past, or can.
+pub(crate) fn summary(
+    proof: &Proof,
+    page: Option<&str>,
+    gate: &crate::floor::Gate,
+) -> Result<String, std::fmt::Error> {
+    use crate::floor::Gate;
     let mut text = String::new();
     let blockers = proof.blockers();
     let ran = proof.ran_here().count();
@@ -159,7 +165,8 @@ pub(crate) fn summary(proof: &Proof, page: Option<&str>) -> Result<String, std::
         writeln!(text)?;
     }
     match (&proof.accepted, page) {
-        (Some(accept), _) if !proof.weakened.is_empty() => {
+        _ if proof.weakened.is_empty() => {}
+        (Some(accept), _) => {
             writeln!(
                 text,
                 "What the change weakens was accepted by {} on the proof page:\n",
@@ -170,12 +177,16 @@ pub(crate) fn summary(proof: &Proof, page: Option<&str>) -> Result<String, std::
             }
             writeln!(text)?;
         }
-        (None, Some(url)) if !proof.weakened.is_empty() => writeln!(
+        (None, Some(_)) if matches!(gate, Gate::Unasked) => writeln!(
+            text,
+            "The proof host could not be asked, so what it weakens fails as without a host.\n"
+        )?,
+        (None, Some(url)) => writeln!(
             text,
             "An admin can accept what it weakens on [the proof page]({url}), which runs this \
              job again.\n"
         )?,
-        _ => {}
+        (None, None) => {}
     }
     for note in proof.notes() {
         writeln!(text, "{note}\n")?;

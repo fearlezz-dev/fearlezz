@@ -17,6 +17,9 @@ pub(crate) enum Gate {
     Job,
     /// The proof host took the run: an admin's accept on its page runs the job again.
     Host,
+    /// The proof host took the run but could not be asked, or did not get its end, so no
+    /// accept can reach it: the job is the gate, as without a host.
+    Unasked,
     /// An admin accepted exactly this on the proof page.
     Accepted(Accept),
 }
@@ -69,6 +72,10 @@ impl Floor {
                                job again"
                     .into(),
                 Gate::Job => format!("  fix: keep the proof the base branch requires; {PAST}"),
+                Gate::Unasked => format!(
+                    "  fix: the proof host could not be asked, so it fails as without a host: \
+                     keep the proof the base branch requires; {PAST}"
+                ),
             });
         }
         lines

@@ -427,6 +427,36 @@ fn an_accept_of_other_weakenings_or_another_head_fails() {
 }
 
 #[test]
+fn a_weakening_the_host_could_not_be_asked_about_fails_as_without_a_host() {
+    // The ask fails, so the host never gets done and no accept can reach this run: the run
+    // says so, and gives the fix it gives without a host.
+    let host = FakeHost::start();
+    let repo = weakening(&host);
+    host.state
+        .lock()
+        .unwrap()
+        .broken
+        .insert("/api/v2/runs/r1/weakenings".into());
+    let (out, text) = ci(&repo, &host.token_env());
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        !out.stdout.contains("accepts it on the proof page"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains(
+            "the proof host could not be asked, so it fails as without a host: keep the proof \
+             the base branch requires; when it must change, a person with admin rights"
+        ),
+        "{}",
+        out.stdout
+    );
+    assert!(!text.contains("accept what it weakens on"), "{text}");
+    assert!(text.contains("The proof host could not be asked"), "{text}");
+}
+
+#[test]
 fn a_weakening_fails_the_proof_when_the_host_cannot_say_it_was_accepted() {
     // Fail safe: a host that cannot be reached or refuses means not accepted.
     for broken in [
