@@ -71,7 +71,8 @@ in
         set -euo pipefail
         cd "$DEVENV_ROOT/ee/host"
         wrangler d1 migrations apply DB --remote
-        wrangler deploy
+        # HOST_FEATURES builds in the tests' routes (ee/host/Cargo.toml); a deploy never has them.
+        env -u HOST_FEATURES wrangler deploy
       '';
     };
   };
