@@ -2,7 +2,7 @@
 // later event applied in turn. Events the snapshot already holds (by sequence number) are
 // dropped, so a page opened while a run goes misses nothing and counts nothing twice.
 
-import type { Change, Check, Live, Ran, Run, RunCheck, Snapshot } from "./proof";
+import type { Change, Check, Live, Look, Ran, Run, RunCheck, Snapshot } from "./proof";
 
 /** A check as a person reads it: not started yet, running, or how it came out. */
 export type CheckState = "planned" | "running" | Ran;
@@ -34,19 +34,25 @@ function changeRun(run: Run, change: Change): Run {
       return change.run;
     case "started":
       return { ...run, checks: upsert(run.checks, change.check, { started: change.at }) };
-    case "finished":
-      return { ...run, checks: withEntry(run.checks, change.check) };
+    case "finished": {
+      const checks = withEntry(run.checks, change.check);
+      return { ...run, checks: change.look ? withLook(checks, change.look) : checks };
+    }
     case "done":
       return {
         ...run,
         state: "done",
-        checks: change.checks.reduce(withEntry, run.checks),
+        checks: change.looks.reduce(withLook, change.checks.reduce(withEntry, run.checks)),
       };
   }
 }
 
 function withEntry(checks: RunCheck[], entry: Check): RunCheck[] {
   return upsert(checks, entry.id, { entry });
+}
+
+function withLook(checks: RunCheck[], look: Look): RunCheck[] {
+  return upsert(checks, look.check, { look });
 }
 
 /** The checks with `id` changed by `fields`, or added at the end when the run did not plan it. */

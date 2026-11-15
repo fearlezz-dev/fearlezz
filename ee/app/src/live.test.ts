@@ -53,7 +53,7 @@ describe("apply", () => {
     });
     expect(opened.runs.map((r) => r.id)).toEqual(["r2", "r1"]);
     expect(opened.work.pull?.number).toBe(7);
-    const done = apply(opened, 5, "r2", { kind: "done", checks: [passed("fmt"), passed("tests")] });
+    const done = apply(opened, 5, "r2", { kind: "done", checks: [passed("fmt"), passed("tests")], looks: [] });
     expect(done.runs[0]!.state).toBe("done");
     expect(done.runs[0]!.checks.map(stateOf)).toEqual(["passed", "passed"]);
     expect(done.runs[1]!.state).toBe("running");

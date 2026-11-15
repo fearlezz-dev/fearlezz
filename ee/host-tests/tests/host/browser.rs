@@ -157,6 +157,38 @@ impl Browser {
         result["result"]["value"].clone()
     }
 
+    /// Presses `key` (one character) on the page, as a person on a keyboard does.
+    pub fn press(&mut self, key: &str) {
+        for kind in ["keyDown", "keyUp"] {
+            let mut params = json!({"type": kind, "key": key});
+            if kind == "keyDown" {
+                params["text"] = json!(key);
+            }
+            self.send("Input.dispatchKeyEvent", params, true);
+        }
+    }
+
+    /// Shows the page as a screen `width` wide and `height` high, a phone's when `mobile`, in
+    /// the dark scheme when `dark`.
+    pub fn view(&mut self, width: u32, height: u32, mobile: bool, dark: bool) {
+        let metrics =
+            json!({"width": width, "height": height, "deviceScaleFactor": 2, "mobile": mobile});
+        self.send("Emulation.setDeviceMetricsOverride", metrics, true);
+        let scheme = if dark { "dark" } else { "light" };
+        let media = json!({"features": [{"name": "prefers-color-scheme", "value": scheme}]});
+        self.send("Emulation.setEmulatedMedia", media, true);
+    }
+
+    /// The whole page as a PNG.
+    pub fn screenshot(&mut self) -> Vec<u8> {
+        use base64::Engine as _;
+        let params = json!({"format": "png", "captureBeyondViewport": true});
+        let shot = self.send("Page.captureScreenshot", params, true);
+        base64::engine::general_purpose::STANDARD
+            .decode(shot["data"].as_str().unwrap())
+            .unwrap()
+    }
+
     /// Waits until `script` gives `true` in the page, for at most 20 seconds.
     pub fn wait_for(&mut self, script: &str) {
         let started = Instant::now();

@@ -10,6 +10,8 @@
 mod browser;
 #[path = "host/github.rs"]
 mod github;
+#[path = "host/media.rs"]
+mod media;
 #[path = "host/worker.rs"]
 mod worker;
 
@@ -249,11 +251,36 @@ fn main() {
             a_page_opened_mid_run_shows_the_current_state,
         ),
         ("two_pages_both_update", two_pages_both_update),
+        (
+            "the_page_shows_a_changed_picture_with_its_before_and_after",
+            the_page_shows_a_changed_picture_with_its_before_and_after,
+        ),
+        (
+            "the_compare_modes_switch_by_click_and_by_key",
+            the_compare_modes_switch_by_click_and_by_key,
+        ),
+        (
+            "a_film_shows_its_lanes_on_one_clock",
+            a_film_shows_its_lanes_on_one_clock,
+        ),
+        (
+            "a_flaky_picture_is_shown_and_marked",
+            a_flaky_picture_is_shown_and_marked,
+        ),
+        (
+            "a_look_that_arrives_shows_without_a_reload",
+            a_look_that_arrives_shows_without_a_reload,
+        ),
+        (
+            "pictures_group_by_the_parts_of_their_names",
+            pictures_group_by_the_parts_of_their_names,
+        ),
     ];
-    let trials: Vec<Trial> = tests
+    let mut trials: Vec<Trial> = tests
         .iter()
         .map(|&(name, test)| Trial::test(name, move || run(test)))
         .collect();
+    trials.push(Trial::test("pictures", || run(pictures)).with_ignored_flag(true));
     let conclusion = libtest_mimic::run(&args, trials);
     if let Some(world) = WORLD.get() {
         if conclusion.has_failed() {
@@ -1230,6 +1257,355 @@ fn two_pages_both_update() {
             browser.eval("document.querySelectorAll('section.run').length"),
             json!(2)
         );
+    }
+}
+
+// Pictures on the page, in a browser.
+
+/// A look of check `screens`: two changed stills of a card, a new one, a flaky one, one that
+/// stayed the same, and a changed film, with the files they name.
+struct Shots {
+    look: Value,
+    files: Vec<(String, Vec<u8>)>,
+}
+
+static SHOTS: OnceLock<Shots> = OnceLock::new();
+
+fn shots() -> &'static Shots {
+    SHOTS.get_or_init(|| {
+        let green = "0x2f9e6e";
+        let blue = "0x3366d6";
+        let mut files = Vec::new();
+        let mut file = |path: &str, bytes: Vec<u8>| -> Value {
+            files.push((format!("looks/screens/{path}"), bytes));
+            json!(format!("looks/screens/{path}"))
+        };
+        let changed_still = |area: [u32; 4]| {
+            json!({
+                "verdict": "changed", "still": true,
+                "size_before": [640, 400], "size_after": [640, 400],
+                "total_before": 0.0, "total_after": 0.0, "max_shift": 0.0, "max_shift_at": null,
+                "states_before": 1, "states_after": 1,
+                "moments": [{"before": [0.0, 0.0], "after": [0.0, 0.0], "box": area, "px": 4000}],
+                "pairs": [],
+            })
+        };
+        let mut items = Vec::new();
+        for theme in ["light", "dark"] {
+            let name = format!("card/{theme}.png");
+            items.push(json!({
+                "name": name, "kind": "still", "change": "changed",
+                "summary": "4000 pixels differ",
+                "before": file(&format!("before/{name}"), media::still(&media::card(160, green))),
+                "after": file(&format!("after/{name}"), media::still(&media::card(96, green))),
+                "comparison": changed_still([72, 280, 232, 328]),
+            }));
+        }
+        items.push(json!({
+            "name": "settings/light.png", "kind": "still", "change": "new", "summary": "new",
+            "before": null,
+            "after": file("after/settings/light.png", media::still(&media::card(200, blue))),
+            "comparison": null,
+        }));
+        items.push(json!({
+            "name": "menu/light.png", "kind": "still", "change": "changed", "flaky": true,
+            "summary": "a clock in the corner",
+            "before": file("before/menu/light.png", media::still(&media::card(120, blue))),
+            "after": file("after/menu/light.png", media::still(&media::card(124, blue))),
+            "comparison": changed_still([72, 280, 196, 328]),
+        }));
+        let about = media::still(&media::card(140, green));
+        items.push(json!({
+            "name": "about/light.png", "kind": "still", "change": "same", "summary": "same",
+            "before": file("before/about/light.png", about.clone()),
+            "after": file("after/about/light.png", about),
+            "comparison": null,
+        }));
+        let area = [72, 280, 292, 328];
+        let pair = |state: usize, before_at: f64, after_at: f64, px: usize| {
+            let boxes = if px > 0 { json!([area]) } else { json!([]) };
+            json!({
+                "before": state, "after": state, "before_frame": 0, "after_frame": 0,
+                "before_at": before_at, "after_at": after_at, "px": px, "boxes": boxes,
+            })
+        };
+        items.push(json!({
+            "name": "checkout.webm", "kind": "film", "change": "changed",
+            "summary": "changes at 1.00 s",
+            "before": file("before/checkout.webm", media::film(&[
+                (1.0, media::card(160, green)),
+                (1.0, media::card(160, blue)),
+                (1.0, media::card(160, green)),
+            ])),
+            "after": file("after/checkout.webm", media::film(&[
+                (1.0, media::card(160, green)),
+                (1.4, media::card(220, blue)),
+                (1.0, media::card(220, green)),
+            ])),
+            "comparison": {
+                "verdict": "changed", "still": false,
+                "size_before": [640, 400], "size_after": [640, 400],
+                "total_before": 3.0, "total_after": 3.4, "max_shift": 0.4, "max_shift_at": 2.0,
+                "states_before": 3, "states_after": 3,
+                "moments": [{"before": [1.0, 3.0], "after": [1.0, 3.4], "box": area, "px": 2880}],
+                "pairs": [pair(0, 0.0, 0.0, 0), pair(1, 1.0, 1.0, 2880), pair(2, 2.0, 2.4, 2880)],
+            },
+        }));
+        Shots {
+            look: look_of("screens", &items),
+            files,
+        }
+    })
+}
+
+/// A run of `branch` whose `screens` check ended with the look of `shots`, all its files sent.
+fn run_with_pictures(job: &Job, run: &str) {
+    let shots = shots();
+    let files: Vec<(&str, &[u8])> = shots
+        .files
+        .iter()
+        .map(|(p, b)| (p.as_str(), b.as_slice()))
+        .collect();
+    let answer = job.finished_with_look(run, &entry("screens", "passed"), &files, &shots.look);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    for (_, bytes) in &files {
+        job.send(bytes);
+    }
+}
+
+/// Opens the page of a work whose run shows the pictures of `shots`.
+fn page_with_pictures(branch: &str) -> browser::Browser {
+    let job = Job::push("owner/repo", branch);
+    let run = job.open(&["screens"]);
+    run_with_pictures(&job, &run.id);
+    let mut browser = browser::Browser::start();
+    browser.open(&format!("{}/owner/repo/work/{branch}", world().worker.url));
+    browser.wait_for("!!document.querySelector('[data-stage]')");
+    browser
+}
+
+/// Whether the stage shows `side` of the current picture, loaded from the files origin.
+fn loaded(tag: &str, side: &str) -> String {
+    let files = &world().worker.files;
+    let ready = if tag == "img" {
+        "m.complete && m.naturalWidth > 0"
+    } else {
+        "m.readyState >= 1"
+    };
+    format!(
+        r#"[...document.querySelectorAll('[data-stage] {tag}[data-side="{side}"]')].some(m => m.src.startsWith("{files}/") && {ready})"#
+    )
+}
+
+fn current() -> &'static str {
+    "document.querySelector('[data-stage]').dataset.key"
+}
+
+fn the_page_shows_a_changed_picture_with_its_before_and_after() {
+    let mut browser = page_with_pictures("feat/pictures");
+    // The first changed picture is open, its two sides loaded from the files origin.
+    assert_eq!(browser.eval(current()), json!("screens/card/light.png"));
+    browser.wait_for(&loaded("img", "before"));
+    browser.wait_for(&loaded("img", "after"));
+    // Its outline of where it differs sits on the picture.
+    assert_eq!(
+        browser.eval("document.querySelectorAll('[data-stage] .mark').length > 0"),
+        json!(true)
+    );
+    // A new picture has only its after.
+    browser
+        .eval(r#"document.querySelector('[data-picture="screens/settings/light.png"]').click()"#);
+    browser.wait_for(&loaded("img", "after"));
+    assert_eq!(
+        browser.eval(r#"document.querySelectorAll('[data-stage] [data-side="before"]').length"#),
+        json!(0)
+    );
+    // The counts say what there is, and one filters to its kind.
+    assert_eq!(
+        browser.eval(r#"document.querySelector('[data-filter="changed"] b').textContent"#),
+        json!("4")
+    );
+    browser.eval(r#"document.querySelector('[data-filter="new"]').click()"#);
+    browser.wait_for("document.querySelectorAll('[data-picture]').length === 1");
+    // What stayed the same is there, folded.
+    browser.eval(r#"document.querySelector('[data-filter="new"]').click()"#);
+    browser.wait_for(r#"!!document.querySelector('[data-group-key="same"]')"#);
+    assert_eq!(
+        browser.eval(r#"document.querySelector('[data-group-key="same"]').open"#),
+        json!(false)
+    );
+}
+
+fn the_compare_modes_switch_by_click_and_by_key() {
+    let mut browser = page_with_pictures("feat/modes");
+    let mode = "document.querySelector('[data-stage]').dataset.mode";
+    assert_eq!(browser.eval(mode), json!("side"));
+    browser.eval(r#"document.querySelector('button[data-mode="slider"]').click()"#);
+    browser.wait_for(&format!(r#"{mode} === "slider""#));
+    assert_eq!(
+        browser.eval(
+            r#"document.querySelector('button[data-mode="slider"]').getAttribute('aria-pressed')"#
+        ),
+        json!("true")
+    );
+    for (key, want) in [("3", "onion"), ("4", "diff"), ("5", "blink"), ("1", "side")] {
+        browser.press(key);
+        browser.wait_for(&format!(r#"{mode} === "{want}""#));
+    }
+    // j and k step between pictures, in the order shown.
+    browser.press("j");
+    browser.wait_for(&format!(r#"{} === "screens/card/dark.png""#, current()));
+    browser.press("k");
+    browser.wait_for(&format!(r#"{} === "screens/card/light.png""#, current()));
+    // The mode stays as the person moves on.
+    browser.press("2");
+    browser.press("j");
+    browser.wait_for(&format!(r#"{} === "screens/card/dark.png""#, current()));
+    assert_eq!(browser.eval(mode), json!("slider"));
+}
+
+fn a_film_shows_its_lanes_on_one_clock() {
+    let mut browser = page_with_pictures("feat/film");
+    browser.eval(r#"document.querySelector('[data-picture="screens/checkout.webm"]').click()"#);
+    browser.wait_for(&loaded("video", "before"));
+    browser.wait_for(&loaded("video", "after"));
+    let lane = |side: &str| {
+        format!(
+            r#"[...document.querySelectorAll('[data-lane="{side}"] i')].map(i => i.dataset.differs)"#
+        )
+    };
+    // Three states each: the first the same, the other two differing.
+    assert_eq!(
+        browser.eval(&lane("before")),
+        json!(["false", "true", "true"])
+    );
+    assert_eq!(
+        browser.eval(&lane("after")),
+        json!(["false", "true", "true"])
+    );
+    // A jump to where they differ moves both films there.
+    browser.eval(r#"document.querySelector('[data-seek]').click()"#);
+    browser.wait_for(
+        r#"[...document.querySelectorAll('[data-stage] video')].every(v => Math.abs(v.currentTime - 1) < 0.05)"#,
+    );
+    assert_eq!(
+        browser.eval("document.querySelector('[data-clock]').textContent.trim()"),
+        json!("1.00 s")
+    );
+}
+
+fn a_flaky_picture_is_shown_and_marked() {
+    let mut browser = page_with_pictures("feat/flaky");
+    let flaky = r#"document.querySelector('[data-picture="screens/menu/light.png"]')"#;
+    assert_eq!(
+        browser.eval(&format!("{flaky}.dataset.flaky")),
+        json!("true")
+    );
+    // After the other changed pictures.
+    assert_eq!(
+        browser.eval(
+            r#"[...document.querySelectorAll('[data-group-key="changed"] [data-picture]')].map(b => b.dataset.picture)"#
+        ),
+        json!([
+            "screens/card/light.png",
+            "screens/card/dark.png",
+            "screens/checkout.webm",
+            "screens/menu/light.png"
+        ])
+    );
+    browser.eval(&format!("{flaky}.click()"));
+    browser.wait_for(r#"document.querySelector('[data-stage]').dataset.flaky === "true""#);
+    assert_eq!(
+        browser.eval("document.querySelector('[data-stage] [data-flaky-note]') !== null"),
+        json!(true)
+    );
+}
+
+fn a_look_that_arrives_shows_without_a_reload() {
+    let job = Job::push("owner/repo", "feat/arrives");
+    let run = job.open(&["fmt", "screens"]);
+    let mut browser = browser::Browser::start();
+    browser.open(&format!(
+        "{}/owner/repo/work/feat/arrives",
+        world().worker.url
+    ));
+    browser.wait_for(&shows("screens", "planned"));
+    browser.eval("window.stayed = true");
+    run_with_pictures(&job, &run.id);
+    browser.wait_for(r#"!!document.querySelector('[data-picture="screens/card/light.png"]')"#);
+    browser.wait_for(&loaded("img", "after"));
+    assert_eq!(
+        browser.eval("window.stayed === true"),
+        json!(true),
+        "no reload"
+    );
+}
+
+fn pictures_group_by_the_parts_of_their_names() {
+    let mut browser = page_with_pictures("feat/groups");
+    let groups =
+        "[...document.querySelectorAll('[data-group-label]')].map(g => g.dataset.groupLabel)";
+    assert_eq!(browser.eval(groups), json!(["Changed", "New", "Unchanged"]));
+    browser.eval(r#"document.querySelector('button[data-group="theme"]').click()"#);
+    browser.wait_for(&format!(r#"{groups}[0] === "light""#));
+    assert_eq!(
+        browser.eval(groups),
+        json!(["light", "dark", "Other", "Unchanged"])
+    );
+    browser.eval(r#"document.querySelector('button[data-group="screen"]').click()"#);
+    browser.wait_for(&format!(r#"{groups}[0] === "card""#));
+    assert_eq!(
+        browser.eval(groups),
+        json!(["card", "checkout", "menu", "settings", "Unchanged"])
+    );
+}
+
+/// Not a test of behaviour: pictures of the page with a changed still, a new still and a
+/// changed film, light and dark and at phone width, written to `ee/target/tmp` for a person
+/// to look at. `cargo test --manifest-path ee/Cargo.toml --test host -- --ignored pictures`.
+fn pictures() {
+    let mut browser = page_with_pictures("feat/shots");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let shoot = |browser: &mut browser::Browser, name: &str| {
+        // Motion settles before the picture.
+        std::thread::sleep(Duration::from_millis(900));
+        let path = dir.join(format!("page-{name}.png"));
+        std::fs::write(&path, browser.screenshot()).unwrap();
+        eprintln!("{}", path.display());
+    };
+    for (view, (width, height, mobile)) in
+        [("wide", (1280, 900, false)), ("phone", (390, 844, true))]
+    {
+        for dark in [false, true] {
+            browser.view(width, height, mobile, dark);
+            let scheme = if dark { "dark" } else { "light" };
+            browser.eval(
+                r#"document.querySelector('[data-picture="screens/card/light.png"]').click()"#,
+            );
+            browser.wait_for(&loaded("img", "after"));
+            shoot(&mut browser, &format!("{view}-{scheme}-still"));
+            browser.eval(
+                r#"document.querySelector('[data-picture="screens/settings/light.png"]').click()"#,
+            );
+            browser.wait_for(&loaded("img", "after"));
+            shoot(&mut browser, &format!("{view}-{scheme}-new"));
+            browser.eval(
+                r#"document.querySelector('[data-picture="screens/checkout.webm"]').click()"#,
+            );
+            browser.wait_for(&loaded("video", "after"));
+            browser.eval(r#"document.querySelector('[data-seek]').click()"#);
+            shoot(&mut browser, &format!("{view}-{scheme}-film"));
+        }
+    }
+    browser.view(1280, 900, false, false);
+    for mode in ["slider", "onion", "diff"] {
+        browser
+            .eval(r#"document.querySelector('[data-picture="screens/card/light.png"]').click()"#);
+        browser.eval(&format!(
+            r#"document.querySelector('button[data-mode="{mode}"]').click()"#
+        ));
+        browser.wait_for(&loaded("img", "after"));
+        shoot(&mut browser, &format!("wide-light-{mode}"));
     }
 }
 
