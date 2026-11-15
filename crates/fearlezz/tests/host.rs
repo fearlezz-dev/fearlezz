@@ -57,6 +57,9 @@ fn ci(repo: &Repo, env: &[(String, String)]) -> (common::Output, String) {
     all.push(("GITHUB_REPOSITORY", "owner/repo"));
     all.push(("GITHUB_REF", "refs/heads/feat/x"));
     all.push(("GITHUB_JOB", "proof"));
+    all.push(("GITHUB_RUN_ID", "4242"));
+    all.push(("GITHUB_RUN_ATTEMPT", "2"));
+    all.push(("RUNNER_NAME", "GitHub Actions 7"));
     all.push(("GITHUB_STEP_SUMMARY", &path));
     let out = repo.fz_env(&["run", "--ci"], &all);
     let text = std::fs::read_to_string(&summary)
@@ -112,6 +115,14 @@ fn the_run_streams_to_the_host_while_its_checks_run() {
     assert_eq!(open["checks"], json!(["lint", "tests"]), "{open:#}");
     assert_eq!(open["source"]["kind"], "ci", "{open:#}");
     assert_eq!(open["source"]["job"], "proof", "{open:#}");
+    // Every leg of a matrix has the same job id; the run, its attempt and the runner that
+    // took the leg tell them apart.
+    assert_eq!(open["source"]["run_id"], 4242, "{open:#}");
+    assert_eq!(open["source"]["run_attempt"], 2, "{open:#}");
+    assert_eq!(
+        open["source"]["runner_name"], "GitHub Actions 7",
+        "{open:#}"
+    );
     assert_eq!(
         open["head"].as_str().unwrap().len(),
         40,

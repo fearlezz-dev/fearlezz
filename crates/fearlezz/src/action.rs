@@ -31,10 +31,32 @@ pub(crate) struct Workflow {
     pub run_url: Option<String>,
     /// The job's id in its workflow.
     pub job: Option<String>,
+    /// Which job this is exactly: its workflow run, the run's attempt and the runner that took
+    /// it, which tell the legs of a matrix apart.
+    pub ci_job: Option<CiJob>,
     /// The ref the run is for, such as `refs/heads/main` or `refs/pull/24/merge`.
     git_ref: Option<String>,
     /// The event, Null without one or when its file cannot be read.
     event: Value,
+}
+
+/// One job of one attempt of a workflow run, as GitHub names it in every job.
+#[derive(Clone)]
+pub(crate) struct CiJob {
+    pub run_id: u64,
+    pub run_attempt: u32,
+    pub runner_name: String,
+}
+
+impl CiJob {
+    /// The job `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and `RUNNER_NAME` name, when all are set.
+    fn read(var: &dyn Fn(&str) -> Option<String>) -> Option<CiJob> {
+        Some(CiJob {
+            run_id: var("GITHUB_RUN_ID")?.parse().ok()?,
+            run_attempt: var("GITHUB_RUN_ATTEMPT")?.parse().ok()?,
+            runner_name: var("RUNNER_NAME")?,
+        })
+    }
 }
 
 impl Workflow {
@@ -57,6 +79,7 @@ impl Workflow {
             repository,
             run_url,
             job: var("GITHUB_JOB"),
+            ci_job: CiJob::read(&var),
             git_ref: var("GITHUB_REF"),
             event,
         }

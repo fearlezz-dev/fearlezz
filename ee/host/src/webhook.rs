@@ -56,6 +56,9 @@ struct JobEvent {
 struct WorkflowJob {
     id: u64,
     run_id: u64,
+    run_attempt: u32,
+    /// The runner that took it; none while it is queued.
+    runner_name: Option<String>,
     name: String,
     head_sha: String,
     head_branch: Option<String>,
@@ -198,7 +201,7 @@ async fn workflow_job(env: &Env, config: &Config, event: JobEvent) -> worker::Re
     Ok(())
 }
 
-/// Closes, as cancelled, each run of `repo` still running that the completed `job` held.
+/// Closes, as cancelled, the run of `repo` still running that the completed `job` was.
 async fn cancel(env: &Env, config: &Config, repo: &str, job: &WorkflowJob) -> worker::Result<()> {
     #[derive(Deserialize)]
     struct Row {
@@ -206,25 +209,36 @@ async fn cancel(env: &Env, config: &Config, repo: &str, job: &WorkflowJob) -> wo
         work: String,
         source: String,
     }
+    let Some(runner) = &job.runner_name else {
+        return Ok(());
+    };
     let db = env.d1("DB")?;
     let rows = db
         .prepare(
-            "SELECT r.id, r.work, r.source FROM runs r JOIN works w ON w.id = r.work WHERE w.repo = ?1 AND r.state = 'running'",
+            "SELECT r.id, r.work, r.source FROM runs r JOIN works w ON w.id = r.work \
+             WHERE w.repo = ?1 AND r.state = 'running' AND json_extract(r.source, '$.kind') = 'ci' \
+             AND json_extract(r.source, '$.run_id') = ?2 AND json_extract(r.source, '$.run_attempt') = ?3 \
+             AND json_extract(r.source, '$.runner_name') = ?4",
         )
-        .bind(&[repo.into()])?
+        .bind(&[
+            repo.into(),
+            (job.run_id as f64).into(),
+            f64::from(job.run_attempt).into(),
+            runner.as_str().into(),
+        ])?
         .all()
         .await?
         .results::<Row>()?;
-    let page = format!("/actions/runs/{}", job.run_id);
     for row in rows {
-        let held = match read::<Source>(&row.source)? {
+        let own = match read::<Source>(&row.source)? {
             Source::Ci {
                 job: id,
-                run_url: Some(url),
-            } => url.ends_with(&page) && jobs::runs(&job.name, &id),
-            _ => false,
+                runner_name,
+                ..
+            } => jobs::is(&job.name, Some(runner), &id, &runner_name),
+            Source::Local { .. } => false,
         };
-        if held {
+        if own {
             api::cancel(env, config, &db, &row.id, &row.work, false).await?;
         }
     }

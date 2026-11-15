@@ -16,7 +16,7 @@ const run = (id: string, head: string, key: string): Run => ({
   id,
   head,
   base: "main",
-  source: { kind: "ci", job: "proof" },
+  source: { kind: "ci", job: "proof", run_id: 1, run_attempt: 1, runner_name: "runner" },
   state: "done",
   opened: 1,
   checks: [

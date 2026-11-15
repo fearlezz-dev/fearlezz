@@ -110,6 +110,8 @@ pub struct ActionsJob {
     pub run: u64,
     pub id: u64,
     pub name: String,
+    /// The runner that took it.
+    pub runner: String,
     pub conclusion: String,
 }
 
@@ -251,25 +253,38 @@ impl FakeGitHub {
         state.tokens.retain(|token, _| !token.starts_with(&prefix));
     }
 
-    /// Job `id` named `name` of workflow run `run` ended with `conclusion`.
-    pub fn job_ended(&self, repo: &str, run: u64, id: u64, name: &str, conclusion: &str) {
+    /// Job `id` named `name` of the first attempt of workflow run `run`, which `runner` took,
+    /// ended with `conclusion`.
+    pub fn job_ended(
+        &self,
+        repo: &str,
+        run: u64,
+        id: u64,
+        name: &str,
+        runner: &str,
+        conclusion: &str,
+    ) {
         let mut state = self.state.lock().unwrap();
         state.jobs.push(ActionsJob {
             repo: repo.to_owned(),
             run,
             id,
             name: name.to_owned(),
+            runner: runner.to_owned(),
             conclusion: conclusion.to_owned(),
         });
     }
 
-    /// The jobs of `repo` the app asked to run again, in order, each with the token that asked.
-    pub fn reruns(&self, repo: &str) -> Vec<(u64, String)> {
+    /// The jobs of workflow run `run` of `repo` the app asked to run again, in order, each with
+    /// the token that asked.
+    pub fn reruns(&self, repo: &str, run: u64) -> Vec<(u64, String)> {
         let state = self.state.lock().unwrap();
         state
             .reruns
             .iter()
-            .filter(|(r, _, _)| r == repo)
+            .filter(|(r, id, _)| {
+                r == repo && state.jobs.iter().any(|j| j.id == *id && j.run == run)
+            })
             .map(|(_, id, token)| (*id, token.clone()))
             .collect()
     }
@@ -459,7 +474,20 @@ fn answer(
                 None => (404, json!({"message": "Not Found"})),
             }
         }
-        ("GET", ["repos", owner, name, "actions", "runs", run, "jobs"]) => {
+        (
+            "GET",
+            [
+                "repos",
+                owner,
+                name,
+                "actions",
+                "runs",
+                run,
+                "attempts",
+                "1",
+                "jobs",
+            ],
+        ) => {
             let repo = format!("{owner}/{name}");
             if !writes_as_app(state, &repo, token) {
                 return (
@@ -472,7 +500,7 @@ fn answer(
                 .jobs
                 .iter()
                 .filter(|j| j.repo == repo && j.run == run)
-                .map(|j| json!({"id": j.id, "run_id": j.run, "name": j.name, "status": "completed", "conclusion": j.conclusion}))
+                .map(|j| json!({"id": j.id, "run_id": j.run, "run_attempt": 1, "name": j.name, "runner_name": j.runner, "status": "completed", "conclusion": j.conclusion}))
                 .collect();
             (200, json!({"total_count": jobs.len(), "jobs": jobs}))
         }

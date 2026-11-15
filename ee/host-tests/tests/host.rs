@@ -332,6 +332,10 @@ fn main() {
             a_job_that_ends_without_done_cancels_its_run,
         ),
         (
+            "a_matrix_leg_ending_leaves_its_siblings_running",
+            a_matrix_leg_ending_leaves_its_siblings_running,
+        ),
+        (
             "a_queued_job_shows_as_waiting_for_a_runner",
             a_queued_job_shows_as_waiting_for_a_runner,
         ),
@@ -1924,19 +1928,31 @@ fn pull_request(action: &str, number: u64, branch: &str, head: &str) -> Value {
     })
 }
 
-/// The `workflow_job` webhook of `action` for job `name` of workflow run `run`.
-fn workflow_job(action: &str, run: u64, name: &str, branch: &str, head: &str) -> Value {
+/// The `workflow_job` webhook of `action` for job `name` of the first attempt of workflow run
+/// `run`, on `runner` once one took it.
+fn workflow_job(
+    action: &str,
+    run: u64,
+    name: &str,
+    runner: Option<&str>,
+    branch: &str,
+    head: &str,
+) -> Value {
+    // A job id of its own for each job name of the run.
+    let id = run * 1000 + name.bytes().map(u64::from).sum::<u64>() % 1000;
     json!({
         "action": action,
         "workflow_job": {
-            "id": run * 10,
+            "id": id,
             "run_id": run,
+            "run_attempt": 1,
+            "runner_name": runner,
             "name": name,
             "head_sha": head,
             "head_branch": branch,
             "status": action,
             "conclusion": if action == "completed" { json!("cancelled") } else { Value::Null },
-            "html_url": format!("https://github.com/owner/review/actions/runs/{run}/job/{}", run * 10),
+            "html_url": format!("https://github.com/owner/review/actions/runs/{run}/job/{id}"),
         },
         "repository": {"full_name": "owner/review"},
         "installation": {"id": 6},
@@ -2154,18 +2170,19 @@ fn a_film_verdict_follows_its_changed_states() {
 fn accept_needs_an_admin_and_runs_the_failed_proof_job_again() {
     let head = commit("a106");
     let job = Job::pull("owner/review", 106, "review/accept").at(&head, 1106);
-    // The workflow run's jobs: this proof job failed, a matrix sibling passed, another job
-    // failed for its own reasons.
+    // The workflow run's jobs: this proof job, a matrix leg, failed; a sibling leg passed and
+    // another failed on its own runner; another job failed for its own reasons.
+    let job = job.on("runner-linux");
     let github = &world().github;
-    github.job_ended("owner/review", 1106, 11061, "proof", "failure");
-    github.job_ended(
-        "owner/review",
-        1106,
-        11062,
-        "proof (macos-latest)",
-        "success",
-    );
-    github.job_ended("owner/review", 1106, 11063, "lint", "failure");
+    let jobs = [
+        (11061, "proof (linux)", "runner-linux", "failure"),
+        (11062, "proof (macos-latest)", "runner-macos", "success"),
+        (11063, "lint", "runner-lint", "failure"),
+        (11064, "proof (windows)", "runner-windows", "failure"),
+    ];
+    for (id, name, runner, conclusion) in jobs {
+        github.job_ended("owner/review", 1106, id, name, runner, conclusion);
+    }
     let (look, files) = one_still(b"accept before", b"accept before");
     let mut look = look;
     look["items"][0]["change"] = json!("same");
@@ -2178,7 +2195,7 @@ fn accept_needs_an_admin_and_runs_the_failed_proof_job_again() {
     let answer = say(&run, "accept", Some(&writer), &[], &json!({}));
     assert_eq!(answer.status, 403, "{}", answer.text());
     assert!(answer.text().contains("admin"), "{}", answer.text());
-    assert!(github.reruns("owner/review").is_empty());
+    assert!(github.reruns("owner/review", 1106).is_empty());
     let admin = sign_in("admin-code", "/");
     let answer = say(&run, "accept", Some(&admin), &[], &json!({}));
     assert_eq!(answer.status, 201, "{}", answer.text());
@@ -2186,9 +2203,9 @@ fn accept_needs_an_admin_and_runs_the_failed_proof_job_again() {
     assert_eq!(accept["by"], "admin", "{accept:#}");
     assert_eq!(accept["weakened"], weakenings(), "{accept:#}");
     assert_eq!(
-        github.reruns("owner/review"),
+        github.reruns("owner/review", 1106),
         [(11061, "installation-6".to_owned())],
-        "only the failed proof job runs again, as the app"
+        "only the run's own failed job runs again, as the app"
     );
     let review = review_of(106);
     assert_eq!(review["accept"]["by"], "admin", "{review:#}");
@@ -2227,7 +2244,7 @@ fn a_run_asks_whether_exactly_its_weakenings_of_its_head_are_accepted() {
     let job = Job::pull("owner/review", 114, "review/asks").at(&head, 1114);
     world()
         .github
-        .job_ended("owner/review", 1114, 11141, "proof", "failure");
+        .job_ended("owner/review", 1114, 11141, "proof", RUNNER, "failure");
     let first = job.open(&["tests"]);
     let answer = job.weakenings(&first.id, &weakenings());
     assert_eq!(answer.status, 200, "{}", answer.text());
@@ -2311,7 +2328,7 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
     // summary says it waits for an admin's accept besides the picture.
     world()
         .github
-        .job_ended("owner/review", 1107, 11071, "proof", "failure");
+        .job_ended("owner/review", 1107, 11071, "proof", RUNNER, "failure");
     let (look, files) = one_still(b"flow before", b"flow after");
     let listed: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
     job.finished_with_look(&run.id, &entry("screens", "passed"), &listed, &look);
@@ -2352,7 +2369,11 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
     let answer = say(&run.id, "accept", Some(&admin), &[], &json!({}));
     assert_eq!(answer.status, 201, "{}", answer.text());
     assert_eq!(
-        world().github.reruns("owner/review").last().map(|r| r.0),
+        world()
+            .github
+            .reruns("owner/review", 1107)
+            .last()
+            .map(|r| r.0),
         Some(11071)
     );
     let rerun = job.open(&["screens"]);
@@ -2484,7 +2505,14 @@ fn a_job_that_ends_without_done_cancels_its_run() {
     // Another job of the same workflow run ending leaves it running.
     let answer = webhook(
         "workflow_job",
-        &workflow_job("completed", 1110, "build", "review/cancel", &head),
+        &workflow_job(
+            "completed",
+            1110,
+            "build",
+            Some(RUNNER),
+            "review/cancel",
+            &head,
+        ),
     );
     assert_eq!(answer.status, 202, "{}", answer.text());
     let snapshot = live("/owner/review/pull/110", &[]).json();
@@ -2492,7 +2520,14 @@ fn a_job_that_ends_without_done_cancels_its_run() {
     // Its own job ending without done closes it as cancelled.
     webhook(
         "workflow_job",
-        &workflow_job("completed", 1110, "proof", "review/cancel", &head),
+        &workflow_job(
+            "completed",
+            1110,
+            "proof",
+            Some(RUNNER),
+            "review/cancel",
+            &head,
+        ),
     );
     let snapshot = live("/owner/review/pull/110", &[]).json();
     assert_eq!(snapshot["runs"][0]["state"], "cancelled", "{snapshot:#}");
@@ -2507,6 +2542,51 @@ fn a_job_that_ends_without_done_cancels_its_run() {
     );
 }
 
+fn a_matrix_leg_ending_leaves_its_siblings_running() {
+    let head = commit("a116");
+    let linux = Job::pull("owner/review", 116, "review/matrix")
+        .at(&head, 1116)
+        .on("runner-linux");
+    let macos = linux.on("runner-macos");
+    let (linux_run, macos_run) = (linux.open(&["tests"]), macos.open(&["tests"]));
+    let answer = linux.done(&linux_run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let answer = webhook(
+        "workflow_job",
+        &workflow_job(
+            "completed",
+            1116,
+            "proof (linux)",
+            Some("runner-linux"),
+            "review/matrix",
+            &head,
+        ),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    let state = |id: &str| {
+        let snapshot = live("/owner/review/pull/116", &[]).json();
+        let runs = snapshot["runs"].as_array().unwrap().clone();
+        runs.into_iter().find(|r| r["id"] == id).unwrap()["state"].clone()
+    };
+    assert_eq!(state(&macos_run.id), "running", "its sibling still proves");
+    let answer = macos.started(&macos_run.id, "tests");
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    // The sibling's own job ending without done closes it.
+    webhook(
+        "workflow_job",
+        &workflow_job(
+            "completed",
+            1116,
+            "proof (macos-latest)",
+            Some("runner-macos"),
+            "review/matrix",
+            &head,
+        ),
+    );
+    assert_eq!(state(&macos_run.id), "cancelled");
+    assert_eq!(state(&linux_run.id), "done");
+}
+
 fn a_queued_job_shows_as_waiting_for_a_runner() {
     // The work and its job are known from an earlier run.
     let job = Job::pull("owner/review", 111, "review/queued").at(&commit("a111"), 1111);
@@ -2516,12 +2596,12 @@ fn a_queued_job_shows_as_waiting_for_a_runner() {
     let page = "/owner/review/pull/111";
     webhook(
         "workflow_job",
-        &workflow_job("queued", 2111, "proof", "review/queued", &head),
+        &workflow_job("queued", 2111, "proof", None, "review/queued", &head),
     );
     // A job that never ran Fearlezz is not shown.
     webhook(
         "workflow_job",
-        &workflow_job("queued", 2111, "lint", "review/queued", &head),
+        &workflow_job("queued", 2111, "lint", None, "review/queued", &head),
     );
     let snapshot = live(page, &[]).json();
     let waiting = snapshot["waiting"].as_array().cloned().unwrap_or_default();
@@ -2534,7 +2614,14 @@ fn a_queued_job_shows_as_waiting_for_a_runner() {
     // Once a runner takes it, it no longer waits.
     webhook(
         "workflow_job",
-        &workflow_job("in_progress", 2111, "proof", "review/queued", &head),
+        &workflow_job(
+            "in_progress",
+            2111,
+            "proof",
+            Some(RUNNER),
+            "review/queued",
+            &head,
+        ),
     );
     browser.wait_for(r#"!document.querySelector('[data-waiting="proof"]')"#);
     let snapshot = live(page, &[]).json();
@@ -2750,9 +2837,14 @@ struct Job {
     head: String,
     /// The workflow run it is a job of, as its run page names it.
     workflow_run: u64,
+    /// The runner that took it, which tells the legs of a matrix apart.
+    runner: String,
     /// A developer's CLI token instead of CI's: the run is a local one.
     cli: Option<String>,
 }
+
+/// The runner a job runs on unless a test names another.
+const RUNNER: &str = "GitHub Actions 1";
 
 /// A run the host opened.
 struct Opened {
@@ -2768,6 +2860,7 @@ impl Job {
             pull: Some(number),
             head: HEAD.to_owned(),
             workflow_run: 1,
+            runner: RUNNER.to_owned(),
             cli: None,
         }
     }
@@ -2779,6 +2872,7 @@ impl Job {
             pull: None,
             head: HEAD.to_owned(),
             workflow_run: 1,
+            runner: RUNNER.to_owned(),
             cli: None,
         }
     }
@@ -2797,6 +2891,14 @@ impl Job {
         Job {
             head: head.to_owned(),
             workflow_run,
+            ..self.clone()
+        }
+    }
+
+    /// Another leg of the same matrix job, which `runner` took.
+    fn on(&self, runner: &str) -> Job {
+        Job {
+            runner: runner.to_owned(),
             ..self.clone()
         }
     }
@@ -2845,6 +2947,9 @@ impl Job {
                 "kind": "ci",
                 "job": "proof",
                 "run_url": format!("https://github.com/{}/actions/runs/{}", self.repository, self.workflow_run),
+                "run_id": self.workflow_run,
+                "run_attempt": 1,
+                "runner_name": self.runner,
             },
             "checks": checks,
         });

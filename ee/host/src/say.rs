@@ -345,40 +345,32 @@ pub async fn accept(req: Request, env: &Env, config: &Config, id: &str) -> Answe
     Ok(Response::from_json(&json!({ "accept": accept }))?.with_status(201))
 }
 
-/// Runs the failed proof job of a CI run again, as the app: each failed job of its workflow
-/// run whose name is the run's job, alone or in a matrix.
+/// Runs the failed proof job of a CI run again, as the app: the one job of its workflow run's
+/// attempt that its runner took, as `jobs::is` names it.
 async fn rerun(config: &Config, run: &RunRow) -> worker::Result<()> {
     let Source::Ci {
         job,
-        run_url: Some(url),
+        run_id,
+        run_attempt,
+        runner_name,
+        ..
     } = read::<Source>(&run.source)?
     else {
-        return Err(worker::Error::RustError(
-            "the run names no workflow run".into(),
-        ));
+        return Err(worker::Error::RustError("the run is not a CI run".into()));
     };
-    let workflow_run = url
-        .rsplit_once("/actions/runs/")
-        .and_then(|(_, rest)| rest.split('/').next()?.parse::<u64>().ok())
-        .ok_or_else(|| worker::Error::RustError(format!("{url} names no workflow run")))?;
     let Some(token) = github::installation_token(config, &run.repository).await? else {
         return Err(worker::Error::RustError("the app is not installed".into()));
     };
-    let failed = github::failed_jobs(&token, config, &run.repository, workflow_run).await?;
-    let mine: Vec<u64> = failed
+    let failed = github::failed_jobs(&token, config, &run.repository, run_id, run_attempt).await?;
+    let mine = failed
         .into_iter()
-        .filter(|(_, name)| jobs::runs(name, &job))
-        .map(|(id, _)| id)
-        .collect();
-    if mine.is_empty() {
-        return Err(worker::Error::RustError(format!(
-            "no failed job {job} in workflow run {workflow_run}"
-        )));
-    }
-    for id in mine {
-        github::rerun_job(&token, config, &run.repository, id).await?;
-    }
-    Ok(())
+        .find(|failed| jobs::is(&failed.name, failed.runner.as_deref(), &job, &runner_name))
+        .ok_or_else(|| {
+            worker::Error::RustError(format!(
+                "no failed job {job} on {runner_name} in workflow run {run_id}"
+            ))
+        })?;
+    github::rerun_job(&token, config, &run.repository, mine.id).await
 }
 
 /// `GET /api/v2/viewer/<owner>/<repo>`: who the page is shown to and what they may do there,

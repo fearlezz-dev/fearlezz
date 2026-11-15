@@ -438,13 +438,27 @@ export type RunState = "running" | "done" | "cancelled";
 
 export type Source = { "kind": "ci", 
 /**
- * The job's id in its workflow.
+ * The job's id in its workflow (`GITHUB_JOB`), the same for every leg of a matrix.
  */
 job: string, 
 /**
  * The workflow run's page.
  */
-run_url?: string | null, } | { "kind": "local", 
+run_url?: string | null, 
+/**
+ * The workflow run (`GITHUB_RUN_ID`). With the attempt and the runner it names the
+ * one job a run is, a leg of a matrix among its siblings, as GitHub's `workflow_job`
+ * webhook names it.
+ */
+run_id: number, 
+/**
+ * The workflow run's attempt (`GITHUB_RUN_ATTEMPT`), 1 until it is run again.
+ */
+run_attempt: number, 
+/**
+ * The runner that took the job (`RUNNER_NAME`).
+ */
+runner_name: string, } | { "kind": "local", 
 /**
  * Who ran it: the login of the CLI's sign in, which the host sets from its token.
  */

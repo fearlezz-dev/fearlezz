@@ -202,15 +202,23 @@ pub async fn write(
     }
 }
 
-/// The jobs of workflow run `run` on `repo` that failed, in its latest attempt, as id and name.
+/// An Actions job that failed: its id, its name and the runner that took it.
+pub struct FailedJob {
+    pub id: u64,
+    pub name: String,
+    pub runner: Option<String>,
+}
+
+/// The jobs of attempt `attempt` of workflow run `run` on `repo` that failed.
 pub async fn failed_jobs(
     token: &str,
     config: &Config,
     repo: &str,
     run: u64,
-) -> Result<Vec<(u64, String)>> {
+    attempt: u32,
+) -> Result<Vec<FailedJob>> {
     let url = format!(
-        "{}/repos/{repo}/actions/runs/{run}/jobs?filter=latest&per_page=100",
+        "{}/repos/{repo}/actions/runs/{run}/attempts/{attempt}/jobs?per_page=100",
         config.github_api
     );
     let reply = call(Method::Get, &url, Some(token), None).await?;
@@ -226,7 +234,13 @@ pub async fn failed_jobs(
         .into_iter()
         .flatten()
         .filter(|job| job["conclusion"] == "failure")
-        .filter_map(|job| Some((job["id"].as_u64()?, job["name"].as_str()?.to_owned())))
+        .filter_map(|job| {
+            Some(FailedJob {
+                id: job["id"].as_u64()?,
+                name: job["name"].as_str()?.to_owned(),
+                runner: job["runner_name"].as_str().map(str::to_owned),
+            })
+        })
         .collect())
 }
 

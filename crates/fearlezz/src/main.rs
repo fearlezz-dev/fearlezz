@@ -995,6 +995,13 @@ fn open_run(
         );
         return None;
     };
+    let Some(ci_job) = &workflow.ci_job else {
+        println!(
+            "proof page not sent: the run names no job of a workflow run (GITHUB_RUN_ID, \
+             GITHUB_RUN_ATTEMPT, RUNNER_NAME)"
+        );
+        return None;
+    };
     let open = fearlezz_proof::events::Open {
         repository: repository.clone(),
         branch: branch.to_string(),
@@ -1004,6 +1011,9 @@ fn open_run(
         source: fearlezz_proof::events::Source::Ci {
             job: workflow.job.clone().unwrap_or_default(),
             run_url: workflow.run_url.clone(),
+            run_id: ci_job.run_id,
+            run_attempt: ci_job.run_attempt,
+            runner_name: ci_job.runner_name.clone(),
         },
         checks: targets.iter().map(|c| c.id.clone()).collect(),
     };

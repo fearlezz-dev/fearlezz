@@ -53,7 +53,8 @@ The bodies are the serde types of `crates/fearlezz-proof/src/events.rs`.
 | Call | Does |
 | --- | --- |
 | `GET /api/v2/installed` | `200 {"installed": true}`, or `200 {"installed": false, "install": "<url>"}`. |
-| `POST /api/v2/runs` | Body `Open` (an OIDC token opens only a CI source, a CLI token only a local one with no `pull`, `400` otherwise): `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?}, "checks": ["<id>", ...]}`, the checks it plans in order. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
+| `POST /api/v2/runs` | Body `Open` (an OIDC token opens only a CI source, a CLI token only a local one with no `pull`, `400` otherwise): `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?, "run_id", "run_attempt", "runner_name"}, "checks": ["<id>", ...]}`, the checks it plans in order; a CI source names its job exactly with `GITHUB_JOB`,
+`GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and `RUNNER_NAME`, which tell the legs of a matrix apart. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
 | `POST /api/v2/runs/<run>/checks` | Body `{"started": {"check": "<id>"}}` when a check starts, or `{"finished": {"check": <proof.json check entry>, "files": {"<path>": {"sha256", "size"}}, "look"?: <look>}}` when it ends, with the files it made (its output at `outputs/<id>.log`, its pictures at `looks/<folder>/...`) and, for a check that takes pictures, its look: the pictures compared with the base commit, as in `proof.json` (`400` when the look is of another check). A check the run did not plan joins at the end. `200 {"missing": ["<sha256>", ...]}`: the blobs the host does not hold yet. |
 | `POST /api/v2/runs/<run>/weakenings` | A CI run asks this before it judges what its change weakens. Body `{"weakened": [<weakening>, ...]}`. `200 {"accepted": <accept> \| null}`: the admin's accept of the run's head (`{"head", "weakened", "by", "at"}`) when it covers exactly these weakenings, nothing more or less, else `null`. `409` for a local run. |
 | `PUT /api/v2/blobs/<sha256>` | The bytes of one missing file, with `Content-Length`. Stored by content, per repository, so a file that did not change is sent once. `204`. |
@@ -174,9 +175,10 @@ and GitHub gets it as the check run and the comment.
   write access resolves it.
 - **An accept is per head**, by an admin of the repository, of exactly what a finished CI run
   of it weakens, which failed its proof job. The host keeps it and runs that failed job again
-  as the app: it lists the jobs of the run's workflow run (`GET /repos/{owner}/{repo}/actions/
-  runs/{run_id}/jobs`) and re-runs each failed one whose name is the run's job, alone or with a
-  matrix's values (`POST /repos/{owner}/{repo}/actions/jobs/{job_id}/rerun`). The job asks for
+  as the app: it lists the jobs of the run's workflow run attempt (`GET /repos/{owner}/{repo}/
+  actions/runs/{run_id}/attempts/{attempt}/jobs`) and re-runs the failed one its runner took
+  whose name is the run's job, alone or with a matrix's values (`POST /repos/{owner}/{repo}/
+  actions/jobs/{job_id}/rerun`). The job asks for
   the accept before it judges its weakenings (Protocol above) and passes, so the required job
   stays the one gate and the host's review honours only its own accept, never one a proof names.
 
@@ -228,11 +230,12 @@ webhook secret before anything in it is read (`401` when the signature does not 
 - A local run has no job: one that said nothing for an hour (no start, end, blob upload or
   done) is closed as cancelled by the host's schedule (a cron trigger every 10 minutes). A blob
   counts for each open run of its writer that names it, as its bytes start and once stored.
-- `workflow_job`: a job runs Fearlezz when its name is the `GITHUB_JOB` of an earlier run of
-  the repository, alone or with a matrix's values after it (`proof (macos-latest)`). A queued
-  or waiting one shows on its branch's page as waiting for a runner; a completed one cancels
-  the runs of its workflow run and job that never said done. A job its workflow renames with
-  `name:` is not matched.
+- `workflow_job`: a queued or waiting job whose name is the `GITHUB_JOB` of an earlier run of
+  the repository, alone or with a matrix's values after it (`proof (macos-latest)`), shows on
+  its branch's page as waiting for a runner. A completed one cancels its own run if that never
+  said done: the run of its workflow run, attempt and runner (`run_id`, `run_attempt`,
+  `runner_name`) whose job its name is, so a matrix leg ending leaves its siblings running. A
+  job its workflow renames with `name:` is not matched.
 
 **Deploying review.** In the GitHub App's settings, add the permissions and events above, set
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared

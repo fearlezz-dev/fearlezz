@@ -1,12 +1,12 @@
-//! CI jobs as GitHub's `workflow_job` webhook names them, matched to Fearlezz runs simply:
+//! CI jobs as GitHub's `workflow_job` webhook names them, matched to Fearlezz runs:
 //!
-//! - A job runs Fearlezz when its name is the job id a Fearlezz run of the repository named
-//!   (`GITHUB_JOB`), or that id with a matrix's values after it (`proof (macos-latest)`). A job
-//!   whose workflow gives it another name is not matched.
-//! - A queued job of such a name waits on the page of the work of its branch until a runner
-//!   takes it.
-//! - A completed job closes, as cancelled, every run of the repository still running whose run
-//!   page is the job's workflow run and whose job id the job's name matches: the job ended
+//! - A job is a Fearlezz run's own when it is of the run's workflow run and attempt, the run's
+//!   runner took it, and its name is the run's job id (`GITHUB_JOB`), alone or with a matrix's
+//!   values after it (`proof (macos-latest)`). The runner tells the legs of a matrix apart, as
+//!   every leg has the same job id. A job whose workflow gives it another name is not matched.
+//! - A queued job has no runner yet: one whose name a Fearlezz run of the repository named waits
+//!   on the page of the work of its branch until a runner takes it.
+//! - A completed job closes, as cancelled, its own run if that is still running: the job ended
 //!   without the run saying done.
 
 use fearlezz_proof::review::Job;
@@ -14,11 +14,17 @@ use serde::Deserialize;
 use worker::{D1Database, D1PreparedStatement, D1Result};
 
 /// Whether a job named `name` is the job `job` (`GITHUB_JOB`) names, alone or in a matrix.
-pub fn runs(name: &str, job: &str) -> bool {
+fn named(name: &str, job: &str) -> bool {
     name == job
         || name
             .strip_prefix(job)
             .is_some_and(|rest| rest.starts_with(" ("))
+}
+
+/// Whether the job named `name` on `runner`, of a run's workflow run and attempt, is the run's
+/// own: its job id `job` on its runner `runner_name`.
+pub fn is(name: &str, runner: Option<&str>, job: &str, runner_name: &str) -> bool {
+    runner == Some(runner_name) && named(name, job)
 }
 
 #[derive(Deserialize)]

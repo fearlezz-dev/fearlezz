@@ -40,11 +40,19 @@ pub struct File {
 pub enum Source {
     /// A CI job, which proves itself with its OIDC token.
     Ci {
-        /// The job's id in its workflow.
+        /// The job's id in its workflow (`GITHUB_JOB`), the same for every leg of a matrix.
         job: String,
         /// The workflow run's page.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_url: Option<String>,
+        /// The workflow run (`GITHUB_RUN_ID`). With the attempt and the runner it names the
+        /// one job a run is, a leg of a matrix among its siblings, as GitHub's `workflow_job`
+        /// webhook names it.
+        run_id: u64,
+        /// The workflow run's attempt (`GITHUB_RUN_ATTEMPT`), 1 until it is run again.
+        run_attempt: u32,
+        /// The runner that took the job (`RUNNER_NAME`).
+        runner_name: String,
     },
     /// A developer's machine, signed in to the host: unproven, and never reviewed, though a
     /// person may leave notes on its pictures.

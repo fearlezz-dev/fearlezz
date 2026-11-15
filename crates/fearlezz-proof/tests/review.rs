@@ -123,6 +123,9 @@ fn run(id: &str, head: &str, state: RunState, items: &[Item]) -> (Run, Option<Pr
         source: Source::Ci {
             job: "proof".into(),
             run_url: None,
+            run_id: 1,
+            run_attempt: 1,
+            runner_name: "runner".into(),
         },
         state,
         opened: 1.0,

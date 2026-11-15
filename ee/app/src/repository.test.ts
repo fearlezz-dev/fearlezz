@@ -37,7 +37,7 @@ describe("the repository page", () => {
   });
 
   test("each work says where its newest run stands and what waits on it", () => {
-    const ci = { kind: "ci" as const, job: "proof" };
+    const ci = { kind: "ci" as const, job: "proof", run_id: 1, run_attempt: 1, runner_name: "runner" };
     expect(standingOf(listed("a", 1, 1))).toBe("none");
     expect(standingOf(listed("a", 1, 1, { latest: { head: "h", source: ci, state: "running", failed: 0 } }))).toBe("running");
     expect(standingOf(listed("a", 1, 1, { latest: { head: "h", source: ci, state: "done", failed: 2 } }))).toBe("failed");

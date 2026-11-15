@@ -6,7 +6,7 @@ const run: Run = {
   id: "r1",
   head: "abc1234",
   base: "main",
-  source: { kind: "ci", job: "proof" },
+  source: { kind: "ci", job: "proof", run_id: 1, run_attempt: 1, runner_name: "runner" },
   state: "running",
   opened: 100,
   checks: [{ id: "fmt" }, { id: "tests" }],
