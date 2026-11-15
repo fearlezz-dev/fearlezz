@@ -135,6 +135,17 @@ pub(crate) fn summary(proof: &Proof, page: Option<&str>) -> Result<String, std::
         }
         writeln!(text)?;
     }
+    if proof.weakenings_wait && !proof.weakened.is_empty() {
+        writeln!(
+            text,
+            "What the change weakens waits for an admin's accept on the proof page, which holds \
+             the review:\n"
+        )?;
+        for w in &proof.weakened {
+            writeln!(text, "- {}", cell(&w.to_string()))?;
+        }
+        writeln!(text)?;
+    }
     for note in proof.notes() {
         writeln!(text, "{note}\n")?;
     }

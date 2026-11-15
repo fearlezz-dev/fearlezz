@@ -831,10 +831,15 @@ impl CommitReport {
     }
 
     /// Writes the bundle when asked, closes the run on the proof host with it, and writes the
-    /// job summary GitHub Actions names, when it names one.
-    fn finish(mut self, floor: &floor::Floor) -> Result<()> {
+    /// job summary GitHub Actions names, when it names one. True when the host took the whole
+    /// run, what the change weakens with it: then the weakening waits there for an admin's
+    /// accept instead of failing the proof.
+    fn finish(mut self, floor: &floor::Floor) -> Result<bool> {
         use std::io::Write as _;
         self.proof.weakened.clone_from(&floor.weakened);
+        // Fail safe: it waits only once the host has it, so it is set before done and taken
+        // back when done does not reach the host.
+        self.proof.weakenings_wait = self.stream.is_some() && !floor.holds();
         let temp = match (&self.bundle, &self.stream) {
             (None, Some(_)) => Some(tempfile::tempdir()?),
             _ => None,
@@ -849,6 +854,12 @@ impl CommitReport {
         if let Some(dir) = &bundle {
             self.stream_step(|s| s.done(dir));
         }
+        if self.proof.weakenings_wait && self.stream.is_none() {
+            self.proof.weakenings_wait = false;
+            if let Some(dir) = &self.bundle {
+                proof::write(&self.proof, dir)?;
+            }
+        }
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
             let summary = action::summary(&self.proof, self.page.as_deref())?;
             std::fs::OpenOptions::new()
@@ -857,7 +868,7 @@ impl CommitReport {
                 .open(Path::new(&path))?
                 .write_all(summary.as_bytes())?;
         }
-        Ok(())
+        Ok(self.proof.weakenings_wait)
     }
 }
 
@@ -986,13 +997,13 @@ fn run_checks(
     } else {
         floor::Floor::default()
     };
-    let lines = floor.lines();
-    let floor_holds = floor.holds();
     let answers_for_work = !in_memory && ids.is_empty() && stage == final_stage;
-    let settled = |view: &View| {
+    // The floor holds when nothing weakens, or when the proof host holds what weakens for an
+    // admin's accept (`hosted`, which the commit report says once it closed the run).
+    let settled = |view: &View, floor_holds: bool| {
         floor_holds && (!answers_for_work || view.next == state::READY || view.checks.is_empty())
     };
-    let next_line = |view: &View| {
+    let next_line = |view: &View, floor_holds: bool| {
         if in_memory {
             state::COMMIT_PROVEN.to_string()
         } else if !floor_holds {
@@ -1000,6 +1011,13 @@ fn run_checks(
         } else {
             view.next.clone()
         }
+    };
+    let finish = |report: Option<CommitReport>| -> Result<bool> {
+        let hosted = report.map_or(Ok(false), |r| r.finish(&floor))?;
+        for line in floor.lines(hosted) {
+            println!("{line}");
+        }
+        Ok(floor.holds() || hosted)
     };
     let mut report = out
         .map(|out| CommitReport::start(ctx, &wt, &targets, out))
@@ -1025,17 +1043,14 @@ fn run_checks(
             ),
             None => println!("nothing to run in {stage}"),
         }
-        for line in &lines {
-            println!("{line}");
-        }
-        report.map_or(Ok(()), |r| r.finish(&floor))?;
+        let floor_holds = finish(report)?;
         match &later {
             Some((next_stage, _)) if floor_holds => {
                 println!("next: fearlezz run --stage {next_stage}");
             }
-            _ => println!("next: {}", next_line(&before)),
+            _ => println!("next: {}", next_line(&before, floor_holds)),
         }
-        return Ok(settled(&before));
+        return Ok(settled(&before, floor_holds));
     }
 
     let clock = std::time::Instant::now();
@@ -1191,10 +1206,7 @@ fn run_checks(
         failures.len() + cannot_record,
         clock.elapsed().as_secs_f64()
     );
-    for line in &lines {
-        println!("{line}");
-    }
-    report.map_or(Ok(()), |r| r.finish(&floor))?;
+    let floor_holds = finish(report)?;
     // Only now: the commit report reads this run's results, which no journal names in CI, so
     // a check sharing its inputs with another could lose its output to the prune.
     prune_store(ctx);
@@ -1212,9 +1224,9 @@ fn run_checks(
     if cannot_record > 0 {
         println!("next: give the recorder its permission (fix: above), then fearlezz run");
     } else {
-        println!("next: {}", next_line(&after));
+        println!("next: {}", next_line(&after, floor_holds));
     }
-    Ok(failures.is_empty() && cannot_record == 0 && !red_blocks && settled(&after))
+    Ok(failures.is_empty() && cannot_record == 0 && !red_blocks && settled(&after, floor_holds))
 }
 
 /// Runs each green check that reads changed test files on the base commit with those files,

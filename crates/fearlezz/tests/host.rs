@@ -312,6 +312,68 @@ fn a_host_that_fails_never_fails_the_proof() {
     }
 }
 
+/// A branch of `repo` whose config makes `lint` run another command than on `main`: it
+/// weakens the proof the base branch requires.
+fn weakening(host: &FakeHost) -> Repo {
+    let repo = repo(host);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("echo all clean", "echo all clean anyway"),
+    );
+    repo.commit("weaken lint");
+    repo
+}
+
+#[test]
+fn a_weakening_waits_for_an_admin_when_the_host_took_the_run() {
+    // The host holds the review: the weakening waits in its check for an admin's accept, so the
+    // proof job itself passes.
+    let host = FakeHost::start();
+    let repo = weakening(&host);
+    let (out, text) = ci(&repo, &host.token_env());
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("weakens lint: it runs another command"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("waits for an admin's accept on the proof page"),
+        "{}",
+        out.stdout
+    );
+    let done = host.sent("POST", "/api/v2/runs/r1/done");
+    assert_eq!(done["proof"]["weakenings_wait"], true, "{done:#}");
+    assert_eq!(done["proof"]["weakened"][0]["check"], "lint", "{done:#}");
+    assert!(text.contains("**Proven**"), "{text}");
+    assert!(text.contains("waits for an admin's accept"), "{text}");
+}
+
+#[test]
+fn a_weakening_fails_the_proof_when_the_host_did_not_take_the_run() {
+    // Fail safe: without a host that took the whole run, nothing holds the weakening for an
+    // admin, so it fails the proof as it does without a host.
+    for broken in ["/api/v2/runs", "/api/v2/runs/r1/done", "not installed"] {
+        let host = FakeHost::start();
+        if broken == "not installed" {
+            host.state.lock().unwrap().installed = false;
+        } else {
+            host.state.lock().unwrap().broken.insert(broken.into());
+        }
+        let repo = weakening(&host);
+        let (out, text) = ci(&repo, &host.token_env());
+        assert!(!out.ok, "{broken}: {}\n{}", out.stdout, out.stderr);
+        assert!(
+            out.stdout.contains("merges past the required check"),
+            "{broken}: {}",
+            out.stdout
+        );
+        assert!(text.contains("**Not proven**"), "{broken}: {text}");
+    }
+}
+
 #[test]
 fn every_call_to_the_host_asks_for_a_fresh_token() {
     // An OIDC token lives minutes; a run with large films can take longer, so no call reuses one.
