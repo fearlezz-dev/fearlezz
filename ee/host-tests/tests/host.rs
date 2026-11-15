@@ -336,8 +336,16 @@ fn main() {
             a_matrix_leg_ending_leaves_its_siblings_running,
         ),
         (
-            "every_leg_of_the_newest_attempt_is_reviewed",
-            every_leg_of_the_newest_attempt_is_reviewed,
+            "every_leg_is_reviewed_and_a_new_attempt_replaces_them",
+            every_leg_is_reviewed_and_a_new_attempt_replaces_them,
+        ),
+        (
+            "a_partial_rerun_replaces_only_the_legs_it_ran",
+            a_partial_rerun_replaces_only_the_legs_it_ran,
+        ),
+        (
+            "a_run_whose_leg_is_not_known_keeps_its_pictures",
+            a_run_whose_leg_is_not_known_keeps_its_pictures,
         ),
         (
             "writes_at_once_reach_a_live_page_in_the_order_of_their_numbers",
@@ -2607,22 +2615,26 @@ fn a_matrix_leg_ending_leaves_its_siblings_running() {
     assert_eq!(state(&linux_run.id), "done");
 }
 
-fn every_leg_of_the_newest_attempt_is_reviewed() {
+/// The content keys of a review's pictures, in its order.
+fn keys(review: &Value) -> Vec<String> {
+    let pictures = review["pictures"].as_array().unwrap();
+    pictures
+        .iter()
+        .map(|p| p["key"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn every_leg_is_reviewed_and_a_new_attempt_replaces_them() {
     let linux = Job::pull("owner/review", 134, "review/legs")
         .at(&commit("a134"), 1134)
         .on("runner-linux");
     let macos = linux.on("runner-macos");
+    linux.picked_up("proof (linux)");
+    macos.picked_up("proof (macos-latest)");
     let (linux_look, linux_files) = one_still(b"legs before", b"legs after on linux");
     let (macos_look, macos_files) = one_still(b"legs before", b"legs after on macos");
     let linux_run = proven(&linux, &linux_look, &linux_files, &json!({}));
     let macos_run = proven(&macos, &macos_look, &macos_files, &json!({}));
-    let keys = |review: &Value| -> Vec<String> {
-        let pictures = review["pictures"].as_array().unwrap();
-        pictures
-            .iter()
-            .map(|p| p["key"].as_str().unwrap().to_owned())
-            .collect()
-    };
     let review = review_of(134);
     assert_eq!(keys(&review).len(), 2, "each leg's picture: {review:#}");
     assert_eq!(review["state"], "waits", "{review:#}");
@@ -2639,16 +2651,108 @@ fn every_leg_of_the_newest_attempt_is_reviewed() {
     assert_eq!(review_of(134)["state"], "approved");
     let first = keys(&review_of(134));
 
-    // The workflow run again: its legs replace those of the attempt before.
+    // The whole workflow runs again, on other runners: its legs replace both.
+    let (linux_again, macos_again) = (
+        linux.again().on("runner-linux-2"),
+        macos.again().on("runner-macos-2"),
+    );
+    linux_again.picked_up("proof (linux)");
+    macos_again.picked_up("proof (macos-latest)");
     let (linux_look, linux_files) = one_still(b"legs before", b"legs after on linux, again");
     let (macos_look, macos_files) = one_still(b"legs before", b"legs after on macos, again");
-    proven(&linux.again(), &linux_look, &linux_files, &json!({}));
-    proven(&macos.again(), &macos_look, &macos_files, &json!({}));
+    proven(&linux_again, &linux_look, &linux_files, &json!({}));
+    proven(&macos_again, &macos_look, &macos_files, &json!({}));
     let review = review_of(134);
     let again = keys(&review);
     assert_eq!(again.len(), 2, "each leg's picture: {review:#}");
     assert!(again.iter().all(|k| !first.contains(k)), "{review:#}");
     assert_eq!(review["state"], "waits", "{review:#}");
+}
+
+fn a_partial_rerun_replaces_only_the_legs_it_ran() {
+    let head = commit("a135");
+    let linux = Job::pull("owner/review", 135, "review/rerun")
+        .at(&head, 1135)
+        .on("runner-linux");
+    let macos = linux.on("runner-macos");
+    let github = &world().github;
+    github.job_ended(
+        "owner/review",
+        1135,
+        11351,
+        "proof (linux)",
+        "runner-linux",
+        "failure",
+    );
+    github.job_ended(
+        "owner/review",
+        1135,
+        11352,
+        "proof (macos-latest)",
+        "runner-macos",
+        "failure",
+    );
+    linux.picked_up("proof (linux)");
+    macos.picked_up("proof (macos-latest)");
+    let (linux_look, linux_files) = one_still(b"rerun before", b"rerun after on linux");
+    let (macos_look, macos_files) = one_still(b"rerun before", b"rerun after on macos");
+    let linux_run = proven(&linux, &linux_look, &linux_files, &weakened());
+    let linux_key = keys(&review_of(135)).remove(0);
+    proven(&macos, &macos_look, &macos_files, &weakened());
+    let first = keys(&review_of(135));
+    assert_eq!(first.len(), 2, "{first:?}");
+    let macos_key = first.iter().find(|k| **k != linux_key).unwrap().clone();
+
+    // The accept runs only the linux leg again, in a new attempt on another runner.
+    let admin = sign_in("admin-code", "/");
+    let answer = say(&linux_run, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let accept = answer.json()["accept"].clone();
+    assert_eq!(github.reruns("owner/review", 1135).len(), 1);
+    let rerun = linux.again().on("runner-linux-2");
+    rerun.picked_up("proof (linux)");
+    let (look, files) = one_still(b"rerun before", b"rerun after on linux, again");
+    proven(&rerun, &look, &files, &weakened_and_accepted(&accept));
+    let review = review_of(135);
+    let after = keys(&review);
+    assert_eq!(
+        after.len(),
+        2,
+        "the macos leg keeps its picture: {review:#}"
+    );
+    assert!(
+        after.contains(&macos_key),
+        "the macos leg's picture: {review:#}"
+    );
+    assert!(
+        !after.contains(&linux_key),
+        "the linux leg's old picture: {review:#}"
+    );
+    assert_eq!(review["state"], "waits", "{review:#}");
+}
+
+fn a_run_whose_leg_is_not_known_keeps_its_pictures() {
+    let linux = Job::pull("owner/review", 136, "review/unknown")
+        .at(&commit("a136"), 1136)
+        .on("runner-linux");
+    // No webhook named the first run's job: which leg it is stays unknown.
+    let (look, files) = one_still(b"unknown before", b"unknown after");
+    proven(&linux, &look, &files, &json!({}));
+    let first = keys(&review_of(136));
+    let again = linux.again().on("runner-linux-2");
+    again.picked_up("proof (linux)");
+    let (look, files) = one_still(b"unknown before", b"unknown after, again");
+    proven(&again, &look, &files, &json!({}));
+    let review = review_of(136);
+    let after = keys(&review);
+    assert_eq!(after.len(), 2, "{review:#}");
+    assert!(after.contains(&first[0]), "{review:#}");
+
+    // Once the webhook names it, the newer run of its leg replaces it.
+    linux.picked_up("proof (linux)");
+    let review = review_of(136);
+    assert_eq!(keys(&review).len(), 1, "{review:#}");
+    assert!(!keys(&review).contains(&first[0]), "{review:#}");
 }
 
 fn writes_at_once_reach_a_live_page_in_the_order_of_their_numbers() {
@@ -3094,6 +3198,33 @@ impl Job {
             attempt: self.attempt + 1,
             ..self.clone()
         }
+    }
+
+    /// GitHub's `workflow_job` webhook saying the job's runner took it, under its display
+    /// `name` (`proof (macos-latest)` for a matrix leg).
+    fn picked_up(&self, name: &str) {
+        let id = self.workflow_run * 1000
+            + u64::from(self.attempt) * 100
+            + self.runner.bytes().map(u64::from).sum::<u64>() % 100;
+        let payload = json!({
+            "action": "in_progress",
+            "workflow_job": {
+                "id": id,
+                "run_id": self.workflow_run,
+                "run_attempt": self.attempt,
+                "runner_name": self.runner,
+                "name": name,
+                "head_sha": self.head,
+                "head_branch": self.branch,
+                "status": "in_progress",
+                "conclusion": null,
+                "html_url": format!("https://github.com/{}/actions/runs/{}/job/{id}", self.repository, self.workflow_run),
+            },
+            "repository": {"full_name": self.repository},
+            "installation": {"id": 6},
+        });
+        let answer = webhook("workflow_job", &payload);
+        assert_eq!(answer.status, 202, "{}", answer.text());
     }
 
     /// Another leg of the same matrix job, which `runner` took.

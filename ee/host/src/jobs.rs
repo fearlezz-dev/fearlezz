@@ -8,6 +8,10 @@
 //!   on the page of the work of its branch until a runner takes it.
 //! - A completed job closes, as cancelled, its own run if that is still running: the job ended
 //!   without the run saying done.
+//! - A job's display name, once a runner took it, is the leg of its own run, and the review
+//!   counts the newest run of each leg (`fearlezz_proof::review::review`).
+
+use std::collections::BTreeMap;
 
 use fearlezz_proof::review::Job;
 use serde::Deserialize;
@@ -25,6 +29,46 @@ fn named(name: &str, job: &str) -> bool {
 /// own: its job id `job` on its runner `runner_name`.
 pub fn is(name: &str, runner: Option<&str>, job: &str, runner_name: &str) -> bool {
     runner == Some(runner_name) && named(name, job)
+}
+
+/// The statement that reads, for each CI run of work `work` at `head`, the names of the jobs
+/// of its workflow run and attempt that its runner took.
+pub fn legs_statement(
+    db: &D1Database,
+    work: &str,
+    head: &str,
+) -> worker::Result<D1PreparedStatement> {
+    db.prepare(
+        "SELECT r.id AS run, json_extract(r.source, '$.job') AS job, j.name FROM runs r \
+         JOIN works w ON w.id = r.work \
+         JOIN jobs j ON j.repo = w.repo AND j.workflow_run = json_extract(r.source, '$.run_id') \
+           AND j.run_attempt = json_extract(r.source, '$.run_attempt') \
+           AND j.runner = json_extract(r.source, '$.runner_name') \
+         WHERE r.work = ?1 AND r.head = ?2 AND json_extract(r.source, '$.kind') = 'ci'",
+    )
+    .bind(&[work.into(), head.into()])
+}
+
+/// The leg of each run `legs_statement` read, by run id: the name of the one job that is the
+/// run's own, as `is` names it. A run whose job no webhook named yet, or whose runner took
+/// more than one job of its name, has none.
+pub fn legs(result: &D1Result) -> worker::Result<BTreeMap<String, String>> {
+    #[derive(Deserialize)]
+    struct LegRow {
+        run: String,
+        job: String,
+        name: String,
+    }
+    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for row in result.results::<LegRow>()? {
+        if named(&row.name, &row.job) {
+            found.entry(row.run).or_default().push(row.name);
+        }
+    }
+    Ok(found
+        .into_iter()
+        .filter_map(|(run, mut names)| (names.len() == 1).then(|| (run, names.remove(0))))
+        .collect())
 }
 
 #[derive(Deserialize)]

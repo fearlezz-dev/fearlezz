@@ -596,6 +596,8 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
 /// proofs, its verdicts and its open notes.
 pub struct OfHead {
     pub runs: Vec<(Run, Option<Proof>)>,
+    /// The leg of each CI run GitHub named, by run id (`jobs::legs`).
+    pub legs: BTreeMap<String, String>,
     pub verdicts: Vec<Verdict>,
     pub notes: Vec<Note>,
 }
@@ -604,6 +606,7 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
     let mut statements = vec![
         db.prepare(VERDICTS).bind(&[work.into()])?,
         open_notes(db, work)?,
+        crate::jobs::legs_statement(db, work, head)?,
     ];
     statements.extend(run_statements(
         db,
@@ -611,7 +614,7 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         &[work.into(), head.into()],
     )?);
     let results = db.batch(statements).await?;
-    let [verdicts, notes, runs @ ..] = results.as_slice() else {
+    let [verdicts, notes, legs, runs @ ..] = results.as_slice() else {
         return Err(worker::Error::RustError(
             "D1 answered another number of results".into(),
         ));
@@ -623,6 +626,7 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         .collect();
     Ok(OfHead {
         runs: assemble(runs)?,
+        legs: crate::jobs::legs(legs)?,
         verdicts,
         notes: notes_of(notes)?,
     })

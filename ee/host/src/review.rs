@@ -59,7 +59,14 @@ pub async fn refresh(
     let Some(head) = &row.head else { return Ok(()) };
     let of = work::of_head(&db, work, head).await?;
     let accept = accept(&db, work, head).await?;
-    let review = review::review(head, &of.runs, &of.verdicts, &of.notes, accept.as_ref());
+    let review = review::review(
+        head,
+        &of.runs,
+        &of.legs,
+        &of.verdicts,
+        &of.notes,
+        accept.as_ref(),
+    );
     let text = serde_json::to_string(&review)?;
     if row.review.as_deref() != Some(text.as_str()) {
         let change = WorkChange::Review {

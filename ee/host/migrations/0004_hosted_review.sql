@@ -119,10 +119,14 @@ CREATE TABLE pulls (
 );
 
 -- The CI jobs GitHub's workflow_job webhook named: queued, waiting, in_progress or completed.
+-- The attempt and the runner tie a job to the Fearlezz run it is, and so its display name
+-- to the run's leg (`jobs::legs`); a queued job has no runner yet.
 CREATE TABLE jobs (
   repo TEXT NOT NULL,
   id INTEGER NOT NULL,
   workflow_run INTEGER NOT NULL,
+  run_attempt INTEGER NOT NULL,
+  runner TEXT,
   name TEXT NOT NULL,
   head TEXT NOT NULL,
   branch TEXT NOT NULL,

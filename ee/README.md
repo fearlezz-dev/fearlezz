@@ -154,9 +154,11 @@ viewer lost access (Who sees a page).
 ### Review
 
 The host is where review happens. Its one model is `crates/fearlezz-proof/src/review.rs`: the
-review of a work's head is derived from the head's CI runs (of each job, every run of its newest
-workflow run attempt: every leg of a matrix counts, and running the workflow again replaces the
-legs of the attempt before), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
+review of a work's head is derived from the head's CI runs (the newest run of each leg: a leg is
+the job with the display name GitHub gives it, `proof (macos-latest)`, so every leg of a matrix
+counts, and a run again, whole or of failed jobs only, replaces just the legs it ran; until the
+`workflow_job` webhook names a run's job, the run is a leg of its own, so its pictures never drop
+out), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
 Every write that can move it (a run opening, a look arriving, done, a cancel, a verdict, an
 accept, a push to the pull request) derives it again in the work's room, after the writes
 before it; when it changed, open pages get it live and GitHub gets it as the check run and the
@@ -239,8 +241,9 @@ webhook secret before anything in it is read (`401` when the signature does not 
   the repository, alone or with a matrix's values after it (`proof (macos-latest)`), shows on
   its branch's page as waiting for a runner. A completed one cancels its own run if that never
   said done: the run of its workflow run, attempt and runner (`run_id`, `run_attempt`,
-  `runner_name`) whose job its name is, so a matrix leg ending leaves its siblings running. A
-  job its workflow renames with `name:` is not matched.
+  `runner_name`) whose job its name is, so a matrix leg ending leaves its siblings running.
+  Once a runner took a job (in progress or completed), its name is the leg of that same run, and
+  the review is derived again. A job its workflow renames with `name:` is not matched.
 
 **Deploying review.** In the GitHub App's settings, add the permissions and events above, set
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared

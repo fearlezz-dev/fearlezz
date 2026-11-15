@@ -129,10 +129,23 @@ decided:
     why: The verdict and the notes drifted apart (review finding).
   - id: every-matrix-leg
     what: >-
-      The review counts every leg of the newest run attempt of each job: of each job id, every
-      CI run of the head whose workflow run and attempt are those of the job's newest run.
-      Legs within one attempt need no identity of their own; a newer attempt replaces them all.
-    built: ee/host-tests/tests/host.rs (every_leg_of_the_newest_attempt_is_reviewed)
+      The review counts every leg of a job, not only the newest run per job; which run of each
+      leg counts is newest-run-per-leg.
+    built: ee/host-tests/tests/host.rs (every_leg_is_reviewed_and_a_new_attempt_replaces_them)
+  - id: newest-run-per-leg
+    what: >-
+      The review counts the newest run of every leg, where a leg is the job plus the display
+      name GitHub gives it (proof (macos-latest)), known to the host from the stored
+      workflow_job webhook and tied to a run by run id, attempt and runner name. A partial re-run
+      (re-run failed jobs, or the accept's re-run) replaces only the legs it ran; the other legs
+      keep their newest run and their pictures keep waiting. A run whose leg is not known yet
+      (no webhook named its job, or its runner took two jobs of that name) is a leg of its own:
+      nothing replaces it, so its pictures never drop out, until the webhook names it and the
+      review is derived again.
+    why: >-
+      Decided by the developer (open partial-rerun): the accept re-runs only the asking leg, so
+      counting only the newest attempt dropped the other legs' pictures from review.
+    built: ee/host-tests/tests/host.rs (a_partial_rerun_replaces_only_the_legs_it_ran, a_run_whose_leg_is_not_known_keeps_its_pictures)
   - id: base-shell-fix
     what: >-
       A base checkout uses the base commit's own shell, like the prepare fix, in this branch. The
@@ -141,15 +154,7 @@ decided:
       take it from there.
     built: crates/fearlezz/tests/red_green.rs (the_base_commit_runs_in_its_own_shell), crates/fearlezz/tests/look.rs (the_base_commit_runs_in_its_own_shell_for_the_look)
 
-open:
-  - id: partial-rerun
-    ask: >-
-      An attempt that reruns only some legs (an admin's accept reruns only the asking run's job;
-      a person's "re-run failed jobs" reruns only failed ones) drops the other legs from the
-      review, so their pictures stop waiting. Keeping them needs a leg identity across attempts:
-      the job's display name (proof (macos-latest)), which only GitHub knows (the workflow_job
-      webhook or the jobs API by run, attempt and runner). Name each run's leg by it and count
-      the newest run of each leg instead?
+open: []
 
 slices:
   - id: core-cut

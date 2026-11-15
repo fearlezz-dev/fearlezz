@@ -163,8 +163,10 @@ async fn workflow_job(env: &Env, event: JobEvent) -> worker::Result<()> {
     };
     let db = env.d1("DB")?;
     db.prepare(
-        "INSERT INTO jobs (repo, id, workflow_run, name, head, branch, state, url, since) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
-         ON CONFLICT (repo, id) DO UPDATE SET state = excluded.state, head = excluded.head",
+        "INSERT INTO jobs (repo, id, workflow_run, run_attempt, runner, name, head, branch, state, url, since) \
+         VALUES (?1, ?2, ?3, ?10, ?11, ?4, ?5, ?6, ?7, ?8, ?9) \
+         ON CONFLICT (repo, id) DO UPDATE SET state = excluded.state, head = excluded.head, \
+         runner = COALESCE(excluded.runner, jobs.runner)",
     )
     .bind(&[
         repo.as_str().into(),
@@ -176,6 +178,8 @@ async fn workflow_job(env: &Env, event: JobEvent) -> worker::Result<()> {
         event.action.as_str().into(),
         job.html_url.as_deref().map_or(JsValue::NULL, JsValue::from),
         (now() as f64).into(),
+        f64::from(job.run_attempt).into(),
+        job.runner_name.as_deref().map_or(JsValue::NULL, JsValue::from),
     ])?
     .run()
     .await?;
@@ -188,10 +192,15 @@ async fn workflow_job(env: &Env, event: JobEvent) -> worker::Result<()> {
         .first(Some("id"))
         .await?;
     if let Some(work) = work {
+        // A runner names the leg of the run the job is, which can move the review.
+        let derive = match job.runner_name {
+            Some(_) => Derive::Review,
+            None => Derive::No,
+        };
         let write = Write {
             statements: Vec::new(),
             event: Some(Event::Waiting),
-            derive: Derive::No,
+            derive,
         };
         room::write(env, &work, &write).await?;
     }

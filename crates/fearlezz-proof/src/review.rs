@@ -221,26 +221,28 @@ pub fn key(item: &Item, sha: impl Fn(&str) -> Option<String>) -> Option<String> 
 }
 
 /// The review of `head` from the work's runs (newest first, each with its proof once done),
-/// its verdicts, its notes and the head's accept. Only CI runs of the head count: of each job,
-/// every run of its newest workflow run attempt, so every leg of a matrix counts, and running
-/// the workflow again replaces the legs of the attempt before.
+/// the display names GitHub gives their jobs (`legs`, by run id, see [`Leg`]), its verdicts,
+/// its notes and the head's accept. Only CI runs of the head count, the newest of each leg: a
+/// workflow run again replaces the legs it ran, and every other leg keeps its newest run.
 pub fn review(
     head: &str,
     runs: &[(Run, Option<Proof>)],
+    legs: &BTreeMap<String, String>,
     verdicts: &[Verdict],
     notes: &[Note],
     accept: Option<&Accept>,
 ) -> Review {
-    let mut attempts: Vec<(&str, u64, u32)> = Vec::new();
-    for newest in runs.iter().filter_map(|(run, _)| attempt(run, head)) {
-        if !attempts.iter().any(|(job, ..)| *job == newest.0) {
-            attempts.push(newest);
+    let mut seen: Vec<Leg<'_>> = Vec::new();
+    let mut counted: Vec<&(Run, Option<Proof>)> = Vec::new();
+    for entry in runs {
+        let Some(leg) = Leg::of(&entry.0, head, legs) else {
+            continue;
+        };
+        if !seen.contains(&leg) {
+            seen.push(leg);
+            counted.push(entry);
         }
     }
-    let counted: Vec<&(Run, Option<Proof>)> = runs
-        .iter()
-        .filter(|(run, _)| attempt(run, head).is_some_and(|attempt| attempts.contains(&attempt)))
-        .collect();
     let live: Vec<&(Run, Option<Proof>)> = counted
         .iter()
         .copied()
@@ -331,18 +333,31 @@ pub fn review(
     }
 }
 
-/// The job, workflow run and attempt of `run` when it is a CI run of `head`.
-fn attempt<'a>(run: &'a Run, head: &str) -> Option<(&'a str, u64, u32)> {
-    let Source::Ci {
-        job,
-        run_id,
-        run_attempt,
-        ..
-    } = &run.source
-    else {
-        return None;
-    };
-    (run.head == head).then_some((job.as_str(), *run_id, *run_attempt))
+/// The leg of a CI job a run proves: the job (`GITHUB_JOB`) with the display name GitHub gives
+/// it, which tells the legs of a matrix apart (`proof (macos-latest)`) and stays the same when
+/// a workflow runs again. Only GitHub knows that name; the host learns it from the
+/// `workflow_job` webhook, by the run's workflow run, attempt and runner. Until it has, the run
+/// is a leg of its own, so no newer run replaces it and its pictures never drop out of review.
+#[derive(PartialEq)]
+enum Leg<'a> {
+    Named { job: &'a str, name: &'a str },
+    Unknown { run: &'a str },
+}
+
+impl<'a> Leg<'a> {
+    /// The leg of `run` when it is a CI run of `head`.
+    fn of(run: &'a Run, head: &str, legs: &'a BTreeMap<String, String>) -> Option<Leg<'a>> {
+        let Source::Ci { job, .. } = &run.source else {
+            return None;
+        };
+        if run.head != head {
+            return None;
+        }
+        Some(match legs.get(&run.id) {
+            Some(name) => Leg::Named { job, name },
+            None => Leg::Unknown { run: &run.id },
+        })
+    }
 }
 
 /// `1 picture` or `3 pictures`.
