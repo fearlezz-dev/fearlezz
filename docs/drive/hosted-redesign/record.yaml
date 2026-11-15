@@ -140,8 +140,12 @@ slices:
       - ee/app/src/pictures.test.ts (name parts, order, grouping, counts, live looks, film lanes and outlines)
     status: done
   - id: verdicts-and-check
-    tests: []
-    status: todo
+    tests:
+      - crates/fearlezz-proof/tests/review.rs (where review of a head stands, content keys of stills and films, carry over, accept, cancel, summary)
+      - crates/fearlezz/tests/host.rs (a_weakening_waits_for_an_admin_when_the_host_took_the_run, a_weakening_fails_the_proof_when_the_host_did_not_take_the_run)
+      - ee/host-tests/tests/host.rs (a_verdict_needs_a_session_write_access_the_app_origin_and_json, a_bearer_token_never_gives_a_verdict_or_an_accept, a_verdict_on_a_local_run_is_refused, a_verdict_carries_over_to_a_later_run_with_the_same_pictures, a_film_verdict_follows_its_changed_states, accept_needs_an_admin, the_check_run_follows_the_review_through_a_whole_flow, one_comment_is_created_then_edited, a_webhook_with_a_wrong_signature_is_refused, a_job_that_ends_without_done_cancels_its_run, a_queued_job_shows_as_waiting_for_a_runner, a_verdict_given_in_one_tab_shows_in_another, the_page_says_what_each_person_can_do, and the review shots of the ignored pictures)
+      - ee/app/src/review.test.ts, ee/app/src/live.test.ts (verdicts, carry over and what waits, as the page words them)
+    status: done
   - id: notes
     tests: []
     status: todo
@@ -152,4 +156,4 @@ slices:
     tests: []
     status: todo
 
-next: Build verdicts-and-check on refactor/hosted-proof-redesign: a verdict per picture on the page, and the GitHub check run the host sets.
+next: Build notes on refactor/hosted-proof-redesign: a needs_change verdict with notes beside looks_right.
