@@ -33,9 +33,9 @@ The bodies are the serde types of `crates/fearlezz-proof/src/events.rs`.
 | --- | --- |
 | `GET /api/v2/installed` | `200 {"installed": true}`, or `200 {"installed": false, "install": "<url>"}`. |
 | `POST /api/v2/runs` | Body `Open`: `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?}, "checks": ["<id>", ...]}`, the checks it plans in order. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
-| `POST /api/v2/runs/<run>/checks` | Body `{"started": {"check": "<id>"}}` when a check starts, or `{"finished": {"check": <proof.json check entry>, "files": {"<path>": {"sha256", "size"}}}}` when it ends, with the files it made (its output at `outputs/<id>.log`). A check the run did not plan joins at the end. `200 {"missing": ["<sha256>", ...]}`: the blobs the host does not hold yet. |
+| `POST /api/v2/runs/<run>/checks` | Body `{"started": {"check": "<id>"}}` when a check starts, or `{"finished": {"check": <proof.json check entry>, "files": {"<path>": {"sha256", "size"}}, "look"?: <look>}}` when it ends, with the files it made (its output at `outputs/<id>.log`, its pictures at `looks/<folder>/...`) and, for a check that takes pictures, its look: the pictures compared with the base commit, as in `proof.json` (`400` when the look is of another check). A check the run did not plan joins at the end. `200 {"missing": ["<sha256>", ...]}`: the blobs the host does not hold yet. |
 | `PUT /api/v2/blobs/<sha256>` | The bytes of one missing file, with `Content-Length`. Stored by content, per repository, so a file that did not change is sent once. `204`. |
-| `POST /api/v2/runs/<run>/done` | Body `{"proof": <proof.json>, "files": {...}}`: every file of the bundle. `409 {"error", "missing": [...]}` while a blob is missing (send them and say done again); otherwise the run is done, the proof's entries are the checks' final word, and it answers `200 {"url": "<page url>"}`. |
+| `POST /api/v2/runs/<run>/done` | Body `{"proof": <proof.json>, "files": {...}}`: every file of the bundle. `409 {"error", "missing": [...]}` while a blob is missing (send them and say done again); otherwise the run is done, the proof's entries and looks are the checks' final word, and it answers `200 {"url": "<page url>"}`. |
 
 A refusal answers `{"error": "<what to do>"}` with `401` for a token that does not pass, `403`
 for a repository without the app or a token for another repository or ref, `400` for a body
@@ -61,7 +61,8 @@ request:
 
 The page is a Solid app (`ee/app`) the worker serves from its static assets: the same
 `index.html` for every work, which draws itself from its live connection. An unknown work is
-`404`. It answers `no-store`, may not be framed, and its `connect-src` is `'self'`.
+`404`. It answers `no-store`, may not be framed, its `connect-src` is `'self'`, and its
+`img-src` and `media-src` name the files origin, the only place pictures load from.
 
 **Live.** D1 is the one record; the Durable Object of a work (`WorkRoom`) holds only the
 WebSockets of its open pages, which hibernate with it. Every write to a work bumps its `seq`
@@ -69,9 +70,23 @@ in the same D1 batch, and then goes to the room as an event. The live connection
 are `events::Live`:
 
 - first `{"kind": "snapshot", "seq", "work", "runs"}`: the work and its newest 20 runs, each with
-  its checks in order (planned, `started` at a time, or with their `entry`);
+  its checks in order (planned, `started` at a time, or with their `entry`, and their `look`
+  once compared);
 - then `{"kind": "event", "seq", "run", "change"}` for each write, where `change` is `opened`
-  (a new run), `started`, `finished` or `done`.
+  (a new run), `started`, `finished` (with the check's look, if any) or `done` (with every
+  look).
+
+**Pictures.** The page shows every look of the run it shows as it arrives, so a person can
+start looking before the run ends: counts that filter, grouping by check or by the parts of a
+picture's name (screen, viewport, theme), changed pictures first, then new and gone, then
+timing, and the same ones folded. The picture on the stage compares its before and after in
+five ways (side by side, slider, onion skin, difference, blink) with outlines of where they
+differ; films play on one clock with a lane per film and a jump to each change. Flaky pictures
+show, marked. `j` and `k` step between pictures, `1` to `5` pick the way to compare. The page
+gets a run's files with `GET /api/v2/runs/<run>/grant`, which answers
+`{"files": "<files origin>/<grant>/", "expires"}` to someone who may see the work (the page's
+rule: `401` without a session for a private repository, `404` otherwise) and is asked again
+before it ends.
 
 The room takes a socket before it reads the snapshot, so nothing written between the two is
 missed; the page drops events its snapshot already holds by `seq`. A dropped connection opens
@@ -93,12 +108,14 @@ answers on two origins and tells them apart by the request's host:
 - the **files origin** (`FILES_ORIGIN`, `https://fearlezz.seamlezz.net` by default): the runs'
   files, and nothing else. It reads no cookies and sets none.
 
-Files origin: `/<grant>/<path>` is the run's file at that path, with its content type and
-`Range` support (films need it). The grant is `base64url(json).base64url(mac)`: the JSON names
-the repository, the run and an expiry one hour out, and the mac is HMAC-SHA256 with
-`SIGNING_KEY`. A missing, expired or altered grant gets `404`. Files answer with
-`Content-Security-Policy: frame-ancestors <APP_ORIGIN>`. No page hands out grants yet; the
-pictures the page shows from here come in a later slice.
+Files origin: `/<grant>/<path>` is the run's picture or film at that path, with `Range`
+support (films need it). Only png, jpeg, webp, gif, avif, mp4 and webm are served, each with the
+content type its name pins and `X-Content-Type-Options: nosniff`; anything else (svg, html, a
+log) is `404`, so nothing a pull request wrote ever runs as a page. The grant is
+`base64url(json).base64url(mac)`: the JSON names the repository, the run and an expiry one hour
+out, and the mac is HMAC-SHA256 with `SIGNING_KEY`. A missing, expired or altered grant, or one
+for another run, gets `404`. Files answer with `Content-Security-Policy: frame-ancestors
+<APP_ORIGIN>`.
 
 ### Who sees a page
 

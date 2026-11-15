@@ -17,7 +17,7 @@ pieces:
         evidence: [docs/drive/hosted-redesign/inventory.html]
   - id: live-page
     status: figuring-out
-    open: Protocol version 2 and the live page are built (host-v2-foundation); pictures come next.
+    open: Protocol version 2, the live page and its pictures are built; verdicts come next.
     tries:
       - id: spike-live
         what: Throwaway Rust worker with a DO per PR, events in, live Solid page, under wrangler dev.
@@ -128,8 +128,11 @@ slices:
       - ee/app/src/live.test.ts (how a snapshot and events become the page's state)
     status: done
   - id: pictures-on-page
-    tests: []
-    status: todo
+    tests:
+      - crates/fearlezz/tests/host.rs (a_finished_check_sends_its_look_with_the_pictures)
+      - ee/host-tests/tests/host.rs (a_finished_check_brings_its_look_to_the_page, a_look_of_another_check_is_refused, the_files_origin_serves_only_pictures_and_films, the_page_gets_a_grant_for_the_files_of_a_run_it_shows, the_work_page_is_served_for_a_navigation (CSP), the_page_shows_a_changed_picture_with_its_before_and_after, the_compare_modes_switch_by_click_and_by_key, a_film_shows_its_lanes_on_one_clock, a_flaky_picture_is_shown_and_marked, a_look_that_arrives_shows_without_a_reload, pictures_group_by_the_parts_of_their_names, and the ignored pictures, which writes page pictures to ee/target/tmp)
+      - ee/app/src/pictures.test.ts (name parts, order, grouping, counts, live looks, film lanes and outlines)
+    status: done
   - id: verdicts-and-check
     tests: []
     status: todo
@@ -143,4 +146,4 @@ slices:
     tests: []
     status: todo
 
-next: Build pictures-on-page on refactor/hosted-proof-redesign: the live page shows each check's changed pictures from the files origin.
+next: Build verdicts-and-check on refactor/hosted-proof-redesign: a verdict per picture on the page, and the GitHub check run the host sets.
