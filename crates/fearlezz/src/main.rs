@@ -750,10 +750,12 @@ fn print_failure(f: &store::RunResult) {
     print_findings(f);
 }
 
-/// What proving a commit shows besides the usual lines, so a reader can tell the checks ran:
-/// the commit and each check with its command and time, and on GitHub Actions the job summary.
-/// Only CI writes these, so the agent whose work they judge cannot change them.
-struct CommitReport {
+/// A run's proof as it is built, and the run on the proof host while it takes it. Proving a
+/// commit for CI shows more besides the usual lines, so a reader can tell the checks ran: the
+/// commit and each check with its command and time, and on GitHub Actions the job summary.
+/// Only CI writes these, so the agent whose work they judge cannot change them. A local run
+/// has a report only while the host takes it, signed in: the host shows it unproven.
+struct Report {
     proof: proof::Proof,
     /// The run on the proof host, while it takes it.
     stream: Option<host::Stream>,
@@ -761,6 +763,8 @@ struct CommitReport {
     page: Option<String>,
     /// A folder for the proof bundle, when asked.
     bundle: Option<PathBuf>,
+    /// Proving a commit for CI, not a local run.
+    ci: bool,
 }
 
 /// What proving a commit for CI takes besides the checks.
@@ -771,13 +775,8 @@ struct CiOut {
     workflow: action::Workflow,
 }
 
-impl CommitReport {
-    fn start(
-        ctx: &Ctx,
-        wt: &Worktree,
-        targets: &[&config::Check],
-        out: CiOut,
-    ) -> Result<CommitReport> {
+impl Report {
+    fn start(ctx: &Ctx, wt: &Worktree, targets: &[&config::Check], out: CiOut) -> Result<Report> {
         let to_run = targets.len();
         let merge = ctx.git.head_short()?;
         // A pull request's run proves the merge GitHub made of its head into the base branch;
@@ -812,12 +811,68 @@ impl CommitReport {
         };
         let stream = host::Host::from_actions(ctx.config.host.as_deref())
             .and_then(|host| open_run(host, &proof, &out.workflow, targets));
-        Ok(CommitReport {
+        Ok(Report {
             page: stream.as_ref().map(|s| s.url.clone()),
             stream,
             proof,
             bundle: out.proof,
+            ci: true,
         })
+    }
+
+    /// A local run on the proof host, when the developer signed in to it and the branch is on
+    /// GitHub: opened before its checks run, so a person can leave notes on its pictures
+    /// before there is a pull request. None otherwise, and then nothing leaves the machine.
+    fn local(ctx: &Ctx, targets: &[&config::Check]) -> Result<Option<Report>> {
+        let url = host_url(Some(&ctx.config));
+        let Some(login) = feedback::login_of(&url) else {
+            return Ok(None);
+        };
+        let (Some(repository), Ok(branch)) = (ctx.git.github_repository(), ctx.git.branch()) else {
+            return Ok(None);
+        };
+        let head = ctx.git.head()?;
+        let proof = proof::Proof {
+            repository: Some(repository.clone()),
+            ..proof::Proof::new(ctx.git.head_short()?, head.clone(), ctx.config.base.clone())
+        };
+        let open = fearlezz_proof::events::Open {
+            repository,
+            branch,
+            pull: None,
+            head,
+            base: ctx.config.base.clone(),
+            source: fearlezz_proof::events::Source::Local { login: login.login },
+            checks: targets.iter().map(|c| c.id.clone()).collect(),
+        };
+        let stream = match host::Host::from_login(&url, &login.token).open(&open) {
+            Ok(host::Opening::Opened(stream)) => {
+                println!(
+                    "proof page: {} shows this run, unproven; fearlezz setup logout stops sending \
+                     local runs",
+                    stream.url
+                );
+                stream
+            }
+            Ok(host::Opening::NotInstalled(install)) => {
+                println!(
+                    "proof page: the Fearlezz app is not installed on this repository, so this \
+                     run was not sent; install it to see local runs on the host: {install}"
+                );
+                return Ok(None);
+            }
+            Err(e) => {
+                println!("proof page not sent: {e:#}");
+                return Ok(None);
+            }
+        };
+        Ok(Some(Report {
+            page: Some(stream.url.clone()),
+            stream: Some(stream),
+            proof,
+            bundle: None,
+            ci: false,
+        }))
     }
 
     /// A check starts.
@@ -866,7 +921,9 @@ impl CommitReport {
             Some(n) => format!("  {n} tests"),
             None => String::new(),
         };
-        println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
+        if self.ci {
+            println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
+        }
         let failure = (result.outcome == Outcome::Failed).then(|| failure_item(result));
         let entry = proof::ran(check, stage, result, failure);
         self.stream_step(|s| s.finished(&entry, look));
@@ -875,14 +932,15 @@ impl CommitReport {
 
     /// Writes the bundle when asked, closes the run on the proof host with it, and writes the
     /// job summary GitHub Actions names, when it names one. True when the host took the whole
-    /// run, what the change weakens with it: then the weakening waits there for an admin's
-    /// accept instead of failing the proof.
+    /// run of CI, what the change weakens with it: then the weakening waits there for an
+    /// admin's accept instead of failing the proof. A local run is never approvable, so what
+    /// it weakens never waits.
     fn finish(mut self, floor: &floor::Floor) -> Result<bool> {
         use std::io::Write as _;
         self.proof.weakened.clone_from(&floor.weakened);
         // Fail safe: it waits only once the host has it, so it is set before done and taken
         // back when done does not reach the host.
-        self.proof.weakenings_wait = self.stream.is_some() && !floor.holds();
+        self.proof.weakenings_wait = self.ci && self.stream.is_some() && !floor.holds();
         let temp = match (&self.bundle, &self.stream) {
             (None, Some(_)) => Some(tempfile::tempdir()?),
             _ => None,
@@ -903,7 +961,7 @@ impl CommitReport {
                 proof::write(&self.proof, dir)?;
             }
         }
-        if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+        if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY").filter(|_| self.ci) {
             let summary = action::summary(&self.proof, self.page.as_deref())?;
             std::fs::OpenOptions::new()
                 .create(true)
@@ -1055,16 +1113,18 @@ fn run_checks(
             view.next.clone()
         }
     };
-    let finish = |report: Option<CommitReport>| -> Result<bool> {
+    let finish = |report: Option<Report>| -> Result<bool> {
         let hosted = report.map_or(Ok(false), |r| r.finish(&floor))?;
         for line in floor.lines(hosted) {
             println!("{line}");
         }
         Ok(floor.holds() || hosted)
     };
-    let mut report = out
-        .map(|out| CommitReport::start(ctx, &wt, &targets, out))
-        .transpose()?;
+    let mut report = match out {
+        Some(out) => Some(Report::start(ctx, &wt, &targets, out)?),
+        None if targets.is_empty() => None,
+        None => Report::local(ctx, &targets)?,
+    };
     if targets.is_empty() {
         // Every check waits in a later stage: say where.
         let later = (ids.is_empty() && !in_memory)
@@ -1128,13 +1188,16 @@ fn run_checks(
             && check.pictures.record.is_some()
             && let Some(u) = record::unavailable()
         {
-            if let Some(r) = report.as_mut() {
+            if let Some(r) = report.as_mut().filter(|r| r.ci) {
                 println!("not run {}: {}", check.id, u.why);
                 r.not_run(check, stages.name(check.stage), &u.why);
                 not_run += 1;
             } else {
                 println!("fail {}: {}", check.id, u.why);
                 println!("  fix: {}", u.fix);
+                if let Some(r) = report.as_mut() {
+                    r.not_run(check, stages.name(check.stage), &u.why);
+                }
                 cannot_record += 1;
             }
             continue;
@@ -1281,7 +1344,7 @@ fn red_before_green(
     wt: &Worktree,
     green: &[(&config::Check, store::RunResult)],
     stage: &str,
-    mut report: Option<&mut CommitReport>,
+    mut report: Option<&mut Report>,
 ) -> Result<bool> {
     let fix = red::is_fix_change(&wt.git, &wt.base)?;
     let mut blocks = false;

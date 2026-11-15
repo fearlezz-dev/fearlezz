@@ -3,7 +3,9 @@
 //! config folder (never in the repository), readable by the user alone. With it, `fearlezz`
 //! shows what waits on the host for the branch, `fearlezz --notes` saves each open note's
 //! pictures with its region drawn into the cache folder, and the stop hook holds the agent while
-//! notes are open. The token only reads; the host refuses it anything else.
+//! notes are open. With it each `fearlezz run` also streams to the host as a local run
+//! (`host.rs`), unproven. The token reads, and opens and streams the person's local runs; the
+//! host refuses it any verdict, note, resolve or accept.
 //!
 //! Without a sign in nothing is asked of the host, so free users and repositories without the
 //! host never wait on it.
@@ -19,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::git::{self, Git};
-use crate::host::{self, Body};
+use crate::host::{self, Body, Limit};
 use crate::media;
 
 /// How long `fearlezz` waits for the host before it goes on without it.
@@ -105,7 +107,7 @@ pub(crate) fn login(url: &str) -> Result<()> {
         "",
         &[],
         Body::Json(json!({})),
-        Some(10),
+        Some(Limit::within(10)),
     )?;
     if status != 200 {
         bail!("the proof host at {url} did not start a sign in ({status}): {codes}");
@@ -130,7 +132,7 @@ pub(crate) fn login(url: &str) -> Result<()> {
             "",
             &[],
             Body::Json(body.clone()),
-            Some(10),
+            Some(Limit::within(10)),
         )?;
         if status != 200 {
             let why = answer
@@ -148,10 +150,13 @@ pub(crate) fn login(url: &str) -> Result<()> {
     all.insert(url.to_owned(), signed.clone());
     keep(&all)?;
     println!(
-        "signed in as {} to {url}; the token reads what waits on the host and can write nothing",
+        "signed in as {} to {url}; each fearlezz run now shows there, unproven, so people can \
+         leave notes before a pull request; the token never gives a verdict",
         signed.login
     );
-    println!("next: fearlezz shows what waits on the host for this branch");
+    println!(
+        "next: fearlezz run shows the run on the host; fearlezz setup logout stops sending runs"
+    );
     Ok(())
 }
 
@@ -169,7 +174,7 @@ pub(crate) fn logout(url: &str) -> Result<()> {
         &gone.token,
         &[],
         Body::None,
-        Some(QUICK_SECONDS),
+        Some(Limit::within(QUICK_SECONDS)),
     ) {
         eprintln!("the proof host did not hear the logout ({e:#}); its token expires on its own");
     }
@@ -199,7 +204,14 @@ pub(crate) fn read(git: &Git, url: &str, seconds: Option<u32>) -> Read {
     };
     let branch: Vec<String> = branch.split('/').map(host::segment).collect();
     let path = format!("{url}/api/v2/work/{repository}/{}", branch.join("/"));
-    match host::curl_within("GET", &path, &login.token, &[], Body::None, seconds) {
+    match host::curl_within(
+        "GET",
+        &path,
+        &login.token,
+        &[],
+        Body::None,
+        seconds.map(Limit::within),
+    ) {
         Err(_) => Read::Said(format!(
             "proof host: {url} could not be reached; going on without it"
         )),
@@ -318,8 +330,10 @@ pub(crate) fn notes(git: &Git, url: &str) -> Result<bool> {
             return Ok(false);
         }
         Read::Nothing => {
-            println!("the proof host has nothing of this branch yet; CI shows its runs there");
-            println!("next: push the branch, and a person leaves notes on its page");
+            println!("the proof host has nothing of this branch yet");
+            println!(
+                "next: fearlezz run shows the run there, and a person leaves notes on its page"
+            );
             return Ok(true);
         }
     };

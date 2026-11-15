@@ -1,8 +1,10 @@
-//! The proof host from CI (protocol version 2 of `ee/README.md`): a GitHub Actions job that
-//! may request an OIDC token asks the host whether its repository installed the app, and only
+//! The proof host (protocol version 2 of `ee/README.md`), from CI and from the developer's
+//! machine. A GitHub Actions job that may request an OIDC token, or a CLI signed in with
+//! `fearlezz setup login`, asks the host whether the repository installed the app, and only
 //! then streams its run: it opens the run before any check runs, says when each check starts
 //! and ends (its entry with the files it made, each sent by content when the host lacks it),
-//! and closes the run with `proof.json`. Talks through curl, which every runner has.
+//! and closes the run with `proof.json`. A local run is the agent's word: the host shows it
+//! unproven and never reviews it. Talks through curl, which every runner has.
 
 use std::fs;
 use std::io::{Read as _, Write as _};
@@ -20,13 +22,28 @@ use crate::proof::Check;
 /// The host a project sends to unless its config names another.
 pub(crate) const DEFAULT: &str = "https://fearlezz.seamlezz.com";
 
-/// The host, and how to ask GitHub Actions for a token whose audience it is.
+/// How long a local run waits on the host before it gives it up for the rest of the run: the
+/// checks run between the calls, and the developer waits on them.
+const LOCAL: Limit = Limit {
+    connect: 2,
+    idle: 5,
+};
+
+/// The host, and what proves who is calling.
 pub(crate) struct Host {
     url: String,
-    /// The job's OIDC token endpoint, with the host as audience.
-    ask: String,
-    /// The job's token for asking.
-    request: String,
+    auth: Auth,
+    /// How long each call may wait; CI waits as long as curl's own limits.
+    limit: Option<Limit>,
+}
+
+/// What proves who calls the host.
+enum Auth {
+    /// A GitHub Actions job: its OIDC token endpoint, with the host as audience, and the job's
+    /// token for asking.
+    Actions { ask: String, request: String },
+    /// The developer's CLI, with the host token of its sign in.
+    Login(String),
 }
 
 /// What opening a run came to.
@@ -60,12 +77,31 @@ impl Host {
         let url = url.unwrap_or(DEFAULT).trim_end_matches('/').to_string();
         let join = if ask.contains('?') { '&' } else { '?' };
         let ask = format!("{ask}{join}audience={}", encode(&url));
-        Some(Host { url, ask, request })
+        Some(Host {
+            url,
+            auth: Auth::Actions { ask, request },
+            limit: None,
+        })
     }
 
-    /// A fresh OIDC token: one lives minutes, and a run with films can take longer.
+    /// The host at `url` (without a trailing slash) as the developer's CLI, signed in with
+    /// host token `token`, waiting on it only briefly.
+    pub(crate) fn from_login(url: &str, token: &str) -> Host {
+        Host {
+            url: url.to_owned(),
+            auth: Auth::Login(token.to_owned()),
+            limit: Some(LOCAL),
+        }
+    }
+
+    /// The token for one call: a fresh OIDC token on Actions (one lives minutes, and a run with
+    /// films can take longer), the sign in's own token otherwise.
     fn token(&self) -> Result<String> {
-        let (status, answer) = curl("GET", &self.ask, &self.request, &[], Body::None)?;
+        let (ask, request) = match &self.auth {
+            Auth::Login(token) => return Ok(token.clone()),
+            Auth::Actions { ask, request } => (ask, request),
+        };
+        let (status, answer) = curl("GET", ask, request, &[], Body::None)?;
         Ok(answer
             .get("value")
             .and_then(Value::as_str)
@@ -76,9 +112,17 @@ impl Host {
 
     /// Opens the run, when the host says the repository installed the app.
     pub(crate) fn open(self, open: &Open) -> Result<Opening> {
-        let (status, answer) = self.call("GET", "/api/v2/installed", Body::None)?;
+        // An OIDC token names its repository; the CLI's token speaks for a person, who names it.
+        let installed = match &self.auth {
+            Auth::Actions { .. } => "/api/v2/installed".to_owned(),
+            Auth::Login(_) => format!("/api/v2/installed?repository={}", encode(&open.repository)),
+        };
+        let (status, answer) = self.call("GET", &installed, Body::None)?;
         if status != 200 {
-            bail!("the host answered {status} when asked whether the app is installed");
+            bail!(
+                "the host answered {status} when asked whether the app is installed{}",
+                said(&answer)
+            );
         }
         if answer.get("installed") != Some(&Value::Bool(true)) {
             let install = answer
@@ -90,7 +134,7 @@ impl Host {
         }
         let (status, answer) = self.call("POST", "/api/v2/runs", json(open)?)?;
         if status != 201 {
-            bail!("the host refused the run ({status}): {answer}");
+            bail!("the host refused the run ({status}){}", said(&answer));
         }
         let opened: Opened = serde_json::from_value(answer)
             .context("the host answered the run without its id and page")?;
@@ -102,13 +146,23 @@ impl Host {
     }
 
     fn call(&self, method: &str, path: &str, body: Body<'_>) -> Result<(u16, Value)> {
-        curl(
+        curl_within(
             method,
             &format!("{}{path}", self.url),
             &self.token()?,
             &[],
             body,
+            self.limit,
         )
+    }
+}
+
+/// The host's own words of a refusal, after a colon, or nothing.
+fn said(answer: &Value) -> String {
+    match answer.get("error").and_then(Value::as_str) {
+        Some(error) => format!(": {error}"),
+        None if answer.is_null() => String::new(),
+        None => format!(": {answer}"),
     }
 }
 
@@ -153,7 +207,7 @@ impl Stream {
         let path = format!("/api/v2/runs/{}/checks", self.run);
         let (status, answer) = self.host.call("POST", &path, json(step)?)?;
         if status != 200 {
-            bail!("the host refused a check ({status}): {answer}");
+            bail!("the host refused a check ({status}){}", said(&answer));
         }
         self.send(&missing(answer)?, local)
     }
@@ -175,7 +229,7 @@ impl Stream {
             self.send(&missing(answer)?, &local)?;
             let (status, answer) = self.host.call("POST", &path, json(&done)?)?;
             if status != 200 {
-                bail!("the host did not close the run ({status}): {answer}");
+                bail!("the host did not close the run ({status}){}", said(&answer));
             }
             status
         } else {
@@ -318,24 +372,51 @@ pub(crate) fn curl(
     curl_within(method, url, token, headers, body, None)
 }
 
-/// `curl`, given up after `seconds` when set: for a call a person waits on. An empty `token`
-/// sends none.
+/// How long a call may wait before it is given up: for a call a person waits on.
+#[derive(Clone, Copy)]
+pub(crate) struct Limit {
+    /// Seconds to connect.
+    pub connect: u32,
+    /// Seconds without a byte moving either way, so a large upload that moves is never cut.
+    pub idle: u32,
+}
+
+impl Limit {
+    /// `seconds` to connect, and twice that without a byte moving.
+    pub(crate) const fn within(seconds: u32) -> Limit {
+        Limit {
+            connect: seconds,
+            idle: seconds * 2,
+        }
+    }
+}
+
+/// `curl`, given up by `limit` when set. An empty `token` sends none.
 pub(crate) fn curl_within(
     method: &str,
     url: &str,
     token: &str,
     headers: &[&str],
     body: Body<'_>,
-    seconds: Option<u32>,
+    limit: Option<Limit>,
 ) -> Result<(u16, Value)> {
     let mut cmd = Command::new("curl");
     // A host that cannot be reached must not hold the checks up: they run between the calls.
     cmd.args(["-sS", "-K", "-", "-X", method, "-w", "\n%{http_code}"])
-        .args(["--connect-timeout", "10"])
         .args(["-H", "User-Agent: fearlezz", "-H", "Expect:"]);
-    if let Some(seconds) = seconds {
-        cmd.args(["--connect-timeout", &seconds.to_string()])
-            .args(["--max-time", &(seconds * 2).to_string()]);
+    match limit {
+        Some(limit) => {
+            cmd.args(["--connect-timeout", &limit.connect.to_string()])
+                .args([
+                    "--speed-limit",
+                    "1",
+                    "--speed-time",
+                    &limit.idle.to_string(),
+                ]);
+        }
+        None => {
+            cmd.args(["--connect-timeout", "10"]);
+        }
     }
     for header in headers {
         cmd.args(["-H", header]);

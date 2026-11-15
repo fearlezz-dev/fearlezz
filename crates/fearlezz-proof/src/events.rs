@@ -45,11 +45,16 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_url: Option<String>,
     },
-    /// A developer's machine: unproven, and never reviewed. Nothing opens one yet.
-    Local {},
+    /// A developer's machine, signed in to the host: unproven, and never reviewed, though a
+    /// person may leave notes on its pictures.
+    Local {
+        /// Who ran it: the login of the CLI's sign in, which the host sets from its token.
+        #[serde(default)]
+        login: String,
+    },
 }
 
-/// Opens a run: what CI sends before any check runs.
+/// Opens a run: what CI, or a signed in CLI, sends before any check runs.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Open {
     /// `owner/name` on GitHub.

@@ -150,6 +150,7 @@ impl Repo {
             .args(args)
             .current_dir(&self.root)
             .env("XDG_CACHE_HOME", &self.cache)
+            .env("XDG_CONFIG_HOME", no_config())
             .env_remove("CI")
             .env_remove("FEARLEZZ_JOURNAL")
             .write_stdin(input)
@@ -236,6 +237,8 @@ fn fz_in(dir: &Path, cache: Option<&Path>, args: &[&str], env: &[(&str, &str)]) 
     if let Some(cache) = cache {
         cmd.env("XDG_CACHE_HOME", cache);
     }
+    // Never the developer's own sign in to a proof host: a test that wants one gives its own.
+    cmd.env("XDG_CONFIG_HOME", no_config());
     // Tests choose for themselves whether they run as on CI.
     cmd.args(args)
         .current_dir(dir)
@@ -254,6 +257,11 @@ fn fz_in(dir: &Path, cache: Option<&Path>, args: &[&str], env: &[(&str, &str)]) 
         stdout: String::from_utf8(out.stdout).unwrap(),
         stderr: String::from_utf8(out.stderr).unwrap(),
     }
+}
+
+/// A config folder with no sign in to any proof host, which Fearlezz only reads.
+pub(crate) fn no_config() -> PathBuf {
+    std::env::temp_dir().join("fearlezz-tests-no-config")
 }
 
 /// Counts how often a check really ran, from outside its inputs.

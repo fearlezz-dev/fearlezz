@@ -48,6 +48,8 @@ pub(crate) struct State {
     pub feedback: Option<Value>,
     /// The pictures a CLI token reads at `/api/v2/runs/<run>/files/<path>`, by that path.
     pub pictures: BTreeMap<String, Vec<u8>>,
+    /// Takes every protocol request and answers none, as a host that hangs.
+    pub hangs: bool,
 }
 
 pub(crate) struct FakeHost {
@@ -161,7 +163,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>, base: &str) {
     if reader.read_exact(&mut body).is_err() {
         return;
     }
-    let picture = {
+    let (picture, hangs) = {
         let mut s = state.lock().unwrap();
         s.requests.push(Request {
             method: method.clone(),
@@ -170,8 +172,13 @@ fn serve(stream: TcpStream, state: &Mutex<State>, base: &str) {
             body: body.clone(),
         });
         let cli = auth.as_deref() == Some(&format!("Bearer {HOST_TOKEN}"));
-        s.pictures.get(&path).filter(|_| cli).cloned()
+        let hangs = s.hangs && path.starts_with("/api/");
+        (s.pictures.get(&path).filter(|_| cli).cloned(), hangs)
     };
+    if hangs {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        return;
+    }
     let mut stream = stream;
     if let Some(bytes) = picture {
         let sent = write!(
@@ -254,7 +261,8 @@ fn answer(
         ("GET", file) if file.contains("/files/") => return (404, json!({"error": "not found"})),
         _ => {}
     }
-    if auth != Some(&format!("Bearer {OIDC}")) {
+    // The protocol takes CI's OIDC token, and the CLI's own token for a local run.
+    if auth != Some(&format!("Bearer {OIDC}")) && !cli {
         return (401, json!({"error": "no token"}));
     }
     let sent: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
