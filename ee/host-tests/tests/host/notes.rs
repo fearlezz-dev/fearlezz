@@ -577,7 +577,9 @@ pub fn an_old_note_shows_dashed_with_its_run_on_a_later_run() {
         r#"!!document.querySelector('[data-draw="after"] [data-region][data-old="true"]')"#,
     );
     browser.wait_for(r#"document.querySelector('[data-notes] li[data-old="true"]')?.textContent.includes('a127000')"#);
-    // A note can be started from the keyboard too: on the whole picture.
+    // A note can be started from the keyboard too: on the whole picture. The control shows
+    // once the page knows the viewer may write, which it asks for after the snapshot.
+    browser.wait_for("!!document.querySelector('button[data-whole]')");
     browser.eval("document.querySelector('button[data-whole]').focus()");
     browser.press(" ");
     browser.wait_for("!!document.querySelector('form[data-compose]')");
