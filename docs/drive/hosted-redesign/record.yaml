@@ -116,6 +116,17 @@ decided:
     what: >-
       Fix in this branch: a base checkout (red before green and looks) is prepared with the base
       commit's own [env] (f5d16d9), found while building host-v2-foundation.
+  - id: accept-reruns-proof
+    what: >-
+      In hosted mode a weakening fails the CI job as in free mode. An admin's Accept on the page
+      re-runs the job, which asks the host whether this head's weakenings are accepted and then
+      passes. One required gate; weakenings_wait goes away. The app needs Actions write.
+    why: Installing the app must never loosen what free mode blocks (review finding).
+  - id: needs-change-from-notes
+    what: >-
+      Needs change is derived from open notes on the picture; only looks right is a stored verdict.
+      Resolving the last note brings the picture back to not looked at yet.
+    why: The verdict and the notes drifted apart (review finding).
 
 open:
   - id: base-shell
