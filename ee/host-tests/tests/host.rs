@@ -1,19 +1,30 @@
-//! The proof host, driven over HTTP as CI and people use it: the upload protocol with its OIDC
-//! check, the pages with their files and ranges, and who may see them. One worker under
-//! `wrangler dev --local` and one fake GitHub serve every test; each test uses its own pull
-//! request numbers and file bytes, so they run side by side. The worker answers on two origins,
-//! the app origin and the files origin, under two host names for the same local port.
+//! The proof host, driven as CI and people use it: protocol version 2 with its OIDC check over
+//! HTTP, the work pages and who may see them, the files origin, and the live page in headless
+//! Chrome. One worker under `wrangler dev --local` and one fake GitHub serve every test; each
+//! test uses its own branches, pull request numbers and file bytes, so they run side by side.
+//! The worker answers on two origins, the app origin and the files origin, under two host names
+//! for the same local port.
 
 // Beside this file, not in tests/, where cargo would take each for a test of its own.
 #[path = "host/browser.rs"]
 mod browser;
 #[path = "host/github.rs"]
 mod github;
+#[path = "host/local.rs"]
+mod local;
+#[path = "host/media.rs"]
+mod media;
+#[path = "host/notes.rs"]
+mod notes;
+#[path = "host/repository.rs"]
+mod repository;
+#[path = "host/share.rs"]
+mod share;
 #[path = "host/worker.rs"]
 mod worker;
 
 use std::sync::OnceLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -26,7 +37,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use github::FakeGitHub;
-use worker::{AUDIENCE, INSTALL_URL, ISSUER, SIGNING_KEY, Worker};
+use worker::{AUDIENCE, INSTALL_URL, ISSUER, SIGNING_KEY, WEBHOOK_SECRET, Worker};
 
 struct World {
     worker: Worker,
@@ -62,7 +73,7 @@ fn world() -> &'static World {
         let answer = request_to(
             &world.worker.url,
             "GET",
-            "/api/v1/installed",
+            "/api/v2/installed",
             &headers,
             None,
         );
@@ -109,93 +120,70 @@ fn main() {
             a_token_from_another_issuer_is_refused,
         ),
         (
-            "a_proof_is_refused_unless_the_app_is_installed",
-            a_proof_is_refused_unless_the_app_is_installed,
+            "a_run_is_refused_unless_the_app_is_installed",
+            a_run_is_refused_unless_the_app_is_installed,
         ),
         (
-            "a_proof_for_another_repository_is_refused",
-            a_proof_for_another_repository_is_refused,
+            "a_run_for_another_repository_is_refused",
+            a_run_for_another_repository_is_refused,
         ),
         (
-            "a_proof_for_another_pull_request_is_refused",
-            a_proof_for_another_pull_request_is_refused,
+            "a_run_for_another_pull_request_is_refused",
+            a_run_for_another_pull_request_is_refused,
         ),
         (
-            "a_proof_of_an_unknown_schema_is_refused",
-            a_proof_of_an_unknown_schema_is_refused,
+            "a_run_for_another_branch_is_refused",
+            a_run_for_another_branch_is_refused,
         ),
         (
-            "a_proof_asks_only_for_the_files_the_repository_lacks",
-            a_proof_asks_only_for_the_files_the_repository_lacks,
+            "a_run_opens_and_answers_the_page_of_its_work",
+            a_run_opens_and_answers_the_page_of_its_work,
+        ),
+        ("checks_stream_into_the_run", checks_stream_into_the_run),
+        (
+            "a_finished_check_asks_only_for_the_files_the_repository_lacks",
+            a_finished_check_asks_only_for_the_files_the_repository_lacks,
         ),
         (
             "a_blob_whose_bytes_do_not_hash_to_its_name_is_refused",
             a_blob_whose_bytes_do_not_hash_to_its_name_is_refused,
         ),
         (
-            "a_blob_no_proof_names_is_refused",
-            a_blob_no_proof_names_is_refused,
+            "a_blob_no_run_names_is_refused",
+            a_blob_no_run_names_is_refused,
         ),
         (
             "done_is_refused_while_a_file_is_missing",
             done_is_refused_while_a_file_is_missing,
         ),
         (
-            "done_is_refused_for_another_repositorys_token",
-            done_is_refused_for_another_repositorys_token,
+            "a_run_takes_calls_only_from_its_own_repository_and_ref",
+            a_run_takes_calls_only_from_its_own_repository_and_ref,
         ),
         (
-            "a_public_proof_shows_to_anyone",
-            a_public_proof_shows_to_anyone,
-        ),
-        ("a_film_is_served_in_ranges", a_film_is_served_in_ranges),
-        (
-            "the_app_origin_never_serves_bundle_files",
-            the_app_origin_never_serves_bundle_files,
+            "a_closed_run_takes_nothing_more",
+            a_closed_run_takes_nothing_more,
         ),
         (
-            "the_shell_frames_the_files_origin_in_a_sandbox",
-            the_shell_frames_the_files_origin_in_a_sandbox,
+            "done_refuses_a_proof_of_an_unknown_schema",
+            done_refuses_a_proof_of_an_unknown_schema,
         ),
         (
-            "the_files_origin_refuses_a_missing_grant",
-            the_files_origin_refuses_a_missing_grant,
+            "the_work_page_is_served_for_a_navigation",
+            the_work_page_is_served_for_a_navigation,
+        ),
+        ("an_unknown_work_is_not_found", an_unknown_work_is_not_found),
+        (
+            "the_app_origin_serves_no_files_and_the_files_origin_no_pages",
+            the_app_origin_serves_no_files_and_the_files_origin_no_pages,
         ),
         (
-            "the_files_origin_refuses_a_tampered_grant",
-            the_files_origin_refuses_a_tampered_grant,
+            "a_private_work_sends_a_stranger_to_sign_in",
+            a_private_work_sends_a_stranger_to_sign_in,
         ),
         (
-            "the_files_origin_refuses_an_expired_grant",
-            the_files_origin_refuses_an_expired_grant,
-        ),
-        (
-            "the_files_origin_refuses_a_grant_for_another_proof",
-            the_files_origin_refuses_a_grant_for_another_proof,
-        ),
-        (
-            "the_files_origin_ignores_cookies_and_sets_none",
-            the_files_origin_ignores_cookies_and_sets_none,
-        ),
-        (
-            "a_proof_shows_nothing_before_done",
-            a_proof_shows_nothing_before_done,
-        ),
-        (
-            "pull_leads_to_the_latest_whole_proof",
-            pull_leads_to_the_latest_whole_proof,
-        ),
-        (
-            "an_older_head_finishing_last_keeps_the_newer_proof_latest",
-            an_older_head_finishing_last_keeps_the_newer_proof_latest,
-        ),
-        (
-            "a_private_proof_sends_a_stranger_to_sign_in",
-            a_private_proof_sends_a_stranger_to_sign_in,
-        ),
-        (
-            "a_reader_signs_in_and_sees_a_private_proof",
-            a_reader_signs_in_and_sees_a_private_proof,
+            "a_reader_signs_in_and_sees_a_private_work",
+            a_reader_signs_in_and_sees_a_private_work,
         ),
         (
             "a_signed_in_person_without_access_gets_not_found",
@@ -231,130 +219,284 @@ fn main() {
             an_unknown_key_id_refetches_the_jwks_once,
         ),
         (
-            "an_approval_on_the_page_posts_the_comment_as_the_person",
-            an_approval_on_the_page_posts_the_comment_as_the_person,
+            "a_file_is_served_in_ranges_under_a_grant",
+            a_file_is_served_in_ranges_under_a_grant,
         ),
         (
-            "a_forks_approval_names_its_head",
-            a_forks_approval_names_its_head,
+            "the_files_origin_refuses_a_missing_tampered_or_expired_grant",
+            the_files_origin_refuses_a_missing_tampered_or_expired_grant,
         ),
         (
-            "an_admin_accepts_a_weakening_on_the_page",
-            an_admin_accepts_a_weakening_on_the_page,
+            "the_files_origin_refuses_a_grant_for_another_run",
+            the_files_origin_refuses_a_grant_for_another_run,
         ),
         (
-            "accepting_on_the_page_needs_admin_rights",
-            accepting_on_the_page_needs_admin_rights,
+            "the_files_origin_ignores_cookies_and_sets_none",
+            the_files_origin_ignores_cookies_and_sets_none,
         ),
         (
-            "approving_on_the_page_needs_write_access",
-            approving_on_the_page_needs_write_access,
+            "the_files_origin_serves_only_pictures_and_films",
+            the_files_origin_serves_only_pictures_and_films,
         ),
         (
-            "approving_on_the_page_needs_a_session",
-            approving_on_the_page_needs_a_session,
+            "the_page_gets_a_grant_for_the_files_of_a_run_it_shows",
+            the_page_gets_a_grant_for_the_files_of_a_run_it_shows,
         ),
         (
-            "approving_from_another_site_is_refused",
-            approving_from_another_site_is_refused,
+            "a_finished_check_brings_its_look_to_the_page",
+            a_finished_check_brings_its_look_to_the_page,
         ),
         (
-            "approving_needs_words_on_one_line",
-            approving_needs_words_on_one_line,
+            "a_look_of_another_check_is_refused",
+            a_look_of_another_check_is_refused,
         ),
         (
-            "approving_an_older_proof_is_refused",
-            approving_an_older_proof_is_refused,
+            "a_page_shows_a_check_move_from_running_to_passed_live",
+            a_page_shows_a_check_move_from_running_to_passed_live,
         ),
         (
-            "approving_after_a_newer_push_is_refused",
-            approving_after_a_newer_push_is_refused,
+            "a_page_opened_mid_run_shows_the_current_state",
+            a_page_opened_mid_run_shows_the_current_state,
+        ),
+        ("two_pages_both_update", two_pages_both_update),
+        (
+            "the_page_shows_a_changed_picture_with_its_before_and_after",
+            the_page_shows_a_changed_picture_with_its_before_and_after,
         ),
         (
-            "approving_needs_something_that_waits",
-            approving_needs_something_that_waits,
+            "the_compare_modes_switch_by_click_and_by_key",
+            the_compare_modes_switch_by_click_and_by_key,
         ),
         (
-            "approving_a_private_proof_without_access_gets_not_found",
-            approving_a_private_proof_without_access_gets_not_found,
+            "a_film_shows_its_lanes_on_one_clock",
+            a_film_shows_its_lanes_on_one_clock,
         ),
         (
-            "approving_needs_the_shells_view_token",
-            approving_needs_the_shells_view_token,
+            "a_flaky_picture_is_shown_and_marked",
+            a_flaky_picture_is_shown_and_marked,
         ),
         (
-            "the_shell_offers_approve_and_accept_by_role",
-            the_shell_offers_approve_and_accept_by_role,
+            "a_look_that_arrives_shows_without_a_reload",
+            a_look_that_arrives_shows_without_a_reload,
         ),
         (
-            "the_shell_offers_nothing_to_settle_when_nothing_waits",
-            the_shell_offers_nothing_to_settle_when_nothing_waits,
+            "a_look_shows_only_once_its_pictures_have_arrived",
+            a_look_shows_only_once_its_pictures_have_arrived,
         ),
         (
-            "the_shell_takes_only_words_from_its_frame",
-            the_shell_takes_only_words_from_its_frame,
+            "pictures_group_by_the_parts_of_their_names",
+            pictures_group_by_the_parts_of_their_names,
         ),
         (
-            "a_page_that_asks_on_load_gets_nothing_posted",
-            a_page_that_asks_on_load_gets_nothing_posted,
+            "a_verdict_needs_a_session_write_access_the_app_origin_and_json",
+            a_verdict_needs_a_session_write_access_the_app_origin_and_json,
         ),
         (
-            "only_the_shells_own_button_posts",
-            only_the_shells_own_button_posts,
+            "a_bearer_token_never_gives_a_verdict_or_an_accept",
+            a_bearer_token_never_gives_a_verdict_or_an_accept,
         ),
         (
-            "a_writer_makes_a_share_link_anyone_can_open",
-            a_writer_makes_a_share_link_anyone_can_open,
+            "a_verdict_on_a_local_run_is_refused",
+            a_verdict_on_a_local_run_is_refused,
         ),
         (
-            "a_share_link_opens_the_latest_proof_of_its_pull_request",
-            a_share_link_opens_the_latest_proof_of_its_pull_request,
+            "a_verdict_carries_over_to_a_later_run_with_the_same_pictures",
+            a_verdict_carries_over_to_a_later_run_with_the_same_pictures,
         ),
         (
-            "a_share_link_opens_nothing_else",
-            a_share_link_opens_nothing_else,
+            "a_film_verdict_follows_its_changed_states",
+            a_film_verdict_follows_its_changed_states,
         ),
         (
-            "a_revoked_share_link_finds_nothing",
-            a_revoked_share_link_finds_nothing,
+            "accept_needs_an_admin_and_runs_the_failed_proof_job_again",
+            accept_needs_an_admin_and_runs_the_failed_proof_job_again,
         ),
         (
-            "an_unknown_share_link_finds_nothing",
-            an_unknown_share_link_finds_nothing,
-        ),
-        ("sharing_needs_write_access", sharing_needs_write_access),
-        (
-            "sharing_from_another_site_is_refused",
-            sharing_from_another_site_is_refused,
+            "a_run_asks_whether_exactly_its_weakenings_of_its_head_are_accepted",
+            a_run_asks_whether_exactly_its_weakenings_of_its_head_are_accepted,
         ),
         (
-            "share_links_are_listed_to_writers",
-            share_links_are_listed_to_writers,
+            "the_check_run_follows_the_review_through_a_whole_flow",
+            the_check_run_follows_the_review_through_a_whole_flow,
         ),
         (
-            "revoking_needs_write_access_and_a_link_of_that_pull_request",
-            revoking_needs_write_access_and_a_link_of_that_pull_request,
+            "one_comment_is_created_then_edited",
+            one_comment_is_created_then_edited,
         ),
         (
-            "the_shell_offers_share_to_writers_alone",
-            the_shell_offers_share_to_writers_alone,
+            "a_webhook_with_a_wrong_signature_is_refused",
+            a_webhook_with_a_wrong_signature_is_refused,
         ),
         (
-            "a_share_link_view_offers_no_posting",
-            a_share_link_view_offers_no_posting,
+            "a_job_that_ends_without_done_cancels_its_run",
+            a_job_that_ends_without_done_cancels_its_run,
+        ),
+        (
+            "a_matrix_leg_ending_leaves_its_siblings_running",
+            a_matrix_leg_ending_leaves_its_siblings_running,
+        ),
+        (
+            "every_leg_is_reviewed_and_a_new_attempt_replaces_them",
+            every_leg_is_reviewed_and_a_new_attempt_replaces_them,
+        ),
+        (
+            "a_partial_rerun_replaces_only_the_legs_it_ran",
+            a_partial_rerun_replaces_only_the_legs_it_ran,
+        ),
+        (
+            "a_run_whose_leg_is_not_known_keeps_its_pictures",
+            a_run_whose_leg_is_not_known_keeps_its_pictures,
+        ),
+        (
+            "a_cancelled_rerun_of_a_leg_keeps_its_older_run_in_review",
+            a_cancelled_rerun_of_a_leg_keeps_its_older_run_in_review,
+        ),
+        (
+            "a_job_its_workflow_names_is_matched_and_its_rerun_replaces_it",
+            a_job_its_workflow_names_is_matched_and_its_rerun_replaces_it,
+        ),
+        (
+            "writes_at_once_reach_a_live_page_in_the_order_of_their_numbers",
+            writes_at_once_reach_a_live_page_in_the_order_of_their_numbers,
+        ),
+        (
+            "github_hanging_or_failing_never_fails_a_write_nor_drops_a_page",
+            github_hanging_or_failing_never_fails_a_write_nor_drops_a_page,
+        ),
+        (
+            "runs_opening_at_once_write_one_comment_and_one_check_run",
+            runs_opening_at_once_write_one_comment_and_one_check_run,
+        ),
+        (
+            "a_verdict_and_done_at_once_leave_the_newest_review_on_github",
+            a_verdict_and_done_at_once_leave_the_newest_review_on_github,
+        ),
+        (
+            "a_queued_job_shows_as_waiting_for_a_runner",
+            a_queued_job_shows_as_waiting_for_a_runner,
+        ),
+        (
+            "a_verdict_given_in_one_tab_shows_in_another",
+            a_verdict_given_in_one_tab_shows_in_another,
+        ),
+        (
+            "the_page_says_what_each_person_can_do",
+            the_page_says_what_each_person_can_do,
+        ),
+        (
+            "a_note_needs_a_session_write_access_and_a_picture_of_the_run",
+            notes::a_note_needs_a_session_write_access_and_a_picture_of_the_run,
+        ),
+        (
+            "an_open_note_makes_its_picture_need_change_and_fails_the_check_run",
+            notes::an_open_note_makes_its_picture_need_change_and_fails_the_check_run,
+        ),
+        (
+            "resolving_the_last_note_brings_a_picture_back_to_not_looked_at",
+            notes::resolving_the_last_note_brings_a_picture_back_to_not_looked_at,
+        ),
+        (
+            "an_open_note_follows_the_work_until_a_writer_resolves_it",
+            notes::an_open_note_follows_the_work_until_a_writer_resolves_it,
+        ),
+        (
+            "a_cli_token_reads_but_never_writes",
+            notes::a_cli_token_reads_but_never_writes,
+        ),
+        (
+            "the_cli_signs_in_through_the_host_with_githubs_device_flow",
+            notes::the_cli_signs_in_through_the_host_with_githubs_device_flow,
+        ),
+        (
+            "the_cli_reads_open_notes_with_their_pictures",
+            notes::the_cli_reads_open_notes_with_their_pictures,
+        ),
+        (
+            "a_note_drawn_on_the_page_is_saved_and_shows_in_another_tab",
+            notes::a_note_drawn_on_the_page_is_saved_and_shows_in_another_tab,
+        ),
+        (
+            "a_film_note_takes_the_moment_of_the_film_clock",
+            notes::a_film_note_takes_the_moment_of_the_film_clock,
+        ),
+        (
+            "an_old_note_shows_dashed_with_its_run_on_a_later_run",
+            notes::an_old_note_shows_dashed_with_its_run_on_a_later_run,
+        ),
+        (
+            "a_cli_token_opens_a_local_run_only_with_write_access",
+            local::a_cli_token_opens_a_local_run_only_with_write_access,
+        ),
+        (
+            "a_local_run_takes_notes_but_never_a_verdict_or_an_accept",
+            local::a_local_run_takes_notes_but_never_a_verdict_or_an_accept,
+        ),
+        (
+            "a_local_run_never_touches_the_check_run_or_the_comment",
+            local::a_local_run_never_touches_the_check_run_or_the_comment,
+        ),
+        (
+            "a_note_on_a_local_run_shows_on_a_later_ci_run_of_the_work",
+            local::a_note_on_a_local_run_shows_on_a_later_ci_run_of_the_work,
+        ),
+        (
+            "a_silent_local_run_is_cancelled_after_an_hour",
+            local::a_silent_local_run_is_cancelled_after_an_hour,
+        ),
+        (
+            "a_local_run_uploading_its_files_is_not_silent",
+            local::a_local_run_uploading_its_files_is_not_silent,
+        ),
+        (
+            "the_host_renews_an_expired_github_token",
+            local::the_host_renews_an_expired_github_token,
+        ),
+        (
+            "a_cli_token_unused_for_30_days_is_refused",
+            local::a_cli_token_unused_for_30_days_is_refused,
+        ),
+        (
+            "the_page_marks_a_local_run_unproven_and_offers_only_notes",
+            local::the_page_marks_a_local_run_unproven_and_offers_only_notes,
+        ),
+        (
+            "a_share_link_shows_the_live_work_and_follows_a_new_run",
+            share::a_share_link_shows_the_live_work_and_follows_a_new_run,
+        ),
+        (
+            "a_share_link_never_writes",
+            share::a_share_link_never_writes,
+        ),
+        (
+            "a_revoked_share_link_is_not_found_and_names_no_repository",
+            share::a_revoked_share_link_is_not_found_and_names_no_repository,
+        ),
+        (
+            "a_writer_makes_lists_and_revokes_share_links_and_a_reader_cannot",
+            share::a_writer_makes_lists_and_revokes_share_links_and_a_reader_cannot,
+        ),
+        (
+            "the_repository_page_lists_its_works_with_what_waits",
+            repository::the_repository_page_lists_its_works_with_what_waits,
+        ),
+        (
+            "a_private_repository_page_needs_a_reader",
+            repository::a_private_repository_page_needs_a_reader,
+        ),
+        (
+            "a_live_page_of_a_private_repository_ends_with_its_access",
+            repository::a_live_page_of_a_private_repository_ends_with_its_access,
+        ),
+        (
+            "the_repository_page_updates_live",
+            repository::the_repository_page_updates_live,
         ),
     ];
     let mut trials: Vec<Trial> = tests
         .iter()
         .map(|&(name, test)| Trial::test(name, move || run(test)))
         .collect();
-    // Pictures of the shell's bar for a person to look at, not a test: run with --ignored.
-    trials.push(
-        Trial::test("pictures_of_the_shells_bar", || {
-            run(pictures_of_the_shells_bar)
-        })
-        .with_ignored_flag(true),
-    );
+    trials.push(Trial::test("pictures", || run(pictures)).with_ignored_flag(true));
     let conclusion = libtest_mimic::run(&args, trials);
     if let Some(world) = WORLD.get() {
         if conclusion.has_failed() {
@@ -388,13 +530,13 @@ pub fn now() -> i64 {
 // The protocol.
 
 fn installed_says_yes_for_a_repository_with_the_app() {
-    let answer = api("GET", "/api/v1/installed", &ci("owner/repo", 1), None);
+    let answer = api("GET", "/api/v2/installed", &ci("owner/repo", 1), None);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(answer.json(), json!({"installed": true}));
 }
 
 fn installed_says_no_with_the_install_link() {
-    let answer = api("GET", "/api/v1/installed", &ci("owner/bare", 1), None);
+    let answer = api("GET", "/api/v2/installed", &ci("owner/bare", 1), None);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(
         answer.json(),
@@ -403,13 +545,15 @@ fn installed_says_no_with_the_install_link() {
 }
 
 fn a_call_without_a_token_is_refused() {
-    let answer = request("GET", "/api/v1/installed", &[], None);
+    let answer = request("GET", "/api/v2/installed", &[], None);
+    assert_eq!(answer.status, 401, "{}", answer.text());
+    let answer = request("POST", "/api/v2/runs", &[], Some(b"{}".to_vec()));
     assert_eq!(answer.status, 401, "{}", answer.text());
 }
 
 fn a_token_signed_by_another_key_is_refused() {
     let token = sign(&world().stranger, &claims("owner/repo", 1));
-    let answer = api("GET", "/api/v1/installed", &token, None);
+    let answer = api("GET", "/api/v2/installed", &token, None);
     assert_eq!(answer.status, 401, "{}", answer.text());
 }
 
@@ -418,476 +562,422 @@ fn an_expired_token_is_refused() {
     claims["iat"] = json!(now() - 900);
     claims["nbf"] = json!(now() - 900);
     claims["exp"] = json!(now() - 300);
-    let answer = api("GET", "/api/v1/installed", &oidc(&claims), None);
+    let answer = api("GET", "/api/v2/installed", &oidc(&claims), None);
     assert_eq!(answer.status, 401, "{}", answer.text());
 }
 
 fn a_token_for_another_audience_is_refused() {
     let mut claims = claims("owner/repo", 1);
     claims["aud"] = json!("https://elsewhere.test");
-    let answer = api("GET", "/api/v1/installed", &oidc(&claims), None);
+    let answer = api("GET", "/api/v2/installed", &oidc(&claims), None);
     assert_eq!(answer.status, 401, "{}", answer.text());
 }
 
 fn a_token_from_another_issuer_is_refused() {
     let mut claims = claims("owner/repo", 1);
     claims["iss"] = json!("https://issuer.elsewhere.test");
-    let answer = api("GET", "/api/v1/installed", &oidc(&claims), None);
+    let answer = api("GET", "/api/v2/installed", &oidc(&claims), None);
     assert_eq!(answer.status, 401, "{}", answer.text());
 }
 
-fn a_proof_is_refused_unless_the_app_is_installed() {
-    let body = upload_body(&proof("owner/bare", 2), &[("index.html", b"<p>bare</p>")]);
-    let answer = api("POST", "/api/v1/proofs", &ci("owner/bare", 2), Some(body));
+fn a_run_is_refused_unless_the_app_is_installed() {
+    let job = Job::push("owner/bare", "bare");
+    let answer = job.open_answer(&job.opening(&["tests"]));
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    assert!(answer.text().contains(INSTALL_URL), "{}", answer.text());
+}
+
+fn a_run_for_another_repository_is_refused() {
+    let job = Job::push("owner/repo", "theirs");
+    let mut body = job.opening(&["tests"]);
+    body["repository"] = json!("other/repo");
+    let answer = job.open_answer(&body);
     assert_eq!(answer.status, 403, "{}", answer.text());
 }
 
-fn a_proof_for_another_repository_is_refused() {
-    let body = upload_body(&proof("other/repo", 3), &[("index.html", b"<p>other</p>")]);
-    let answer = api("POST", "/api/v1/proofs", &ci("owner/repo", 3), Some(body));
+fn a_run_for_another_pull_request_is_refused() {
+    // A pull request's token names its merge ref; it opens no run of another pull request.
+    let job = Job::pull("owner/repo", 4, "four");
+    let mut body = job.opening(&["tests"]);
+    body["pull"]["number"] = json!(5);
+    let answer = job.open_answer(&body);
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    // Nor of a push.
+    let mut body = job.opening(&["tests"]);
+    body.as_object_mut().unwrap().remove("pull");
+    let answer = job.open_answer(&body);
     assert_eq!(answer.status, 403, "{}", answer.text());
 }
 
-fn a_proof_for_another_pull_request_is_refused() {
-    let body = upload_body(&proof("owner/repo", 4), &[("index.html", b"<p>four</p>")]);
-    let answer = api("POST", "/api/v1/proofs", &ci("owner/repo", 5), Some(body));
+fn a_run_for_another_branch_is_refused() {
+    // A push of one branch opens no run of another.
+    let job = Job::push("owner/repo", "mine");
+    let mut body = job.opening(&["tests"]);
+    body["branch"] = json!("main");
+    let answer = job.open_answer(&body);
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    // A pull request's run is of its own head branch.
+    let job = Job::pull("owner/repo", 6, "six");
+    let mut body = job.opening(&["tests"]);
+    body["branch"] = json!("main");
+    let answer = job.open_answer(&body);
     assert_eq!(answer.status, 403, "{}", answer.text());
 }
 
-fn a_proof_of_an_unknown_schema_is_refused() {
-    let mut proof = proof("owner/repo", 6);
-    proof["schema"] = json!(99);
-    let body = upload_body(&proof, &[("index.html", b"<p>six</p>")]);
-    let answer = api("POST", "/api/v1/proofs", &ci("owner/repo", 6), Some(body));
-    assert_eq!(answer.status, 400, "{}", answer.text());
+fn a_run_opens_and_answers_the_page_of_its_work() {
+    let app = &world().worker.url;
+    let push = Job::push("owner/repo", "feat/opens");
+    let opened = push.open(&["tests"]);
+    assert_eq!(opened.url, format!("{app}/owner/repo/work/feat/opens"));
+    assert_eq!(opened.id.len(), 32, "{}", opened.id);
+    // A pull request's work shows at the pull request.
+    let pull = Job::pull("owner/repo", 7, "feat/seven");
+    let opened = pull.open(&["tests"]);
+    assert_eq!(opened.url, format!("{app}/owner/repo/pull/7"));
+    // Once the branch has a pull request, its branch page is the same page.
+    let snapshot = live("/owner/repo/work/feat/seven", &[]);
+    assert_eq!(snapshot.status, 200, "{}", snapshot.text());
+    assert_eq!(snapshot.json()["work"]["pull"]["number"], 7);
+    // A branch with characters a path gives a meaning to is escaped.
+    let odd = Job::push("owner/repo", "odd#branch?");
+    let opened = odd.open(&["tests"]);
+    assert_eq!(opened.url, format!("{app}/owner/repo/work/odd%23branch%3F"));
+    let snapshot = live("/owner/repo/work/odd%23branch%3F", &[]);
+    assert_eq!(snapshot.status, 200, "{}", snapshot.text());
+    assert_eq!(snapshot.json()["work"]["branch"], "odd#branch?");
 }
 
-fn a_proof_asks_only_for_the_files_the_repository_lacks() {
-    let page: &[u8] = b"<p>lacks</p>";
-    let picture: &[u8] = b"a picture that does not change";
-    let files = [("index.html", page), ("media/after.png", picture)];
-    let id = upload("owner/repo", 10, &files);
-    assert!(!id.is_empty());
+fn checks_stream_into_the_run() {
+    let job = Job::push("owner/repo", "feat/stream");
+    let run = job.open(&["fmt", "tests", "lint"]);
+    let path = "/owner/repo/work/feat/stream";
+    let first = live(path, &[]).json();
+    assert_eq!(first["kind"], "snapshot");
+    assert_eq!(first["work"]["repository"], "owner/repo");
+    assert_eq!(first["work"]["branch"], "feat/stream");
+    let ids: Vec<&str> = first["runs"][0]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["fmt", "tests", "lint"],
+        "the planned checks, in order"
+    );
+    assert_eq!(first["runs"][0]["state"], "running");
+    assert_eq!(first["runs"][0]["source"]["job"], "proof");
 
-    let changed: &[u8] = b"<p>lacks, again</p>";
-    let again = [("index.html", changed), ("media/after.png", picture)];
-    let body = upload_body(&proof("owner/repo", 10), &again);
-    let answer = api("POST", "/api/v1/proofs", &ci("owner/repo", 10), Some(body));
-    assert_eq!(answer.status, 201, "{}", answer.text());
-    assert_eq!(answer.json()["missing"], json!([sha256(changed)]));
+    assert_eq!(job.started(&run.id, "fmt").status, 200);
+    let answer = job.finished(&run.id, &entry("fmt", "passed"), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.json(), json!({"missing": []}));
+    assert_eq!(job.started(&run.id, "tests").status, 200);
+    // A check the run did not plan joins at the end.
+    assert_eq!(job.started(&run.id, "extra").status, 200);
+
+    let now = live(path, &[]).json();
+    let checks = &now["runs"][0]["checks"];
+    assert_eq!(checks[0]["entry"]["outcome"], "passed", "{now:#}");
+    assert_eq!(checks[0]["entry"]["seconds"], 1.5, "{now:#}");
+    assert!(checks[1]["started"].is_number(), "{now:#}");
+    assert!(checks[1].get("entry").is_none(), "{now:#}");
+    assert!(
+        checks[2].get("started").is_none(),
+        "lint has not started: {now:#}"
+    );
+    assert_eq!(checks[3]["id"], "extra", "{now:#}");
+    // Each event counts: the snapshot says which one it holds.
+    assert_eq!(
+        now["seq"].as_u64().unwrap(),
+        first["seq"].as_u64().unwrap() + 4,
+        "{now:#}"
+    );
+}
+
+fn a_finished_check_asks_only_for_the_files_the_repository_lacks() {
+    let log: &[u8] = b"the output of tests, which does not change";
+    let job = Job::push("owner/repo", "feat/lacks");
+    let run = job.open(&["tests"]);
+    let answer = job.finished(
+        &run.id,
+        &entry("tests", "passed"),
+        &[("outputs/tests.log", log)],
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.json(), json!({"missing": [sha256(log)]}));
+    assert_eq!(job.send(log).status, 204);
+
+    // The next run of the repository holds it already.
+    let run = job.open(&["tests"]);
+    let answer = job.finished(
+        &run.id,
+        &entry("tests", "passed"),
+        &[("outputs/tests.log", log)],
+    );
+    assert_eq!(answer.json(), json!({"missing": []}));
 
     // Blobs are kept per repository: another repository sends its own.
-    let body = upload_body(&proof("other/repo", 10), &files);
-    let answer = api("POST", "/api/v1/proofs", &ci("other/repo", 10), Some(body));
-    assert_eq!(answer.status, 201, "{}", answer.text());
-    let mut missing: Vec<Value> = answer.json()["missing"].as_array().unwrap().clone();
-    missing.sort_by_key(|m| m.as_str().unwrap().to_owned());
-    let mut expected = vec![json!(sha256(page)), json!(sha256(picture))];
-    expected.sort_by_key(|m| m.as_str().unwrap().to_owned());
-    assert_eq!(missing, expected);
+    let other = Job::push("other/repo", "feat/lacks");
+    let run = other.open(&["tests"]);
+    let answer = other.finished(
+        &run.id,
+        &entry("tests", "passed"),
+        &[("outputs/tests.log", log)],
+    );
+    assert_eq!(answer.json(), json!({"missing": [sha256(log)]}));
 }
 
 fn a_blob_whose_bytes_do_not_hash_to_its_name_is_refused() {
-    let page: &[u8] = b"<p>honest bytes</p>";
-    let body = upload_body(&proof("owner/repo", 11), &[("index.html", page)]);
-    let answer = api("POST", "/api/v1/proofs", &ci("owner/repo", 11), Some(body));
-    assert_eq!(answer.status, 201, "{}", answer.text());
-    let path = format!("/api/v1/blobs/{}", sha256(page));
+    let honest: &[u8] = b"<p>honest bytes</p>";
+    let job = Job::push("owner/repo", "feat/honest");
+    let run = job.open(&["tests"]);
+    job.finished(
+        &run.id,
+        &entry("tests", "passed"),
+        &[("outputs/tests.log", honest)],
+    );
     // As long as the honest bytes, so only their hash tells them apart.
     let forged: &[u8] = b"<p>forged bytes</p>";
-    assert_eq!(forged.len(), page.len());
-    let answer = api("PUT", &path, &ci("owner/repo", 11), Some(forged.to_vec()));
+    assert_eq!(forged.len(), honest.len());
+    let path = format!("/api/v2/blobs/{}", sha256(honest));
+    let answer = api("PUT", &path, &job.token(), Some(forged.to_vec()));
     assert_eq!(answer.status, 400, "{}", answer.text());
     assert!(answer.text().contains("hash"), "{}", answer.text());
-
-    // Nothing was kept: the honest bytes are still asked for, and still accepted.
-    let body = upload_body(&proof("owner/repo", 11), &[("index.html", page)]);
-    let answer = api("POST", "/api/v1/proofs", &ci("owner/repo", 11), Some(body));
-    assert_eq!(answer.json()["missing"], json!([sha256(page)]));
-    let answer = api("PUT", &path, &ci("owner/repo", 11), Some(page.to_vec()));
-    assert_eq!(answer.status, 204, "{}", answer.text());
+    // Nothing was kept: the honest bytes are still asked for, and still taken.
+    let answer = job.done(&run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 409, "{}", answer.text());
+    assert_eq!(job.send(honest).status, 204);
 }
 
-fn a_blob_no_proof_names_is_refused() {
-    let bytes: &[u8] = b"bytes nobody asked for";
-    let path = format!("/api/v1/blobs/{}", sha256(bytes));
-    let answer = api("PUT", &path, &ci("owner/repo", 12), Some(bytes.to_vec()));
+fn a_blob_no_run_names_is_refused() {
+    let job = Job::push("owner/repo", "feat/nobody");
+    let answer = job.send(b"bytes nobody asked for");
     assert_eq!(answer.status, 409, "{}", answer.text());
 }
 
 fn done_is_refused_while_a_file_is_missing() {
-    let body = upload_body(
-        &proof("owner/repo", 13),
-        &[("index.html", b"<p>thirteen</p>")],
+    let log: &[u8] = b"the output of a check whose bytes never came";
+    let picture: &[u8] = b"\x89PNG a picture only done names";
+    let job = Job::push("owner/repo", "feat/missing");
+    let run = job.open(&["tests"]);
+    job.finished(
+        &run.id,
+        &entry("tests", "passed"),
+        &[("outputs/tests.log", log)],
     );
-    let answer = api("POST", "/api/v1/proofs", &ci("owner/repo", 13), Some(body));
-    let id = answer.json()["id"].as_str().unwrap().to_owned();
-    let answer = api(
-        "POST",
-        &format!("/api/v1/proofs/{id}/done"),
-        &ci("owner/repo", 13),
-        None,
-    );
+    // Done names the files the bundle holds besides; it lacks both, and says which.
+    let files: &[(&str, &[u8])] = &[
+        ("outputs/tests.log", log),
+        ("looks/screens/after.png", picture),
+    ];
+    let answer = job.done(&run.id, &[entry("tests", "passed")], files);
     assert_eq!(answer.status, 409, "{}", answer.text());
+    let mut wanted = vec![sha256(log), sha256(picture)];
+    wanted.sort();
+    assert_eq!(answer.json()["missing"], json!(wanted), "{}", answer.text());
+    let path = "/owner/repo/work/feat/missing";
+    assert_eq!(live(path, &[]).json()["runs"][0]["state"], "running");
+
+    assert_eq!(job.send(log).status, 204);
+    assert_eq!(job.send(picture).status, 204);
+    // The proof's entries are the final word on each check.
+    let mut last = entry("tests", "passed");
+    last["unstable"] = json!(true);
+    let answer = job.done(&run.id, &[last], files);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let url = format!("{}{path}", world().worker.url);
+    assert_eq!(answer.json(), json!({"url": url}));
+    let now = live(path, &[]).json();
+    assert_eq!(now["runs"][0]["state"], "done", "{now:#}");
+    assert_eq!(now["runs"][0]["checks"][0]["entry"]["unstable"], true);
 }
 
-fn done_is_refused_for_another_repositorys_token() {
-    let page: &[u8] = b"<p>fourteen</p>";
-    let body = upload_body(&proof("owner/repo", 14), &[("index.html", page)]);
-    let answer = api("POST", "/api/v1/proofs", &ci("owner/repo", 14), Some(body));
-    let id = answer.json()["id"].as_str().unwrap().to_owned();
-    let path = format!("/api/v1/blobs/{}", sha256(page));
-    api("PUT", &path, &ci("owner/repo", 14), Some(page.to_vec()));
-    let answer = api(
-        "POST",
-        &format!("/api/v1/proofs/{id}/done"),
-        &ci("other/repo", 14),
-        None,
+fn a_run_takes_calls_only_from_its_own_repository_and_ref() {
+    let job = Job::pull("owner/repo", 8, "feat/eight");
+    let run = job.open(&["tests"]);
+    // Another repository's token does not find it.
+    let stranger = Job::pull("other/repo", 8, "feat/eight");
+    assert_eq!(stranger.started(&run.id, "tests").status, 404);
+    assert_eq!(stranger.done(&run.id, &[], &[]).status, 404);
+    // A token of the same repository for another pull request may not write it.
+    let other = Job::pull("owner/repo", 9, "feat/eight");
+    let answer = other.started(&run.id, "tests");
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    assert_eq!(other.done(&run.id, &[], &[]).status, 403);
+    // Nor may a push of the same branch.
+    let push = Job::push("owner/repo", "feat/eight");
+    assert_eq!(push.started(&run.id, "tests").status, 403);
+    // Its own job may.
+    assert_eq!(job.started(&run.id, "tests").status, 200);
+}
+
+fn a_closed_run_takes_nothing_more() {
+    let job = Job::push("owner/repo", "feat/closed");
+    let run = job.open(&["tests"]);
+    assert_eq!(
+        job.done(&run.id, &[entry("tests", "passed")], &[]).status,
+        200
     );
-    assert_eq!(answer.status, 404, "{}", answer.text());
+    let answer = job.started(&run.id, "tests");
+    assert_eq!(answer.status, 409, "{}", answer.text());
+    assert_eq!(
+        job.done(&run.id, &[entry("tests", "passed")], &[]).status,
+        409
+    );
+}
+
+fn done_refuses_a_proof_of_an_unknown_schema() {
+    let job = Job::push("owner/repo", "feat/schema");
+    let run = job.open(&["tests"]);
+    let mut body = job.closing(&[], &[], &[]);
+    body["proof"]["schema"] = json!(99);
+    let path = format!("/api/v2/runs/{}/done", run.id);
+    let answer = api("POST", &path, &job.token(), Some(body.to_string().into()));
+    assert_eq!(answer.status, 400, "{}", answer.text());
+    assert!(answer.text().contains("99"), "{}", answer.text());
 }
 
 // The pages.
 
-fn a_public_proof_shows_to_anyone() {
-    let page: &[u8] = b"<!doctype html><p>public</p>";
-    let picture: &[u8] = b"\x89PNG a public picture";
-    let id = upload(
-        "owner/repo",
-        20,
-        &[("index.html", page), ("media/after.png", picture)],
-    );
-    let folder = format!("/owner/repo/proofs/{id}/");
-
-    // The app origin answers with its own shell; the bundle's page comes from the files origin.
-    let answer = get(&folder, &[]);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    assert!(
-        answer
-            .header("content-type")
-            .unwrap()
-            .starts_with("text/html")
-    );
-    let frame = frame_url(&answer);
-    let answer = get_url(&frame, &[]);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    assert_eq!(answer.body, page);
-    assert!(
-        answer
-            .header("content-type")
-            .unwrap()
-            .starts_with("text/html")
-    );
-
-    // The page's relative links resolve beside it, on the files origin.
-    let base = frame.strip_suffix("index.html").unwrap();
-    let answer = get_url(&format!("{base}media/after.png"), &[]);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    assert_eq!(answer.body, picture);
-    assert_eq!(answer.header("content-type").unwrap(), "image/png");
-
-    assert_eq!(get_url(&format!("{base}media/none.png"), &[]).status, 404);
-
-    // Relative links need the folder's slash.
-    let answer = get(&format!("/owner/repo/proofs/{id}"), &[]);
-    assert_eq!(answer.status, 301, "{}", answer.text());
-    assert_eq!(answer.header("location").unwrap(), folder);
-}
-
-fn a_film_is_served_in_ranges() {
-    let film: &[u8] = b"0123456789 a film of eleven and more bytes";
-    let id = upload(
-        "owner/repo",
-        21,
-        &[("index.html", b"<p>film</p>"), ("media/run.mp4", film)],
-    );
-    let path = format!("{}media/run.mp4", files_base("owner/repo", &id, &[]));
-
-    let answer = get_url(&path, &[("Range", "bytes=2-5")]);
-    assert_eq!(answer.status, 206, "{}", answer.text());
-    assert_eq!(answer.body, b"2345");
-    assert_eq!(
-        answer.header("content-range").unwrap(),
-        format!("bytes 2-5/{}", film.len())
-    );
-    assert_eq!(answer.header("content-type").unwrap(), "video/mp4");
-
-    let answer = get_url(&path, &[("Range", "bytes=-5")]);
-    assert_eq!(answer.status, 206, "{}", answer.text());
-    assert_eq!(answer.body, &film[film.len() - 5..]);
-
-    let answer = get_url(&path, &[("Range", "bytes=40-")]);
-    assert_eq!(answer.status, 206, "{}", answer.text());
-    assert_eq!(answer.body, &film[40..]);
-
-    let answer = get_url(&path, &[]);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    assert_eq!(answer.header("accept-ranges").unwrap(), "bytes");
-}
-
-// The files origin.
-
-fn the_app_origin_never_serves_bundle_files() {
-    let page: &[u8] = b"<script>steal(document.cookie)</script>";
-    let id = upload(
-        "owner/repo",
-        25,
-        &[("index.html", page), ("media/after.png", b"a picture")],
-    );
-    let folder = format!("/owner/repo/proofs/{id}/");
-    let shell = get(&folder, &[]);
-    assert_eq!(shell.status, 200, "{}", shell.text());
-    assert!(!shell.text().contains("steal"), "{}", shell.text());
-    for path in ["index.html", "media/after.png"] {
-        let answer = get(&format!("{folder}{path}"), &[]);
-        assert_eq!(answer.status, 404, "{path}: {}", answer.text());
+fn the_work_page_is_served_for_a_navigation() {
+    let job = Job::pull("owner/repo", 20, "feat/page");
+    job.open(&["tests"]);
+    for path in ["/owner/repo/work/feat/page", "/owner/repo/pull/20"] {
+        let answer = navigate(path, &[]);
+        assert_eq!(answer.status, 200, "{path}: {}", answer.text());
+        assert!(
+            answer
+                .header("content-type")
+                .unwrap()
+                .starts_with("text/html"),
+            "{path}"
+        );
+        let html = answer.text();
+        assert!(html.contains(r#"<div id="app">"#), "{path}: {html}");
+        // The app's script is served beside it, from the same origin.
+        let start = html.find("/assets/").unwrap();
+        let end = start + html[start..].find('"').unwrap();
+        let script = get(&html[start..end], &[]);
+        assert_eq!(script.status, 200, "{}", &html[start..end]);
+        let policy = answer.header("content-security-policy").unwrap();
+        assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
+        // Pictures and films load from the files origin only.
+        let files = &world().worker.files;
+        for directive in [format!("img-src {files}"), format!("media-src {files}")] {
+            assert!(policy.contains(&directive), "{policy}");
+        }
     }
-    // Nor does the files origin answer the app's paths.
-    for path in [folder.as_str(), "/login", "/owner/repo/pull/25"] {
+}
+
+fn an_unknown_work_is_not_found() {
+    for path in [
+        "/owner/repo/work/no-such-branch",
+        "/owner/repo/pull/999",
+        "/owner/repo/elsewhere/x",
+    ] {
+        assert_eq!(navigate(path, &[]).status, 404, "{path}");
+    }
+    assert_eq!(live("/owner/repo/work/no-such-branch", &[]).status, 404);
+}
+
+fn the_app_origin_serves_no_files_and_the_files_origin_no_pages() {
+    let log: &[u8] = b"<script>steal(document.cookie)</script>";
+    let job = Job::push("owner/repo", "feat/origins");
+    let run = job.open(&["tests"]);
+    job.finished(
+        &run.id,
+        &entry("tests", "passed"),
+        &[("looks/tests/home.png", log)],
+    );
+    job.send(log);
+    let page = "/owner/repo/work/feat/origins";
+    let answer = navigate(page, &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert!(!answer.text().contains("steal"));
+    let answer = get(&format!("{page}/looks/tests/home.png"), &[]);
+    assert_eq!(answer.status, 404, "{}", answer.text());
+    // The files origin answers none of the app's paths.
+    for path in [
+        page,
+        "/login",
+        "/api/v2/installed",
+        "/live/owner/repo/work/feat/origins",
+    ] {
         let answer = get_url(&format!("{}{path}", world().worker.files), &[]);
         assert_eq!(answer.status, 404, "{path}: {}", answer.text());
     }
-}
-
-fn the_shell_frames_the_files_origin_in_a_sandbox() {
-    let id = upload("owner/repo", 26, &[("index.html", b"<p>framed</p>")]);
-    let shell = get(&format!("/owner/repo/proofs/{id}/"), &[]);
-    assert_eq!(shell.status, 200, "{}", shell.text());
-    let html = shell.text();
-    let frame = frame_url(&shell);
-    assert!(
-        frame.starts_with(&format!("{}/", world().worker.files)),
-        "{frame}"
-    );
-    assert!(frame.ends_with("/index.html"), "{frame}");
-    let sandbox = attribute(&html, "sandbox").unwrap_or_else(|| panic!("no sandbox: {html}"));
-    let tokens: Vec<&str> = sandbox.split_whitespace().collect();
-    assert!(tokens.contains(&"allow-scripts"), "{sandbox}");
-    assert!(tokens.contains(&"allow-same-origin"), "{sandbox}");
-    assert!(
-        !tokens.iter().any(|t| t.starts_with("allow-top-navigation")),
-        "{sandbox}"
-    );
-    // The shell holds a grant, so it is never cached, and nobody frames the app origin.
-    assert_eq!(shell.header("cache-control").unwrap(), "no-store");
-    let policy = shell.header("content-security-policy").unwrap();
-    assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
-    assert!(
-        policy.contains(&format!("frame-src {}", world().worker.files)),
-        "{policy}"
-    );
-
-    // Only the app origin may frame the files.
-    let answer = get_url(&frame, &[]);
+    // Under a grant, the file is there, as the picture its name says and nothing else.
+    let grant = files_base("owner/repo", &run.id, &[]);
+    let answer = get_url(&format!("{grant}looks/tests/home.png"), &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.body, log);
+    assert_eq!(answer.header("content-type").unwrap(), "image/png");
+    assert_eq!(answer.header("x-content-type-options").unwrap(), "nosniff");
     let policy = answer.header("content-security-policy").unwrap();
     assert!(
         policy.contains(&format!("frame-ancestors {}", world().worker.url)),
         "{policy}"
     );
-    assert!(answer.header("x-frame-options").is_some());
-}
-
-fn the_files_origin_refuses_a_missing_grant() {
-    let id = upload("owner/repo", 27, &[("index.html", b"<p>granted</p>")]);
-    let files = &world().worker.files;
-    for path in [
-        "/index.html".to_owned(),
-        format!("/{id}/index.html"),
-        format!("/owner/repo/proofs/{id}/index.html"),
-    ] {
-        let answer = get_url(&format!("{files}{path}"), &[]);
-        assert_eq!(answer.status, 404, "{path}: {}", answer.text());
-    }
-}
-
-fn the_files_origin_refuses_a_tampered_grant() {
-    let id = upload("owner/repo", 28, &[("index.html", b"<p>tamper</p>")]);
-    let frame = frame_url(&get(&format!("/owner/repo/proofs/{id}/"), &[]));
-    assert_eq!(get_url(&frame, &[]).status, 200);
-    let files = &world().worker.files;
-    let grant = frame
-        .strip_prefix(&format!("{files}/"))
-        .unwrap()
-        .strip_suffix("/index.html")
-        .unwrap();
-    let (payload, mac) = grant.split_once('.').unwrap();
-
-    // A later expiry under the old seal.
-    let decoded = URL_SAFE_NO_PAD.decode(payload).unwrap();
-    let mut claims: Value = serde_json::from_slice(&decoded).unwrap();
-    claims["exp"] = json!(claims["exp"].as_i64().unwrap() + 86400);
-    let longer = URL_SAFE_NO_PAD.encode(claims.to_string());
-    let answer = get_url(&format!("{files}/{longer}.{mac}/index.html"), &[]);
-    assert_eq!(answer.status, 404, "{}", answer.text());
-
-    // A seal changed by one character.
-    let mut mac = mac.to_owned();
-    let last = mac.pop().unwrap();
-    mac.push(if last == 'A' { 'B' } else { 'A' });
-    let answer = get_url(&format!("{files}/{payload}.{mac}/index.html"), &[]);
-    assert_eq!(answer.status, 404, "{}", answer.text());
-}
-
-fn the_files_origin_refuses_an_expired_grant() {
-    let id = upload("owner/repo", 29, &[("index.html", b"<p>expiry</p>")]);
-    // A grant sealed with the host's key is good until its expiry, and not after.
-    let fresh = files_base("owner/repo", &id, &[]);
-    assert_eq!(get_url(&format!("{fresh}index.html"), &[]).status, 200);
-    let expired = files_base("owner/repo", &id, &[("exp", json!(now() - 1))]);
-    let answer = get_url(&format!("{expired}index.html"), &[]);
-    assert_eq!(answer.status, 404, "{}", answer.text());
-}
-
-fn the_files_origin_refuses_a_grant_for_another_proof() {
-    let mine = upload("owner/repo", 34, &[("index.html", b"<p>mine</p>")]);
-    let theirs = upload("owner/secret", 34, &[("index.html", b"<p>theirs</p>")]);
-    // The grant for one proof shows that proof, not another.
-    let frame = frame_url(&get(&format!("/owner/repo/proofs/{mine}/"), &[]));
-    assert_eq!(get_url(&frame, &[]).body, b"<p>mine</p>");
-    // A grant naming a proof of another repository than its own opens nothing.
-    let crossed = files_base("owner/repo", &theirs, &[]);
-    let answer = get_url(&format!("{crossed}index.html"), &[]);
-    assert_eq!(answer.status, 404, "{}", answer.text());
-    // Nor does a grant for a proof that does not exist.
-    let unknown = files_base("owner/repo", "0123456789abcdef0123456789abcdef", &[]);
-    assert_eq!(get_url(&format!("{unknown}index.html"), &[]).status, 404);
-}
-
-fn the_files_origin_ignores_cookies_and_sets_none() {
-    let id = upload("owner/secret", 35, &[("index.html", b"<p>cookies</p>")]);
-    let path = format!("/owner/secret/proofs/{id}/");
-    let session = sign_in("reader-code", &path);
-    // A session is no grant on the files origin.
-    let files = &world().worker.files;
-    let answer = get_url(&format!("{files}{path}index.html"), &[("Cookie", &session)]);
-    assert_eq!(answer.status, 404, "{}", answer.text());
-    let frame = frame_url(&get(&path, &[("Cookie", &session)]));
-    let answer = get_url(&frame, &[("Cookie", &session)]);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    assert!(answer.header("set-cookie").is_none());
-    let answer = get_url(&frame, &[]);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    assert!(answer.header("set-cookie").is_none());
-}
-
-fn a_proof_shows_nothing_before_done() {
-    let page: &[u8] = b"<p>not whole yet</p>";
-    let body = upload_body(&proof("owner/repo", 22), &[("index.html", page)]);
-    let answer = api("POST", "/api/v1/proofs", &ci("owner/repo", 22), Some(body));
-    let created = answer.json();
-    let path = format!("/api/v1/blobs/{}", sha256(page));
-    api("PUT", &path, &ci("owner/repo", 22), Some(page.to_vec()));
-    let id = created["id"].as_str().unwrap();
-    assert_eq!(get(&format!("/owner/repo/proofs/{id}/"), &[]).status, 404);
-}
-
-fn pull_leads_to_the_latest_whole_proof() {
-    upload("owner/repo", 23, &[("index.html", b"<p>first</p>")]);
-    let second = upload("owner/repo", 23, &[("index.html", b"<p>second</p>")]);
-    // A third that never finishes leaves the second as the latest.
-    let body = upload_body(&proof("owner/repo", 23), &[("index.html", b"<p>third</p>")]);
-    api("POST", "/api/v1/proofs", &ci("owner/repo", 23), Some(body));
-
-    let answer = get("/owner/repo/pull/23", &[]);
-    assert_eq!(answer.status, 302, "{}", answer.text());
-    assert_eq!(
-        answer.header("location").unwrap(),
-        format!("/owner/repo/proofs/{second}/")
-    );
-    assert_eq!(get("/owner/repo/pull/24", &[]).status, 404);
-}
-
-fn an_older_head_finishing_last_keeps_the_newer_proof_latest() {
-    // GitHub says the pull request is at HEAD; a slow run of an earlier push finishes last.
-    let mut older = proof("owner/repo", 83);
-    older["head"] = json!("0ld0000aaaa0000aaaa0000aaaa0000aaaa0000a");
-    let newer = start_upload("owner/repo", 83, &proof("owner/repo", 83), b"<p>newer</p>");
-    let late = start_upload("owner/repo", 83, &older, b"<p>older</p>");
-    finish_upload("owner/repo", 83, &newer);
-    finish_upload("owner/repo", 83, &late);
-    let answer = get("/owner/repo/pull/83", &[]);
-    assert_eq!(answer.status, 302, "{}", answer.text());
-    assert_eq!(
-        answer.header("location").unwrap(),
-        format!("/owner/repo/proofs/{newer}/"),
-        "the proof of the current head stays the latest"
-    );
-    // The older proof is still whole at its own address.
-    assert_eq!(get(&format!("/owner/repo/proofs/{late}/"), &[]).status, 200);
-
-    // An older head that finishes while nothing newer is whole is the latest there is.
-    let mut older = proof("owner/repo", 84);
-    older["head"] = json!("0ld0000aaaa0000aaaa0000aaaa0000aaaa0000a");
-    let late = start_upload("owner/repo", 84, &older, b"<p>alone</p>");
-    finish_upload("owner/repo", 84, &late);
-    let answer = get("/owner/repo/pull/84", &[]);
-    assert_eq!(
-        answer.header("location").unwrap(),
-        format!("/owner/repo/proofs/{late}/")
-    );
 }
 
 // Who sees a page.
 
-fn a_private_proof_sends_a_stranger_to_sign_in() {
-    let id = upload("owner/secret", 30, &[("index.html", b"<p>secret</p>")]);
-    let path = format!("/owner/secret/proofs/{id}/");
-    let answer = get(&path, &[]);
+fn a_private_work_sends_a_stranger_to_sign_in() {
+    Job::push("owner/secret", "feat/stranger").open(&["tests"]);
+    let path = "/owner/secret/work/feat/stranger";
+    let answer = navigate(path, &[]);
     assert_eq!(answer.status, 302, "{}", answer.text());
     assert_eq!(
         answer.header("location").unwrap(),
         format!("/login?next={}", path.replace('/', "%2F"))
     );
+    // Its live connection answers without a sign in, and says nothing of the work.
+    let answer = live(path, &[]);
+    assert_eq!(answer.status, 401, "{}", answer.text());
+    assert!(
+        !answer.text().contains("feat/stranger"),
+        "{}",
+        answer.text()
+    );
 }
 
-fn a_reader_signs_in_and_sees_a_private_proof() {
-    let page: &[u8] = b"<p>secret, for readers</p>";
-    let id = upload("owner/secret", 31, &[("index.html", page)]);
-    let path = format!("/owner/secret/proofs/{id}/");
-    let session = sign_in("reader-code", &path);
-    let answer = get(&path, &[("Cookie", &session)]);
+fn a_reader_signs_in_and_sees_a_private_work() {
+    Job::pull("owner/secret", 31, "feat/reader").open(&["tests"]);
+    let path = "/owner/secret/pull/31";
+    let session = sign_in("reader-code", path);
+    let answer = navigate(path, &[("Cookie", &session)]);
     assert_eq!(answer.status, 200, "{}", answer.text());
-    let answer = get_url(&frame_url(&answer), &[]);
+    let answer = live(path, &[("Cookie", &session)]);
     assert_eq!(answer.status, 200, "{}", answer.text());
-    assert_eq!(answer.body, page);
-
-    let answer = get("/owner/secret/pull/31", &[("Cookie", &session)]);
-    assert_eq!(answer.status, 302, "{}", answer.text());
-    assert_eq!(answer.header("location").unwrap(), path);
+    assert_eq!(answer.json()["work"]["branch"], "feat/reader");
 }
 
 fn a_signed_in_person_without_access_gets_not_found() {
-    let id = upload(
-        "owner/secret",
-        32,
-        &[("index.html", b"<p>not for strangers</p>")],
-    );
-    let path = format!("/owner/secret/proofs/{id}/");
-    let session = sign_in("stranger-code", &path);
-    assert_eq!(get(&path, &[("Cookie", &session)]).status, 404);
-    assert_eq!(
-        get("/owner/secret/pull/32", &[("Cookie", &session)]).status,
-        404
-    );
+    Job::push("owner/secret", "feat/no-access").open(&["tests"]);
+    let path = "/owner/secret/work/feat/no-access";
+    let session = sign_in("stranger-code", path);
+    assert_eq!(navigate(path, &[("Cookie", &session)]).status, 404);
+    assert_eq!(live(path, &[("Cookie", &session)]).status, 404);
 }
 
 fn an_unknown_repository_looks_like_a_private_one() {
-    let path = "/nobody/nothing/proofs/0123456789abcdef/";
-    let answer = get(path, &[]);
+    let path = "/nobody/nothing/work/main";
+    let answer = navigate(path, &[]);
     assert_eq!(answer.status, 302, "{}", answer.text());
     let session = sign_in("stranger-code", path);
-    assert_eq!(get(path, &[("Cookie", &session)]).status, 404);
+    assert_eq!(navigate(path, &[("Cookie", &session)]).status, 404);
 }
 
 fn a_forged_session_counts_as_none() {
-    let id = upload("owner/secret", 33, &[("index.html", b"<p>forged</p>")]);
-    let path = format!("/owner/secret/proofs/{id}/");
-    let session = sign_in("reader-code", &path);
+    Job::push("owner/secret", "feat/forged").open(&["tests"]);
+    let path = "/owner/secret/work/feat/forged";
+    let session = sign_in("reader-code", path);
     let mut forged = session.clone();
     let last = forged.pop().unwrap();
     forged.push(if last == 'A' { 'B' } else { 'A' });
-    let answer = get(&path, &[("Cookie", &forged)]);
+    let answer = navigate(path, &[("Cookie", &forged)]);
     assert_eq!(answer.status, 302, "{}", answer.text());
 }
 
@@ -903,16 +993,16 @@ fn sign_in_refuses_a_state_it_did_not_give() {
 }
 
 fn logout_ends_the_session() {
-    let id = upload("owner/secret", 36, &[("index.html", b"<p>logout</p>")]);
-    let path = format!("/owner/secret/proofs/{id}/");
-    let session = sign_in("reader-code", &path);
-    assert_eq!(get(&path, &[("Cookie", &session)]).status, 200);
+    Job::push("owner/secret", "feat/logout").open(&["tests"]);
+    let path = "/owner/secret/work/feat/logout";
+    let session = sign_in("reader-code", path);
+    assert_eq!(navigate(path, &[("Cookie", &session)]).status, 200);
     let answer = get("/logout", &[("Cookie", &session)]);
     assert_eq!(answer.status, 302, "{}", answer.text());
     let cleared = cookie_set(&answer, "session").unwrap();
     assert!(cleared.contains("Max-Age=0"), "{cleared}");
     // The host forgot the session: the old cookie, sent again, is no sign in.
-    let answer = get(&path, &[("Cookie", &session)]);
+    let answer = navigate(path, &[("Cookie", &session)]);
     assert_eq!(answer.status, 302, "{}", answer.text());
     let location = answer.header("location").unwrap();
     assert!(location.starts_with("/login?"), "{location}");
@@ -937,29 +1027,29 @@ fn the_session_cookie_holds_only_a_random_id() {
 // Caching GitHub's answers.
 
 fn a_second_view_does_not_ask_github_who_may_read() {
-    let id = upload("owner/cached", 37, &[("index.html", b"<p>cached</p>")]);
-    let path = format!("/owner/cached/proofs/{id}/");
-    let session = sign_in("reader-code", &path);
+    Job::push("owner/cached", "feat/cached").open(&["tests"]);
+    let path = "/owner/cached/work/feat/cached";
+    let session = sign_in("reader-code", path);
     let github = &world().github;
     let before = github.asked("GET", "/repos/owner/cached");
-    assert_eq!(get(&path, &[("Cookie", &session)]).status, 200);
-    assert_eq!(get(&path, &[("Cookie", &session)]).status, 200);
-    let answer = get("/owner/cached/pull/37", &[("Cookie", &session)]);
-    assert_eq!(answer.status, 302, "{}", answer.text());
+    assert_eq!(navigate(path, &[("Cookie", &session)]).status, 200);
+    assert_eq!(navigate(path, &[("Cookie", &session)]).status, 200);
+    assert_eq!(live(path, &[("Cookie", &session)]).status, 200);
     assert_eq!(github.asked("GET", "/repos/owner/cached"), before + 1);
 }
 
 fn a_second_view_does_not_ask_github_whether_public() {
-    let id = upload("owner/open", 38, &[("index.html", b"<p>open</p>")]);
-    let path = format!("/owner/open/proofs/{id}/");
+    Job::push("owner/open", "feat/open").open(&["tests"]);
+    let path = "/owner/open/work/feat/open";
     let github = &world().github;
     let installation = "/repos/owner/open/installation";
     let (repo, install) = (
         github.asked("GET", "/repos/owner/open"),
         github.asked("GET", installation),
     );
-    assert_eq!(get(&path, &[]).status, 200);
-    assert_eq!(get(&path, &[]).status, 200);
+    assert_eq!(navigate(path, &[]).status, 200);
+    assert_eq!(navigate(path, &[]).status, 200);
+    assert_eq!(live(path, &[]).status, 200);
     assert_eq!(github.asked("GET", "/repos/owner/open"), repo + 1);
     assert_eq!(github.asked("GET", installation), install + 1);
 }
@@ -970,7 +1060,7 @@ fn an_unknown_key_id_refetches_the_jwks_once() {
     let before = github.asked("GET", jwks);
     // Known keys come from the cache.
     for _ in 0..2 {
-        let answer = api("GET", "/api/v1/installed", &ci("owner/repo", 1), None);
+        let answer = api("GET", "/api/v2/installed", &ci("owner/repo", 1), None);
         assert_eq!(answer.status, 200, "{}", answer.text());
     }
     assert_eq!(github.asked("GET", jwks), before);
@@ -979,793 +1069,2645 @@ fn an_unknown_key_id_refetches_the_jwks_once() {
     let mut rng = rand::thread_rng();
     let rotated = RsaPrivateKey::new(&mut rng, 2048).unwrap();
     let token = sign_with_kid(&rotated, "rotated-key", &claims("owner/repo", 1));
-    let answer = api("GET", "/api/v1/installed", &token, None);
+    let answer = api("GET", "/api/v2/installed", &token, None);
     assert_eq!(answer.status, 401, "{}", answer.text());
     assert_eq!(github.asked("GET", jwks), before + 1);
 
     // Once GitHub publishes it, the next token naming it refetches and passes, and later ones
     // find it in the cache.
     github.publish("rotated-key", RsaPublicKey::from(&rotated));
-    let answer = api("GET", "/api/v1/installed", &token, None);
+    let answer = api("GET", "/api/v2/installed", &token, None);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(github.asked("GET", jwks), before + 2);
-    let answer = api("GET", "/api/v1/installed", &token, None);
+    let answer = api("GET", "/api/v2/installed", &token, None);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(github.asked("GET", jwks), before + 2);
 }
 
-// Approving and accepting on the page.
+// The files origin.
 
-fn an_approval_on_the_page_posts_the_comment_as_the_person() {
-    let id = upload_proof("owner/team", 50, &waiting("owner/team", 50));
-    let session = sign_in("writer-code", "/");
-    let words = json!({"check": "screens", "words": "  the header reads well "});
-    let answer = act("owner/team", &id, "approve", Some(&session), words);
-    assert_eq!(answer.status, 201, "{}", answer.text());
-    let posted = world().github.posted("owner/team", 50);
-    assert_eq!(posted.len(), 1, "{posted:?}");
+/// A run of `owner/repo` holding `bytes` at `path`, sent; its id.
+fn run_with_file(branch: &str, path: &str, bytes: &[u8]) -> String {
+    let job = Job::push("owner/repo", branch);
+    let run = job.open(&["tests"]);
+    job.finished(&run.id, &entry("tests", "passed"), &[(path, bytes)]);
+    assert_eq!(job.send(bytes).status, 204);
+    run.id
+}
+
+fn a_file_is_served_in_ranges_under_a_grant() {
+    let film: &[u8] = b"0123456789 a film of eleven and more bytes";
+    let run = run_with_file("feat/film", "looks/screens/run.mp4", film);
+    let path = format!(
+        "{}looks/screens/run.mp4",
+        files_base("owner/repo", &run, &[])
+    );
+
+    let answer = get_url(&path, &[("Range", "bytes=2-5")]);
+    assert_eq!(answer.status, 206, "{}", answer.text());
+    assert_eq!(answer.body, b"2345");
     assert_eq!(
-        posted[0].login, "writer",
-        "posted with the person's own token"
+        answer.header("content-range").unwrap(),
+        format!("bytes 2-5/{}", film.len())
     );
-    assert_eq!(posted[0].body, "/fearlezz approve the header reads well");
-    let url = answer.json()["url"].as_str().unwrap().to_owned();
-    assert!(
-        url.starts_with("https://github.com/owner/team/pull/50#issuecomment-"),
-        "{url}"
-    );
-    assert_eq!(answer.json()["pull"], 50);
-}
+    assert_eq!(answer.header("content-type").unwrap(), "video/mp4");
 
-fn a_forks_approval_names_its_head() {
-    let id = upload_proof("owner/team", 51, &waiting("owner/team", 51));
-    world()
-        .github
-        .set_head("owner/team", 51, github::HEAD, "someone/team");
-    let session = sign_in("writer-code", "/");
-    let words = json!({"check": "screens", "words": "looks right"});
-    let answer = act("owner/team", &id, "approve", Some(&session), words);
-    assert_eq!(answer.status, 201, "{}", answer.text());
-    let posted = world().github.posted("owner/team", 51);
-    assert_eq!(posted[0].body, "/fearlezz approve abc1234 looks right");
-}
+    let answer = get_url(&path, &[("Range", "bytes=-5")]);
+    assert_eq!(answer.status, 206, "{}", answer.text());
+    assert_eq!(answer.body, &film[film.len() - 5..]);
 
-fn an_admin_accepts_a_weakening_on_the_page() {
-    let id = upload_proof("owner/team", 52, &waiting("owner/team", 52));
-    let session = sign_in("admin-code", "/");
-    let words = json!({"words": "the old command hid nothing"});
-    let answer = act("owner/team", &id, "accept", Some(&session), words);
-    assert_eq!(answer.status, 201, "{}", answer.text());
-    let posted = world().github.posted("owner/team", 52);
-    assert_eq!(posted.len(), 1, "{posted:?}");
-    assert_eq!(posted[0].login, "admin");
-    assert_eq!(
-        posted[0].body,
-        "/fearlezz accept the old command hid nothing"
-    );
-}
+    let answer = get_url(&path, &[("Range", "bytes=40-")]);
+    assert_eq!(answer.status, 206, "{}", answer.text());
+    assert_eq!(answer.body, &film[40..]);
 
-fn accepting_on_the_page_needs_admin_rights() {
-    let id = upload_proof("owner/team", 53, &waiting("owner/team", 53));
-    let session = sign_in("writer-code", "/");
-    let answer = act(
-        "owner/team",
-        &id,
-        "accept",
-        Some(&session),
-        json!({"words": "fine"}),
-    );
-    assert_eq!(answer.status, 403, "{}", answer.text());
-    let error = answer.json()["error"].as_str().unwrap().to_owned();
-    assert!(error.contains("admin rights"), "{error}");
-    assert!(world().github.posted("owner/team", 53).is_empty());
-}
-
-fn approving_on_the_page_needs_write_access() {
-    let id = upload_proof("owner/team", 54, &waiting("owner/team", 54));
-    let session = sign_in("reader-code", "/");
-    let words = json!({"check": "screens", "words": "fine"});
-    let answer = act("owner/team", &id, "approve", Some(&session), words);
-    assert_eq!(answer.status, 403, "{}", answer.text());
-    let error = answer.json()["error"].as_str().unwrap().to_owned();
-    assert!(error.contains("write access"), "{error}");
-    assert!(world().github.posted("owner/team", 54).is_empty());
-}
-
-fn approving_on_the_page_needs_a_session() {
-    let id = upload_proof("owner/team", 55, &waiting("owner/team", 55));
-    let words = json!({"check": "screens", "words": "fine"});
-    let answer = act("owner/team", &id, "approve", None, words);
-    assert_eq!(answer.status, 401, "{}", answer.text());
-    assert!(answer.json()["error"].as_str().unwrap().contains("sign in"));
-    assert!(world().github.posted("owner/team", 55).is_empty());
-}
-
-fn approving_from_another_site_is_refused() {
-    let id = upload_proof("owner/team", 56, &waiting("owner/team", 56));
-    let session = sign_in("writer-code", "/");
-    let path = format!("/owner/team/proofs/{id}/approve");
-    let body = json!({"check": "screens", "words": "fine"})
-        .to_string()
-        .into_bytes();
-    let files = world().worker.files.clone();
-    let cookie = session.as_str();
-    for origin in [Some("https://evil.test"), Some(files.as_str()), None] {
-        let mut headers = vec![("Cookie", cookie), ("Content-Type", "application/json")];
-        if let Some(origin) = origin {
-            headers.push(("Origin", origin));
-        }
-        let answer = request("POST", &path, &headers, Some(body.clone()));
-        assert_eq!(answer.status, 403, "{origin:?}: {}", answer.text());
-    }
-    // A form post from the app's own origin is no JSON, and gets nothing either.
-    let origin = world().worker.url.clone();
-    let headers = [
-        ("Cookie", cookie),
-        ("Origin", origin.as_str()),
-        ("Content-Type", "application/x-www-form-urlencoded"),
-    ];
-    let answer = request("POST", &path, &headers, Some(b"words=fine".to_vec()));
-    assert_eq!(answer.status, 415, "{}", answer.text());
-    assert!(world().github.posted("owner/team", 56).is_empty());
-}
-
-fn approving_needs_words_on_one_line() {
-    let id = upload_proof("owner/team", 57, &waiting("owner/team", 57));
-    let session = sign_in("writer-code", "/");
-    for words in ["", "   ", "fine\nreally", "fine\rreally"] {
-        let body = json!({"check": "screens", "words": words});
-        let answer = act("owner/team", &id, "approve", Some(&session), body);
-        assert_eq!(answer.status, 400, "{words:?}: {}", answer.text());
-    }
-    let long = "a".repeat(501);
-    let body = json!({"check": "screens", "words": long});
-    let answer = act("owner/team", &id, "approve", Some(&session), body);
-    assert_eq!(answer.status, 400, "{}", answer.text());
-    assert!(world().github.posted("owner/team", 57).is_empty());
-}
-
-fn approving_an_older_proof_is_refused() {
-    let older = upload_proof("owner/team", 58, &waiting("owner/team", 58));
-    let newer = upload_proof("owner/team", 58, &waiting("owner/team", 58));
-    let session = sign_in("writer-code", "/");
-    let words = json!({"check": "screens", "words": "fine"});
-    let answer = act(
-        "owner/team",
-        &older,
-        "approve",
-        Some(&session),
-        words.clone(),
-    );
-    assert_eq!(answer.status, 409, "{}", answer.text());
-    let error = answer.json()["error"].as_str().unwrap().to_owned();
-    assert!(error.contains("newer proof"), "{error}");
-    assert!(error.contains(&newer), "it names the newer one: {error}");
-    assert!(world().github.posted("owner/team", 58).is_empty());
-    let answer = act("owner/team", &newer, "approve", Some(&session), words);
-    assert_eq!(answer.status, 201, "{}", answer.text());
-}
-
-fn approving_after_a_newer_push_is_refused() {
-    let id = upload_proof("owner/team", 59, &waiting("owner/team", 59));
-    world().github.set_head(
-        "owner/team",
-        59,
-        "fff0000fff0000fff0000fff0000fff0000fff00",
-        "owner/team",
-    );
-    let session = sign_in("writer-code", "/");
-    let words = json!({"check": "screens", "words": "fine"});
-    let answer = act("owner/team", &id, "approve", Some(&session), words);
-    assert_eq!(answer.status, 409, "{}", answer.text());
-    let error = answer.json()["error"].as_str().unwrap().to_owned();
-    assert!(error.contains("fff0000"), "{error}");
-    assert!(world().github.posted("owner/team", 59).is_empty());
-}
-
-fn approving_needs_something_that_waits() {
-    // Nothing waits in a proof without pictures or weakenings.
-    let id = upload_proof("owner/team", 60, &proof("owner/team", 60));
-    let session = sign_in("admin-code", "/");
-    let approve = json!({"check": "screens", "words": "fine"});
-    let answer = act("owner/team", &id, "approve", Some(&session), approve);
-    assert_eq!(answer.status, 409, "{}", answer.text());
-    let answer = act(
-        "owner/team",
-        &id,
-        "accept",
-        Some(&session),
-        json!({"words": "fine"}),
-    );
-    assert_eq!(answer.status, 409, "{}", answer.text());
-    // Pictures of another check do not wait.
-    let id = upload_proof("owner/team", 61, &waiting("owner/team", 61));
-    let other = json!({"check": "others", "words": "fine"});
-    let answer = act("owner/team", &id, "approve", Some(&session), other);
-    assert_eq!(answer.status, 409, "{}", answer.text());
-    assert!(world().github.posted("owner/team", 60).is_empty());
-    assert!(world().github.posted("owner/team", 61).is_empty());
-}
-
-fn approving_a_private_proof_without_access_gets_not_found() {
-    let id = upload_proof("owner/vault", 62, &waiting("owner/vault", 62));
-    let session = sign_in("stranger-code", "/");
-    let words = json!({"check": "screens", "words": "fine"});
-    let answer = act("owner/vault", &id, "approve", Some(&session), words.clone());
-    assert_eq!(answer.status, 404, "{}", answer.text());
-    // A writer of the private repository approves it.
-    let session = sign_in("writer-code", "/");
-    let answer = act("owner/vault", &id, "approve", Some(&session), words);
-    assert_eq!(answer.status, 201, "{}", answer.text());
-}
-
-fn approving_needs_the_shells_view_token() {
-    let id = upload_proof("owner/team", 85, &waiting("owner/team", 85));
-    let other = upload_proof("owner/team", 86, &waiting("owner/team", 86));
-    let writer = sign_in("writer-code", "/");
-    let admin = sign_in("admin-code", "/");
-    let words = json!({"check": "screens", "words": "fine"});
-    let path = format!("/owner/team/proofs/{id}/approve");
-    let origin = world().worker.url.clone();
-    let send = |session: &str, view: Option<&str>| {
-        let mut headers = vec![
-            ("Origin", origin.as_str()),
-            ("Content-Type", "application/json"),
-            ("Cookie", session),
-        ];
-        if let Some(view) = view {
-            headers.push(("Fearlezz-View", view));
-        }
-        request(
-            "POST",
-            &path,
-            &headers,
-            Some(words.to_string().into_bytes()),
-        )
-    };
-    // Without the token only the shell's page holds, nothing is posted, whoever asks.
-    let answer = send(&writer, None);
-    assert_eq!(answer.status, 403, "{}", answer.text());
-    assert!(answer.json()["error"].as_str().unwrap().contains("reload"));
-    // Nor with a token of another proof's shell, another person's, or a made up one.
-    let theirs = view_token("owner/team", &id, &admin).unwrap();
-    let elsewhere = view_token("owner/team", &other, &writer).unwrap();
-    for view in [theirs.as_str(), elsewhere.as_str(), "made.up"] {
-        let answer = send(&writer, Some(view));
-        assert_eq!(answer.status, 403, "{view}: {}", answer.text());
-    }
-    assert!(world().github.posted("owner/team", 85).is_empty());
-    // The token of this person's own view of this proof posts.
-    let mine = view_token("owner/team", &id, &writer).unwrap();
-    let answer = send(&writer, Some(&mine));
-    assert_eq!(answer.status, 201, "{}", answer.text());
-}
-
-fn the_shell_offers_approve_and_accept_by_role() {
-    let id = upload_proof("owner/team", 87, &waiting("owner/team", 87));
-    let path = format!("/owner/team/proofs/{id}/");
-    let approve = "data-kind=\"approve\" data-check=\"screens\"";
-    let accept = "data-kind=\"accept\"";
-    // An admin gets both, each with a field for their own words, from the host's own proof.
-    let admin = sign_in("admin-code", "/");
-    let html = get(&path, &[("Cookie", &admin)]).text();
-    let bar = &html[html
-        .find("id=\"waits\"")
-        .unwrap_or_else(|| panic!("{html}"))..];
-    let bar = &bar[..bar.find("</section>").unwrap()];
-    assert_eq!(bar.matches(approve).count(), 1, "{bar}");
-    assert_eq!(bar.matches(accept).count(), 1, "{bar}");
-    assert_eq!(bar.matches("name=\"words\"").count(), 2, "{bar}");
-    assert!(bar.contains("Check <code>tests</code> is weaker"), "{bar}");
-    assert!(bar.contains("it runs another command"), "{bar}");
-    assert!(
-        !bar.contains(" value="),
-        "nothing is filled in for them: {bar}"
-    );
-    // A writer approves, but only an admin accepts.
-    let writer = sign_in("writer-code", "/");
-    let html = get(&path, &[("Cookie", &writer)]).text();
-    assert!(html.contains(approve), "{html}");
-    assert!(!html.contains(accept), "{html}");
-    // A reader gets nothing to press, and someone without a session a way to sign in.
-    let reader = sign_in("reader-code", "/");
-    let html = get(&path, &[("Cookie", &reader)]).text();
-    assert!(!html.contains("data-kind="), "{html}");
-    let html = get(&path, &[]).text();
-    assert!(!html.contains("data-kind="), "{html}");
-    let next = path.replace('/', "%2F");
-    assert!(
-        html.contains(&format!("href=\"/login?next={next}\"")),
-        "{html}"
-    );
-    // A fork's head waits as a whole: one Approve that names no check.
-    let fork = upload_proof("owner/team", 88, &waiting("owner/team", 88));
-    world()
-        .github
-        .set_head("owner/team", 88, github::HEAD, "someone/team");
-    let html = get(
-        &format!("/owner/team/proofs/{fork}/"),
-        &[("Cookie", &writer)],
-    )
-    .text();
-    assert!(html.contains(approve), "{html}");
-}
-
-fn the_shell_offers_nothing_to_settle_when_nothing_waits() {
-    let id = upload_proof("owner/team", 89, &proof("owner/team", 89));
-    let admin = sign_in("admin-code", "/");
-    let html = get(&format!("/owner/team/proofs/{id}/"), &[("Cookie", &admin)]).text();
-    assert!(!html.contains("id=\"waits\""), "{html}");
-    assert!(!html.contains("data-kind="), "{html}");
-}
-
-fn the_shell_takes_only_words_from_its_frame() {
-    let id = upload_proof("owner/team", 63, &waiting("owner/team", 63));
-    let writer = sign_in("writer-code", "/");
-    let answer = get(&format!("/owner/team/proofs/{id}/"), &[("Cookie", &writer)]);
+    let answer = get_url(&path, &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
-    let csp = answer.header("content-security-policy").unwrap().to_owned();
-    let html = answer.text();
-    // Its one script runs by a nonce that changes per view, and may only call its own origin.
-    let nonce = attribute(&html[html.find("<script").unwrap()..], "nonce").unwrap();
-    assert!(nonce.len() >= 32, "{nonce}");
-    assert!(
-        csp.contains(&format!("script-src 'nonce-{nonce}'")),
-        "{csp}"
-    );
-    assert!(csp.contains("connect-src 'self'"), "{csp}");
-    let again = get(&format!("/owner/team/proofs/{id}/"), &[("Cookie", &writer)]).text();
-    assert!(!again.contains(&nonce), "a fresh nonce per view");
-    // It listens to its frame alone, from the files origin, for words to fill in.
+    assert_eq!(answer.header("accept-ranges").unwrap(), "bytes");
+    let base = files_base("owner/repo", &run, &[]);
+    assert_eq!(get_url(&format!("{base}looks/none.png"), &[]).status, 404);
+}
+
+fn the_files_origin_refuses_a_missing_tampered_or_expired_grant() {
+    let run = run_with_file("feat/grant", "looks/tests/home.png", b"granted bytes");
     let files = &world().worker.files;
-    assert!(html.contains("e.source !== frame.contentWindow"), "{html}");
-    assert!(html.contains(&format!("\"{files}\"")), "{html}");
-    assert!(html.contains("'fearlezz:fill'"), "{html}");
-    assert!(!html.contains("'fearlezz:approve'"), "{html}");
-    assert!(html.contains("credentials: 'same-origin'"), "{html}");
-    assert!(
-        html.contains("id=\"said\""),
-        "the bar for what happened: {html}"
+    for path in [
+        "/looks/tests/home.png".to_owned(),
+        format!("/{run}/looks/tests/home.png"),
+    ] {
+        let answer = get_url(&format!("{files}{path}"), &[]);
+        assert_eq!(answer.status, 404, "{path}: {}", answer.text());
+    }
+    let fresh = files_base("owner/repo", &run, &[]);
+    assert_eq!(
+        get_url(&format!("{fresh}looks/tests/home.png"), &[]).status,
+        200
+    );
+    let expired = files_base("owner/repo", &run, &[("exp", json!(now() - 1))]);
+    assert_eq!(
+        get_url(&format!("{expired}looks/tests/home.png"), &[]).status,
+        404
+    );
+    // A later expiry under the old seal, and a seal changed by one character.
+    let grant = fresh
+        .strip_prefix(&format!("{files}/"))
+        .unwrap()
+        .strip_suffix('/')
+        .unwrap();
+    let (payload, mac) = grant.split_once('.').unwrap();
+    let decoded = URL_SAFE_NO_PAD.decode(payload).unwrap();
+    let mut claims: Value = serde_json::from_slice(&decoded).unwrap();
+    claims["exp"] = json!(claims["exp"].as_i64().unwrap() + 86400);
+    let longer = URL_SAFE_NO_PAD.encode(claims.to_string());
+    let answer = get_url(&format!("{files}/{longer}.{mac}/looks/tests/home.png"), &[]);
+    assert_eq!(answer.status, 404, "{}", answer.text());
+    let mut mac = mac.to_owned();
+    let last = mac.pop().unwrap();
+    mac.push(if last == 'A' { 'B' } else { 'A' });
+    let answer = get_url(
+        &format!("{files}/{payload}.{mac}/looks/tests/home.png"),
+        &[],
+    );
+    assert_eq!(answer.status, 404, "{}", answer.text());
+}
+
+fn the_files_origin_refuses_a_grant_for_another_run() {
+    let mine = run_with_file("feat/mine", "looks/tests/home.png", b"mine");
+    let job = Job::push("owner/secret", "feat/theirs");
+    let theirs = job.open(&["tests"]);
+    job.finished(
+        &theirs.id,
+        &entry("tests", "passed"),
+        &[("looks/tests/home.png", b"theirs")],
+    );
+    job.send(b"theirs");
+    let base = files_base("owner/repo", &mine, &[]);
+    assert_eq!(
+        get_url(&format!("{base}looks/tests/home.png"), &[]).body,
+        b"mine"
+    );
+    // A grant naming a run of another repository than its own opens nothing.
+    let crossed = files_base("owner/repo", &theirs.id, &[]);
+    let answer = get_url(&format!("{crossed}looks/tests/home.png"), &[]);
+    assert_eq!(answer.status, 404, "{}", answer.text());
+    let unknown = files_base("owner/repo", "0123456789abcdef0123456789abcdef", &[]);
+    assert_eq!(
+        get_url(&format!("{unknown}looks/tests/home.png"), &[]).status,
+        404
     );
 }
 
-/// A page that asks on load, as a pull request's CI could write it: with the old messages
-/// that once had the shell post, fill messages, and a post of its own to the app origin, for
-/// the proof its grant names.
-fn asking_page(app: &str) -> String {
+fn the_files_origin_ignores_cookies_and_sets_none() {
+    let run = run_with_file("feat/cookies", "looks/tests/home.png", b"cookies");
+    let session = sign_in("reader-code", "/");
+    let base = files_base("owner/repo", &run, &[]);
+    for headers in [vec![("Cookie", session.as_str())], vec![]] {
+        let answer = get_url(&format!("{base}looks/tests/home.png"), &headers);
+        assert_eq!(answer.status, 200, "{}", answer.text());
+        assert!(answer.header("set-cookie").is_none());
+    }
+    // A session is no grant.
+    let files = &world().worker.files;
+    let answer = get_url(
+        &format!("{files}/owner/repo/work/feat/cookies"),
+        &[("Cookie", &session)],
+    );
+    assert_eq!(answer.status, 404, "{}", answer.text());
+}
+
+fn the_files_origin_serves_only_pictures_and_films() {
+    let job = Job::push("owner/repo", "feat/types");
+    let run = job.open(&["screens"]);
+    let served: &[(&str, &[u8], &str)] = &[
+        ("looks/s/a.png", b"types: a png", "image/png"),
+        ("looks/s/b.JPG", b"types: a jpg", "image/jpeg"),
+        ("looks/s/c.jpeg", b"types: a jpeg", "image/jpeg"),
+        ("looks/s/d.webp", b"types: a webp", "image/webp"),
+        ("looks/s/e.gif", b"types: a gif", "image/gif"),
+        ("looks/s/f.avif", b"types: an avif", "image/avif"),
+        ("looks/s/g.mp4", b"types: an mp4", "video/mp4"),
+        ("looks/s/h.webm", b"types: a webm", "video/webm"),
+    ];
+    // What CI wrote is content of a pull request: anything a browser could run, or guess at,
+    // is never served.
+    let refused: &[(&str, &[u8])] = &[
+        ("looks/s/evil.svg", b"<svg onload=alert(1)></svg>"),
+        ("looks/s/evil.html", b"<script>alert(1)</script> html"),
+        ("looks/s/evil.htm", b"<script>alert(1)</script> htm"),
+        ("looks/s/evil.xml", b"<x/> xml"),
+        ("outputs/screens.log", b"types: a log"),
+        ("looks/s/clip.mov", b"types: a mov"),
+        ("looks/s/blob.bin", b"types: a bin"),
+        ("looks/s/noextension", b"types: none"),
+    ];
+    let mut files: Vec<(&str, &[u8])> = served.iter().map(|(p, b, _)| (*p, *b)).collect();
+    files.extend_from_slice(refused);
+    job.finished(&run.id, &entry("screens", "passed"), &files);
+    for (_, bytes) in &files {
+        assert_eq!(job.send(bytes).status, 204);
+    }
+    let base = files_base("owner/repo", &run.id, &[]);
+    for (path, bytes, kind) in served {
+        let answer = get_url(&format!("{base}{path}"), &[]);
+        assert_eq!(answer.status, 200, "{path}: {}", answer.text());
+        assert_eq!(answer.body, *bytes, "{path}");
+        assert_eq!(answer.header("content-type").unwrap(), *kind, "{path}");
+        assert_eq!(
+            answer.header("x-content-type-options").unwrap(),
+            "nosniff",
+            "{path}"
+        );
+    }
+    for (path, _) in refused {
+        let answer = get_url(&format!("{base}{path}"), &[]);
+        assert_eq!(answer.status, 404, "{path}: {}", answer.text());
+        assert!(answer.body.len() < 40, "{path}: {}", answer.text());
+    }
+}
+
+fn the_page_gets_a_grant_for_the_files_of_a_run_it_shows() {
+    let still: &[u8] = b"a still of a public work";
+    let mine = run_with_file("feat/granted", "looks/s/home.png", still);
+    let answer = get(&format!("/api/v2/runs/{mine}/grant"), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.header("cache-control").unwrap(), "no-store");
+    let grant = answer.json();
+    let files = grant["files"].as_str().unwrap();
+    assert!(
+        files.starts_with(&format!("{}/", world().worker.files)) && files.ends_with('/'),
+        "{grant}"
+    );
+    let expires = grant["expires"].as_i64().unwrap();
+    assert!(
+        (now() + 3000..=now() + 3700).contains(&expires),
+        "an hour: {grant}"
+    );
+    let answer = get_url(&format!("{files}looks/s/home.png"), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.body, still);
+
+    // The grant opens its own run only.
+    let other: &[u8] = b"a still of another run";
+    let theirs = run_with_file("feat/granted-other", "looks/s/home.png", other);
+    let answer = get_url(&format!("{files}looks/s/home.png"), &[]);
+    assert_eq!(answer.body, still);
+    let answer = get(&format!("/api/v2/runs/{theirs}/grant"), &[]);
+    let files = answer.json()["files"].as_str().unwrap().to_owned();
+    assert_eq!(
+        get_url(&format!("{files}looks/s/home.png"), &[]).body,
+        other
+    );
+
+    // A private work's grant goes only to someone who may read it.
+    let job = Job::push("owner/secret", "feat/granted");
+    let secret = job.open(&["screens"]);
+    let path = format!("/api/v2/runs/{}/grant", secret.id);
+    assert_eq!(get(&path, &[]).status, 401);
+    let stranger = sign_in("stranger-code", "/");
+    assert_eq!(get(&path, &[("Cookie", &stranger)]).status, 404);
+    let reader = sign_in("reader-code", "/");
+    let answer = get(&path, &[("Cookie", &reader)]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(
+        get("/api/v2/runs/0123456789abcdef0123456789abcdef/grant", &[]).status,
+        404
+    );
+}
+
+// Looks.
+
+fn a_finished_check_brings_its_look_to_the_page() {
+    let job = Job::push("owner/repo", "feat/look");
+    let run = job.open(&["fmt", "screens"]);
+    let before: &[u8] = b"look: the before";
+    let after: &[u8] = b"look: the after";
+    let look = look_of(
+        "screens",
+        &[still(
+            "home.png",
+            "changed",
+            Some("looks/screens/before/home.png"),
+            Some("looks/screens/after/home.png"),
+        )],
+    );
+    let answer = job.finished_with_look(
+        &run.id,
+        &entry("screens", "passed"),
+        &[
+            ("looks/screens/before/home.png", before),
+            ("looks/screens/after/home.png", after),
+        ],
+        &look,
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    job.send(before);
+    job.send(after);
+    let page = "/owner/repo/work/feat/look";
+    let snapshot = live(page, &[]).json();
+    let checks = &snapshot["runs"][0]["checks"];
+    assert!(checks[0].get("look").is_none(), "{snapshot:#}");
+    assert_eq!(
+        checks[1]["look"]["items"][0]["name"], "home.png",
+        "{snapshot:#}"
+    );
+
+    // Done's looks are the final word.
+    let mut last = look.clone();
+    last["items"][0]["flaky"] = json!(true);
+    let answer = job.close(
+        &run.id,
+        &[entry("fmt", "passed"), entry("screens", "passed")],
+        &[last],
+        &[
+            ("looks/screens/before/home.png", before),
+            ("looks/screens/after/home.png", after),
+        ],
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let snapshot = live(page, &[]).json();
+    let look = &snapshot["runs"][0]["checks"][1]["look"];
+    assert_eq!(look["items"][0]["flaky"], true, "{snapshot:#}");
+}
+
+fn a_look_of_another_check_is_refused() {
+    let job = Job::push("owner/repo", "feat/look-other");
+    let run = job.open(&["screens"]);
+    let answer = job.finished_with_look(
+        &run.id,
+        &entry("screens", "passed"),
+        &[],
+        &look_of("tests", &[]),
+    );
+    assert_eq!(answer.status, 400, "{}", answer.text());
+}
+
+// The live page, in a browser.
+
+/// Whether check `id` of the newest run shows in state `state` on the page.
+fn shows(id: &str, state: &str) -> String {
     format!(
-        r#"<!doctype html><title>asks</title><p>a page that asks</p><script>
-var p = window.parent;
-p.postMessage({{ kind: 'fearlezz:approve', check: 'screens', words: 'approved by the page' }}, '*');
-p.postMessage({{ kind: 'fearlezz:accept', check: null, words: 'accepted by the page' }}, '*');
-p.postMessage({{ kind: 'fearlezz:fill', of: 'approve', check: 'nothing', words: 'not a check' }}, '*');
-p.postMessage({{ kind: 'fearlezz:fill', of: 'approve', check: 'screens', words: 'words from the page' }}, '*');
-p.postMessage({{ kind: 'fearlezz:fill', of: 'accept', check: null, words: 'why from the page' }}, '*');
-var grant = JSON.parse(atob(location.pathname.split('/')[1].split('.')[0].replace(/-/g, '+').replace(/_/g, '/')));
-fetch('{app}/' + grant.repo + '/proofs/' + grant.proof + '/accept', {{ method: 'POST', credentials: 'include',
-  headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ words: 'fetched' }}) }}).catch(function () {{}});
-</script>"#
+        r#"document.querySelector('section.run [data-check="{id}"]')?.dataset.state === "{state}""#
     )
 }
 
-/// Opens the shell of a waiting proof whose page asks on load, signed in as an admin, in a
-/// real browser.
-fn open_asking_shell(pull: u64) -> browser::Browser {
-    let app = world().worker.url.clone();
-    let page = asking_page(&app);
-    let id = upload_with(
-        "owner/team",
-        pull,
-        &waiting("owner/team", pull),
-        &[("index.html", page.as_bytes())],
-    );
-    let admin = sign_in("admin-code", "/");
-    let (name, value) = admin.split_once('=').unwrap();
+fn a_page_shows_a_check_move_from_running_to_passed_live() {
+    let job = Job::push("owner/repo", "feat/live");
+    let run = job.open(&["fmt", "tests"]);
     let mut browser = browser::Browser::start();
-    browser.cookie(&app, name, value);
-    browser.open(&format!("{app}/owner/team/proofs/{id}/"));
+    browser.open(&format!("{}/owner/repo/work/feat/live", world().worker.url));
+    browser.wait_for(&shows("fmt", "planned"));
+    assert_eq!(
+        browser.eval("document.querySelector('[data-title]').textContent"),
+        json!("feat/live")
+    );
+    // A mark on the page itself, which a reload would lose.
+    browser.eval("window.stayed = true");
+
+    job.started(&run.id, "fmt");
+    browser.wait_for(&shows("fmt", "running"));
+    job.finished(&run.id, &entry("fmt", "passed"), &[]);
+    browser.wait_for(&shows("fmt", "passed"));
+    browser.wait_for(
+        r#"document.querySelector('[data-check="fmt"] .seconds').textContent === "1.5 s""#,
+    );
+    job.done(
+        &run.id,
+        &[entry("fmt", "passed"), entry("tests", "failed")],
+        &[],
+    );
+    browser.wait_for(&shows("tests", "failed"));
+    browser.wait_for(r#"document.querySelector('section.run').dataset.state === "done""#);
+    assert_eq!(
+        browser.eval("window.stayed === true"),
+        json!(true),
+        "no reload"
+    );
+}
+
+fn a_page_opened_mid_run_shows_the_current_state() {
+    let job = Job::pull("owner/repo", 40, "feat/midway");
+    let run = job.open(&["fmt", "tests", "lint"]);
+    job.started(&run.id, "fmt");
+    job.finished(&run.id, &entry("fmt", "passed"), &[]);
+    job.started(&run.id, "tests");
+    let mut browser = browser::Browser::start();
+    browser.open(&format!("{}/owner/repo/pull/40", world().worker.url));
+    browser.wait_for(&shows("fmt", "passed"));
+    assert_eq!(browser.eval(&shows("tests", "running")), json!(true));
+    assert_eq!(browser.eval(&shows("lint", "planned")), json!(true));
+    assert_eq!(
+        browser.eval("document.querySelector('[data-title]').textContent"),
+        json!("#40 Pull request 40")
+    );
+    // And it goes on live from there.
+    job.finished(&run.id, &entry("tests", "passed"), &[]);
+    browser.wait_for(&shows("tests", "passed"));
+}
+
+fn two_pages_both_update() {
+    let job = Job::push("owner/repo", "feat/two");
+    let run = job.open(&["tests"]);
+    let url = format!("{}/owner/repo/work/feat/two", world().worker.url);
+    let mut browser = browser::Browser::start();
+    let first = browser.open(&url);
+    browser.wait_for(&shows("tests", "planned"));
+    let second = browser.open(&url);
+    browser.wait_for(&shows("tests", "planned"));
+
+    job.started(&run.id, "tests");
+    for page in [&first, &second] {
+        browser.on(page);
+        browser.wait_for(&shows("tests", "running"));
+    }
+    // A second run shows on both, newest first.
+    let next = job.open(&["tests"]);
+    job.started(&next.id, "tests");
+    job.finished(&next.id, &entry("tests", "passed"), &[]);
+    for page in [&first, &second] {
+        browser.on(page);
+        browser.wait_for(&format!(
+            r#"document.querySelector('section.run').dataset.run === "{}""#,
+            next.id
+        ));
+        browser.wait_for(&shows("tests", "passed"));
+        assert_eq!(
+            browser.eval("document.querySelectorAll('section.run').length"),
+            json!(2)
+        );
+    }
+}
+
+// Pictures on the page, in a browser.
+
+/// A look of check `screens`: two changed stills of a card, a new one, a flaky one, one that
+/// stayed the same, and a changed film, with the files they name.
+struct Shots {
+    look: Value,
+    files: Vec<(String, Vec<u8>)>,
+}
+
+static SHOTS: OnceLock<Shots> = OnceLock::new();
+
+fn shots() -> &'static Shots {
+    SHOTS.get_or_init(|| {
+        let green = "0x2f9e6e";
+        let blue = "0x3366d6";
+        let mut files = Vec::new();
+        let mut file = |path: &str, bytes: Vec<u8>| -> Value {
+            files.push((format!("looks/screens/{path}"), bytes));
+            json!(format!("looks/screens/{path}"))
+        };
+        let changed_still = |area: [u32; 4]| {
+            json!({
+                "verdict": "changed", "still": true,
+                "size_before": [640, 400], "size_after": [640, 400],
+                "total_before": 0.0, "total_after": 0.0, "max_shift": 0.0, "max_shift_at": null,
+                "states_before": 1, "states_after": 1,
+                "moments": [{"before": [0.0, 0.0], "after": [0.0, 0.0], "box": area, "px": 4000}],
+                "pairs": [],
+            })
+        };
+        let mut items = Vec::new();
+        for theme in ["light", "dark"] {
+            let name = format!("card/{theme}.png");
+            items.push(json!({
+                "name": name, "kind": "still", "change": "changed",
+                "summary": "4000 pixels differ",
+                "before": file(&format!("before/{name}"), media::still(&media::card(160, green))),
+                "after": file(&format!("after/{name}"), media::still(&media::card(96, green))),
+                "comparison": changed_still([72, 280, 232, 328]),
+            }));
+        }
+        items.push(json!({
+            "name": "settings/light.png", "kind": "still", "change": "new", "summary": "new",
+            "before": null,
+            "after": file("after/settings/light.png", media::still(&media::card(200, blue))),
+            "comparison": null,
+        }));
+        items.push(json!({
+            "name": "menu/light.png", "kind": "still", "change": "changed", "flaky": true,
+            "summary": "a clock in the corner",
+            "before": file("before/menu/light.png", media::still(&media::card(120, blue))),
+            "after": file("after/menu/light.png", media::still(&media::card(124, blue))),
+            "comparison": changed_still([72, 280, 196, 328]),
+        }));
+        let about = media::still(&media::card(140, green));
+        items.push(json!({
+            "name": "about/light.png", "kind": "still", "change": "same", "summary": "same",
+            "before": file("before/about/light.png", about.clone()),
+            "after": file("after/about/light.png", about),
+            "comparison": null,
+        }));
+        let area = [72, 280, 292, 328];
+        let pair = |state: usize, before_at: f64, after_at: f64, px: usize| {
+            let boxes = if px > 0 { json!([area]) } else { json!([]) };
+            json!({
+                "before": state, "after": state, "before_frame": 0, "after_frame": 0,
+                "before_at": before_at, "after_at": after_at, "px": px, "boxes": boxes,
+            })
+        };
+        items.push(json!({
+            "name": "checkout.webm", "kind": "film", "change": "changed",
+            "summary": "changes at 1.00 s",
+            "before": file("before/checkout.webm", media::film(&[
+                (1.0, media::card(160, green)),
+                (1.0, media::card(160, blue)),
+                (1.0, media::card(160, green)),
+            ])),
+            "after": file("after/checkout.webm", media::film(&[
+                (1.0, media::card(160, green)),
+                (1.4, media::card(220, blue)),
+                (1.0, media::card(220, green)),
+            ])),
+            "comparison": {
+                "verdict": "changed", "still": false,
+                "size_before": [640, 400], "size_after": [640, 400],
+                "total_before": 3.0, "total_after": 3.4, "max_shift": 0.4, "max_shift_at": 2.0,
+                "states_before": 3, "states_after": 3,
+                "moments": [{"before": [1.0, 3.0], "after": [1.0, 3.4], "box": area, "px": 2880}],
+                "pairs": [pair(0, 0.0, 0.0, 0), pair(1, 1.0, 1.0, 2880), pair(2, 2.0, 2.4, 2880)],
+            },
+        }));
+        Shots {
+            look: look_of("screens", &items),
+            files,
+        }
+    })
+}
+
+/// A run of `branch` whose `screens` check ended with the look of `shots`, all its files sent.
+fn run_with_pictures(job: &Job, run: &str) {
+    let shots = shots();
+    let files: Vec<(&str, &[u8])> = shots
+        .files
+        .iter()
+        .map(|(p, b)| (p.as_str(), b.as_slice()))
+        .collect();
+    let answer = job.finished_with_look(run, &entry("screens", "passed"), &files, &shots.look);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    for (_, bytes) in &files {
+        job.send(bytes);
+    }
+}
+
+/// Opens the page of a work whose run shows the pictures of `shots`.
+fn page_with_pictures(branch: &str) -> browser::Browser {
+    let job = Job::push("owner/repo", branch);
+    let run = job.open(&["screens"]);
+    run_with_pictures(&job, &run.id);
+    let mut browser = browser::Browser::start();
+    browser.open(&format!("{}/owner/repo/work/{branch}", world().worker.url));
+    browser.wait_for("!!document.querySelector('[data-stage]')");
     browser
 }
 
-fn a_page_that_asks_on_load_gets_nothing_posted() {
-    let mut browser = open_asking_shell(90);
-    // The page's words reach the shell's own fields, which shows its messages arrived...
-    browser.wait_for(
-        "(document.querySelector('[data-kind=accept] [name=words]') || {}).value === 'why from the page'",
-    );
-    // ...yet nothing is posted: not on load, not by the old messages, not by its own fetch.
-    std::thread::sleep(Duration::from_secs(2));
-    assert!(
-        world().github.posted("owner/team", 90).is_empty(),
-        "{:?}",
-        world().github.posted("owner/team", 90)
-    );
-    let approve = browser.eval("document.querySelector('[data-kind=approve] [name=words]').value");
-    assert_eq!(approve, json!("words from the page"));
+/// Whether the stage shows `side` of the current picture, loaded from the files origin.
+fn loaded(tag: &str, side: &str) -> String {
+    let files = &world().worker.files;
+    let ready = if tag == "img" {
+        "m.complete && m.naturalWidth > 0"
+    } else {
+        "m.readyState >= 1"
+    };
+    format!(
+        r#"[...document.querySelectorAll('[data-stage] {tag}[data-side="{side}"]')].some(m => m.src.startsWith("{files}/") && {ready})"#
+    )
+}
+
+fn current() -> &'static str {
+    "document.querySelector('[data-stage]').dataset.key"
+}
+
+fn the_page_shows_a_changed_picture_with_its_before_and_after() {
+    let mut browser = page_with_pictures("feat/pictures");
+    // The first changed picture is open, its two sides loaded from the files origin.
+    assert_eq!(browser.eval(current()), json!("screens/card/light.png"));
+    browser.wait_for(&loaded("img", "before"));
+    browser.wait_for(&loaded("img", "after"));
+    // Its outline of where it differs sits on the picture.
     assert_eq!(
-        browser.eval("document.activeElement.name"),
-        json!("words"),
-        "the field it filled has focus"
+        browser.eval("document.querySelectorAll('[data-stage] .mark').length > 0"),
+        json!(true)
     );
+    // A new picture has only its after.
+    browser
+        .eval(r#"document.querySelector('[data-picture="screens/settings/light.png"]').click()"#);
+    browser.wait_for(&loaded("img", "after"));
     assert_eq!(
-        browser.eval("document.querySelectorAll('[data-kind]').length"),
-        json!(2),
-        "a message never adds a control"
+        browser.eval(r#"document.querySelectorAll('[data-stage] [data-side="before"]').length"#),
+        json!(0)
+    );
+    // The counts say what there is, and one filters to its kind.
+    assert_eq!(
+        browser.eval(r#"document.querySelector('[data-filter="changed"] b').textContent"#),
+        json!("4")
+    );
+    browser.eval(r#"document.querySelector('[data-filter="new"]').click()"#);
+    browser.wait_for("document.querySelectorAll('[data-picture]').length === 1");
+    // What stayed the same is there, folded.
+    browser.eval(r#"document.querySelector('[data-filter="new"]').click()"#);
+    browser.wait_for(r#"!!document.querySelector('[data-group-key="same"]')"#);
+    assert_eq!(
+        browser.eval(r#"document.querySelector('[data-group-key="same"]').open"#),
+        json!(false)
     );
 }
 
-fn only_the_shells_own_button_posts() {
-    let mut browser = open_asking_shell(91);
-    browser.wait_for(
-        "(document.querySelector('[data-kind=approve] [name=words]') || {}).value === 'words from the page'",
+fn the_compare_modes_switch_by_click_and_by_key() {
+    let mut browser = page_with_pictures("feat/modes");
+    let mode = "document.querySelector('[data-stage]').dataset.mode";
+    assert_eq!(browser.eval(mode), json!("side"));
+    browser.eval(r#"document.querySelector('button[data-mode="slider"]').click()"#);
+    browser.wait_for(&format!(r#"{mode} === "slider""#));
+    assert_eq!(
+        browser.eval(
+            r#"document.querySelector('button[data-mode="slider"]').getAttribute('aria-pressed')"#
+        ),
+        json!("true")
     );
-    browser.eval("document.querySelector('[data-kind=approve] [name=words]').value = 'the header reads well'");
-    browser.eval("document.querySelector('[data-kind=approve] button').click()");
-    browser.wait_for("!document.getElementById('said').hidden");
-    let posted = world().github.posted("owner/team", 91);
-    assert_eq!(posted.len(), 1, "{posted:?}");
-    assert_eq!(posted[0].login, "admin");
-    assert_eq!(posted[0].body, "/fearlezz approve the header reads well");
-    let said = browser.eval("document.getElementById('said').textContent");
-    assert!(said.as_str().unwrap().contains("Posted"), "{said}");
-}
-
-/// Pictures of the shell's bar with Approve and Accept, light and dark, for a person to look at.
-fn pictures_of_the_shells_bar() {
-    let mut browser = open_asking_shell(92);
-    browser.wait_for(
-        "(document.querySelector('[data-kind=accept] [name=words]') || {}).value === 'why from the page'",
-    );
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
-    for scheme in ["light", "dark"] {
-        browser.scheme(scheme);
-        std::thread::sleep(Duration::from_millis(500));
-        let file = dir.join(format!("shell-bar-{scheme}.png"));
-        std::fs::write(&file, browser.picture()).unwrap();
-        println!("{}", file.display());
+    for (key, want) in [("3", "onion"), ("4", "diff"), ("5", "blink"), ("1", "side")] {
+        browser.press(key);
+        browser.wait_for(&format!(r#"{mode} === "{want}""#));
     }
+    // j and k step between pictures, in the order shown.
+    browser.press("j");
+    browser.wait_for(&format!(r#"{} === "screens/card/dark.png""#, current()));
+    browser.press("k");
+    browser.wait_for(&format!(r#"{} === "screens/card/light.png""#, current()));
+    // The mode stays as the person moves on.
+    browser.press("2");
+    browser.press("j");
+    browser.wait_for(&format!(r#"{} === "screens/card/dark.png""#, current()));
+    assert_eq!(browser.eval(mode), json!("slider"));
 }
 
-// Share links.
-
-fn a_writer_makes_a_share_link_anyone_can_open() {
-    let page = format!("<p>shared vault {}</p>", now());
-    let id = upload_with(
-        "owner/vault",
-        70,
-        &proof("owner/vault", 70),
-        &[("index.html", page.as_bytes())],
-    );
-    let session = sign_in("writer-code", "/");
-    let answer = share("owner/vault", 70, Some(&session));
-    assert_eq!(answer.status, 201, "{}", answer.text());
-    let made = answer.json();
-    let token = made["token"].as_str().unwrap().to_owned();
-    assert!(token.len() >= 32, "unguessable: {token}");
+fn a_film_shows_its_lanes_on_one_clock() {
+    let mut browser = page_with_pictures("feat/film");
+    browser.eval(r#"document.querySelector('[data-picture="screens/checkout.webm"]').click()"#);
+    browser.wait_for(&loaded("video", "before"));
+    browser.wait_for(&loaded("video", "after"));
+    let lane = |side: &str| {
+        format!(
+            r#"[...document.querySelectorAll('[data-lane="{side}"] i')].map(i => i.dataset.differs)"#
+        )
+    };
+    // Three states each: the first the same, the other two differing.
     assert_eq!(
-        made["url"].as_str().unwrap(),
-        format!("{}/s/{token}", world().worker.url)
+        browser.eval(&lane("before")),
+        json!(["false", "true", "true"])
     );
-    assert_eq!(made["made_by"], "writer");
+    assert_eq!(
+        browser.eval(&lane("after")),
+        json!(["false", "true", "true"])
+    );
+    // A jump to where they differ moves both films there.
+    browser.eval(r#"document.querySelector('[data-seek]').click()"#);
+    browser.wait_for(
+        r#"[...document.querySelectorAll('[data-stage] video')].every(v => Math.abs(v.currentTime - 1) < 0.05)"#,
+    );
+    assert_eq!(
+        browser.eval("document.querySelector('[data-clock]').textContent.trim()"),
+        json!("1.00 s")
+    );
+}
 
-    // Without any session, the private pull request's proof opens through the link.
-    let answer = get(&format!("/s/{token}"), &[]);
+fn a_flaky_picture_is_shown_and_marked() {
+    let mut browser = page_with_pictures("feat/flaky");
+    let flaky = r#"document.querySelector('[data-picture="screens/menu/light.png"]')"#;
+    assert_eq!(
+        browser.eval(&format!("{flaky}.dataset.flaky")),
+        json!("true")
+    );
+    // After the other changed pictures.
+    assert_eq!(
+        browser.eval(
+            r#"[...document.querySelectorAll('[data-group-key="changed"] [data-picture]')].map(b => b.dataset.picture)"#
+        ),
+        json!([
+            "screens/card/light.png",
+            "screens/card/dark.png",
+            "screens/checkout.webm",
+            "screens/menu/light.png"
+        ])
+    );
+    browser.eval(&format!("{flaky}.click()"));
+    browser.wait_for(r#"document.querySelector('[data-stage]').dataset.flaky === "true""#);
+    assert_eq!(
+        browser.eval("document.querySelector('[data-stage] [data-flaky-note]') !== null"),
+        json!(true)
+    );
+}
+
+fn a_look_that_arrives_shows_without_a_reload() {
+    let job = Job::push("owner/repo", "feat/arrives");
+    let run = job.open(&["fmt", "screens"]);
+    let mut browser = browser::Browser::start();
+    browser.open(&format!(
+        "{}/owner/repo/work/feat/arrives",
+        world().worker.url
+    ));
+    browser.wait_for(&shows("screens", "planned"));
+    browser.eval("window.stayed = true");
+    run_with_pictures(&job, &run.id);
+    browser.wait_for(r#"!!document.querySelector('[data-picture="screens/card/light.png"]')"#);
+    browser.wait_for(&loaded("img", "after"));
+    assert_eq!(
+        browser.eval("window.stayed === true"),
+        json!(true),
+        "no reload"
+    );
+}
+
+fn a_look_shows_only_once_its_pictures_have_arrived() {
+    // CI sends a check's end with its look, then the pictures the host lacks. Until the last
+    // one is in, a page could only show them broken, so the look waits for them.
+    let job = Job::push("owner/repo", "feat/waits");
+    let run = job.open(&["screens"]);
+    let page = "/owner/repo/work/feat/waits";
+    let mut browser = browser::Browser::start();
+    browser.open(&format!("{}{page}", world().worker.url));
+    browser.wait_for(&shows("screens", "planned"));
+    browser.eval("window.stayed = true");
+    // Bytes no other test sends, since the host keeps files per repository.
+    let before = media::still(&media::card(150, "0x8a4fbf"));
+    let after = media::still(&media::card(190, "0x8a4fbf"));
+    let files: Vec<(&str, &[u8])> = vec![
+        ("looks/screens/before/card/light.png", &before),
+        ("looks/screens/after/card/light.png", &after),
+    ];
+    let look = look_of(
+        "screens",
+        &[still(
+            "card/light.png",
+            "changed",
+            Some(files[0].0),
+            Some(files[1].0),
+        )],
+    );
+    let answer = job.finished_with_look(&run.id, &entry("screens", "passed"), &files, &look);
     assert_eq!(answer.status, 200, "{}", answer.text());
-    assert!(cookie_set(&answer, "session").is_none());
-    assert_eq!(answer.header("cache-control"), Some("no-store"));
-    assert_eq!(answer.header("referrer-policy"), Some("no-referrer"));
+    browser.wait_for(&shows("screens", "passed"));
+    let pictures = "document.querySelectorAll('[data-picture]').length";
+    assert_eq!(
+        browser.eval(pictures),
+        json!(0),
+        "no picture before its files"
+    );
+    let snapshot = live(page, &[]).json();
     assert!(
-        answer.text().contains("Pull request 70"),
+        snapshot["runs"][0]["checks"][0].get("look").is_none(),
+        "{snapshot:#}"
+    );
+    // Every file but the last: still nothing.
+    let (last, rest) = files.split_last().unwrap();
+    for (_, bytes) in rest {
+        assert_eq!(job.send(bytes).status, 204);
+    }
+    assert!(
+        live(page, &[]).json()["runs"][0]["checks"][0]
+            .get("look")
+            .is_none()
+    );
+    assert_eq!(browser.eval(pictures), json!(0));
+    // The last one shows the look, live, every picture loaded.
+    assert_eq!(job.send(last.1).status, 204);
+    browser.wait_for(r#"!!document.querySelector('[data-picture="screens/card/light.png"]')"#);
+    browser.wait_for(&loaded("img", "before"));
+    browser.wait_for(&loaded("img", "after"));
+    assert_eq!(
+        browser.eval("window.stayed === true"),
+        json!(true),
+        "no reload"
+    );
+    let snapshot = live(page, &[]).json();
+    assert_eq!(
+        snapshot["runs"][0]["checks"][0]["look"]["check"], "screens",
+        "{snapshot:#}"
+    );
+}
+
+fn pictures_group_by_the_parts_of_their_names() {
+    let mut browser = page_with_pictures("feat/groups");
+    let groups =
+        "[...document.querySelectorAll('[data-group-label]')].map(g => g.dataset.groupLabel)";
+    assert_eq!(browser.eval(groups), json!(["Changed", "New", "Unchanged"]));
+    browser.eval(r#"document.querySelector('button[data-group="theme"]').click()"#);
+    browser.wait_for(&format!(r#"{groups}[0] === "light""#));
+    assert_eq!(
+        browser.eval(groups),
+        json!(["light", "dark", "Other", "Unchanged"])
+    );
+    browser.eval(r#"document.querySelector('button[data-group="screen"]').click()"#);
+    browser.wait_for(&format!(r#"{groups}[0] === "card""#));
+    assert_eq!(
+        browser.eval(groups),
+        json!(["card", "checkout", "menu", "settings", "Unchanged"])
+    );
+}
+
+// Review: verdicts and accepts on the page, the check run and comment the app writes, and
+// GitHub's webhooks. Every review test works on `owner/review`, where `writer` has write
+// access and `admin` admin rights, each on its own pull request.
+
+/// A commit of forty hex digits, from a short name.
+fn commit(name: &str) -> String {
+    format!("{name:0<40}")
+}
+
+/// The look of check `screens` with one changed still, and its files, by their bytes.
+fn one_still(before: &[u8], after: &[u8]) -> (Value, Vec<(&'static str, Vec<u8>)>) {
+    let files = vec![
+        ("looks/screens/before/card/light.png", before.to_vec()),
+        ("looks/screens/after/card/light.png", after.to_vec()),
+    ];
+    let look = look_of(
+        "screens",
+        &[still(
+            "card/light.png",
+            "changed",
+            Some(files[0].0),
+            Some(files[1].0),
+        )],
+    );
+    (look, files)
+}
+
+/// A run of `job` whose check `screens` ends with `look` and its files, every file sent, and
+/// then done with `extra` over its proof.
+fn proven(job: &Job, look: &Value, files: &[(&str, Vec<u8>)], extra: &Value) -> String {
+    let run = job.open(&["screens"]);
+    let files: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    let answer = job.finished_with_look(&run.id, &entry("screens", "passed"), &files, look);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    for (_, bytes) in &files {
+        job.send(bytes);
+    }
+    let answer = job.close_with(
+        &run.id,
+        &[entry("screens", "passed")],
+        std::slice::from_ref(look),
+        &files,
+        extra,
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    run.id
+}
+
+/// The work's review as its page gets it.
+fn review_of(pull: u64) -> Value {
+    live(&format!("/owner/review/pull/{pull}"), &[]).json()["review"].clone()
+}
+
+/// What the page sends to say something about run `run` (`verdicts` or `accept`): JSON from
+/// the app origin with the session `cookie`, and `headers` besides or instead.
+fn say(
+    run: &str,
+    what: &str,
+    cookie: Option<&str>,
+    headers: &[(&str, &str)],
+    body: &Value,
+) -> Answer {
+    let origin = world().worker.url.clone();
+    let mut all: Vec<(&str, &str)> =
+        vec![("Origin", &origin), ("Content-Type", "application/json")];
+    for (name, value) in headers {
+        all.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        all.push((name, value));
+    }
+    if let Some(cookie) = cookie {
+        all.push(("Cookie", cookie));
+    }
+    let path = format!("/api/v2/runs/{run}/{what}");
+    request("POST", &path, &all, Some(body.to_string().into_bytes()))
+}
+
+fn looks_right(picture: &str) -> Value {
+    json!({"check": "screens", "picture": picture, "kind": "looks_right"})
+}
+
+/// What a CI run's change weakens, as its proof shows it.
+fn weakenings() -> Value {
+    json!([{"check": "tests", "how": "it runs another command"}])
+}
+
+/// A proof that weakens `weakenings()`, which fails it while no admin accepted it.
+fn weakened() -> Value {
+    json!({ "weakened": weakenings() })
+}
+
+/// The proof of a rerun that weakens the same and names the accept the host answered.
+fn weakened_and_accepted(accept: &Value) -> Value {
+    json!({ "weakened": weakenings(), "accepted": accept })
+}
+
+/// Sends a GitHub webhook of `event`, signed with the app's webhook secret.
+fn webhook(event: &str, payload: &Value) -> Answer {
+    let body = payload.to_string().into_bytes();
+    let signature = github::signature(WEBHOOK_SECRET, &body);
+    let headers = [
+        ("X-GitHub-Event", event),
+        ("X-Hub-Signature-256", signature.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    request("POST", "/api/github/webhook", &headers, Some(body))
+}
+
+/// The `pull_request` webhook of `action` for pull request `number` of `owner/review` at `head`.
+fn pull_request(action: &str, number: u64, branch: &str, head: &str) -> Value {
+    json!({
+        "action": action,
+        "number": number,
+        "pull_request": {
+            "number": number,
+            "title": format!("Pull request {number}"),
+            "html_url": format!("https://github.com/owner/review/pull/{number}"),
+            "head": {"sha": head, "ref": branch, "repo": {"full_name": "owner/review"}},
+            "base": {"ref": "main", "repo": {"full_name": "owner/review"}},
+        },
+        "repository": {"full_name": "owner/review"},
+        "installation": {"id": 6},
+    })
+}
+
+/// The `workflow_job` webhook of `action` for job `name` of the first attempt of workflow run
+/// `run`, on `runner` once one took it.
+fn workflow_job(
+    action: &str,
+    run: u64,
+    name: &str,
+    runner: Option<&str>,
+    branch: &str,
+    head: &str,
+) -> Value {
+    // A job id of its own for each job name of the run.
+    let id = run * 1000 + name.bytes().map(u64::from).sum::<u64>() % 1000;
+    json!({
+        "action": action,
+        "workflow_job": {
+            "id": id,
+            "run_id": run,
+            "run_attempt": 1,
+            "runner_name": runner,
+            "name": name,
+            "head_sha": head,
+            "head_branch": branch,
+            "status": action,
+            "conclusion": if action == "completed" { json!("cancelled") } else { Value::Null },
+            "html_url": format!("https://github.com/owner/review/actions/runs/{run}/job/{id}"),
+        },
+        "repository": {"full_name": "owner/review"},
+        "installation": {"id": 6},
+    })
+}
+
+/// The work's review once GitHub holds it: the work's room publishes it just after the write
+/// that moved it, so this waits until the check run of its head says its state and nothing more
+/// reaches GitHub for the pull request for a moment.
+fn published(pull: u64) -> Value {
+    let github = &world().github;
+    let written = |head: &str| {
+        let checks: usize = github
+            .check_runs("owner/review", head)
+            .iter()
+            .map(|c| c.writes.len())
+            .sum();
+        let comments: usize = github
+            .comments("owner/review", pull)
+            .iter()
+            .map(|c| c.bodies.len())
+            .sum();
+        (checks, comments)
+    };
+    eventually(|| {
+        let review = review_of(pull);
+        let head = review["head"].as_str().unwrap_or_default().to_owned();
+        let before = written(&head);
+        let runs = github.check_runs("owner/review", &head);
+        let state = runs.last().map(github::CheckRun::state);
+        if state.as_deref() != Some(conclusion(&review["state"])) {
+            return Err(format!("{review:#} is {state:?} on GitHub"));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        if written(&head) != before || review_of(pull) != review {
+            return Err(format!("{review:#} is still being published"));
+        }
+        Ok(review)
+    })
+}
+
+/// The latest check run the app wrote for `head` of `owner/review`.
+fn check_run(head: &str) -> github::CheckRun {
+    let runs = world().github.check_runs("owner/review", head);
+    runs.last()
+        .cloned()
+        .unwrap_or_else(|| panic!("no check run for {head}"))
+}
+
+fn a_verdict_needs_a_session_write_access_the_app_origin_and_json() {
+    let job = Job::pull("owner/review", 101, "review/guarded").at(&commit("a101"), 1101);
+    let (look, files) = one_still(b"guarded before", b"guarded after");
+    let run = proven(&job, &look, &files, &json!({}));
+    let body = looks_right("card/light.png");
+    let writer = sign_in("writer-code", "/");
+    let reader = sign_in("reader-code", "/");
+
+    let answer = say(&run, "verdicts", None, &[], &body);
+    assert_eq!(answer.status, 401, "without a session: {}", answer.text());
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[("Origin", "https://elsewhere.test")],
+        &body,
+    );
+    assert_eq!(answer.status, 403, "from another site: {}", answer.text());
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[("Origin", "null")],
+        &body,
+    );
+    assert_eq!(answer.status, 403, "from no site: {}", answer.text());
+    let form = [("Content-Type", "application/x-www-form-urlencoded")];
+    let answer = say(&run, "verdicts", Some(&writer), &form, &body);
+    assert_eq!(answer.status, 415, "a form: {}", answer.text());
+    let answer = say(&run, "verdicts", Some(&reader), &[], &body);
+    assert_eq!(answer.status, 403, "a reader: {}", answer.text());
+    assert!(answer.text().contains("write access"), "{}", answer.text());
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("nothing.png"),
+    );
+    assert_eq!(
+        answer.status,
+        409,
+        "a picture the run lacks: {}",
+        answer.text()
+    );
+    assert_eq!(review_of(101)["state"], "waits");
+
+    let answer = say(&run, "verdicts", Some(&writer), &[], &body);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let review = review_of(101);
+    assert_eq!(review["state"], "approved", "{review:#}");
+    let verdict = &review["pictures"][0]["verdict"];
+    assert_eq!(verdict["by"], "writer", "{review:#}");
+    assert_eq!(
+        review["pictures"][0]["standing"], "looks_right",
+        "{review:#}"
+    );
+    assert_eq!(verdict["run"], run.as_str(), "{review:#}");
+}
+
+fn a_bearer_token_never_gives_a_verdict_or_an_accept() {
+    // A token is how programs speak to the host (CI's OIDC token now, the CLI's own later);
+    // only a person in a browser gives a verdict or an accept.
+    let job = Job::pull("owner/review", 102, "review/bearer").at(&commit("a102"), 1102);
+    let (look, files) = one_still(b"bearer before", b"bearer after");
+    let run = proven(&job, &look, &files, &weakened());
+    let auth = format!("Bearer {}", job.token());
+    let bearer = [("Authorization", auth.as_str())];
+    let writer = sign_in("writer-code", "/");
+    let admin = sign_in("admin-code", "/");
+    let body = looks_right("card/light.png");
+    for cookie in [None, Some(writer.as_str())] {
+        let answer = say(&run, "verdicts", cookie, &bearer, &body);
+        assert_eq!(answer.status, 403, "{}", answer.text());
+    }
+    let answer = say(&run, "accept", Some(&admin), &bearer, &json!({}));
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    let review = review_of(102);
+    assert!(review["pictures"][0]["verdict"].is_null(), "{review:#}");
+    assert!(review["accept"].is_null(), "{review:#}");
+}
+
+fn a_verdict_on_a_local_run_is_refused() {
+    let job = Job::pull("owner/review", 103, "review/local").at(&commit("a103"), 1103);
+    let (look, files) = one_still(b"local before", b"local after");
+    let run = proven(&job, &look, &files, &json!({}));
+    // No call opens a local run yet; its record is what one will look like.
+    world().worker.sql(&format!(
+        r#"UPDATE runs SET source = '{{"kind":"local"}}' WHERE id = '{run}'"#
+    ));
+    let writer = sign_in("writer-code", "/");
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("card/light.png"),
+    );
+    assert_eq!(answer.status, 409, "{}", answer.text());
+    assert!(answer.text().contains("local run"), "{}", answer.text());
+}
+
+fn a_verdict_carries_over_to_a_later_run_with_the_same_pictures() {
+    let first = Job::pull("owner/review", 104, "review/carries").at(&commit("a104"), 1104);
+    let (look, files) = one_still(b"carries before", b"carries after");
+    let run = proven(&first, &look, &files, &json!({}));
+    let writer = sign_in("writer-code", "/");
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("card/light.png"),
+    );
+    assert_eq!(answer.status, 201, "{}", answer.text());
+
+    // A later push whose picture is the same keeps the verdict, and says where it came from.
+    let second = first.at(&commit("b104"), 2104);
+    let later = proven(&second, &look, &files, &json!({}));
+    let review = review_of(104);
+    assert_eq!(review["head"], commit("b104"), "{review:#}");
+    assert_eq!(review["state"], "approved", "{review:#}");
+    let verdict = &review["pictures"][0]["verdict"];
+    assert_eq!(verdict["head"], commit("a104"), "{review:#}");
+    assert_eq!(verdict["run"], run.as_str(), "{review:#}");
+    assert_ne!(verdict["run"], later.as_str());
+
+    // Another after loses it.
+    let third = first.at(&commit("c104"), 3104);
+    let (changed, changed_files) = one_still(b"carries before", b"carries after, changed");
+    proven(&third, &changed, &changed_files, &json!({}));
+    let review = review_of(104);
+    assert_eq!(review["state"], "waits", "{review:#}");
+    assert!(review["pictures"][0]["verdict"].is_null(), "{review:#}");
+}
+
+/// A changed film whose states named in `changed` differ, recorded as `bytes`.
+fn film_look(bytes: &[u8], changed: &[usize]) -> (Value, Vec<(&'static str, Vec<u8>)>) {
+    let files = vec![
+        (
+            "looks/screens/before/checkout.webm",
+            b"film before".to_vec(),
+        ),
+        ("looks/screens/after/checkout.webm", bytes.to_vec()),
+    ];
+    let pairs: Vec<Value> = (0..3)
+        .map(|state| {
+            let px = if changed.contains(&state) { 900 } else { 0 };
+            json!({
+                "before": state, "after": state, "before_frame": 0, "after_frame": 0,
+                "before_at": state as f64, "after_at": state as f64, "px": px, "boxes": [],
+            })
+        })
+        .collect();
+    let item = json!({
+        "name": "checkout.webm", "kind": "film", "change": "changed", "summary": "changes",
+        "before": files[0].0, "after": files[1].0,
+        "comparison": {
+            "verdict": "changed", "still": false,
+            "size_before": [640, 400], "size_after": [640, 400],
+            "total_before": 3.0, "total_after": 3.0, "max_shift": 0.0, "max_shift_at": null,
+            "states_before": 3, "states_after": 3, "moments": [], "pairs": pairs,
+        },
+    });
+    (look_of("screens", &[item]), files)
+}
+
+fn a_film_verdict_follows_its_changed_states() {
+    let first = Job::pull("owner/review", 105, "review/film").at(&commit("a105"), 1105);
+    let (look, files) = film_look(b"film after, recording 1", &[1]);
+    let run = proven(&first, &look, &files, &json!({}));
+    let writer = sign_in("writer-code", "/");
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("checkout.webm"),
+    );
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    // Films differ in their bytes each time they are recorded; the same change keeps it.
+    let (again, again_files) = film_look(b"film after, recording 2", &[1]);
+    proven(
+        &first.at(&commit("b105"), 2105),
+        &again,
+        &again_files,
+        &json!({}),
+    );
+    assert_eq!(review_of(105)["state"], "approved");
+    // Another state that changed is another change.
+    let (other, other_files) = film_look(b"film after, recording 3", &[1, 2]);
+    proven(
+        &first.at(&commit("c105"), 3105),
+        &other,
+        &other_files,
+        &json!({}),
+    );
+    assert_eq!(review_of(105)["state"], "waits");
+}
+
+fn accept_needs_an_admin_and_runs_the_failed_proof_job_again() {
+    let head = commit("a106");
+    let job = Job::pull("owner/review", 106, "review/accept").at(&head, 1106);
+    // The workflow run's jobs: this proof job, a matrix leg, failed; a sibling leg passed and
+    // another failed on its own runner; another job failed for its own reasons.
+    let job = job.on("runner-linux");
+    let github = &world().github;
+    let jobs = [
+        (11061, "proof (linux)", "runner-linux", "failure"),
+        (11062, "proof (macos-latest)", "runner-macos", "success"),
+        (11063, "lint", "runner-lint", "failure"),
+        (11064, "proof (windows)", "runner-windows", "failure"),
+    ];
+    for (id, name, runner, conclusion) in jobs {
+        github.job_ended("owner/review", 1106, id, name, runner, conclusion);
+    }
+    let (look, files) = one_still(b"accept before", b"accept before");
+    let mut look = look;
+    look["items"][0]["change"] = json!("same");
+    let run = proven(&job, &look, &files, &weakened());
+    let review = review_of(106);
+    assert_eq!(review["state"], "failed", "the job holds it: {review:#}");
+    assert_eq!(review["weakened"][0]["check"], "tests", "{review:#}");
+
+    let writer = sign_in("writer-code", "/");
+    let answer = say(&run, "accept", Some(&writer), &[], &json!({}));
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    assert!(answer.text().contains("admin"), "{}", answer.text());
+    assert!(github.reruns("owner/review", 1106).is_empty());
+    let admin = sign_in("admin-code", "/");
+    let answer = say(&run, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let accept = answer.json()["accept"].clone();
+    assert_eq!(accept["by"], "admin", "{accept:#}");
+    assert_eq!(accept["weakened"], weakenings(), "{accept:#}");
+    assert_eq!(
+        github.reruns("owner/review", 1106),
+        [(11061, "installation-6".to_owned())],
+        "only the run's own failed job runs again, as the app"
+    );
+    let review = review_of(106);
+    assert_eq!(review["accept"]["by"], "admin", "{review:#}");
+    assert_eq!(
+        review["state"], "approved",
+        "the host holds its own accept: {review:#}"
+    );
+
+    // The job runs again: it asks, gets the accept, and its proof passes.
+    let rerun = job.open(&["screens"]);
+    let answer = job.weakenings(&rerun.id, &weakenings());
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let accepted = answer.json()["accepted"].clone();
+    assert_eq!(accepted["by"], "admin", "{accepted:#}");
+    let listed: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    job.finished_with_look(&rerun.id, &entry("screens", "passed"), &listed, &look);
+    let answer = job.close_with(
+        &rerun.id,
+        &[entry("screens", "passed")],
+        std::slice::from_ref(&look),
+        &listed,
+        &weakened_and_accepted(&accepted),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(review_of(106)["state"], "approved");
+
+    // A run that weakens nothing has nothing to accept.
+    let plain = job.at(&commit("b106"), 2106);
+    let other = proven(&plain, &look, &files, &json!({}));
+    let answer = say(&other, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 409, "{}", answer.text());
+}
+
+fn a_run_asks_whether_exactly_its_weakenings_of_its_head_are_accepted() {
+    let head = commit("a114");
+    let job = Job::pull("owner/review", 114, "review/asks").at(&head, 1114);
+    world()
+        .github
+        .job_ended("owner/review", 1114, 11141, "proof", RUNNER, "failure");
+    let first = job.open(&["tests"]);
+    let answer = job.weakenings(&first.id, &weakenings());
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert!(answer.json()["accepted"].is_null(), "nothing accepted yet");
+    job.close_with(
+        &first.id,
+        &[entry("tests", "passed")],
+        &[],
+        &[],
+        &weakened(),
+    );
+    let admin = sign_in("admin-code", "/");
+    let answer = say(&first.id, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+
+    let again = job.open(&["tests"]);
+    let answer = job.weakenings(&again.id, &weakenings());
+    assert_eq!(
+        answer.json()["accepted"]["by"],
+        "admin",
         "{}",
         answer.text()
     );
-    let frame = frame_url(&answer);
-    assert!(frame.starts_with(&world().worker.files), "{frame}");
-    let answer = get_url(&frame, &[]);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    assert_eq!(answer.body, page.as_bytes());
-    // The proof's own address still needs a session.
-    let answer = get(&format!("/owner/vault/proofs/{id}/"), &[]);
-    assert_eq!(answer.status, 302, "{}", answer.text());
-}
-
-fn a_share_link_opens_the_latest_proof_of_its_pull_request() {
-    let first = format!("<p>first of 71 {}</p>", now());
-    upload_with(
-        "owner/vault",
-        71,
-        &proof("owner/vault", 71),
-        &[("index.html", first.as_bytes())],
+    let more = json!([
+        {"check": "tests", "how": "it runs another command"},
+        {"check": "lint", "how": "it is gone"},
+    ]);
+    let answer = job.weakenings(&again.id, &more);
+    assert!(
+        answer.json()["accepted"].is_null(),
+        "more: {}",
+        answer.text()
     );
-    let session = sign_in("writer-code", "/");
-    let token = share("owner/vault", 71, Some(&session)).json()["token"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let second = format!("<p>second of 71 {}</p>", now());
-    upload_with(
-        "owner/vault",
-        71,
-        &proof("owner/vault", 71),
-        &[("index.html", second.as_bytes())],
+    let answer = job.weakenings(&again.id, &json!([]));
+    assert!(
+        answer.json()["accepted"].is_null(),
+        "less: {}",
+        answer.text()
     );
-    let answer = get(&format!("/s/{token}"), &[]);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    let answer = get_url(&frame_url(&answer), &[]);
-    assert_eq!(answer.body, second.as_bytes());
-}
 
-fn a_share_link_opens_nothing_else() {
-    let other = upload_proof("owner/vault", 73, &proof("owner/vault", 73));
-    upload_proof("owner/vault", 72, &proof("owner/vault", 72));
-    let session = sign_in("writer-code", "/");
-    let token = share("owner/vault", 72, Some(&session)).json()["token"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert_eq!(get(&format!("/s/{token}"), &[]).status, 200);
-    // Another pull request of the same repository still asks for a sign in.
-    assert_eq!(get("/owner/vault/pull/73", &[]).status, 302);
-    let answer = get(&format!("/owner/vault/proofs/{other}/"), &[]);
-    assert_eq!(answer.status, 302, "{}", answer.text());
-    // The link's paths below it are nothing.
-    assert_eq!(get(&format!("/s/{token}/index.html"), &[]).status, 404);
-}
+    // Another head of the same pull request has no accept.
+    let later = job.at(&commit("b114"), 2114);
+    let run = later.open(&["tests"]);
+    let answer = later.weakenings(&run.id, &weakenings());
+    assert!(answer.json()["accepted"].is_null(), "{}", answer.text());
 
-fn a_revoked_share_link_finds_nothing() {
-    upload_proof("owner/vault", 74, &proof("owner/vault", 74));
-    let session = sign_in("writer-code", "/");
-    let token = share("owner/vault", 74, Some(&session)).json()["token"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert_eq!(get(&format!("/s/{token}"), &[]).status, 200);
-    let answer = revoke("owner/vault", 74, &token, Some(&session));
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    let answer = get(&format!("/s/{token}"), &[]);
-    assert_eq!(answer.status, 404, "{}", answer.text());
-    assert!(!answer.text().contains("vault"), "{}", answer.text());
-    // Not even a writer's session brings it back.
-    let answer = get(&format!("/s/{token}"), &[("Cookie", &session)]);
-    assert_eq!(answer.status, 404, "{}", answer.text());
-}
-
-fn an_unknown_share_link_finds_nothing() {
-    for token in ["0123456789abcdef0123456789abcdef", "nothing", ""] {
-        let answer = get(&format!("/s/{token}"), &[]);
-        assert_eq!(answer.status, 404, "{token}: {}", answer.text());
-        assert!(!answer.text().contains("owner"), "{}", answer.text());
-    }
-}
-
-fn sharing_needs_write_access() {
-    upload_proof("owner/vault", 75, &proof("owner/vault", 75));
-    let answer = share("owner/vault", 75, None);
-    assert_eq!(answer.status, 401, "{}", answer.text());
-    let reader = sign_in("reader-code", "/");
-    let answer = share("owner/vault", 75, Some(&reader));
+    // Only the run's own token asks, and only for a CI run.
+    let stranger = Job::pull("owner/review", 115, "review/other").at(&head, 1114);
+    let answer = stranger.weakenings(&again.id, &weakenings());
     assert_eq!(answer.status, 403, "{}", answer.text());
-    let error = answer.json()["error"].as_str().unwrap().to_owned();
-    assert!(error.contains("write access"), "{error}");
-    // Someone GitHub shows nothing of the private repository learns nothing of it.
-    let stranger = sign_in("stranger-code", "/");
-    let answer = share("owner/vault", 75, Some(&stranger));
-    assert_eq!(answer.status, 404, "{}", answer.text());
-    // A pull request without a whole proof has nothing to share.
-    let writer = sign_in("writer-code", "/");
-    let answer = share("owner/vault", 76, Some(&writer));
-    assert_eq!(answer.status, 404, "{}", answer.text());
-    let answer = links("owner/vault", 75, Some(&writer));
-    assert_eq!(answer.json()["links"], json!([]), "nothing was made");
 }
 
-fn sharing_from_another_site_is_refused() {
-    upload_proof("owner/vault", 77, &proof("owner/vault", 77));
-    let session = sign_in("writer-code", "/");
-    let files = world().worker.files.clone();
-    for origin in [Some("https://evil.test"), Some(files.as_str()), None] {
-        let mut headers = vec![
-            ("Cookie", session.as_str()),
-            ("Content-Type", "application/json"),
-        ];
-        if let Some(origin) = origin {
-            headers.push(("Origin", origin));
-        }
-        let path = "/owner/vault/pull/77/share";
-        let answer = request("POST", path, &headers, Some(b"{}".to_vec()));
-        assert_eq!(answer.status, 403, "{origin:?}: {}", answer.text());
-    }
-    let answer = links("owner/vault", 77, Some(&session));
-    assert_eq!(answer.json()["links"], json!([]), "nothing was made");
-}
-
-fn share_links_are_listed_to_writers() {
-    upload_proof("owner/vault", 78, &proof("owner/vault", 78));
-    let session = sign_in("writer-code", "/");
-    let made = || {
-        share("owner/vault", 78, Some(&session)).json()["token"]
+fn the_check_run_follows_the_review_through_a_whole_flow() {
+    let page = format!("{}/owner/review/pull/107", world().worker.url);
+    let first = commit("a107");
+    // A push to the pull request: its head waits for CI.
+    let answer = webhook(
+        "pull_request",
+        &pull_request("synchronize", 107, "review/flow", &first),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    published(107);
+    let check = check_run(&first);
+    assert_eq!(check.field("name"), "Fearlezz review");
+    assert_eq!(check.state(), "queued");
+    assert_eq!(check.field("details_url"), page.as_str());
+    assert!(
+        check.field("output")["title"]
             .as_str()
             .unwrap()
-            .to_owned()
-    };
-    let (kept, gone) = (made(), made());
-    revoke("owner/vault", 78, &gone, Some(&session));
-    let answer = links("owner/vault", 78, Some(&session));
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    let listed = answer.json()["links"].as_array().unwrap().clone();
-    assert_eq!(listed.len(), 1, "{listed:?}");
-    assert_eq!(listed[0]["token"].as_str().unwrap(), kept);
-    assert_eq!(
-        listed[0]["url"].as_str().unwrap(),
-        format!("{}/s/{kept}", world().worker.url)
+            .contains("Waiting for CI"),
+        "{:?}",
+        check.writes
     );
-    assert_eq!(listed[0]["made_by"], "writer");
-    assert!(listed[0]["made_at"].as_i64().unwrap() > 0);
-    let reader = sign_in("reader-code", "/");
-    assert_eq!(links("owner/vault", 78, Some(&reader)).status, 403);
-    assert_eq!(links("owner/vault", 78, None).status, 401);
-}
 
-fn revoking_needs_write_access_and_a_link_of_that_pull_request() {
-    upload_proof("owner/vault", 79, &proof("owner/vault", 79));
-    let writer = sign_in("writer-code", "/");
-    let token = share("owner/vault", 79, Some(&writer)).json()["token"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let reader = sign_in("reader-code", "/");
-    assert_eq!(revoke("owner/vault", 79, &token, Some(&reader)).status, 403);
-    assert_eq!(revoke("owner/vault", 79, &token, None).status, 401);
-    // The token names another pull request, or another repository.
-    assert_eq!(revoke("owner/vault", 80, &token, Some(&writer)).status, 404);
-    assert_eq!(revoke("owner/team", 79, &token, Some(&writer)).status, 404);
-    assert_eq!(get(&format!("/s/{token}"), &[]).status, 200, "still live");
-}
+    // CI opens its run: in progress.
+    let job = Job::pull("owner/review", 107, "review/flow").at(&first, 1107);
+    let run = job.open(&["screens"]);
+    published(107);
+    assert_eq!(check_run(&first).state(), "in_progress");
 
-fn the_shell_offers_share_to_writers_alone() {
-    let id = upload_proof("owner/team", 81, &proof("owner/team", 81));
-    let path = format!("/owner/team/proofs/{id}/");
-    let writer = sign_in("writer-code", "/");
-    let html = get(&path, &[("Cookie", &writer)]).text();
-    assert!(html.contains("id=\"share\""), "{html}");
-    assert!(html.contains("/owner/team/pull/81/share"), "{html}");
-    let reader = sign_in("reader-code", "/");
-    let html = get(&path, &[("Cookie", &reader)]).text();
-    assert!(!html.contains("id=\"share\""), "{html}");
-    // With nothing to offer there is no bar: the page shows its own title.
-    assert!(!html.contains("<header"), "{html}");
-    let html = get(&path, &[]).text();
-    assert!(!html.contains("id=\"share\""), "{html}");
-    assert!(!html.contains("<header"), "{html}");
-}
-
-fn a_share_link_view_offers_no_posting() {
-    upload_proof("owner/team", 82, &waiting("owner/team", 82));
-    let writer = sign_in("writer-code", "/");
-    let token = share("owner/team", 82, Some(&writer)).json()["token"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    for session in [None, Some(writer.as_str())] {
-        let headers: Vec<(&str, &str)> = session.iter().map(|s| ("Cookie", *s)).collect();
-        let answer = get(&format!("/s/{token}"), &headers);
-        assert_eq!(answer.status, 200, "{}", answer.text());
-        let html = answer.text();
-        // It answers its frame, but never posts and never offers to share.
-        assert!(html.contains("e.source !== frame.contentWindow"), "{html}");
-        assert!(!html.contains("fetch("), "{html}");
-        assert!(!html.contains("id=\"share\""), "{html}");
-        assert!(!html.contains("data-kind="), "no Approve or Accept: {html}");
-        assert!(html.contains("share link"), "{html}");
-        let csp = answer.header("content-security-policy").unwrap();
-        assert!(csp.contains("connect-src 'none'"), "{csp}");
+    // Done, with a changed picture and a weakening: the proof fails on the weakening, and its
+    // summary says it waits for an admin's accept besides the picture.
+    world()
+        .github
+        .job_ended("owner/review", 1107, 11071, "proof", RUNNER, "failure");
+    let (look, files) = one_still(b"flow before", b"flow after");
+    let listed: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    job.finished_with_look(&run.id, &entry("screens", "passed"), &listed, &look);
+    for (_, bytes) in &listed {
+        job.send(bytes);
     }
+    let answer = job.close_with(
+        &run.id,
+        &[entry("screens", "passed")],
+        &[look],
+        &listed,
+        &weakened(),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    published(107);
+    let check = check_run(&first);
+    assert_eq!(check.state(), "failure", "{:?}", check.writes);
+    let summary = check.field("output")["summary"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(summary.contains("card/light.png"), "{summary}");
+    assert!(summary.contains("check `tests` is weaker"), "{summary}");
+    assert!(summary.contains("waits for an admin's accept"), "{summary}");
+
+    // A writer's verdict leaves the weakening failing the proof; an admin's accept runs the job
+    // again, which passes with it.
+    let writer = sign_in("writer-code", "/");
+    let answer = say(
+        &run.id,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("card/light.png"),
+    );
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    published(107);
+    assert_eq!(check_run(&first).state(), "failure");
+    let admin = sign_in("admin-code", "/");
+    let answer = say(&run.id, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    assert_eq!(
+        world()
+            .github
+            .reruns("owner/review", 1107)
+            .last()
+            .map(|r| r.0),
+        Some(11071)
+    );
+    let rerun = job.open(&["screens"]);
+    published(107);
+    assert_eq!(check_run(&first).state(), "in_progress");
+    let accepted = job.weakenings(&rerun.id, &weakenings()).json()["accepted"].clone();
+    let look = one_still(b"flow before", b"flow after").0;
+    job.finished_with_look(&rerun.id, &entry("screens", "passed"), &listed, &look);
+    let answer = job.close_with(
+        &rerun.id,
+        &[entry("screens", "passed")],
+        &[look],
+        &listed,
+        &weakened_and_accepted(&accepted),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    published(107);
+    let check = check_run(&first);
+    assert_eq!(check.state(), "success", "{:?}", check.writes);
+    assert!(
+        check.tokens.iter().all(|t| t == "installation-6"),
+        "the app writes it: {:?}",
+        check.tokens
+    );
+
+    // The next push gets a check run of its own, which fails with its proof.
+    let second = commit("b107");
+    webhook(
+        "pull_request",
+        &pull_request("synchronize", 107, "review/flow", &second),
+    );
+    published(107);
+    assert_eq!(check_run(&second).state(), "queued");
+    let next = job.at(&second, 2107);
+    let run = next.open(&["tests"]);
+    next.done(&run.id, &[entry("tests", "failed")], &[]);
+    published(107);
+    assert_eq!(check_run(&second).state(), "failure");
+    assert_eq!(
+        check_run(&first).state(),
+        "success",
+        "the first head keeps its own"
+    );
+}
+
+fn one_comment_is_created_then_edited() {
+    let first = commit("a108");
+    webhook(
+        "pull_request",
+        &pull_request("opened", 108, "review/comment", &first),
+    );
+    assert!(
+        world().github.comments("owner/review", 108).is_empty(),
+        "no hosted run yet"
+    );
+    let job = Job::pull("owner/review", 108, "review/comment").at(&first, 1108);
+    let run = job.open(&["tests"]);
+    published(108);
+    let comments = world().github.comments("owner/review", 108);
+    assert_eq!(comments.len(), 1, "{comments:?}");
+    let page = format!("{}/owner/review/pull/108", world().worker.url);
+    assert!(comments[0].bodies[0].contains(&page), "{comments:?}");
+    assert!(comments[0].bodies[0].contains("proving"), "{comments:?}");
+
+    job.done(&run.id, &[entry("tests", "passed")], &[]);
+    published(108);
+    let next = job.at(&commit("b108"), 2108);
+    let run = next.open(&["tests"]);
+    published(108);
+    next.done(&run.id, &[entry("tests", "failed")], &[]);
+    published(108);
+    let comments = world().github.comments("owner/review", 108);
+    assert_eq!(comments.len(), 1, "one comment, edited: {comments:?}");
+    let bodies = &comments[0].bodies;
+    assert!(bodies.len() >= 3, "{bodies:?}");
+    assert!(bodies.last().unwrap().contains("failed"), "{bodies:?}");
+    assert!(
+        bodies.iter().all(|b| b.lines().count() == 1),
+        "one line: {bodies:?}"
+    );
+    assert!(
+        comments[0].tokens.iter().all(|t| t == "installation-6"),
+        "as the app: {comments:?}"
+    );
+}
+
+fn a_webhook_with_a_wrong_signature_is_refused() {
+    let body = json!({"zen": "Keep it logically awesome.", "hook_id": 1}).to_string();
+    let wrong = github::signature("another secret", body.as_bytes());
+    for headers in [
+        vec![("X-GitHub-Event", "ping")],
+        vec![
+            ("X-GitHub-Event", "ping"),
+            ("X-Hub-Signature-256", wrong.as_str()),
+        ],
+        vec![
+            ("X-GitHub-Event", "ping"),
+            ("X-Hub-Signature-256", "sha256=00"),
+        ],
+    ] {
+        let answer = request(
+            "POST",
+            "/api/github/webhook",
+            &headers,
+            Some(body.clone().into_bytes()),
+        );
+        assert_eq!(answer.status, 401, "{headers:?}: {}", answer.text());
+    }
+    // A forged push to a pull request writes nothing to GitHub.
+    let head = commit("a109");
+    let payload = pull_request("synchronize", 109, "review/forged", &head).to_string();
+    let wrong = github::signature("another secret", payload.as_bytes());
+    let headers = [
+        ("X-GitHub-Event", "pull_request"),
+        ("X-Hub-Signature-256", wrong.as_str()),
+    ];
+    let answer = request(
+        "POST",
+        "/api/github/webhook",
+        &headers,
+        Some(payload.into_bytes()),
+    );
+    assert_eq!(answer.status, 401, "{}", answer.text());
+    assert!(world().github.check_runs("owner/review", &head).is_empty());
+    let answer = webhook(
+        "ping",
+        &json!({"zen": "Keep it logically awesome.", "hook_id": 1}),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+}
+
+fn a_job_that_ends_without_done_cancels_its_run() {
+    let head = commit("a110");
+    let job = Job::pull("owner/review", 110, "review/cancel").at(&head, 1110);
+    let run = job.open(&["tests"]);
+    job.started(&run.id, "tests");
+    let answer = webhook(
+        "workflow_job",
+        &workflow_job(
+            "in_progress",
+            1110,
+            "proof",
+            Some(RUNNER),
+            "review/cancel",
+            &head,
+        ),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    // Another job of the same workflow run ending on the same runner, as a self hosted one
+    // runs several, leaves it running: the names tell the two apart.
+    let answer = webhook(
+        "workflow_job",
+        &workflow_job(
+            "completed",
+            1110,
+            "build",
+            Some(RUNNER),
+            "review/cancel",
+            &head,
+        ),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    let snapshot = live("/owner/review/pull/110", &[]).json();
+    assert_eq!(snapshot["runs"][0]["state"], "running", "{snapshot:#}");
+    // Its own job ending without done closes it as cancelled.
+    webhook(
+        "workflow_job",
+        &workflow_job(
+            "completed",
+            1110,
+            "proof",
+            Some(RUNNER),
+            "review/cancel",
+            &head,
+        ),
+    );
+    let snapshot = live("/owner/review/pull/110", &[]).json();
+    assert_eq!(snapshot["runs"][0]["state"], "cancelled", "{snapshot:#}");
+    assert_eq!(snapshot["review"]["state"], "cancelled", "{snapshot:#}");
+    published(110);
+    assert_eq!(check_run(&head).state(), "cancelled");
+    let answer = job.finished(&run.id, &entry("tests", "passed"), &[]);
+    assert_eq!(
+        answer.status,
+        409,
+        "a closed run takes nothing more: {}",
+        answer.text()
+    );
+}
+
+fn a_matrix_leg_ending_leaves_its_siblings_running() {
+    let head = commit("a116");
+    let linux = Job::pull("owner/review", 116, "review/matrix")
+        .at(&head, 1116)
+        .on("runner-linux");
+    let macos = linux.on("runner-macos");
+    let (linux_run, macos_run) = (linux.open(&["tests"]), macos.open(&["tests"]));
+    let answer = linux.done(&linux_run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let answer = webhook(
+        "workflow_job",
+        &workflow_job(
+            "completed",
+            1116,
+            "proof (linux)",
+            Some("runner-linux"),
+            "review/matrix",
+            &head,
+        ),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    let state = |id: &str| {
+        let snapshot = live("/owner/review/pull/116", &[]).json();
+        let runs = snapshot["runs"].as_array().unwrap().clone();
+        runs.into_iter().find(|r| r["id"] == id).unwrap()["state"].clone()
+    };
+    assert_eq!(state(&macos_run.id), "running", "its sibling still proves");
+    let answer = macos.started(&macos_run.id, "tests");
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    // The sibling's own job ending without done closes it.
+    webhook(
+        "workflow_job",
+        &workflow_job(
+            "completed",
+            1116,
+            "proof (macos-latest)",
+            Some("runner-macos"),
+            "review/matrix",
+            &head,
+        ),
+    );
+    assert_eq!(state(&macos_run.id), "cancelled");
+    assert_eq!(state(&linux_run.id), "done");
+}
+
+/// The content keys of a review's pictures, in its order.
+fn keys(review: &Value) -> Vec<String> {
+    let pictures = review["pictures"].as_array().unwrap();
+    pictures
+        .iter()
+        .map(|p| p["key"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn every_leg_is_reviewed_and_a_new_attempt_replaces_them() {
+    let linux = Job::pull("owner/review", 134, "review/legs")
+        .at(&commit("a134"), 1134)
+        .on("runner-linux");
+    let macos = linux.on("runner-macos");
+    linux.picked_up("proof (linux)");
+    macos.picked_up("proof (macos-latest)");
+    let (linux_look, linux_files) = one_still(b"legs before", b"legs after on linux");
+    let (macos_look, macos_files) = one_still(b"legs before", b"legs after on macos");
+    let linux_run = proven(&linux, &linux_look, &linux_files, &json!({}));
+    let macos_run = proven(&macos, &macos_look, &macos_files, &json!({}));
+    let review = review_of(134);
+    assert_eq!(keys(&review).len(), 2, "each leg's picture: {review:#}");
+    assert_eq!(review["state"], "waits", "{review:#}");
+
+    // A verdict on one leg's picture leaves the other's waiting.
+    let writer = sign_in("writer-code", "/");
+    let picture = looks_right("card/light.png");
+    let answer = say(&linux_run, "verdicts", Some(&writer), &[], &picture);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let review = review_of(134);
+    assert_eq!(review["state"], "waits", "{review:#}");
+    let answer = say(&macos_run, "verdicts", Some(&writer), &[], &picture);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    assert_eq!(review_of(134)["state"], "approved");
+    let first = keys(&review_of(134));
+
+    // The whole workflow runs again, on other runners: its legs replace both.
+    let (linux_again, macos_again) = (
+        linux.again().on("runner-linux-2"),
+        macos.again().on("runner-macos-2"),
+    );
+    linux_again.picked_up("proof (linux)");
+    macos_again.picked_up("proof (macos-latest)");
+    let (linux_look, linux_files) = one_still(b"legs before", b"legs after on linux, again");
+    let (macos_look, macos_files) = one_still(b"legs before", b"legs after on macos, again");
+    proven(&linux_again, &linux_look, &linux_files, &json!({}));
+    proven(&macos_again, &macos_look, &macos_files, &json!({}));
+    let review = review_of(134);
+    let again = keys(&review);
+    assert_eq!(again.len(), 2, "each leg's picture: {review:#}");
+    assert!(again.iter().all(|k| !first.contains(k)), "{review:#}");
+    assert_eq!(review["state"], "waits", "{review:#}");
+}
+
+fn a_partial_rerun_replaces_only_the_legs_it_ran() {
+    let head = commit("a135");
+    let linux = Job::pull("owner/review", 135, "review/rerun")
+        .at(&head, 1135)
+        .on("runner-linux");
+    let macos = linux.on("runner-macos");
+    let github = &world().github;
+    github.job_ended(
+        "owner/review",
+        1135,
+        11351,
+        "proof (linux)",
+        "runner-linux",
+        "failure",
+    );
+    github.job_ended(
+        "owner/review",
+        1135,
+        11352,
+        "proof (macos-latest)",
+        "runner-macos",
+        "failure",
+    );
+    linux.picked_up("proof (linux)");
+    macos.picked_up("proof (macos-latest)");
+    let (linux_look, linux_files) = one_still(b"rerun before", b"rerun after on linux");
+    let (macos_look, macos_files) = one_still(b"rerun before", b"rerun after on macos");
+    let linux_run = proven(&linux, &linux_look, &linux_files, &weakened());
+    let linux_key = keys(&review_of(135)).remove(0);
+    proven(&macos, &macos_look, &macos_files, &weakened());
+    let first = keys(&review_of(135));
+    assert_eq!(first.len(), 2, "{first:?}");
+    let macos_key = first.iter().find(|k| **k != linux_key).unwrap().clone();
+
+    // The accept runs only the linux leg again, in a new attempt on another runner.
+    let admin = sign_in("admin-code", "/");
+    let answer = say(&linux_run, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let accept = answer.json()["accept"].clone();
+    assert_eq!(github.reruns("owner/review", 1135).len(), 1);
+    let rerun = linux.again().on("runner-linux-2");
+    rerun.picked_up("proof (linux)");
+    let (look, files) = one_still(b"rerun before", b"rerun after on linux, again");
+    proven(&rerun, &look, &files, &weakened_and_accepted(&accept));
+    let review = review_of(135);
+    let after = keys(&review);
+    assert_eq!(
+        after.len(),
+        2,
+        "the macos leg keeps its picture: {review:#}"
+    );
+    assert!(
+        after.contains(&macos_key),
+        "the macos leg's picture: {review:#}"
+    );
+    assert!(
+        !after.contains(&linux_key),
+        "the linux leg's old picture: {review:#}"
+    );
+    assert_eq!(review["state"], "waits", "{review:#}");
+}
+
+fn a_run_whose_leg_is_not_known_keeps_its_pictures() {
+    let linux = Job::pull("owner/review", 136, "review/unknown")
+        .at(&commit("a136"), 1136)
+        .on("runner-linux");
+    // No webhook named the first run's job: which leg it is stays unknown.
+    let (look, files) = one_still(b"unknown before", b"unknown after");
+    proven(&linux, &look, &files, &json!({}));
+    let first = keys(&review_of(136));
+    let again = linux.again().on("runner-linux-2");
+    again.picked_up("proof (linux)");
+    let (look, files) = one_still(b"unknown before", b"unknown after, again");
+    proven(&again, &look, &files, &json!({}));
+    let review = review_of(136);
+    let after = keys(&review);
+    assert_eq!(after.len(), 2, "{review:#}");
+    assert!(after.contains(&first[0]), "{review:#}");
+
+    // Once the webhook names it, the newer run of its leg replaces it.
+    linux.picked_up("proof (linux)");
+    let review = review_of(136);
+    assert_eq!(keys(&review).len(), 1, "{review:#}");
+    assert!(!keys(&review).contains(&first[0]), "{review:#}");
+}
+
+fn a_cancelled_rerun_of_a_leg_keeps_its_older_run_in_review() {
+    let head = commit("a138");
+    let linux = Job::pull("owner/review", 138, "review/cancelled-rerun")
+        .at(&head, 1138)
+        .on("runner-linux");
+    let macos = linux.on("runner-macos");
+    linux.picked_up("proof (linux)");
+    macos.picked_up("proof (macos-latest)");
+    let (look, files) = one_still(b"rerun before", b"rerun after on linux");
+    proven(&linux, &look, &files, &json!({}));
+    let (mut same, files) = one_still(b"rerun same", b"rerun same");
+    same["items"][0]["change"] = json!("same");
+    proven(&macos, &same, &files, &json!({}));
+    let first = keys(&review_of(138));
+    assert_eq!(first.len(), 1, "the linux leg's picture");
+
+    // The linux leg runs again and its job is cancelled before it says done.
+    let again = linux.again().on("runner-linux-2");
+    again.picked_up("proof (linux)");
+    let run = again.open(&["screens"]);
+    assert_eq!(review_of(138)["state"], "running");
+    again.ended("proof (linux)");
+    let snapshot = live("/owner/review/pull/138", &[]).json();
+    let state = snapshot["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == run.id.as_str())
+        .unwrap()["state"]
+        .clone();
+    assert_eq!(state, "cancelled", "{snapshot:#}");
+    let review = snapshot["review"].clone();
+    assert_eq!(
+        keys(&review),
+        first,
+        "the older run's picture stays: {review:#}"
+    );
+    assert_eq!(review["state"], "waits", "{review:#}");
+    published(138);
+    assert_eq!(check_run(&head).state(), "action_required");
+}
+
+fn a_job_its_workflow_names_is_matched_and_its_rerun_replaces_it() {
+    // The workflow names the job `Proof` with `name:`; its GITHUB_JOB is `proof`.
+    let job = Job::pull("owner/review", 137, "review/named")
+        .at(&commit("a137"), 1137)
+        .on("runner-named");
+    job.picked_up("Proof");
+    let (mut look, files) = one_still(b"named", b"named");
+    look["items"][0]["change"] = json!("same");
+    proven(&job, &look, &files, &weakened());
+    assert_eq!(review_of(137)["state"], "failed");
+
+    // Run again on GitHub, the job proves without the weakening: it replaces the failed run.
+    let again = job.again().on("runner-named-2");
+    again.picked_up("Proof");
+    proven(&again, &look, &files, &json!({}));
+    let review = review_of(137);
+    assert_eq!(review["state"], "approved", "{review:#}");
+}
+
+fn writes_at_once_reach_a_live_page_in_the_order_of_their_numbers() {
+    let job = Job::pull("owner/review", 117, "review/order").at(&commit("a117"), 1117);
+    let checks: Vec<String> = (0..16).map(|i| format!("check-{i}")).collect();
+    let planned: Vec<&str> = checks.iter().map(String::as_str).collect();
+    let run = job.open(&planned);
+    let mut browser = browser::Browser::start();
+    browser.open(&format!("{}/owner/review/pull/117", world().worker.url));
+    browser.wait_for(
+        "location.pathname === '/owner/review/pull/117' && document.readyState === 'complete'",
+    );
+    // A live connection of its own, keeping every message's number as it arrives.
+    browser.eval(
+        "new Promise((done) => { window.seen = []; \
+         const socket = new WebSocket(`ws://${location.host}/live/owner/review/pull/117`); \
+         socket.onmessage = (m) => window.seen.push(JSON.parse(m.data).seq); \
+         socket.onopen = () => done(true); })",
+    );
+    browser.wait_for("window.seen.length === 1");
+    // Every check ends at once, each with a look, which the host reads its pictures for
+    // before it tells pages.
+    let (look, files) = one_still(b"order before", b"order after");
+    let listed: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    std::thread::scope(|scope| {
+        for check in &planned {
+            let (job, run, listed) = (&job, &run.id, &listed);
+            let mut look = look.clone();
+            look["check"] = json!(check);
+            scope.spawn(move || {
+                let answer = job.finished_with_look(run, &entry(check, "passed"), listed, &look);
+                assert_eq!(answer.status, 200, "{}", answer.text());
+            });
+        }
+    });
+    browser.wait_for("window.seen.length === 17");
+    let seen: Vec<u64> = serde_json::from_value(browser.eval("window.seen")).unwrap();
+    let first = seen[0];
+    assert_eq!(
+        seen,
+        (first..=first + 16).collect::<Vec<_>>(),
+        "the snapshot, then each event once, one more than the one before"
+    );
+}
+
+/// The conclusion, or the status while it runs, of the check run of a review in `state`.
+fn conclusion(state: &Value) -> &'static str {
+    match state.as_str().unwrap() {
+        "ci" => "queued",
+        "running" => "in_progress",
+        "failed" | "needs_change" => "failure",
+        "cancelled" => "cancelled",
+        "waits" => "action_required",
+        "approved" => "success",
+        other => panic!("no review state {other}"),
+    }
+}
+
+fn github_hanging_or_failing_never_fails_a_write_nor_drops_a_page() {
+    let github = &world().github;
+    let head = commit("a139");
+    let job = Job::pull("owner/stalled", 139, "stalled/work").at(&head, 1139);
+    let mut browser = browser::Browser::start();
+    // A page of the host's origin, which opens the work's live connection once a run made it.
+    browser.open(&format!("{}/", world().worker.url));
+    browser.wait_for("document.readyState === 'complete'");
+    for stall in [github::Stall::Hang, github::Stall::Fail] {
+        github.stall("owner/stalled", Some(stall));
+        let quick = |what: &str, answer: Answer, at: Instant| {
+            assert_eq!(answer.status, 200, "{what}: {}", answer.text());
+            assert!(
+                at.elapsed() < Duration::from_secs(5),
+                "{what} waited {:?} for GitHub ({stall:?})",
+                at.elapsed()
+            );
+        };
+        let at = Instant::now();
+        let answer = job.open_answer(&job.opening(&["tests"]));
+        assert_eq!(answer.status, 201, "{}", answer.text());
+        assert!(
+            at.elapsed() < Duration::from_secs(5),
+            "open waited {:?} for GitHub ({stall:?})",
+            at.elapsed()
+        );
+        let run = answer.json()["run"].as_str().unwrap().to_owned();
+        browser.eval(
+            "new Promise((done) => { window.seen = []; window.socket = new WebSocket(\
+             `ws://${location.host}/live/owner/stalled/pull/139`); \
+             window.socket.onmessage = (m) => window.seen.push(JSON.parse(m.data)); \
+             window.socket.onopen = () => done(true); })",
+        );
+        browser.wait_for("window.seen.length === 1");
+        let at = Instant::now();
+        quick("started", job.started(&run, "tests"), at);
+        let at = Instant::now();
+        quick("done", job.done(&run, &[entry("tests", "passed")], &[]), at);
+        browser.wait_for("window.seen.some((m) => m.kind === 'event' && m.change.kind === 'done')");
+        assert_eq!(
+            browser.eval("window.socket.readyState"),
+            json!(1),
+            "the page stays open ({stall:?})"
+        );
+        browser.eval("window.socket.close()");
+    }
+
+    // Once GitHub writes again, the next write publishes the newest review.
+    github.stall("owner/stalled", None);
+    let again = job.again().on("runner-again");
+    let run = again.open(&["tests"]);
+    let answer = again.done(&run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    eventually(|| {
+        let runs = github.check_runs("owner/stalled", &head);
+        let state = runs.last().map(github::CheckRun::state);
+        (state.as_deref() == Some("success"))
+            .then_some(())
+            .ok_or(format!("{runs:?}"))
+    });
+}
+
+/// What `what` gives once it gives it, asked again for up to 20 seconds: GitHub hears of a
+/// review just after the write that moved it.
+fn eventually<T>(what: impl Fn() -> Result<T, String>) -> T {
+    let until = Instant::now() + Duration::from_secs(20);
+    loop {
+        match what() {
+            Ok(value) => return value,
+            Err(why) if Instant::now() > until => panic!("never came: {why}"),
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
+fn runs_opening_at_once_write_one_comment_and_one_check_run() {
+    let head = commit("a118");
+    let job = Job::pull("owner/review", 118, "review/together").at(&head, 1118);
+    let legs: Vec<Job> = (0..4).map(|i| job.on(&format!("runner-{i}"))).collect();
+    std::thread::scope(|scope| {
+        for leg in &legs {
+            scope.spawn(move || leg.open(&["tests"]));
+        }
+    });
+    published(118);
+    assert_eq!(
+        world().github.comments("owner/review", 118).len(),
+        1,
+        "one comment on the pull request"
+    );
+    let runs = world().github.check_runs("owner/review", &head);
+    assert_eq!(runs.len(), 1, "one check run of the head: {runs:?}");
+    assert_eq!(runs[0].state(), "in_progress");
+}
+
+fn a_verdict_and_done_at_once_leave_the_newest_review_on_github() {
+    for number in [119, 129, 133] {
+        let head = commit(&format!("a{number}"));
+        let job = Job::pull("owner/review", number, &format!("review/race-{number}"))
+            .at(&head, 1000 + number);
+        let run = job.open(&["screens"]);
+        let before = format!("race {number} before");
+        let after = format!("race {number} after");
+        let (look, files) = one_still(before.as_bytes(), after.as_bytes());
+        let listed: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+        job.finished_with_look(&run.id, &entry("screens", "passed"), &listed, &look);
+        for (_, bytes) in &listed {
+            job.send(bytes);
+        }
+        let writer = sign_in("writer-code", "/");
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let answer = say(
+                    &run.id,
+                    "verdicts",
+                    Some(&writer),
+                    &[],
+                    &looks_right("card/light.png"),
+                );
+                assert_eq!(answer.status, 201, "{}", answer.text());
+            });
+            scope.spawn(|| {
+                let looks = std::slice::from_ref(&look);
+                let answer = job.close_with(
+                    &run.id,
+                    &[entry("screens", "passed")],
+                    looks,
+                    &listed,
+                    &json!({}),
+                );
+                assert_eq!(answer.status, 200, "{}", answer.text());
+            });
+        });
+        let review = published(number);
+        assert_eq!(review["state"], "approved", "{review:#}");
+        let check = check_run(&head);
+        assert_eq!(
+            check.state(),
+            conclusion(&review["state"]),
+            "{:?}",
+            check.writes
+        );
+    }
+}
+
+fn a_queued_job_shows_as_waiting_for_a_runner() {
+    // The work and its job are known from an earlier run.
+    let job = Job::pull("owner/review", 111, "review/queued").at(&commit("a111"), 1111);
+    let run = job.open(&["tests"]);
+    job.done(&run.id, &[entry("tests", "passed")], &[]);
+    let head = commit("b111");
+    let page = "/owner/review/pull/111";
+    webhook(
+        "workflow_job",
+        &workflow_job("queued", 2111, "proof", None, "review/queued", &head),
+    );
+    // A job that never ran Fearlezz is not shown.
+    webhook(
+        "workflow_job",
+        &workflow_job("queued", 2111, "lint", None, "review/queued", &head),
+    );
+    let snapshot = live(page, &[]).json();
+    let waiting = snapshot["waiting"].as_array().cloned().unwrap_or_default();
+    assert_eq!(waiting.len(), 1, "{snapshot:#}");
+    assert_eq!(waiting[0]["name"], "proof", "{snapshot:#}");
+    assert_eq!(waiting[0]["head"], head.as_str(), "{snapshot:#}");
+    let mut browser = browser::Browser::start();
+    browser.open(&format!("{}{page}", world().worker.url));
+    browser.wait_for(r#"!!document.querySelector('[data-waiting="proof"]')"#);
+    // Once a runner takes it, it no longer waits.
+    webhook(
+        "workflow_job",
+        &workflow_job(
+            "in_progress",
+            2111,
+            "proof",
+            Some(RUNNER),
+            "review/queued",
+            &head,
+        ),
+    );
+    browser.wait_for(r#"!document.querySelector('[data-waiting="proof"]')"#);
+    let snapshot = live(page, &[]).json();
+    assert!(
+        snapshot
+            .get("waiting")
+            .is_none_or(|w| w.as_array().unwrap().is_empty()),
+        "{snapshot:#}"
+    );
+}
+
+/// A pull request of `owner/review` whose run shows the pictures of `shots`, done with `extra`
+/// over its proof.
+fn review_with_pictures(number: u64, branch: &str, extra: &Value) -> (Job, String) {
+    let job = Job::pull("owner/review", number, branch).at(&commit(&format!("a{number}")), number);
+    let run = job.open(&["screens"]);
+    run_with_pictures(&job, &run.id);
+    let shots = shots();
+    let files: Vec<(&str, &[u8])> = shots
+        .files
+        .iter()
+        .map(|(p, b)| (p.as_str(), b.as_slice()))
+        .collect();
+    let answer = job.close_with(
+        &run.id,
+        &[entry("screens", "passed")],
+        std::slice::from_ref(&shots.look),
+        &files,
+        extra,
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    (job, run.id)
+}
+
+/// Whether the picture on the stage shows the verdict `state`.
+fn verdict_shows(state: &str) -> String {
+    format!(r#"document.querySelector('[data-said]')?.dataset.said === "{state}""#)
+}
+
+fn a_verdict_given_in_one_tab_shows_in_another() {
+    review_with_pictures(112, "review/tabs", &json!({}));
+    let url = format!("{}/owner/review/pull/112", world().worker.url);
+    let mut browser = browser::Browser::start();
+    browser.sign_in(&world().worker.url, &sign_in("writer-code", "/"));
+    let first = browser.open(&url);
+    browser.wait_for(&verdict_shows("none"));
+    let second = browser.open(&url);
+    browser.wait_for(&verdict_shows("none"));
+    browser.eval("window.stayed = true");
+    // The headline says what waits for this person, once the host says who they are.
+    browser.wait_for(
+        "document.querySelector('[data-standing]').textContent.includes('wait for your look')",
+    );
+
+    browser.on(&first);
+    browser.eval(r#"document.querySelector('button[data-say="looks_right"]').click()"#);
+    browser.wait_for(&verdict_shows("looks_right"));
+    browser.on(&second);
+    browser.wait_for(&verdict_shows("looks_right"));
+    assert_eq!(
+        browser.eval("document.querySelector('[data-said]').textContent.includes('writer')"),
+        json!(true)
+    );
+    browser.wait_for(r#"document.querySelector('[data-picture="screens/card/light.png"]').dataset.verdict === "looks_right""#);
+    assert_eq!(
+        browser.eval("window.stayed === true"),
+        json!(true),
+        "no reload"
+    );
+}
+
+fn the_page_says_what_each_person_can_do() {
+    review_with_pictures(113, "review/roles", &weakened());
+    let url = format!("{}/owner/review/pull/113", world().worker.url);
+    let app = world().worker.url.clone();
+    // Signed out: a way to sign in.
+    let mut browser = browser::Browser::start();
+    browser.open(&url);
+    browser.wait_for(&verdict_shows("none"));
+    browser.wait_for(r#"!!document.querySelector('[data-said] a[data-sign-in]')"#);
+    assert_eq!(
+        browser.eval("!!document.querySelector('button[data-say]')"),
+        json!(false)
+    );
+    // A reader: why there is nothing to press.
+    let mut reader = browser::Browser::start();
+    reader.sign_in(&app, &sign_in("reader-code", "/"));
+    reader.open(&url);
+    reader.wait_for(r#"!!document.querySelector('[data-said] [data-cannot]')"#);
+    assert_eq!(
+        reader.eval("document.querySelector('[data-said] [data-cannot]').textContent.includes('write access')"),
+        json!(true)
+    );
+    reader.wait_for(r#"!!document.querySelector('[data-weakenings] [data-cannot]')"#);
+    // A writer gives verdicts but cannot accept.
+    let mut writer = browser::Browser::start();
+    writer.sign_in(&app, &sign_in("writer-code", "/"));
+    writer.open(&url);
+    writer.wait_for(r#"!!document.querySelector('button[data-say="looks_right"]')"#);
+    writer.wait_for(r#"!!document.querySelector('[data-weakenings] [data-cannot]')"#);
+    assert_eq!(
+        writer.eval("!!document.querySelector('button[data-accept]')"),
+        json!(false)
+    );
+    // An admin accepts beside what it weakens.
+    let mut admin = browser::Browser::start();
+    admin.sign_in(&app, &sign_in("admin-code", "/"));
+    admin.open(&url);
+    admin.wait_for(r#"!!document.querySelector('[data-weakenings] button[data-accept]')"#);
+    assert_eq!(
+        admin.eval("document.querySelector('[data-weakenings]').textContent.includes('it runs another command')"),
+        json!(true)
+    );
+    admin.eval("document.querySelector('button[data-accept]').click()");
+    admin.wait_for(r#"document.querySelector('[data-weakenings]').dataset.accepted === "true""#);
+    reader.wait_for(r#"document.querySelector('[data-weakenings]').dataset.accepted === "true""#);
+}
+
+/// Not a test of behaviour: pictures of the page with a changed still, a new still and a
+/// changed film, light and dark and at phone width, written to `ee/target/tmp` for a person
+/// to look at. `cargo test --manifest-path ee/Cargo.toml --test host -- --ignored pictures`.
+fn pictures() {
+    let mut browser = page_with_pictures("feat/shots");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let shoot = |browser: &mut browser::Browser, name: &str| {
+        // Motion settles before the picture.
+        std::thread::sleep(Duration::from_millis(900));
+        let path = dir.join(format!("page-{name}.png"));
+        std::fs::write(&path, browser.screenshot()).unwrap();
+        eprintln!("{}", path.display());
+    };
+    for (view, (width, height, mobile)) in
+        [("wide", (1280, 900, false)), ("phone", (390, 844, true))]
+    {
+        for dark in [false, true] {
+            browser.view(width, height, mobile, dark);
+            let scheme = if dark { "dark" } else { "light" };
+            browser.eval(
+                r#"document.querySelector('[data-picture="screens/card/light.png"]').click()"#,
+            );
+            browser.wait_for(&loaded("img", "after"));
+            shoot(&mut browser, &format!("{view}-{scheme}-still"));
+            browser.eval(
+                r#"document.querySelector('[data-picture="screens/settings/light.png"]').click()"#,
+            );
+            browser.wait_for(&loaded("img", "after"));
+            shoot(&mut browser, &format!("{view}-{scheme}-new"));
+            browser.eval(
+                r#"document.querySelector('[data-picture="screens/checkout.webm"]').click()"#,
+            );
+            browser.wait_for(&loaded("video", "after"));
+            browser.eval(r#"document.querySelector('[data-seek]').click()"#);
+            shoot(&mut browser, &format!("{view}-{scheme}-film"));
+        }
+    }
+    browser.view(1280, 900, false, false);
+    for mode in ["slider", "onion", "diff"] {
+        browser
+            .eval(r#"document.querySelector('[data-picture="screens/card/light.png"]').click()"#);
+        browser.eval(&format!(
+            r#"document.querySelector('button[data-mode="{mode}"]').click()"#
+        ));
+        browser.wait_for(&loaded("img", "after"));
+        shoot(&mut browser, &format!("wide-light-{mode}"));
+    }
+
+    // Review: what waits for an admin, before and after their verdict, then a reader's view.
+    review_with_pictures(190, "review/shots", &weakened());
+    let url = format!("{}/owner/review/pull/190", world().worker.url);
+    let mut admin = browser::Browser::start();
+    admin.sign_in(&world().worker.url, &sign_in("admin-code", "/"));
+    admin.open(&url);
+    for dark in [false, true] {
+        admin.view(1280, 900, false, dark);
+        admin.wait_for(&verdict_shows("none"));
+        admin.wait_for(&loaded("img", "after"));
+        let scheme = if dark { "dark" } else { "light" };
+        shoot(&mut admin, &format!("review-{scheme}-waits"));
+    }
+    admin.eval(r#"document.querySelector('button[data-say="looks_right"]').click()"#);
+    admin.wait_for(&verdict_shows("looks_right"));
+    for dark in [false, true] {
+        admin.view(1280, 900, false, dark);
+        let scheme = if dark { "dark" } else { "light" };
+        shoot(&mut admin, &format!("review-{scheme}-looks-right"));
+    }
+    admin.view(390, 844, true, false);
+    shoot(&mut admin, "review-phone-light");
+    let mut reader = browser::Browser::start();
+    reader.sign_in(&world().worker.url, &sign_in("reader-code", "/"));
+    reader.open(&url);
+    reader.view(1280, 900, false, false);
+    reader.wait_for(r#"!!document.querySelector('[data-weakenings] [data-cannot]')"#);
+    reader.wait_for(&loaded("img", "after"));
+    shoot(&mut reader, "review-light-reader");
+
+    notes::pictures(&shoot);
+    local::pictures(&shoot);
+    share::pictures(&shoot);
+    repository::pictures(&shoot);
 }
 
 // Helpers.
 
-/// A proof whose pictures of `screens` wait for approval and whose weakening waits for an
-/// admin's accept.
-fn waiting(repository: &str, pull: u64) -> Value {
-    let mut proof = proof(repository, pull);
-    proof["looks"] = json!([{
-        "check": "screens",
-        "base_commit": "def5678",
-        "base_result": "passed",
-        "items": [
-            {"name": "home.png", "kind": "still", "change": "changed", "summary": "changed", "flaky": false},
-            {"name": "about.png", "kind": "still", "change": "same", "summary": "same", "flaky": false},
-        ],
-    }]);
-    proof["weakened"] = json!([{"check": "tests", "how": "it runs another command"}]);
-    proof["weakenings_wait"] = json!(true);
-    proof
+/// A CI job of one repository: a pull request's run from its head branch, or a push of a
+/// branch. It speaks protocol version 2 with the OIDC token Actions would give it.
+#[derive(Clone)]
+struct Job {
+    repository: &'static str,
+    branch: String,
+    pull: Option<u64>,
+    /// The commit it proves.
+    head: String,
+    /// The workflow run it is a job of, as its run page names it.
+    workflow_run: u64,
+    /// The workflow run's attempt, 1 until it is run again.
+    attempt: u32,
+    /// The runner that took it, which tells the legs of a matrix apart.
+    runner: String,
+    /// A developer's CLI token instead of CI's: the run is a local one.
+    cli: Option<String>,
 }
 
-/// Approves or accepts a proof from its shell, as the shell's script asks: same origin, JSON,
-/// with the token of the person's view of the shell when they may see it.
-fn act(repository: &str, id: &str, kind: &str, session: Option<&str>, body: Value) -> Answer {
-    let path = format!("/{repository}/proofs/{id}/{kind}");
-    let origin = world().worker.url.clone();
-    let mut headers = vec![
-        ("Origin", origin.as_str()),
-        ("Content-Type", "application/json"),
-    ];
-    let view = session.and_then(|s| view_token(repository, id, s));
-    if let Some(session) = session {
-        headers.push(("Cookie", session));
+/// The runner a job runs on unless a test names another.
+const RUNNER: &str = "GitHub Actions 1";
+
+/// A run the host opened.
+struct Opened {
+    id: String,
+    url: String,
+}
+
+impl Job {
+    fn pull(repository: &'static str, number: u64, branch: &str) -> Job {
+        Job {
+            repository,
+            branch: branch.to_owned(),
+            pull: Some(number),
+            head: HEAD.to_owned(),
+            workflow_run: 1,
+            attempt: 1,
+            runner: RUNNER.to_owned(),
+            cli: None,
+        }
     }
-    if let Some(view) = &view {
-        headers.push(("Fearlezz-View", view));
+
+    fn push(repository: &'static str, branch: &str) -> Job {
+        Job {
+            repository,
+            branch: branch.to_owned(),
+            pull: None,
+            head: HEAD.to_owned(),
+            workflow_run: 1,
+            attempt: 1,
+            runner: RUNNER.to_owned(),
+            cli: None,
+        }
     }
-    request("POST", &path, &headers, Some(body.to_string().into_bytes()))
-}
 
-/// The token of a person's view of a proof's shell, which its script sends with a post; None
-/// when the shell does not open for them.
-fn view_token(repository: &str, id: &str, session: &str) -> Option<String> {
-    let answer = get(
-        &format!("/{repository}/proofs/{id}/"),
-        &[("Cookie", session)],
-    );
-    if answer.status != 200 {
-        return None;
+    /// A developer's local run of `branch`, sent with their CLI `token`: no pull request, and
+    /// no job.
+    fn local(repository: &'static str, branch: &str, token: &str) -> Job {
+        Job {
+            cli: Some(token.to_owned()),
+            ..Job::push(repository, branch)
+        }
     }
-    let html = answer.text();
-    let start = html.find("var VIEW = \"")? + "var VIEW = \"".len();
-    let end = html[start..].find('"')?;
-    Some(html[start..start + end].to_owned())
-}
 
-/// Makes a share link of a pull request, as the shell's script asks: same origin, JSON.
-fn share(repository: &str, pull: u64, session: Option<&str>) -> Answer {
-    post_json(&format!("/{repository}/pull/{pull}/share"), session)
-}
-
-/// Revokes a share link, as the shell's script asks.
-fn revoke(repository: &str, pull: u64, token: &str, session: Option<&str>) -> Answer {
-    post_json(
-        &format!("/{repository}/pull/{pull}/share/{token}/revoke"),
-        session,
-    )
-}
-
-/// The live share links of a pull request.
-fn links(repository: &str, pull: u64, session: Option<&str>) -> Answer {
-    let headers: Vec<(&str, &str)> = session.iter().map(|s| ("Cookie", *s)).collect();
-    get(&format!("/{repository}/pull/{pull}/share"), &headers)
-}
-
-fn post_json(path: &str, session: Option<&str>) -> Answer {
-    let origin = world().worker.url.clone();
-    let mut headers = vec![
-        ("Origin", origin.as_str()),
-        ("Content-Type", "application/json"),
-    ];
-    if let Some(session) = session {
-        headers.push(("Cookie", session));
+    /// The same job proving another commit, as a later push brings, in workflow run `run`.
+    fn at(&self, head: &str, workflow_run: u64) -> Job {
+        Job {
+            head: head.to_owned(),
+            workflow_run,
+            ..self.clone()
+        }
     }
-    request("POST", path, &headers, Some(b"{}".to_vec()))
+
+    /// The same job in the next attempt of its workflow run, as running it again starts.
+    fn again(&self) -> Job {
+        Job {
+            attempt: self.attempt + 1,
+            ..self.clone()
+        }
+    }
+
+    /// GitHub's `workflow_job` webhook saying the job's runner took it, under its display
+    /// `name` (`proof (macos-latest)` for a matrix leg).
+    fn picked_up(&self, name: &str) {
+        self.job_event("in_progress", name);
+    }
+
+    /// GitHub's `workflow_job` webhook saying the job, under its display `name`, ended
+    /// cancelled.
+    fn ended(&self, name: &str) {
+        self.job_event("completed", name);
+    }
+
+    fn job_event(&self, action: &str, name: &str) {
+        let id = self.workflow_run * 1000
+            + u64::from(self.attempt) * 100
+            + self.runner.bytes().map(u64::from).sum::<u64>() % 100;
+        let conclusion = if action == "completed" {
+            json!("cancelled")
+        } else {
+            Value::Null
+        };
+        let payload = json!({
+            "action": action,
+            "workflow_job": {
+                "id": id,
+                "run_id": self.workflow_run,
+                "run_attempt": self.attempt,
+                "runner_name": self.runner,
+                "name": name,
+                "head_sha": self.head,
+                "head_branch": self.branch,
+                "status": action,
+                "conclusion": conclusion,
+                "html_url": format!("https://github.com/{}/actions/runs/{}/job/{id}", self.repository, self.workflow_run),
+            },
+            "repository": {"full_name": self.repository},
+            "installation": {"id": 6},
+        });
+        let answer = webhook("workflow_job", &payload);
+        assert_eq!(answer.status, 202, "{}", answer.text());
+    }
+
+    /// Another leg of the same matrix job, which `runner` took.
+    fn on(&self, runner: &str) -> Job {
+        Job {
+            runner: runner.to_owned(),
+            ..self.clone()
+        }
+    }
+
+    /// The claims Actions puts in the job's token.
+    fn claims(&self) -> Value {
+        let now = now();
+        let (git_ref, head_ref, event) = match self.pull {
+            Some(n) => (
+                format!("refs/pull/{n}/merge"),
+                self.branch.clone(),
+                "pull_request",
+            ),
+            None => (format!("refs/heads/{}", self.branch), String::new(), "push"),
+        };
+        json!({
+            "iss": ISSUER,
+            "aud": AUDIENCE,
+            "sub": format!("repo:{}:{event}", self.repository),
+            "repository": self.repository,
+            "repository_owner": self.repository.split('/').next().unwrap(),
+            "ref": git_ref,
+            "head_ref": head_ref,
+            "event_name": event,
+            "iat": now,
+            "nbf": now,
+            "exp": now + 300,
+        })
+    }
+
+    fn token(&self) -> String {
+        match &self.cli {
+            Some(token) => token.clone(),
+            None => oidc(&self.claims()),
+        }
+    }
+
+    /// What the job sends to open a run of `checks`.
+    fn opening(&self, checks: &[&str]) -> Value {
+        let mut body = json!({
+            "repository": self.repository,
+            "branch": self.branch,
+            "head": self.head,
+            "base": "main",
+            "source": {
+                "kind": "ci",
+                "job": "proof",
+                "run_url": format!("https://github.com/{}/actions/runs/{}", self.repository, self.workflow_run),
+                "run_id": self.workflow_run,
+                "run_attempt": self.attempt,
+                "runner_name": self.runner,
+            },
+            "checks": checks,
+        });
+        if let Some(n) = self.pull {
+            body["pull"] = json!({"number": n, "title": format!("Pull request {n}")});
+        }
+        if self.cli.is_some() {
+            body["source"] = json!({"kind": "local"});
+        }
+        body
+    }
+
+    fn open_answer(&self, body: &Value) -> Answer {
+        api(
+            "POST",
+            "/api/v2/runs",
+            &self.token(),
+            Some(body.to_string().into_bytes()),
+        )
+    }
+
+    /// Opens a run of `checks`.
+    fn open(&self, checks: &[&str]) -> Opened {
+        let answer = self.open_answer(&self.opening(checks));
+        assert_eq!(answer.status, 201, "{}", answer.text());
+        let opened = answer.json();
+        Opened {
+            id: opened["run"].as_str().unwrap().to_owned(),
+            url: opened["url"].as_str().unwrap().to_owned(),
+        }
+    }
+
+    fn step(&self, run: &str, step: &Value) -> Answer {
+        let path = format!("/api/v2/runs/{run}/checks");
+        api(
+            "POST",
+            &path,
+            &self.token(),
+            Some(step.to_string().into_bytes()),
+        )
+    }
+
+    fn started(&self, run: &str, check: &str) -> Answer {
+        self.step(run, &json!({"started": {"check": check}}))
+    }
+
+    fn finished(&self, run: &str, check: &Value, files: &[(&str, &[u8])]) -> Answer {
+        self.step(
+            run,
+            &json!({"finished": {"check": check, "files": manifest(files)}}),
+        )
+    }
+
+    /// A check that took pictures ends, with its look.
+    fn finished_with_look(
+        &self,
+        run: &str,
+        check: &Value,
+        files: &[(&str, &[u8])],
+        look: &Value,
+    ) -> Answer {
+        let finished = json!({"check": check, "files": manifest(files), "look": look});
+        self.step(run, &json!({ "finished": finished }))
+    }
+
+    /// The bytes of one file, by content.
+    fn send(&self, bytes: &[u8]) -> Answer {
+        let path = format!("/api/v2/blobs/{}", sha256(bytes));
+        api("PUT", &path, &self.token(), Some(bytes.to_vec()))
+    }
+
+    /// What the job sends to close a run whose checks came out as `checks`, with `looks`.
+    fn closing(&self, checks: &[Value], looks: &[Value], files: &[(&str, &[u8])]) -> Value {
+        let mut proof = json!({
+            "schema": 1,
+            "repository": self.repository,
+            "commit": &self.head[..7],
+            "head": self.head,
+            "base": "main",
+            "checks": checks,
+            "weakened": [],
+            "looks": looks,
+        });
+        if let Some(n) = self.pull {
+            proof["pull"] = json!({"number": n, "title": format!("Pull request {n}")});
+        }
+        json!({"proof": proof, "files": manifest(files)})
+    }
+
+    /// Closes a run as `close` does, with `extra` laid over its proof.
+    fn close_with(
+        &self,
+        run: &str,
+        checks: &[Value],
+        looks: &[Value],
+        files: &[(&str, &[u8])],
+        extra: &Value,
+    ) -> Answer {
+        let path = format!("/api/v2/runs/{run}/done");
+        let mut body = self.closing(checks, looks, files);
+        for (name, value) in extra.as_object().unwrap() {
+            body["proof"][name] = value.clone();
+        }
+        api(
+            "POST",
+            &path,
+            &self.token(),
+            Some(body.to_string().into_bytes()),
+        )
+    }
+
+    /// Asks whether an admin accepted exactly `weakened` at the run's head, as CI does before it
+    /// judges what its change weakens.
+    fn weakenings(&self, run: &str, weakened: &Value) -> Answer {
+        let path = format!("/api/v2/runs/{run}/weakenings");
+        let body = json!({ "weakened": weakened });
+        api(
+            "POST",
+            &path,
+            &self.token(),
+            Some(body.to_string().into_bytes()),
+        )
+    }
+
+    fn done(&self, run: &str, checks: &[Value], files: &[(&str, &[u8])]) -> Answer {
+        self.close(run, checks, &[], files)
+    }
+
+    fn close(
+        &self,
+        run: &str,
+        checks: &[Value],
+        looks: &[Value],
+        files: &[(&str, &[u8])],
+    ) -> Answer {
+        let path = format!("/api/v2/runs/{run}/done");
+        let body = self.closing(checks, looks, files);
+        api(
+            "POST",
+            &path,
+            &self.token(),
+            Some(body.to_string().into_bytes()),
+        )
+    }
 }
 
-/// The claims Actions puts in a pull request run's token.
-fn claims(repository: &str, pull: u64) -> Value {
-    let now = now();
+/// The commit a job proves unless it says another.
+const HEAD: &str = "abc1234abc1234abc1234abc1234abc1234abc1";
+
+/// A check's entry in the proof, as it ended.
+fn entry(id: &str, outcome: &str) -> Value {
     json!({
-        "iss": ISSUER,
-        "aud": AUDIENCE,
-        "sub": format!("repo:{repository}:pull_request"),
-        "repository": repository,
-        "repository_owner": repository.split('/').next().unwrap(),
-        "ref": format!("refs/pull/{pull}/merge"),
-        "event_name": "pull_request",
-        "iat": now,
-        "nbf": now,
-        "exp": now + 300,
+        "id": id,
+        "run": format!("run {id}"),
+        "stage": "working",
+        "outcome": outcome,
+        "seconds": 1.5,
     })
 }
 
-fn ci(repository: &str, pull: u64) -> String {
+/// A check's look: its pictures compared with the base commit.
+fn look_of(check: &str, items: &[Value]) -> Value {
+    json!({
+        "check": check,
+        "base_commit": "0123456789abcdef0123456789abcdef01234567",
+        "base_result": "passed",
+        "items": items,
+    })
+}
+
+/// One still of a look, compared as `change`.
+fn still(name: &str, change: &str, before: Option<&str>, after: Option<&str>) -> Value {
+    json!({
+        "name": name,
+        "kind": "still",
+        "change": change,
+        "summary": format!("{name} {change}"),
+        "before": before,
+        "after": after,
+        "comparison": null,
+    })
+}
+
+/// Files as a call names them: `{path: {sha256, size}}`.
+fn manifest(files: &[(&str, &[u8])]) -> Value {
+    files
+        .iter()
+        .map(|(path, bytes)| {
+            let file = json!({"sha256": sha256(bytes), "size": bytes.len()});
+            ((*path).to_owned(), file)
+        })
+        .collect::<serde_json::Map<String, Value>>()
+        .into()
+}
+
+/// The claims of a pull request run's token.
+fn claims(repository: &'static str, pull: u64) -> Value {
+    Job::pull(repository, pull, &format!("pull-{pull}")).claims()
+}
+
+fn ci(repository: &'static str, pull: u64) -> String {
     oidc(&claims(repository, pull))
 }
 
@@ -1788,93 +3730,32 @@ fn sign_with_kid(key: &RsaPrivateKey, kid: &str, claims: &Value) -> String {
     format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
 }
 
-/// A `proof.json` as CI writes it, with no checks or pictures.
-fn proof(repository: &str, pull: u64) -> Value {
-    json!({
-        "schema": 1,
-        "repository": repository,
-        "pull": {"number": pull, "title": format!("Pull request {pull}")},
-        "commit": "abc1234 merged into def5678",
-        "head": "abc1234abc1234abc1234abc1234abc1234abc1",
-        "base": "main",
-        "checks": [],
-        "weakened": [],
-        "looks": [],
-    })
+/// A page as a browser navigates to it.
+fn navigate(path: &str, headers: &[(&str, &str)]) -> Answer {
+    let mut all = vec![("Sec-Fetch-Mode", "navigate"), ("Accept", "text/html")];
+    all.extend_from_slice(headers);
+    get(path, &all)
 }
 
-fn upload_body(proof: &Value, files: &[(&str, &[u8])]) -> Vec<u8> {
-    let files: serde_json::Map<String, Value> = files
-        .iter()
-        .map(|(path, bytes)| {
-            let file = json!({"sha256": sha256(bytes), "size": bytes.len()});
-            ((*path).to_owned(), file)
-        })
-        .collect();
-    json!({"proof": proof, "files": files})
-        .to_string()
-        .into_bytes()
+/// The live snapshot of the work at a page's path, asked without upgrading.
+fn live(path: &str, headers: &[(&str, &str)]) -> Answer {
+    get(&format!("/live{path}"), headers)
 }
 
-/// The whole upload as CI does it; the proof's id.
-fn upload(repository: &str, pull: u64, files: &[(&str, &[u8])]) -> String {
-    upload_with(repository, pull, &proof(repository, pull), files)
-}
-
-/// The upload of `proof` with a page of its own.
-fn upload_proof(repository: &str, pull: u64, proof: &Value) -> String {
-    let page = format!("<p>{repository} {pull} {}</p>", now());
-    upload_with(repository, pull, proof, &[("index.html", page.as_bytes())])
-}
-
-fn upload_with(repository: &str, pull: u64, proof: &Value, files: &[(&str, &[u8])]) -> String {
-    let id = start_upload_with(repository, pull, proof, files);
-    finish_upload(repository, pull, &id);
-    id
-}
-
-/// An upload with every file sent but not yet done, with `page` as its page; the proof's id.
-fn start_upload(repository: &str, pull: u64, proof: &Value, page: &[u8]) -> String {
-    start_upload_with(repository, pull, proof, &[("index.html", page)])
-}
-
-fn start_upload_with(
-    repository: &str,
-    pull: u64,
-    proof: &Value,
-    files: &[(&str, &[u8])],
-) -> String {
-    let token = ci(repository, pull);
-    let body = upload_body(proof, files);
-    let answer = api("POST", "/api/v1/proofs", &token, Some(body));
-    assert_eq!(answer.status, 201, "{}", answer.text());
-    let created = answer.json();
-    let id = created["id"].as_str().unwrap().to_owned();
-    assert_eq!(
-        created["url"].as_str().unwrap(),
-        format!("{}/{repository}/proofs/{id}/", world().worker.url)
-    );
-    for missing in created["missing"].as_array().unwrap() {
-        let missing = missing.as_str().unwrap();
-        let (_, bytes) = files.iter().find(|(_, b)| sha256(b) == missing).unwrap();
-        let answer = api(
-            "PUT",
-            &format!("/api/v1/blobs/{missing}"),
-            &token,
-            Some(bytes.to_vec()),
-        );
-        assert_eq!(answer.status, 204, "{}", answer.text());
+/// The folder of a run on the files origin under a grant sealed here with the host's key, as
+/// the host seals them: `base64url(json).base64url(HMAC-SHA256("grant." + payload))`. `changes`
+/// overrides its claims.
+fn files_base(repo: &str, run: &str, changes: &[(&str, Value)]) -> String {
+    use hmac::Mac as _;
+    let mut claims = json!({"repo": repo, "run": run, "exp": now() + 3600});
+    for (name, value) in changes {
+        claims[*name] = value.clone();
     }
-    id
-}
-
-/// Marks an upload done, as CI does once every file is sent.
-fn finish_upload(repository: &str, pull: u64, id: &str) {
-    let token = ci(repository, pull);
-    let answer = api("POST", &format!("/api/v1/proofs/{id}/done"), &token, None);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    let url = format!("{}/{repository}/proofs/{id}/", world().worker.url);
-    assert_eq!(answer.json()["url"], json!(url));
+    let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(SIGNING_KEY.as_bytes()).unwrap();
+    mac.update(format!("grant.{payload}").as_bytes());
+    let mac = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    format!("{}/{payload}.{mac}/", world().worker.files)
 }
 
 /// Signs in with a GitHub OAuth code, starting from `next`; the session cookie.
@@ -1909,40 +3790,6 @@ fn sign_in_answer(code: &str, next: &str) -> Answer {
     assert_eq!(answer.status, 302, "{}", answer.text());
     assert_eq!(answer.header("location").unwrap(), next);
     answer
-}
-
-/// The `src` of the frame in a proof's shell page.
-fn frame_url(shell: &Answer) -> String {
-    let html = shell.text();
-    let frame = &html[html
-        .find("<iframe")
-        .unwrap_or_else(|| panic!("no frame: {html}"))..];
-    attribute(frame, "src")
-        .unwrap_or_else(|| panic!("no src: {html}"))
-        .replace("&amp;", "&")
-}
-
-/// The value of the first `name="..."` attribute in some HTML.
-fn attribute(html: &str, name: &str) -> Option<String> {
-    let start = html.find(&format!(" {name}=\""))? + name.len() + 3;
-    let end = html[start..].find('"')?;
-    Some(html[start..start + end].to_owned())
-}
-
-/// The folder of a proof on the files origin under a grant sealed here with the host's key, as
-/// the host seals them: `base64url(json).base64url(HMAC-SHA256("grant." + payload))`. `changes`
-/// overrides its claims.
-fn files_base(repo: &str, proof: &str, changes: &[(&str, Value)]) -> String {
-    use hmac::Mac as _;
-    let mut claims = json!({"repo": repo, "proof": proof, "exp": now() + 3600});
-    for (name, value) in changes {
-        claims[*name] = value.clone();
-    }
-    let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
-    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(SIGNING_KEY.as_bytes()).unwrap();
-    mac.update(format!("grant.{payload}").as_bytes());
-    let mac = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
-    format!("{}/{payload}.{mac}/", world().worker.files)
 }
 
 struct Answer {

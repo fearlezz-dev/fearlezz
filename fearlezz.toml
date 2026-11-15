@@ -17,11 +17,12 @@ inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", 
 
 # The proof host in ee/ is a Cargo workspace of its own, built to wasm, so the rust piece's
 # checks at the root do not reach it. These read ee/ and the proof bundle crate it shares with
-# the core, so other core edits never rerun them.
+# the core, so other core edits never rerun them; ee-fmt reads the core's sources too, since
+# `--all` checks them through the path dependency on the proof bundle crate.
 [check.ee-fmt]
 run = "cargo fmt --manifest-path ee/Cargo.toml --all --check"
 stage = "working"
-inputs = ["ee/**", "crates/fearlezz-proof/**"]
+inputs = ["ee/**", "crates/fearlezz-proof/**", "crates/**/*.rs"]
 
 [check.ee-clippy]
 run = "cargo clippy --manifest-path ee/Cargo.toml --all-targets --quiet --message-format=json"
@@ -36,6 +37,21 @@ stage = "working"
 tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }
 test_files = ["ee/host-tests/tests/**"]
 inputs = ["ee/**", "crates/fearlezz-proof/**"]
+
+# The proof host's page: its types, and its tests of how a live connection becomes what the
+# page shows. That its types match the proof model is a test of ee-tests. devenv installs
+# the page's packages as it enters the shell.
+[check.ee-page-types]
+run = "tsc -p ee/app"
+stage = "working"
+inputs = ["ee/app/**"]
+
+[check.ee-page-tests]
+run = "bun test ee/app --reporter=junit --reporter-outfile=\"$FEARLEZZ_OUT/junit.xml\""
+stage = "working"
+tests = "junit"
+test_files = ["ee/app/src/**/*.test.ts"]
+inputs = ["ee/app/**"]
 
 [check.actionlint]
 run = "actionlint"

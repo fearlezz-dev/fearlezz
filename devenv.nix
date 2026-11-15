@@ -34,7 +34,8 @@ in
     targets = [ "wasm32-unknown-unknown" ];
   };
 
-  packages = [ pkgs.git pkgs.ffmpeg pkgs.ast-grep pkgs.actionlint pkgs.shellcheck pkgs.jq pkgs.yq-go pkgs.gitleaks pkgs.trufflehog pkgs.betterleaks pkgs.osv-scanner pkgs.zizmor pkgs.wrangler worker-build pkgs.secretspec ];
+  # bun installs, builds and tests the proof host's page (ee/app); typescript type checks it.
+  packages = [ pkgs.git pkgs.ffmpeg pkgs.ast-grep pkgs.actionlint pkgs.shellcheck pkgs.jq pkgs.yq-go pkgs.gitleaks pkgs.trufflehog pkgs.betterleaks pkgs.osv-scanner pkgs.zizmor pkgs.wrangler worker-build pkgs.secretspec pkgs.bun pkgs.typescript ];
 
   scripts = {
     format = {
@@ -73,6 +74,13 @@ in
         wrangler deploy
       '';
     };
+  };
+
+  # The page's packages, before every shell, so a fresh checkout's checks find them; with the
+  # lockfile met it takes a few milliseconds.
+  tasks."app:install" = {
+    exec = ''bun install --frozen-lockfile --silent --cwd "$DEVENV_ROOT/ee/app"'';
+    before = [ "devenv:enterShell" ];
   };
 
   enterTest = "check";

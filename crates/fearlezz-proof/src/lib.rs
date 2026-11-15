@@ -1,24 +1,28 @@
-//! The proof bundle of Fearlezz: what one proving run showed, as `proof.json` holds it, and
-//! what in it waits for a person. `fearlezz run --ci --proof` writes it and the proof host
-//! reads it, both through these types, so a page, the status comment and the host's approve
-//! and accept read one model. It builds for wasm32 with serde alone.
+//! The proof bundle of Fearlezz: what one proving run showed, as `proof.json` holds it.
+//! `fearlezz run --ci --proof` writes it and the proof host reads it, both through these types,
+//! so the CLI, the host's pages and its review read one model. It builds for wasm32 with serde
+//! alone.
 //!
 //! Each check carries its command, output, tests and findings, beside what the change weakens
-//! about the proof, red before green, and every picture. What blocks, what waits and what to
-//! read are derived, never stored.
+//! about the proof, red before green, and every picture. What blocks and what to read are
+//! derived, never stored.
 
+pub mod events;
 pub mod findings;
+pub mod floor;
 pub mod look;
 pub mod media;
-pub mod waits;
+pub mod notes;
+pub mod review;
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::findings::Finding;
+use crate::floor::Weakening;
 use crate::look::Look;
-use crate::waits::{Obligation, Obligations, Weakening};
+use crate::review::Accept;
 
 /// The version of `proof.json`; a reader refuses one it does not know.
 pub const SCHEMA: u32 = 1;
@@ -39,7 +43,8 @@ pub struct Proof {
     pub pull: Option<Pull>,
     /// The commit as people read it, with the merge it proved.
     pub commit: String,
-    /// The full commit people know: the pull request's head, or HEAD. Approvals bind to it.
+    /// The full commit people know: the pull request's head, or HEAD. An admin's accept on the
+    /// proof host binds to it.
     pub head: String,
     /// The base branch.
     pub base: String,
@@ -50,16 +55,17 @@ pub struct Proof {
     pub checks: Vec<Check>,
     /// What the change weakens about the proof, against the base branch's config.
     pub weakened: Vec<Weakening>,
-    /// Whether what it weakens waits for an admin's accept instead of keeping the commit from
-    /// being proven: on a pull request whose run holds the `fearlezz/approval` status.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub weakenings_wait: bool,
+    /// An admin's accept of exactly these weakenings of the head, as the proof host answered
+    /// it before the run judged them; then they do not keep the commit from being proven.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted: Option<Accept>,
     /// Every comparison of pictures with the base commit, unchanged ones too.
     pub looks: Vec<Look>,
 }
 
 /// The pull request a run proves: enough to know which one a page belongs to.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Pull {
     /// Its number.
     pub number: u64,
@@ -73,6 +79,7 @@ pub struct Pull {
 /// How a check came out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Ran {
     /// It passed.
     Passed,
@@ -95,6 +102,7 @@ impl Ran {
 
 /// One check the run took up.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Check {
     /// Its id.
     pub id: String,
@@ -143,6 +151,7 @@ pub struct Check {
 
 /// One test case a test report says ran.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Case {
     /// `classname::name`, or the name alone when there is no class.
     pub name: String,
@@ -155,6 +164,7 @@ pub struct Case {
 
 /// One thing that keeps a commit from being proven: what, why, and what to do about it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Item {
     /// What is wrong.
     pub what: String,
@@ -166,6 +176,7 @@ pub struct Item {
 
 /// What running the check on the base commit with the change's test files showed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Red {
     /// What it comes to.
     pub verdict: Verdict,
@@ -189,6 +200,7 @@ pub struct Red {
 /// What red before green comes to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Verdict {
     /// The tests fail on the base and pass here.
     Red,
@@ -226,7 +238,7 @@ impl Proof {
             run_url: None,
             checks: Vec::new(),
             weakened: Vec::new(),
-            weakenings_wait: false,
+            accepted: None,
             looks: Vec::new(),
         }
     }
@@ -250,8 +262,8 @@ impl Proof {
     }
 
     /// What keeps the commit from being proven: failed checks, unstable ones, what the change
-    /// weakens (unless it waits for an admin's accept), and fixes its tests do not prove, in
-    /// that order.
+    /// weakens (unless an admin accepted exactly that of its head), and fixes its tests do not
+    /// prove, in that order.
     pub fn blockers(&self) -> Vec<Item> {
         let mut items: Vec<Item> = self
             .checks
@@ -277,13 +289,17 @@ impl Proof {
         items
     }
 
-    /// What the change weakens when nothing can wait for an admin's accept, so it blocks.
+    /// What the change weakens, unless an admin accepted exactly that of its head.
     fn blocking_weakenings(&self) -> impl Iterator<Item = &Weakening> {
-        self.weakened.iter().filter(|_| !self.weakenings_wait)
+        let accepted = self
+            .accepted
+            .as_ref()
+            .is_some_and(|a| a.covers(&self.head, &self.weakened));
+        self.weakened.iter().filter(move |_| !accepted)
     }
 
     /// How many blockers the change itself has to fix: all but what it weakens, which only a
-    /// person settles (by accepting it where it waits, by asking an admin where it blocks).
+    /// person settles (an admin's accept on the proof page, or a merge past the required check).
     pub fn to_fix(&self) -> usize {
         self.blockers().len() - self.blocking_weakenings().count()
     }
@@ -305,26 +321,6 @@ impl Proof {
             .iter()
             .filter_map(|c| c.red.as_ref().map(|r| r.note(&c.id)));
         not_run.chain(red).collect()
-    }
-
-    /// Looks whose changed pictures wait for a person.
-    pub fn pictures_to_approve(&self) -> impl Iterator<Item = &Look> {
-        self.looks.iter().filter(|l| l.to_look_at() > 0)
-    }
-
-    /// What waits for a person on its head: the changed pictures of each check, then what the
-    /// change weakens where it waits for an admin's accept.
-    pub fn obligations(&self) -> Obligations {
-        let pictures = self
-            .pictures_to_approve()
-            .map(|l| Obligation::Pictures(l.check.clone()));
-        let weakened = self
-            .weakened
-            .iter()
-            .filter(|_| self.weakenings_wait)
-            .cloned()
-            .map(Obligation::Weakened);
-        pictures.chain(weakened).collect()
     }
 }
 
@@ -487,4 +483,9 @@ pub fn test_names(names: &[String], quote: &str) -> String {
         Some(more) if more > 0 => format!("{text} and {more} more"),
         _ => text,
     }
+}
+
+/// The first seven characters of a commit, as people read it.
+pub fn short(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }

@@ -45,9 +45,17 @@ const SHOWS_IT: &str = "test \"$(cat src/value)\" = 2\n";
 /// A test that passes on the base commit too.
 const PASSES_ANYWAY: &str = "test -e src/value\n";
 
+/// `fearlezz run --ci`, and the job summary it wrote.
 fn ci(repo: &Repo) -> (common::Output, String) {
-    let path = repo.path(".runs/comment.md");
-    let out = repo.fz(&["run", "--ci", "--comment", path.to_str().unwrap()]);
+    let path = repo.path(".runs/summary.md");
+    // The summary is appended to, as on GitHub; each run here reads its own.
+    if path.exists() {
+        std::fs::remove_file(&path).unwrap();
+    }
+    let out = repo.fz_env(
+        &["run", "--ci"],
+        &[("GITHUB_STEP_SUMMARY", path.to_str().unwrap())],
+    );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{}", out.stdout));
     (out, text)
 }
@@ -704,5 +712,53 @@ fn locally_a_fix_whose_red_before_green_cannot_run_is_held() {
             .starts_with("next: red before green tests did not run ("),
         "{}",
         status.stdout
+    );
+}
+
+#[test]
+fn the_base_commit_is_prepared_with_its_own_env() {
+    let repo = repo();
+    // The change adds a prepare step that needs a folder only the change has.
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{CHECKS}\n[env]\nprepare = \"test -d newdir\"\n\n[settings.skill]\nagents = \
+             []\n\n[settings.hooks]\nagents = []\n"
+        ),
+    );
+    repo.write("newdir/keep", "\n");
+    change(&repo, SHOWS_IT, "fix: the value is two");
+    // Adding a prepare step weakens the floor, which holds the run; only red before green
+    // is the subject here.
+    let out = repo.fz(FINAL);
+    assert!(
+        out.stdout
+            .contains("red before green tests: tests/new.sh fails on the base commit"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn the_base_commit_runs_in_its_own_shell() {
+    let repo = repo();
+    // The change adds a shell that needs a folder only the change has.
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{CHECKS}\n[env]\nshell = \"test -d newdir &&\"\n\n[settings.skill]\nagents = \
+             []\n\n[settings.hooks]\nagents = []\n"
+        ),
+    );
+    repo.write("newdir/keep", "\n");
+    change(&repo, SHOWS_IT, "fix: the value is two");
+    // Adding a shell weakens the floor, which holds the run; only red before green is the
+    // subject here.
+    let out = repo.fz(FINAL);
+    assert!(
+        out.stdout
+            .contains("red before green tests: tests/new.sh fails on the base commit"),
+        "{}",
+        out.stdout
     );
 }

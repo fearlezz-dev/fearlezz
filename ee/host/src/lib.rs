@@ -1,32 +1,54 @@
-//! The proof host: takes the proof bundles CI sends (OIDC authenticated, files stored by
-//! content in R2, records in D1) and shows each proof's page to the people GitHub lets read its
-//! repository. `ee/README.md` is the protocol.
+//! The proof host: takes the runs CI streams (OIDC authenticated, files stored by content in
+//! R2, records in D1) and shows each piece of work live to the people GitHub lets read its
+//! repository, who review it there: a verdict per picture with notes of what should change, an
+//! admin's accept of a weakening. The CLI reads what waits with a token of its own, and with it
+//! streams the developer's local runs, shown unproven and never reviewed.
+//! The host is the authority for review and writes it to GitHub as the app. `ee/README.md` is
+//! the protocol.
 //!
-//! It answers on two origins. The app origin holds sign in, the API and a shell page per proof;
-//! the files origin serves the bundles' files, which CI wrote, so a proof's page never runs
-//! where the session cookie lives.
+//! It answers on two origins. The app origin holds sign in, the API, the pages (the app in
+//! `ee/app`, served from static assets: a work's page, a repository's list of works, and a
+//! work's page through a share link, which only views) and their live connections, each held by
+//! a Durable Object of the work or the repository; the files origin serves the runs' files,
+//! which CI wrote, so nothing of them ever runs where the session cookie lives.
 
 mod api;
-mod approve;
 mod cache;
+mod cli;
 mod crypto;
 mod files;
 mod github;
+mod jobs;
+mod notes;
 mod oidc;
 mod pages;
+mod repository;
+mod review;
+mod room;
+mod say;
 mod session;
 mod share;
+mod webhook;
+mod work;
 
+pub use room::WorkRoom;
 use worker::{Env, Request, Response, Result, event};
+
+/// The host's schedule (`wrangler.toml`): closes the local runs that went silent.
+#[event(scheduled)]
+async fn scheduled(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
+    let closed = api::close_silent(&env);
+    if let Err(error) = closed.await {
+        worker::console_error!("silent local runs were not closed: {error}");
+    }
+}
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
     let config = Config::from(&env)?;
     let path = req.path();
-    // API callers and the shell's posts and asks read JSON; people read text.
-    let json = path.starts_with("/api/")
-        || req.method() == worker::Method::Post
-        || path.ends_with("/share");
+    // API callers and the live connection read JSON; people read text.
+    let json = path.starts_with("/api/") || path.starts_with("/live/");
     let on_files = req.url()?.origin().ascii_serialization() == config.files_origin;
     let answer = if on_files {
         files::serve(&req, &env, &config, &path).await
@@ -43,35 +65,57 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     let method = req.method().to_string();
     match (method.as_str(), segments.as_slice()) {
-        ("GET", ["api", "v1", "installed"]) => api::installed(&req, env, config).await,
-        ("POST", ["api", "v1", "proofs"]) => api::create(req, env, config).await,
-        ("PUT", ["api", "v1", "blobs", sha256]) => api::blob(req, env, config, sha256).await,
-        ("POST", ["api", "v1", "proofs", id, "done"]) => api::done(&req, env, config, id).await,
+        ("GET", ["api", "v2", "installed"]) => api::installed(&req, env, config).await,
+        ("POST", ["api", "v2", "runs"]) => api::open(req, env, config).await,
+        ("POST", ["api", "v2", "runs", run, "checks"]) => api::step(req, env, config, run).await,
+        ("POST", ["api", "v2", "runs", run, "weakenings"]) => {
+            api::weakenings(req, env, config, run).await
+        }
+        ("POST", ["api", "v2", "runs", run, "done"]) => api::done(req, env, config, run).await,
+        ("PUT", ["api", "v2", "blobs", sha256]) => api::blob(req, env, config, sha256).await,
+        ("GET", ["api", "v2", "runs", run, "grant"]) => pages::grant(&req, env, config, run).await,
+        ("POST", ["api", "v2", "runs", run, "verdicts"]) => {
+            say::verdict(req, env, config, run).await
+        }
+        ("POST", ["api", "v2", "runs", run, "accept"]) => say::accept(req, env, config, run).await,
+        ("POST", ["api", "v2", "runs", run, "notes"]) => notes::make(req, env, config, run).await,
+        ("POST", ["api", "v2", "notes", note, "resolve"]) => {
+            notes::resolve(req, env, config, note).await
+        }
+        ("POST", ["api", "v2", "login", "device"]) => cli::device(config).await,
+        ("POST", ["api", "v2", "login", "token"]) => cli::token(req, env, config).await,
+        ("DELETE", ["api", "v2", "login"]) => cli::logout(&req, env, config).await,
+        ("GET", ["api", "v2", "work", owner, repo, branch @ ..]) => {
+            cli::feedback(&req, env, config, owner, repo, branch).await
+        }
+        ("GET", ["api", "v2", "runs", run, "files", path @ ..]) if !path.is_empty() => {
+            cli::file(&req, env, config, run, path).await
+        }
+        ("GET", ["api", "v2", "viewer", owner, repo]) => {
+            say::viewer(&req, env, config, owner, repo).await
+        }
+        ("POST", ["api", "v2", "shares"]) => share::make(req, env, config).await,
+        ("GET", ["api", "v2", "shares"]) => share::list(&req, env, config).await,
+        ("POST", ["api", "v2", "shares", id, "revoke"]) => {
+            share::revoke(req, env, config, id).await
+        }
+        ("POST", ["api", "github", "webhook"]) => webhook::receive(req, env, config).await,
         ("GET", ["login"]) => session::login(&req, config).await,
         ("GET", ["callback"]) => session::callback(&req, env, config).await,
         ("GET", ["logout"]) => session::logout(&req, env).await,
-        ("POST", [owner, repo, "proofs", id, action]) => {
-            match fearlezz_proof::waits::Kind::of(action) {
-                Some(kind) => approve::act(req, env, config, owner, repo, id, kind).await,
-                None => Err(Refusal::new(404, "not found")),
-            }
-        }
-        ("POST", [owner, repo, "pull", number, "share"]) => {
-            share::make(req, env, config, owner, repo, number).await
-        }
-        ("GET", [owner, repo, "pull", number, "share"]) => {
-            share::list(&req, env, config, owner, repo, number).await
-        }
-        ("POST", [owner, repo, "pull", number, "share", token, "revoke"]) => {
-            share::revoke(req, env, config, owner, repo, number, token).await
-        }
-        ("GET", ["s", token]) => share::view(env, config, token).await,
-        ("GET", [owner, repo, "pull", number]) => {
-            pages::pull(&req, env, config, owner, repo, number).await
-        }
-        ("GET", [owner, repo, "proofs", id, rest @ ..]) => {
-            pages::shell(&req, env, config, owner, repo, id, rest).await
-        }
+        // A GitHub owner never starts with a dash, so `/-/` names no repository.
+        ("GET", ["-", "share", token]) => share::page(env, config, token).await,
+        ("GET", ["live", "-", "share", token]) => share::live(&req, env, config, token).await,
+        ("GET", ["live", owner, repo]) => repository::live(&req, env, config, owner, repo).await,
+        ("GET", ["live", owner, repo, rest @ ..]) => match pages::place(rest) {
+            Some(place) => pages::live(&req, env, config, owner, repo, &place).await,
+            None => Err(Refusal::new(404, "not found")),
+        },
+        ("GET", [owner, repo]) => repository::page(&req, env, config, owner, repo).await,
+        ("GET", [owner, repo, rest @ ..]) => match pages::place(rest) {
+            Some(place) => pages::page(&req, env, config, owner, repo, &place).await,
+            None => Err(Refusal::new(404, "not found")),
+        },
         _ => Err(Refusal::new(404, "not found")),
     }
 }
@@ -111,11 +155,18 @@ impl From<worker::Error> for Refusal {
     }
 }
 
+impl From<serde_json::Error> for Refusal {
+    fn from(error: serde_json::Error) -> Refusal {
+        worker::Error::from(error).into()
+    }
+}
+
 /// Every setting, from wrangler vars and secrets.
 pub struct Config {
-    /// Where people sign in and CI uploads, and where the links the host hands out point.
+    /// Where people sign in and CI streams its runs, and where the links the host hands out
+    /// point.
     pub app_origin: String,
-    /// Where the bundles' files are served from: another site than the app origin.
+    /// Where the runs' files are served from: another site than the app origin.
     pub files_origin: String,
     /// The host's origin, the `aud` CI asks its OIDC token for.
     pub audience: String,
@@ -132,6 +183,8 @@ pub struct Config {
     pub app_key: String,
     /// Seals the sign in cookie and the grants of the files origin.
     pub signing_key: String,
+    /// What GitHub signs the app's webhooks with.
+    pub webhook_secret: String,
 }
 
 impl Config {
@@ -153,6 +206,7 @@ impl Config {
             client_secret: secret("GITHUB_CLIENT_SECRET")?,
             app_key: secret("GITHUB_APP_KEY")?,
             signing_key: secret("SIGNING_KEY")?,
+            webhook_secret: secret("WEBHOOK_SECRET")?,
         })
     }
 }

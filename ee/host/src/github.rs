@@ -1,13 +1,15 @@
-//! What the host asks GitHub: whether the app is installed on a repository, whether a
-//! repository is public or a person may read it, who signed in, and, for approving on a page,
-//! a person's permission, a pull request's head, and posting a comment as that person.
+//! What the host asks GitHub and writes there: whether the app is installed on a repository,
+//! whether a repository is public or a person may read it, what a person may do on it, who
+//! signed in, and, as the app, its check runs and pull request comments, and running a failed
+//! Actions job again.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use fearlezz_proof::waits::Role;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use worker::{Fetch, Headers, Method, Request, RequestInit, Result};
+use worker::{AbortSignal, Fetch, Headers, Method, Request, RequestInit, Result};
+
+use fearlezz_proof::review::Role;
 
 use crate::{Config, crypto, now};
 
@@ -15,6 +17,12 @@ use crate::{Config, crypto, now};
 struct Reply {
     status: u16,
     body: Value,
+}
+
+/// What every call to GitHub carries: it gives up after 10 seconds, so a GitHub that hangs
+/// never holds the host.
+pub fn timeout() -> AbortSignal {
+    AbortSignal::from(web_sys::AbortSignal::timeout_with_u32(10_000))
 }
 
 async fn call(
@@ -37,7 +45,7 @@ async fn call(
         init.with_body(Some(body.to_string().into()));
     }
     let mut response = Fetch::Request(Request::new_with_init(url, &init)?)
-        .send()
+        .send_with_signal(&timeout())
         .await?;
     let status = response.status_code();
     let body = response.json().await.unwrap_or(Value::Null);
@@ -160,8 +168,8 @@ pub async fn login(config: &Config, token: &str) -> Result<Option<String>> {
     Ok(reply.body["login"].as_str().map(str::to_owned))
 }
 
-/// The role of `login` on `repo`, asked with their own token: the legacy role GitHub gives
-/// (`admin`, `write`, `read`, `none`), the one CI counts. None when the token no longer works.
+/// What a person may do on a repository, as GitHub's collaborator permission says it with
+/// their own token; None when the token no longer works.
 pub async fn permission(
     config: &Config,
     repo: &str,
@@ -180,66 +188,151 @@ pub async fn permission(
     })
 }
 
-/// A pull request's head: its commit and the repository it comes from.
-pub struct Head {
-    pub sha: String,
-    pub from: String,
-}
-
-/// The head of pull request `number`, asked with a person's token or the app's installation
-/// token, or None when the token no longer works.
-pub async fn head(config: &Config, repo: &str, number: u64, token: &str) -> Result<Option<Head>> {
-    let url = format!("{}/repos/{repo}/pulls/{number}", config.github_api);
-    let reply = call(Method::Get, &url, Some(token), None).await?;
-    match reply.status {
-        200 => Ok(Some(Head {
-            sha: reply.body["head"]["sha"]
-                .as_str()
-                .unwrap_or_default()
-                .to_owned(),
-            from: reply.body["head"]["repo"]["full_name"]
-                .as_str()
-                .unwrap_or_default()
-                .to_owned(),
-        })),
-        401 => Ok(None),
-        status => Err(worker::Error::RustError(format!(
-            "GitHub answered {status} for pull request {number} of {repo}"
+/// Writes as the app with an installation token: creates (POST to `path`) or updates (PATCH)
+/// one of its records on `repo`, answering the record's id.
+pub async fn write(
+    token: &str,
+    config: &Config,
+    method: Method,
+    path: &str,
+    body: &Value,
+) -> Result<u64> {
+    let url = format!("{}{path}", config.github_api);
+    let reply = call(method, &url, Some(token), Some(body)).await?;
+    match (reply.status, reply.body["id"].as_u64()) {
+        (200 | 201, Some(id)) => Ok(id),
+        (status, _) => Err(worker::Error::RustError(format!(
+            "GitHub answered {status} to {path}: {}",
+            reply.body["message"].as_str().unwrap_or_default()
         ))),
     }
 }
 
-/// What came of posting a comment.
-pub enum Posted {
-    /// Its page.
-    Url(String),
-    BadToken,
-    /// GitHub's status, such as 403 when the app lacks the permission to comment.
-    Refused(u16),
+/// An Actions job: its id, its name, the runner that took it and how it ended.
+pub struct ActionsJob {
+    pub id: u64,
+    pub name: String,
+    pub runner: Option<String>,
+    pub conclusion: Option<String>,
 }
 
-/// Posts `body` on pull request `number` as the person whose token it is.
-pub async fn comment(
+/// The jobs of attempt `attempt` of workflow run `run` on `repo`.
+pub async fn jobs(
+    token: &str,
     config: &Config,
     repo: &str,
-    number: u64,
-    token: &str,
-    body: &str,
-) -> Result<Posted> {
+    run: u64,
+    attempt: u32,
+) -> Result<Vec<ActionsJob>> {
     let url = format!(
-        "{}/repos/{repo}/issues/{number}/comments",
+        "{}/repos/{repo}/actions/runs/{run}/attempts/{attempt}/jobs?per_page=100",
         config.github_api
     );
-    let reply = call(
-        Method::Post,
-        &url,
-        Some(token),
-        Some(&json!({"body": body})),
-    )
-    .await?;
-    Ok(match (reply.status, reply.body["html_url"].as_str()) {
-        (201, Some(url)) => Posted::Url(url.to_owned()),
-        (401, _) => Posted::BadToken,
-        (status, _) => Posted::Refused(status),
+    let reply = call(Method::Get, &url, Some(token), None).await?;
+    if reply.status != 200 {
+        return Err(worker::Error::RustError(format!(
+            "GitHub answered {} for the jobs of workflow run {run}: {}",
+            reply.status,
+            reply.body["message"].as_str().unwrap_or_default()
+        )));
+    }
+    Ok(reply.body["jobs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|job| {
+            Some(ActionsJob {
+                id: job["id"].as_u64()?,
+                name: job["name"].as_str()?.to_owned(),
+                runner: job["runner_name"].as_str().map(str::to_owned),
+                conclusion: job["conclusion"].as_str().map(str::to_owned),
+            })
+        })
+        .collect())
+}
+
+/// Runs Actions job `id` of `repo` again, as the app (Actions write).
+pub async fn rerun_job(token: &str, config: &Config, repo: &str, id: u64) -> Result<()> {
+    let url = format!("{}/repos/{repo}/actions/jobs/{id}/rerun", config.github_api);
+    let reply = call(Method::Post, &url, Some(token), Some(&json!({}))).await?;
+    match reply.status {
+        200..=299 => Ok(()),
+        status => Err(worker::Error::RustError(format!(
+            "GitHub answered {status} to running job {id} again: {}",
+            reply.body["message"].as_str().unwrap_or_default()
+        ))),
+    }
+}
+
+/// Starts GitHub's device flow for the app: the codes a person enters on GitHub, as GitHub
+/// answers them (`device_code`, `user_code`, `verification_uri`, `expires_in`, `interval`); None
+/// when GitHub refuses, as it does while the app's device flow is off.
+pub async fn device_code(config: &Config) -> Result<Option<Value>> {
+    let url = format!("{}/login/device/code", config.github_web);
+    let body = json!({"client_id": config.client_id});
+    let reply = call(Method::Post, &url, None, Some(&body)).await?;
+    Ok((reply.status == 200 && reply.body["device_code"].is_string()).then_some(reply.body))
+}
+
+/// Where a device flow stands.
+pub enum Device {
+    /// The person has not entered the code yet; ask again after `interval` seconds.
+    Pending { interval: u64 },
+    /// They did: their token, and how to renew it.
+    Token(UserToken),
+    /// It ended without a token, in GitHub's words.
+    Refused(String),
+}
+
+/// Asks GitHub whether the person entered the code of device flow `device_code`.
+pub async fn device_token(config: &Config, device_code: &str) -> Result<Device> {
+    let url = format!("{}/login/oauth/access_token", config.github_web);
+    let body = json!({
+        "client_id": config.client_id,
+        "device_code": device_code,
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+    });
+    let reply = call(Method::Post, &url, None, Some(&body)).await?;
+    if let Some(token) = UserToken::of(&reply.body) {
+        return Ok(Device::Token(token));
+    }
+    let interval = reply.body["interval"].as_u64().unwrap_or(5);
+    Ok(match reply.body["error"].as_str() {
+        Some("authorization_pending") => Device::Pending { interval },
+        Some("slow_down") => Device::Pending { interval },
+        Some(error) => Device::Refused(error.to_owned()),
+        None => Device::Refused(format!("GitHub answered {}", reply.status)),
     })
+}
+
+/// A person's GitHub App user token as GitHub hands it out: the token, how many seconds it
+/// lasts and the refresh token that renews it, when the app makes user tokens expire.
+pub struct UserToken {
+    pub token: String,
+    pub seconds: Option<i64>,
+    pub refresh: Option<String>,
+}
+
+impl UserToken {
+    fn of(body: &Value) -> Option<UserToken> {
+        Some(UserToken {
+            token: body["access_token"].as_str()?.to_owned(),
+            seconds: body["expires_in"].as_i64(),
+            refresh: body["refresh_token"].as_str().map(str::to_owned),
+        })
+    }
+}
+
+/// Renews a person's user token with its refresh token, as GitHub lets an app; None when
+/// GitHub refuses it (the refresh token expired, or the person revoked the app).
+pub async fn refresh(config: &Config, refresh_token: &str) -> Result<Option<UserToken>> {
+    let url = format!("{}/login/oauth/access_token", config.github_web);
+    let body = json!({
+        "client_id": config.client_id,
+        "client_secret": config.client_secret,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    });
+    let reply = call(Method::Post, &url, None, Some(&body)).await?;
+    Ok(UserToken::of(&reply.body))
 }

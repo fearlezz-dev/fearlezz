@@ -1120,42 +1120,49 @@ fn round3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
 }
 
-/// Writes the given frames of a film as PNG files no wider than `max_w`, in one ffmpeg
-/// pass. Returns each requested frame with its file, in the order asked.
-pub(crate) fn extract(
-    film: &Path,
-    frames: &[usize],
-    max_w: usize,
-    dir: &Path,
-    prefix: &str,
-) -> Result<Vec<(usize, PathBuf)>> {
-    let mut wanted: Vec<usize> = frames.to_vec();
-    wanted.sort_unstable();
-    wanted.dedup();
-    if wanted.is_empty() {
-        return Ok(Vec::new());
+/// Writes one frame of a still or film as a PNG at `out`: a film's frame at `time` seconds (its
+/// last frame when it is shorter), and with `region` (fractions of the picture: x, y, w, h)
+/// outlined in red when given. The pictures of a person's note, for the agent to look at.
+pub(crate) fn noted(
+    source: &Path,
+    time: Option<f64>,
+    region: Option<[f64; 4]>,
+    out: &Path,
+) -> Result<()> {
+    let filter = match region {
+        Some([x, y, w, h]) => {
+            format!("drawbox=x=iw*{x}:y=ih*{y}:w=iw*{w}:h=ih*{h}:color=red:t=max(3\\,ih/100)")
+        }
+        None => "null".to_owned(),
+    };
+    let run = |seek: &[String]| -> Result<bool> {
+        let done = Command::new("ffmpeg")
+            .args(["-v", "error", "-nostdin", "-y"])
+            .args(seek)
+            .arg("-i")
+            .arg(source)
+            .args(["-frames:v", "1", "-update", "1", "-vf", &filter])
+            .arg(out)
+            .output()
+            .context("running ffmpeg; Fearlezz needs it to draw a note on its picture")?;
+        if !done.status.success() {
+            bail!(
+                "ffmpeg could not draw on {}: {}",
+                source.display(),
+                String::from_utf8_lossy(&done.stderr).trim()
+            );
+        }
+        Ok(std::fs::metadata(out).is_ok_and(|m| m.len() > 0))
+    };
+    let seek = time
+        .map(|t| vec!["-ss".to_owned(), format!("{t:.3}")])
+        .unwrap_or_default();
+    if run(&seek)? {
+        return Ok(());
     }
-    std::fs::create_dir_all(dir)?;
-    let select: Vec<String> = wanted.iter().map(|n| format!("eq(n\\,{n})")).collect();
-    let filter = format!("select='{}',scale='min({max_w},iw)':-2", select.join("+"));
-    let pattern = dir.join(format!("{prefix}%04d.png"));
-    let out = Command::new("ffmpeg")
-        .args(["-v", "error", "-nostdin", "-y", "-i"])
-        .arg(film)
-        .args(["-vf", &filter, "-fps_mode", "passthrough"])
-        .arg(&pattern)
-        .output()
-        .context("running ffmpeg")?;
-    if !out.status.success() {
-        bail!(
-            "ffmpeg could not take frames from {}: {}",
-            film.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+    // A moment past the film's end: its last frame.
+    if run(&["-sseof".to_owned(), "-0.1".to_owned()])? {
+        return Ok(());
     }
-    Ok(wanted
-        .iter()
-        .enumerate()
-        .map(|(k, n)| (*n, dir.join(format!("{prefix}{:04}.png", k + 1))))
-        .collect())
+    bail!("ffmpeg took no frame from {}", source.display())
 }

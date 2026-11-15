@@ -4,11 +4,25 @@
 //! the checks, never which files they read.
 
 use anyhow::Result;
-use fearlezz_proof::waits::{PAST, Part, Weakening};
+use fearlezz_proof::floor::{PAST, Part, Weakening};
+use fearlezz_proof::review::Accept;
 
 use crate::config::{self, Builtin, Config, Env, Ports, Widening};
 use crate::findings::Scope;
 use crate::state::Worktree;
+
+/// Where what a change weakens gets past the job that judges it.
+pub(crate) enum Gate {
+    /// Nowhere but the job: an admin merges past the required check.
+    Job,
+    /// The proof host took the run: an admin's accept on its page runs the job again.
+    Host,
+    /// The proof host took the run but could not be asked, or did not get its end, so no
+    /// accept can reach it: the job is the gate, as without a host.
+    Unasked,
+    /// An admin accepted exactly this on the proof page.
+    Accepted(Accept),
+}
 
 /// What a change takes away from the proof the base branch requires.
 #[derive(Default)]
@@ -36,21 +50,32 @@ impl Floor {
         self.weakened.is_empty()
     }
 
-    /// The lines a run prints: what fails the floor and how to get past it; when it `waits`
-    /// on a pull request, that an admin's accept lets it through.
-    pub(crate) fn lines(&self, waits: bool) -> Vec<String> {
+    /// Whether it holds at `gate`: nothing weakens, or an admin accepted what does.
+    pub(crate) fn holds_at(&self, gate: &Gate) -> bool {
+        self.holds() || matches!(gate, Gate::Accepted(_))
+    }
+
+    /// The lines a run prints: what weakens, and how it gets past `gate` or that it did.
+    pub(crate) fn lines(&self, gate: &Gate) -> Vec<String> {
         let mut lines: Vec<String> = self
             .weakened
             .iter()
             .map(|w| format!("weakens {}: {}", w.part.name(), w.how))
             .collect();
         if !self.weakened.is_empty() {
-            lines.push(if waits {
-                "  note: the proof passes; the fearlezz/approval status waits until a person with \
-                 admin rights reads why and comments /fearlezz accept <words>"
-                    .into()
-            } else {
-                format!("  fix: keep the proof the base branch requires; {PAST}")
+            lines.push(match gate {
+                Gate::Accepted(accept) => {
+                    format!("  accepted by {} on the proof page", accept.by)
+                }
+                Gate::Host => "  fix: keep the proof the base branch requires; when it must \
+                               change, an admin accepts it on the proof page, which runs this \
+                               job again"
+                    .into(),
+                Gate::Job => format!("  fix: keep the proof the base branch requires; {PAST}"),
+                Gate::Unasked => format!(
+                    "  fix: the proof host could not be asked, so it fails as without a host: \
+                     keep the proof the base branch requires; {PAST}"
+                ),
             });
         }
         lines

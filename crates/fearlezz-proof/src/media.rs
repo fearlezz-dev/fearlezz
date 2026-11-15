@@ -7,6 +7,7 @@ pub type Box4 = [u32; 4];
 
 /// What comparing two pictures found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "Likeness"))]
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
     /// The same pictures.
@@ -19,6 +20,7 @@ pub enum Verdict {
 
 /// A stretch of the films where the pictures differ.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Moment {
     /// Start and end in the before film, in seconds.
     pub before: (f64, f64),
@@ -33,6 +35,7 @@ pub struct Moment {
 
 /// One matched pair of states.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Pair {
     /// The state's index in the before film.
     pub before: usize,
@@ -54,6 +57,7 @@ pub struct Pair {
 
 /// Everything comparing a still or film with its before found.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Comparison {
     /// What it comes to.
     pub verdict: Verdict,

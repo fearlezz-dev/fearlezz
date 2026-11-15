@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use sha2::{Digest as _, Sha256};
 
-use crate::config::{Check, Config};
+use crate::config::{Check, Config, Env};
 use crate::env::EnvCtx;
 use crate::git::Git;
 use crate::media::{self, Verdict};
@@ -20,10 +20,31 @@ pub(crate) const BASE_JOURNAL: &str = "(base)";
 
 pub(crate) use fearlezz_proof::look::{Change, Item, Look};
 
-/// The look saved in the folder `dir`, if any.
+/// The look saved in the folder `dir`, if any. Its pictures are relative to that folder,
+/// wherever it was when the look was written.
 pub(crate) fn saved(dir: &Path) -> Option<Look> {
     let text = fs::read_to_string(dir.join("look.json")).ok()?;
-    serde_json::from_str(&text).ok()
+    let look: Look = serde_json::from_str(&text).ok()?;
+    Some(Look {
+        dir: dir.to_path_buf(),
+        ..look
+    })
+}
+
+/// What a person reviews of `look`: each picture that is not the same as on the base, with
+/// the summary of its comparison and the before and after files to open, one per line.
+pub(crate) fn lines(look: &Look) -> Vec<String> {
+    let mut lines = Vec::new();
+    for item in look.items.iter().filter(|i| i.change != Change::Same) {
+        let flaky = if item.flaky { " (flaky)" } else { "" };
+        lines.push(format!("  {}{flaky}: {}", item.name, item.summary));
+        for (side, rel) in [("before", &item.before), ("after", &item.after)] {
+            if let Some(rel) = rel {
+                lines.push(format!("    {side}: {}", look.dir.join(rel).display()));
+            }
+        }
+    }
+    lines
 }
 
 pub(crate) enum LookOutcome {
@@ -39,6 +60,10 @@ pub(crate) enum LookOutcome {
 pub(crate) struct Base {
     pub commit: String,
     pub wt: Worktree,
+    /// The base commit's own `[env]`: its code ran in that environment, so its checkout is
+    /// prepared, its services run and its checks run inside its shell by it, never by the
+    /// change's.
+    env: Env,
     prepared: bool,
     /// Keeps other commands from removing the worktree while this one uses it.
     _hold: fs::File,
@@ -49,10 +74,16 @@ impl Base {
     /// run on a base commit goes through here, so where base checkouts live is decided once.
     pub(crate) fn at(git: &Git, config: &Config, commit: String, name: &str) -> Result<Base> {
         let (base, hold) = git.base_worktree(&commit, name)?;
-        let wt = Worktree::read(base, config)?;
+        let env = if base.root.join(crate::config::FILE).exists() {
+            Config::load(&base.root, &git.common)?.env
+        } else {
+            Env::default()
+        };
+        let wt = Worktree::read_in(base, config, &env)?;
         Ok(Base {
             commit,
             wt,
+            env,
             prepared: false,
             _hold: hold,
         })
@@ -60,7 +91,7 @@ impl Base {
 
     /// Reads the worktree again after its files changed.
     pub(crate) fn reread(&mut self, config: &Config) -> Result<()> {
-        self.wt = Worktree::read(self.wt.git.clone(), config)?;
+        self.wt = Worktree::read_in(self.wt.git.clone(), config, &self.env)?;
         Ok(())
     }
 }
@@ -208,9 +239,7 @@ pub(crate) fn look(
         return without_before(check, result, &base.wt.git.common, &reason).map(LookOutcome::Done);
     }
     let dir = look_dir(&base.wt.git.common, check, &before.id, &result.id);
-    let saved: Option<Look> = fs::read_to_string(dir.join("look.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok());
+    let saved = saved(&dir);
     // A base run that passes without any picture usually means it could not reach what it
     // records, or the recording is new in this change.
     let note = (!has_media(&before)).then(|| {
@@ -228,7 +257,7 @@ pub(crate) fn look(
     Ok(LookOutcome::Done(look))
 }
 
-/// The look when there is no before: every picture is new and needs approval, so a missing
+/// The look when there is no before: every picture is new and shows as such, so a missing
 /// base never lets changed pictures through unseen.
 pub(crate) fn without_before(
     check: &Check,
@@ -260,7 +289,7 @@ fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf 
 }
 
 /// Runs a check on the base checkout: prepared like any checkout, with its own services
-/// for this one run.
+/// for this one run and inside its shell, all by the base commit's own `[env]`.
 pub(crate) fn run_on_base(
     store: &Store,
     check: &Check,
@@ -271,16 +300,16 @@ pub(crate) fn run_on_base(
 ) -> Result<RunResult> {
     let root = base.wt.git.root.clone();
     if !base.prepared {
-        if let Some(line) = env.state.prepare(env.cfg, &env.main, &root)? {
+        if let Some(line) = env.state.prepare(&base.env, &env.main, &root)? {
             println!("base {line}");
         }
         base.prepared = true;
     }
     let mut vars = std::collections::BTreeMap::new();
     if check.needs_services() {
-        let (services, line) = env
-            .state
-            .ensure_up(env.cfg, &root, BASE_JOURNAL, false, env.now)?;
+        let (services, line) =
+            env.state
+                .ensure_up(&base.env, &root, BASE_JOURNAL, false, env.now)?;
         if let Some(line) = line {
             println!("base {line}");
         }
@@ -288,6 +317,7 @@ pub(crate) fn run_on_base(
     }
     let at = run::Where {
         root: &root,
+        shell: base.wt.shell.as_deref(),
         tree: &base.wt.tree,
         journal: BASE_JOURNAL,
         stage,
@@ -296,7 +326,7 @@ pub(crate) fn run_on_base(
     };
     let result = run::execute(store, check, inputs, &at);
     let stopped = if check.needs_services() {
-        env.state.stop(env.cfg, &root)
+        env.state.stop(&base.env, &root)
     } else {
         Ok(())
     };
@@ -433,16 +463,15 @@ fn build(
     }
     items.sort_by(|a, b| a.change.cmp(&b.change).then(a.name.cmp(&b.name)));
 
-    let mut look = Look {
+    let look = Look {
         check: check.id.clone(),
         base_commit: base_commit.to_string(),
         base_result: before.map(|b| b.id.clone()).unwrap_or_default(),
         no_before,
         note,
         items,
-        report: dir.join("index.html"),
+        dir: dir.to_path_buf(),
     };
-    crate::report::write(dir, &mut look)?;
     // Whole or not at all: a reader never sees a look written in part.
     let part = dir.join("look.json.part");
     fs::write(&part, serde_json::to_string_pretty(&look)?)?;

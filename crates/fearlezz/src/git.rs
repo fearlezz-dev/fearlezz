@@ -44,6 +44,12 @@ impl Git {
             .context("HEAD is detached; Fearlezz keeps a journal per branch, so switch to one")
     }
 
+    /// `owner/name` of the repository on GitHub that `origin` points at, if it does.
+    pub(crate) fn github_repository(&self) -> Option<String> {
+        let url = self.git(&["remote", "get-url", "origin"]).ok()?;
+        github_slug(url.trim())
+    }
+
     /// Every file in the worktree that git would track: committed, changed or new, not ignored.
     pub(crate) fn files(&self) -> Result<Vec<String>> {
         let out = self.git(&[
@@ -355,6 +361,44 @@ impl Git {
         std::fs::write(&marker, b"")?;
         Ok(())
     }
+}
+
+/// `owner/name` of a GitHub remote URL: `https://github.com/o/r(.git)`, `git@github.com:o/r`
+/// or `ssh://git@github.com/o/r`.
+fn github_slug(url: &str) -> Option<String> {
+    let rest = [
+        "https://github.com/",
+        "http://github.com/",
+        "git@github.com:",
+        "ssh://git@github.com/",
+    ]
+    .iter()
+    .find_map(|prefix| url.strip_prefix(prefix))?;
+    let rest = rest.trim_end_matches('/');
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let (owner, name) = rest.split_once('/')?;
+    (!owner.is_empty() && !name.is_empty() && !name.contains('/'))
+        .then(|| format!("{owner}/{name}"))
+}
+
+/// The per user config folder of Fearlezz: below `$XDG_CONFIG_HOME` when set, else the
+/// platform's (`~/Library/Application Support` on macOS, `~/.config` elsewhere).
+pub(crate) fn config_dir() -> Result<PathBuf> {
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute());
+    if let Some(dir) = xdg {
+        return Ok(dir.join("fearlezz"));
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is not set, so there is no config folder for the proof host's sign in")?;
+    let config = if cfg!(target_os = "macos") {
+        home.join("Library").join("Application Support")
+    } else {
+        home.join(".config")
+    };
+    Ok(config.join("fearlezz"))
 }
 
 /// The per user cache folder of Fearlezz: below `$XDG_CACHE_HOME` when set, else the

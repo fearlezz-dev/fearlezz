@@ -4,10 +4,10 @@ mod action;
 mod config;
 mod counts;
 mod env;
+mod feedback;
 mod findings;
 mod floor;
 mod git;
-mod github;
 mod hooks;
 mod host;
 mod init;
@@ -15,13 +15,10 @@ mod journal;
 mod lints;
 mod look;
 mod media;
-mod overview;
-mod page;
 mod presets;
 mod proof;
 mod record;
 mod red;
-mod report;
 mod rules;
 mod run;
 mod settings;
@@ -76,13 +73,14 @@ struct See {
     /// The latest result of a check in this journal, as JSON.
     #[arg(long, value_name = "CHECK")]
     check: Option<String>,
-    /// Write the overview page of every journal.
-    #[arg(long)]
-    page: bool,
     /// A still of a running app's window, to look at while working (macOS): a pid, bundle
     /// id, app name or part of the window title. Prints the PNG's path.
     #[arg(long, value_name = "WINDOW")]
     still: Option<String>,
+    /// The open notes people left on the proof host for this branch, each with its pictures
+    /// saved and its region drawn. Needs `fearlezz setup login`.
+    #[arg(long)]
+    notes: bool,
 }
 
 #[derive(Subcommand)]
@@ -102,23 +100,17 @@ enum Cmd {
         /// Only move the stage, such as going back to fix something first.
         #[arg(long, requires = "stage")]
         no_run: bool,
-        /// Prove this commit, for CI: every check, fresh, with no journal. On
-        /// GitHub Actions with a token it also does what the event asks: a pull request gets
-        /// its pictures, status comment and status, `/fearlezz approve` and `/fearlezz accept`
-        /// are answered, and closed
-        /// pull requests lose their pictures.
+        /// Prove this commit, for CI: every check, fresh, with no journal. It writes nothing
+        /// to GitHub; on GitHub Actions it writes the job summary, and sends the proof to the
+        /// proof host when the job may ask for an OIDC token.
         #[arg(long, conflicts_with_all = ["checks", "stage"])]
         ci: bool,
-        /// With --ci: also write the status comment (Markdown) to this file, for a CI other
-        /// than GitHub Actions to post on its merge request.
-        #[arg(long, value_name = "PATH", requires = "ci")]
-        comment: Option<PathBuf>,
         /// With --ci: also write everything the run showed into this folder: `proof.json`
-        /// with each check's output and every picture beside it, for a page to show.
+        /// with each check's output and every picture beside it, before and after.
         #[arg(long, value_name = "DIR", requires = "ci")]
         proof: Option<PathBuf>,
     },
-    /// Tell: record what only you know, such as a note, a question, or an approval.
+    /// Tell: record what only you know, such as a note or a question.
     Say {
         #[command(subcommand)]
         what: Say,
@@ -136,16 +128,6 @@ enum Say {
     Note { text: String },
     /// Ask the developer something and wait for them.
     Ask { question: String },
-    /// Record that the developer agreed with a check's changed stills and films.
-    Approve {
-        check: String,
-        /// The developer's own words, quoted.
-        #[arg(long, required_unless_present = "github", conflicts_with = "github")]
-        said: Option<String>,
-        /// Read the approval a person gave on the pull request with `/fearlezz approve`.
-        #[arg(long)]
-        github: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -167,6 +149,11 @@ enum Setup {
         #[arg(value_enum)]
         event: hooks::Event,
     },
+    /// Sign in to the proof host through GitHub, to read the notes people leave there. The
+    /// token stays in your config folder and can only read.
+    Login,
+    /// Sign out of the proof host and forget its token.
+    Logout,
     /// Stop the services this checkout runs, or with --all every checkout's.
     Down {
         #[arg(long)]
@@ -203,6 +190,7 @@ fn main() -> ExitCode {
         Some(cmd) => dispatch(cmd),
         None => match &cli.see.still {
             Some(window) => still(window),
+            None if cli.see.notes => notes(),
             None => see(&cli.see),
         },
     };
@@ -304,20 +292,12 @@ fn prepared() -> Result<Ctx> {
     Ok(ctx)
 }
 
-/// Proves this commit for CI. On GitHub Actions it does what the event asks: a pull request's
-/// proof also pushes its changed pictures, writes its status comment and sets its status; a
-/// comment, a closed pull request or the schedule need no checkout.
-fn ci_run(comment: Option<PathBuf>, proof: Option<PathBuf>) -> Result<bool> {
+/// Proves this commit for CI. On GitHub Actions it installs ffmpeg when checks take pictures
+/// and names the pull request the event is for; it writes nothing to GitHub.
+fn ci_run(proof: Option<PathBuf>) -> Result<bool> {
     let workflow = action::Workflow::read();
-    let actions = action::Actions::detect(&workflow)?;
-    if let Some(gh) = &actions {
-        let task = gh.task();
-        if task != action::Task::Prove {
-            return gh.act(&task);
-        }
-    }
     let ctx = prepared()?;
-    if actions.is_some()
+    if workflow.actions
         && needs_ffmpeg(&ctx.config)
         && let Some(dir) = action::install_ffmpeg()?
     {
@@ -334,22 +314,10 @@ fn ci_run(comment: Option<PathBuf>, proof: Option<PathBuf>) -> Result<bool> {
             std::env::set_var("PATH", path);
         }
     }
-    let pull = actions.as_ref().and_then(action::Actions::pull);
-    // The action keeps this folder as the run's `fearlezz-pictures` artifact.
-    let pictures = actions.as_ref().and_then(|_| {
-        std::env::var_os("RUNNER_TEMP").map(|t| PathBuf::from(t).join("fearlezz-pictures"))
-    });
     let mut journal = Journal::in_memory("ci");
     let to = ctx.config.stages.name(ctx.config.stages.last()).to_string();
     journal.append(ctx.now, Event::Stage { to, reason: None })?;
-    let out = CiOut {
-        comment,
-        proof,
-        pictures,
-        pull,
-        workflow,
-    };
-    run_checks(&ctx, journal, &[], true, out)
+    run_checks(&ctx, journal, &[], true, Some(CiOut { proof, workflow }))
 }
 
 /// Whether a check takes pictures, which needs ffmpeg.
@@ -366,11 +334,10 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
             reason,
             no_run,
             ci,
-            comment,
             proof,
         } => {
             if ci {
-                return ci_run(comment, proof);
+                return ci_run(proof);
             }
             let ctx = prepared()?;
             if let Some(name) = stage {
@@ -380,7 +347,7 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
                     return Ok(true);
                 }
             }
-            run_checks(&ctx, ctx.journal()?, &checks, fresh, CiOut::default())
+            run_checks(&ctx, ctx.journal()?, &checks, fresh, None)
         }
         Cmd::Say { what } => say(&prepared()?, what),
         Cmd::Setup { what } => setup(what),
@@ -416,52 +383,18 @@ fn hook_answer(event: hooks::Event, input: &hooks::Input) -> Result<hooks::Answe
         needs_proof: wt.changed.iter().any(|p| ctx.config.needs_proof(p)),
         now: view.now.clone(),
         next: view.next.clone(),
+        // Asked of the host only where it can hold the agent: a stop it has not held yet.
+        open_notes: if matches!(event, hooks::Event::Stop) && !input.again {
+            feedback::open_notes(&ctx.git, &host_url(Some(&ctx.config)))
+        } else {
+            0
+        },
     };
     Ok(hooks::judge(&ctx.config, &work, event, input))
 }
 
 fn say(ctx: &Ctx, what: Say) -> Result<bool> {
     match what {
-        Say::Approve {
-            check,
-            github: true,
-            ..
-        } => approve_from_github(ctx, &check)?,
-        Say::Approve { check, said, .. } => {
-            let said = said.unwrap_or_default().trim().to_string();
-            if said.is_empty() {
-                bail!("approving needs the developer's own words: --said \"<what they said>\"");
-            }
-            let mut j = ctx.journal()?;
-            let v = ctx.view(&j)?;
-            let view = v.checks.iter().find(|c| c.id == check).with_context(|| {
-                format!(
-                    "nothing to approve: {check} has not run in journal {}",
-                    j.name
-                )
-            })?;
-            let look = match (&view.state, &view.look) {
-                (CheckState::Ok | CheckState::NeedsFresh, Some(l)) if l.to_look_at() > 0 => {
-                    l.clone()
-                }
-                _ => bail!(
-                    "nothing to approve: {check} has no changed stills or films on the current inputs"
-                ),
-            };
-            let key = ctx.worktree()?.inputs(ctx.config.check(&check)?)?.key;
-            j.append(
-                ctx.now,
-                Event::Approve {
-                    check: check.clone(),
-                    key,
-                    said: said.clone(),
-                    by: None,
-                    url: None,
-                },
-            )?;
-            println!("approved {check}: {} (\"{said}\")", look.counts());
-            println!("next: {}", ctx.view(&j)?.next);
-        }
         Say::Ask { question } => {
             let mut j = ctx.journal()?;
             j.append(
@@ -483,39 +416,6 @@ fn say(ctx: &Ctx, what: Say) -> Result<bool> {
     Ok(true)
 }
 
-/// Records the approval given on the pull request for the commit checked out here, by the
-/// rule CI settles the status with (`github::Pending`), for a check whose pictures waited.
-fn approve_from_github(ctx: &Ctx, check: &str) -> Result<()> {
-    let config = ctx.config.check(check)?;
-    let mut wt = ctx.worktree()?;
-    if !wt.committed {
-        bail!(
-            "an approval on the pull request is for a commit: commit and push the work, wait for \
-             its proof, then run this again"
-        );
-    }
-    let head = ctx.git.head()?;
-    let approval = github::approval_of_commit(&ctx.git.root, &head, check)?;
-    let key = wt.inputs(config)?.key;
-    let mut j = ctx.journal()?;
-    j.append(
-        ctx.now,
-        Event::Approve {
-            check: check.to_string(),
-            key,
-            said: approval.said.clone(),
-            by: Some(approval.by.clone()),
-            url: Some(approval.url),
-        },
-    )?;
-    println!(
-        "approved {check} on GitHub by @{} (\"{}\")",
-        approval.by, approval.said
-    );
-    println!("next: {}", ctx.view(&j)?.next);
-    Ok(())
-}
-
 /// Writes the starter config and says what it found.
 fn setup_init() -> Result<()> {
     let git = Git::discover(&std::env::current_dir()?)?;
@@ -529,9 +429,34 @@ fn setup_init() -> Result<()> {
     Ok(())
 }
 
+/// The proof host this repository sends its proof to, or the default one outside a repository.
+fn host_url(config: Option<&Config>) -> String {
+    config
+        .and_then(|c| c.host.as_deref())
+        .unwrap_or(host::DEFAULT)
+        .trim_end_matches('/')
+        .to_owned()
+}
+
+/// The proof host of the repository here, if any.
+fn here_host_url() -> String {
+    let config = Git::discover(&std::env::current_dir().unwrap_or_default())
+        .ok()
+        .and_then(|git| Config::load(&git.root, &git.common).ok());
+    host_url(config.as_ref())
+}
+
+/// `fearlezz --notes`: the open notes on the proof host, with their pictures.
+fn notes() -> Result<bool> {
+    let ctx = ctx()?;
+    feedback::notes(&ctx.git, &host_url(Some(&ctx.config)))
+}
+
 fn setup(what: Setup) -> Result<bool> {
     match what {
         Setup::Init => setup_init()?,
+        Setup::Login => feedback::login(&here_host_url())?,
+        Setup::Logout => feedback::logout(&here_host_url())?,
         Setup::Update { piece } => {
             let git = Git::discover(&std::env::current_dir()?)?;
             let updated = presets::update(&git.root, &git.common, piece.as_deref())?;
@@ -688,7 +613,7 @@ fn see(see: &See) -> Result<bool> {
     } else if let Some(name) = &see.journal {
         let found = ctx.all_views()?.into_iter().find(|(v, _)| v.name == *name);
         let (v, _) = found.with_context(|| format!("no journal \"{name}\""))?;
-        print_status(&ctx, &v);
+        print_status(&ctx, &v, (Vec::new(), 0));
     } else if see.plan {
         plan(&ctx)?;
     } else if let Some(when) = &see.since {
@@ -711,18 +636,10 @@ fn see(see: &See) -> Result<bool> {
             .get(key, id)
             .context("the result is missing from the store")?;
         println!("{}", serde_json::to_string_pretty(&result)?);
-    } else if see.page {
-        let views = ctx.all_views()?;
-        let html = overview::render(&ctx.config, &views, ctx.now)?;
-        let dir = ctx.git.common.join("fearlezz");
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join("overview.html");
-        std::fs::write(&path, html)?;
-        println!("wrote {}", path.display());
-        println!("next: open it in a browser");
     } else {
         let j = ctx.journal()?;
-        print_status(&ctx, &ctx.view(&j)?);
+        let host = feedback::status(&ctx.git, &host_url(Some(&ctx.config)));
+        print_status(&ctx, &ctx.view(&j)?, host);
     }
     Ok(true)
 }
@@ -833,46 +750,34 @@ fn print_failure(f: &store::RunResult) {
     print_findings(f);
 }
 
-/// What proving a commit shows besides the usual lines, so a reader can tell the checks ran:
-/// the commit and each check with its command and time, and for GitHub the check page (the
-/// job summary) and the short status for the pull request. Only CI writes these, so the agent
-/// whose work they judge cannot change them.
-struct CommitReport {
+/// A run's proof as it is built, and the run on the proof host while it takes it. Proving a
+/// commit for CI shows more besides the usual lines, so a reader can tell the checks ran: the
+/// commit and each check with its command and time, and on GitHub Actions the job summary.
+/// Only CI writes these, so the agent whose work they judge cannot change them. A local run
+/// has a report only while the host takes it, signed in: the host shows it unproven.
+struct Report {
     proof: proof::Proof,
-    /// The proof host the config names, when it is not the default one.
-    host: Option<String>,
-    /// Where the short status, the bundle and the changed pictures go, when asked.
-    out: CiOut,
+    /// The run on the proof host, while it takes it.
+    stream: Option<host::Stream>,
+    /// The host's page of the work, once the host opened the run.
+    page: Option<String>,
+    /// A folder for the proof bundle, when asked.
+    bundle: Option<PathBuf>,
+    /// Proving a commit for CI, not a local run.
+    ci: bool,
 }
 
-/// What proving a commit writes for CI besides its output, when asked.
-#[derive(Default)]
+/// What proving a commit for CI takes besides the checks.
 struct CiOut {
-    /// A file for the status comment, for a CI other than GitHub Actions.
-    comment: Option<PathBuf>,
     /// A folder for the proof bundle.
     proof: Option<PathBuf>,
-    /// On GitHub Actions: a folder for the before and after of each changed picture, kept as
-    /// the run's artifact.
-    pictures: Option<PathBuf>,
-    /// The pull request on GitHub the proof reports to.
-    pull: Option<action::Pull>,
     /// What GitHub Actions says of the run: the pull request and pages the proof names.
     workflow: action::Workflow,
 }
 
-impl CiOut {
-    /// Whether what the change weakens waits for an admin's accept rather than failing the
-    /// proof: only on a pull request from the repository itself, whose `fearlezz/approval`
-    /// status makes it wait. A run of it without a token (another job of the same pull request)
-    /// waits too, since the run with the token holds that status; a fork's run cannot.
-    fn weakenings_wait(&self) -> bool {
-        self.workflow.own_pull_request()
-    }
-}
-
-impl CommitReport {
-    fn start(ctx: &Ctx, wt: &Worktree, to_run: usize, out: CiOut) -> Result<CommitReport> {
+impl Report {
+    fn start(ctx: &Ctx, wt: &Worktree, targets: &[&config::Check], out: CiOut) -> Result<Report> {
+        let to_run = targets.len();
         let merge = ctx.git.head_short()?;
         // A pull request's run proves the merge GitHub made of its head into the base branch;
         // the head is the commit people know.
@@ -904,14 +809,103 @@ impl CommitReport {
             run_url: out.workflow.run_url.clone(),
             ..proof::Proof::new(commit, head, ctx.config.base.clone())
         };
-        Ok(CommitReport {
+        let stream = host::Host::from_actions(ctx.config.host.as_deref())
+            .and_then(|host| open_run(host, &proof, &out.workflow, targets));
+        Ok(Report {
+            page: stream.as_ref().map(|s| s.url.clone()),
+            stream,
             proof,
-            host: ctx.config.host.clone(),
-            out,
+            bundle: out.proof,
+            ci: true,
         })
     }
 
-    fn ran(&mut self, check: &config::Check, stage: &str, result: &store::RunResult) {
+    /// A local run on the proof host, when the developer signed in to it and the branch is on
+    /// GitHub: opened before its checks run, so a person can leave notes on its pictures
+    /// before there is a pull request. None otherwise, and then nothing leaves the machine.
+    fn local(ctx: &Ctx, targets: &[&config::Check]) -> Result<Option<Report>> {
+        let url = host_url(Some(&ctx.config));
+        let Some(login) = feedback::login_of(&url) else {
+            return Ok(None);
+        };
+        let (Some(repository), Ok(branch)) = (ctx.git.github_repository(), ctx.git.branch()) else {
+            return Ok(None);
+        };
+        let head = ctx.git.head()?;
+        let proof = proof::Proof {
+            repository: Some(repository.clone()),
+            ..proof::Proof::new(ctx.git.head_short()?, head.clone(), ctx.config.base.clone())
+        };
+        let open = fearlezz_proof::events::Open {
+            repository,
+            branch,
+            pull: None,
+            head,
+            base: ctx.config.base.clone(),
+            source: fearlezz_proof::events::Source::Local { login: login.login },
+            checks: targets.iter().map(|c| c.id.clone()).collect(),
+        };
+        let stream = match host::Host::from_login(&url, &login.token).open(&open) {
+            Ok(host::Opening::Opened(stream)) => {
+                println!(
+                    "proof page: {} shows this run, unproven; fearlezz setup logout stops sending \
+                     local runs",
+                    stream.url
+                );
+                stream
+            }
+            Ok(host::Opening::NotInstalled(install)) => {
+                println!(
+                    "proof page: the Fearlezz app is not installed on this repository, so this \
+                     run was not sent; install it to see local runs on the host: {install}"
+                );
+                return Ok(None);
+            }
+            Err(e) => {
+                println!("proof page not sent: {e:#}");
+                return Ok(None);
+            }
+        };
+        Ok(Some(Report {
+            page: Some(stream.url.clone()),
+            stream: Some(stream),
+            proof,
+            bundle: None,
+            ci: false,
+        }))
+    }
+
+    /// A check starts.
+    fn starts(&mut self, check: &config::Check) {
+        self.stream_step(|s| s.started(&check.id));
+    }
+
+    /// A check could not run here.
+    fn not_run(&mut self, check: &config::Check, stage: &str, why: &str) {
+        let entry = proof::not_run(check, stage, why);
+        self.stream_step(|s| s.finished(&entry, None));
+        self.proof.checks.push(entry);
+    }
+
+    /// Sends one step of the run to the host; a host that fails is said once and sent
+    /// nothing more, and never fails the proof.
+    fn stream_step(&mut self, step: impl FnOnce(&host::Stream) -> Result<()>) {
+        if let Some(stream) = &self.stream
+            && let Err(e) = step(stream)
+        {
+            println!("proof page not sent: {e:#}");
+            self.stream = None;
+        }
+    }
+
+    /// A check ended, with its pictures compared with the base when it takes pictures.
+    fn ran(
+        &mut self,
+        check: &config::Check,
+        stage: &str,
+        result: &store::RunResult,
+        look: Option<&look::Look>,
+    ) {
         let word = match result.outcome {
             Outcome::Passed => "passed",
             Outcome::Failed => "failed",
@@ -927,84 +921,124 @@ impl CommitReport {
             Some(n) => format!("  {n} tests"),
             None => String::new(),
         };
-        println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
+        if self.ci {
+            println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
+        }
         let failure = (result.outcome == Outcome::Failed).then(|| failure_item(result));
-        self.proof
-            .checks
-            .push(proof::ran(check, stage, result, failure));
+        let entry = proof::ran(check, stage, result, failure);
+        self.stream_step(|s| s.finished(&entry, look));
+        self.proof.checks.push(entry);
     }
 
-    /// Writes the check page into the job summary GitHub Actions names, when it names one,
-    /// and the status comment to the file and the pull request, when asked.
-    fn finish(mut self, floor: &floor::Floor) -> Result<()> {
+    /// Judges what the change weakens, writes the bundle when asked, closes the run on the
+    /// proof host with it, and writes the job summary GitHub Actions names, when it names one.
+    /// Before it judges, a CI run the host took asks it whether an admin accepted exactly what
+    /// the change weakens at this head; a host that does not answer means not accepted. A
+    /// local run never asks. The gate it answers says where the weakening got past, or can: a
+    /// host that failed the ask or done holds no run an accept can reach.
+    fn finish(mut self, floor: &floor::Floor) -> Result<floor::Gate> {
         use std::io::Write as _;
-        let waits = self.out.weakenings_wait();
-        self.proof.weakenings_wait = waits;
         self.proof.weakened.clone_from(&floor.weakened);
-        // A host that cannot be reached never fails the proof: CI proved the commit anyway.
-        let host = host::Host::from_actions(self.host.as_deref());
-        let temp = match (&self.out.proof, &host) {
+        let hosted = self.ci && self.stream.is_some();
+        if hosted && !floor.holds() {
+            let head = self.proof.head.clone();
+            let mut accepted = None;
+            self.stream_step(|s| {
+                accepted = s
+                    .accepted(&floor.weakened)?
+                    .filter(|a| a.covers(&head, &floor.weakened));
+                Ok(())
+            });
+            self.proof.accepted = accepted;
+        }
+        let temp = match (&self.bundle, &self.stream) {
             (None, Some(_)) => Some(tempfile::tempdir()?),
             _ => None,
         };
         let bundle = self
-            .out
-            .proof
+            .bundle
             .clone()
             .or_else(|| temp.as_ref().map(|t| t.path().to_path_buf()));
         if let Some(dir) = &bundle {
             proof::write(&self.proof, dir)?;
         }
-        let page = match (&host, &bundle) {
-            (Some(host), Some(dir)) => match host.send(dir) {
-                Ok(host::Sent::Page(url)) => {
-                    println!("proof page: {url}");
-                    Some(url)
-                }
-                Ok(host::Sent::NotInstalled(install)) => {
-                    println!(
-                        "proof page: the Fearlezz app is not installed on this repository, so \
-                         nothing was sent; install it to get the page: {install}"
-                    );
-                    None
-                }
-                Err(e) => {
-                    println!("proof page not sent: {e:#}");
-                    None
-                }
-            },
-            _ => None,
-        };
-        let report = github::Report::new(
-            &self.proof,
-            self.out.pull.as_ref().and_then(|p| p.url.as_deref()),
-            self.out.pictures.is_some(),
-            page,
-        );
-        if let Some(dir) = &self.out.pictures {
-            github::copy_pictures(report.waits(), dir)?;
+        if let Some(dir) = &bundle {
+            self.stream_step(|s| s.done(dir));
         }
-        if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-            let page = report.page()?;
+        let gate = match self.proof.accepted.clone() {
+            Some(accept) => floor::Gate::Accepted(accept),
+            None if hosted && self.stream.is_some() => floor::Gate::Host,
+            None if hosted => floor::Gate::Unasked,
+            None => floor::Gate::Job,
+        };
+        if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY").filter(|_| self.ci) {
+            let summary = action::summary(&self.proof, self.page.as_deref(), &gate)?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(Path::new(&path))?
-                .write_all(page.as_bytes())?;
+                .write_all(summary.as_bytes())?;
         }
-        let comment = report.comment()?;
-        if let Some(path) = &self.out.comment {
-            std::fs::write(path, comment.render())
-                .with_context(|| format!("writing {}", path.display()))?;
-        }
-        if let Some(pull) = &self.out.pull {
-            pull.report(&comment, self.out.pictures.as_deref());
-        }
-        Ok(())
+        Ok(gate)
     }
 }
 
-/// A failed check as a blocker, for a reader who sees neither the agent nor the logs.
+/// Opens the run on the proof host, printing its page or why there is none. A host that
+/// fails never fails the proof: CI proves the commit anyway.
+fn open_run(
+    host: host::Host,
+    proof: &proof::Proof,
+    workflow: &action::Workflow,
+    targets: &[&config::Check],
+) -> Option<host::Stream> {
+    let (Some(repository), Some(branch)) = (&workflow.repository, workflow.branch()) else {
+        println!(
+            "proof page not sent: the run names no repository and branch (GITHUB_REPOSITORY, \
+             GITHUB_REF)"
+        );
+        return None;
+    };
+    let Some(ci_job) = &workflow.ci_job else {
+        println!(
+            "proof page not sent: the run names no job of a workflow run (GITHUB_RUN_ID, \
+             GITHUB_RUN_ATTEMPT, RUNNER_NAME)"
+        );
+        return None;
+    };
+    let open = fearlezz_proof::events::Open {
+        repository: repository.clone(),
+        branch: branch.to_string(),
+        pull: proof.pull.clone(),
+        head: proof.head.clone(),
+        base: proof.base.clone(),
+        source: fearlezz_proof::events::Source::Ci {
+            job: workflow.job.clone().unwrap_or_default(),
+            run_url: workflow.run_url.clone(),
+            run_id: ci_job.run_id,
+            run_attempt: ci_job.run_attempt,
+            runner_name: ci_job.runner_name.clone(),
+        },
+        checks: targets.iter().map(|c| c.id.clone()).collect(),
+    };
+    match host.open(&open) {
+        Ok(host::Opening::Opened(stream)) => {
+            println!("proof page: {}", stream.url);
+            Some(stream)
+        }
+        Ok(host::Opening::NotInstalled(install)) => {
+            println!(
+                "proof page: the Fearlezz app is not installed on this repository, so nothing \
+                 was sent; install it to get the page: {install}"
+            );
+            None
+        }
+        Err(e) => {
+            println!("proof page not sent: {e:#}");
+            None
+        }
+    }
+}
+
 /// How to make a missing tool reachable for checks.
 fn install_fix(tool: &str) -> String {
     let nix = if run::NIX_TOOLS.contains(&tool) {
@@ -1061,7 +1095,15 @@ fn failure_item(f: &store::RunResult) -> proof::Item {
     }
 }
 
-fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut) -> Result<bool> {
+/// Runs the checks `ids` names, or those the stage needs, and says what is next. `out` is
+/// given when proving a commit for CI.
+fn run_checks(
+    ctx: &Ctx,
+    mut j: Journal,
+    ids: &[String],
+    fresh: bool,
+    out: Option<CiOut>,
+) -> Result<bool> {
     let mut wt = ctx.worktree()?;
     let before = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
     let stages = &ctx.config.stages;
@@ -1076,15 +1118,13 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
     } else {
         floor::Floor::default()
     };
-    // On a pull request a weakening waits for an admin's accept; elsewhere it blocks.
-    let waits = out.weakenings_wait();
-    let lines = floor.lines(waits);
-    let floor_holds = floor.holds() || waits;
     let answers_for_work = !in_memory && ids.is_empty() && stage == final_stage;
-    let settled = |view: &View| {
+    // The floor holds when nothing weakens, or when an admin accepted on the proof host
+    // exactly what weakens at this head (the gate the commit report answers).
+    let settled = |view: &View, floor_holds: bool| {
         floor_holds && (!answers_for_work || view.next == state::READY || view.checks.is_empty())
     };
-    let next_line = |view: &View| {
+    let next_line = |view: &View, floor_holds: bool| {
         if in_memory {
             state::COMMIT_PROVEN.to_string()
         } else if !floor_holds {
@@ -1093,9 +1133,18 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
             view.next.clone()
         }
     };
-    let mut report = in_memory
-        .then(|| CommitReport::start(ctx, &wt, targets.len(), out))
-        .transpose()?;
+    let finish = |report: Option<Report>| -> Result<bool> {
+        let gate = report.map_or(Ok(floor::Gate::Job), |r| r.finish(&floor))?;
+        for line in floor.lines(&gate) {
+            println!("{line}");
+        }
+        Ok(floor.holds_at(&gate))
+    };
+    let mut report = match out {
+        Some(out) => Some(Report::start(ctx, &wt, &targets, out)?),
+        None if targets.is_empty() => None,
+        None => Report::local(ctx, &targets)?,
+    };
     if targets.is_empty() {
         // Every check waits in a later stage: say where.
         let later = (ids.is_empty() && !in_memory)
@@ -1117,17 +1166,14 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
             ),
             None => println!("nothing to run in {stage}"),
         }
-        for line in &lines {
-            println!("{line}");
-        }
-        report.map_or(Ok(()), |r| r.finish(&floor))?;
+        let floor_holds = finish(report)?;
         match &later {
             Some((next_stage, _)) if floor_holds => {
                 println!("next: fearlezz run --stage {next_stage}");
             }
-            _ => println!("next: {}", next_line(&before)),
+            _ => println!("next: {}", next_line(&before, floor_holds)),
         }
-        return Ok(settled(&before));
+        return Ok(settled(&before, floor_holds));
     }
 
     let clock = std::time::Instant::now();
@@ -1138,6 +1184,9 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
     let env = ctx.env();
     let mut prepared = false;
     let mut held = None;
+    let mut looks = Vec::new();
+    // Opened once, on the first check with pictures.
+    let mut base = None;
     let (mut not_run, mut cannot_record) = (0, 0);
     for check in &targets {
         let inputs = wt.inputs(check)?;
@@ -1159,18 +1208,22 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
             && check.pictures.record.is_some()
             && let Some(u) = record::unavailable()
         {
-            if let Some(r) = report.as_mut() {
+            if let Some(r) = report.as_mut().filter(|r| r.ci) {
                 println!("not run {}: {}", check.id, u.why);
-                r.proof
-                    .checks
-                    .push(proof::not_run(check, stages.name(check.stage), &u.why));
+                r.not_run(check, stages.name(check.stage), &u.why);
                 not_run += 1;
             } else {
                 println!("fail {}: {}", check.id, u.why);
                 println!("  fix: {}", u.fix);
+                if let Some(r) = report.as_mut() {
+                    r.not_run(check, stages.name(check.stage), &u.why);
+                }
                 cannot_record += 1;
             }
             continue;
+        }
+        if let Some(r) = report.as_mut() {
+            r.starts(check);
         }
         let (result, was_reused) = if let Some(r) = reuse {
             (r, true)
@@ -1197,6 +1250,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
             }
             let at = run::Where {
                 root: &wt.git.root,
+                shell: wt.shell.as_deref(),
                 tree: &wt.tree,
                 journal: &j.name,
                 stage: &stage,
@@ -1225,9 +1279,16 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
             },
         )?;
         reused += usize::from(was_reused);
+        // Compared as soon as the check passed, so its look goes with it to the proof host.
+        let look = if result.outcome == Outcome::Passed {
+            look_at(ctx, &wt, check, &result, &stage, &mut base)?
+        } else {
+            None
+        };
         if let Some(r) = report.as_mut() {
-            r.ran(check, stages.name(check.stage), &result);
+            r.ran(check, stages.name(check.stage), &result, look.as_ref());
         }
+        looks.extend(look);
         match result.outcome {
             Outcome::Passed => {
                 passed += 1;
@@ -1249,7 +1310,6 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
     for (_, r) in &green {
         print_findings(r);
     }
-    let looks = look_at_media(ctx, &wt, &green, &stage)?;
     if let Some(r) = report.as_mut() {
         r.proof.looks = looks;
         for id in &unstable {
@@ -1273,10 +1333,7 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         failures.len() + cannot_record,
         clock.elapsed().as_secs_f64()
     );
-    for line in &lines {
-        println!("{line}");
-    }
-    report.map_or(Ok(()), |r| r.finish(&floor))?;
+    let floor_holds = finish(report)?;
     // Only now: the commit report reads this run's results, which no journal names in CI, so
     // a check sharing its inputs with another could lose its output to the prune.
     prune_store(ctx);
@@ -1288,12 +1345,15 @@ fn run_checks(ctx: &Ctx, mut j: Journal, ids: &[String], fresh: bool, out: CiOut
         env.state.stop(env.cfg, &wt.git.root)?;
         println!("services stopped: all proof is in");
     }
+    if let Some(line) = after.pictures_to_review(&ctx.config) {
+        println!("{line}");
+    }
     if cannot_record > 0 {
         println!("next: give the recorder its permission (fix: above), then fearlezz run");
     } else {
-        println!("next: {}", next_line(&after));
+        println!("next: {}", next_line(&after, floor_holds));
     }
-    Ok(failures.is_empty() && cannot_record == 0 && !red_blocks && settled(&after))
+    Ok(failures.is_empty() && cannot_record == 0 && !red_blocks && settled(&after, floor_holds))
 }
 
 /// Runs each green check that reads changed test files on the base commit with those files,
@@ -1305,7 +1365,7 @@ fn red_before_green(
     wt: &Worktree,
     green: &[(&config::Check, store::RunResult)],
     stage: &str,
-    mut report: Option<&mut CommitReport>,
+    mut report: Option<&mut Report>,
 ) -> Result<bool> {
     let fix = red::is_fix_change(&wt.git, &wt.base)?;
     let mut blocks = false;
@@ -1357,72 +1417,79 @@ fn red_before_green(
     Ok(blocks)
 }
 
-/// Compares the stills and films of green checks with the base commit, one line per check,
-/// and records each comparison against it. Returns each look it made.
-fn look_at_media(
+/// Compares the stills and films of a green check with the base commit (`base`, opened on the
+/// first check that needs it), says what it found, and records the comparison against it. The
+/// look it made, if any.
+fn look_at(
     ctx: &Ctx,
     wt: &Worktree,
-    green: &[(&config::Check, store::RunResult)],
+    check: &config::Check,
+    result: &store::RunResult,
     stage: &str,
-) -> Result<Vec<look::Look>> {
-    let mut looks = Vec::new();
-    // Opened once, on the first check with pictures.
-    let mut base: Option<Result<look::Base>> = None;
-    for (check, result) in green {
-        // A check that takes pictures is compared even without any, so all gone shows.
-        let has_media = look::has_media(result);
-        if !has_media && !ctx.config.takes_pictures(check) {
-            continue;
+    base: &mut Option<Result<look::Base>>,
+) -> Result<Option<look::Look>> {
+    // A check that takes pictures is compared even without any, so all gone shows.
+    let has_media = look::has_media(result);
+    if !has_media && !ctx.config.takes_pictures(check) {
+        return Ok(None);
+    }
+    let base =
+        base.get_or_insert_with(|| look::Base::at(&ctx.git, &ctx.config, wt.base.clone(), ""));
+    let outcome = match base {
+        Ok(base) => look::look(&ctx.store, check, result, base, stage, &ctx.env()),
+        Err(e) => Err(anyhow::anyhow!("the base checkout failed: {e:#}")),
+    };
+    // Without a before every picture is new; a failed look never ends the run. A run
+    // without pictures whose base cannot be compared has nothing to show.
+    let outcome = outcome.or_else(|e| {
+        if !has_media {
+            return Ok(look::LookOutcome::NoMedia);
         }
-        let base =
-            base.get_or_insert_with(|| look::Base::at(&ctx.git, &ctx.config, wt.base.clone(), ""));
-        let outcome = match base {
-            Ok(base) => look::look(&ctx.store, check, result, base, stage, &ctx.env()),
-            Err(e) => Err(anyhow::anyhow!("the base checkout failed: {e:#}")),
-        };
-        // Without a before every picture is new; a failed look never ends the run. A run
-        // without pictures whose base cannot be compared has nothing to show.
-        let outcome = outcome.or_else(|e| {
-            if !has_media {
-                return Ok(look::LookOutcome::NoMedia);
-            }
-            look::without_before(check, result, &ctx.git.common, &format!("{e:#}"))
-                .map(look::LookOutcome::Done)
-        });
-        let looked = match &outcome {
-            Ok(look::LookOutcome::NoMedia | look::LookOutcome::SameInputs) => {
-                Some(store::Looked::Nothing)
-            }
-            Ok(look::LookOutcome::Done(l)) => Some(store::Looked::At(l.dir().to_path_buf())),
-            Err(_) => None,
-        };
-        if let Some(looked) = looked {
-            store::AgainstBase::update(result, &wt.base, |a| a.look = Some(looked))?;
+        look::without_before(check, result, &ctx.git.common, &format!("{e:#}"))
+            .map(look::LookOutcome::Done)
+    });
+    let looked = match &outcome {
+        Ok(look::LookOutcome::NoMedia | look::LookOutcome::SameInputs) => {
+            Some(store::Looked::Nothing)
         }
-        match outcome {
-            Ok(look::LookOutcome::NoMedia) => {}
-            Ok(look::LookOutcome::SameInputs) => println!(
+        Ok(look::LookOutcome::Done(l)) => Some(store::Looked::At(l.dir.clone())),
+        Err(_) => None,
+    };
+    if let Some(looked) = looked {
+        store::AgainstBase::update(result, &wt.base, |a| a.look = Some(looked))?;
+    }
+    match outcome {
+        Ok(look::LookOutcome::NoMedia) => Ok(None),
+        Ok(look::LookOutcome::SameInputs) => {
+            println!(
                 "look {}: inputs are the same as on the base, so the pictures are too",
                 check.id
-            ),
-            Ok(look::LookOutcome::Done(l)) => {
-                match &l.no_before {
-                    Some(why) => println!("look {}: no before ({why}); {}", check.id, l.counts()),
-                    None => println!("look {}: {}", check.id, l.counts()),
-                }
-                if let Some(note) = &l.note {
-                    println!("  note: {note}");
-                }
-                println!("  report: {}", l.report.display());
-                looks.push(l);
+            );
+            Ok(None)
+        }
+        Ok(look::LookOutcome::Done(l)) => {
+            match &l.no_before {
+                Some(why) => println!("look {}: no before ({why}); {}", check.id, l.counts()),
+                None => println!("look {}: {}", check.id, l.counts()),
             }
-            Err(e) => println!("look {} failed: {e:#}", check.id),
+            if let Some(note) = &l.note {
+                println!("  note: {note}");
+            }
+            for line in look::lines(&l) {
+                println!("{line}");
+            }
+            Ok(Some(l))
+        }
+        Err(e) => {
+            println!("look {} failed: {e:#}", check.id);
+            Ok(None)
         }
     }
-    Ok(looks)
 }
 
-fn print_status(ctx: &Ctx, v: &View) {
+/// Where a work stands, then what waits on the proof host (`host`: its lines and how many notes
+/// are open), then what to do next.
+fn print_status(ctx: &Ctx, v: &View, host: (Vec<String>, usize)) {
     println!(
         "{}  stage {}  [{}]",
         v.name,
@@ -1463,19 +1530,16 @@ fn print_status(ctx: &Ctx, v: &View) {
             println!("  {f}");
         }
     }
-    for c in &v.checks {
-        if let Some(l) = c.look.as_ref().filter(|l| l.to_look_at() > 0) {
-            let verdict = match &c.approved {
-                Some(a) => a.label(),
-                None => "needs the developer's approval".to_string(),
-            };
-            println!(
-                "look {}: {}, {verdict}  {}",
-                l.check,
-                l.counts(),
-                l.report.display()
-            );
+    for l in v.checks.iter().filter_map(|c| c.look.as_ref()) {
+        if l.items.iter().any(|i| i.change != look::Change::Same) {
+            println!("look {}: {}", l.check, l.counts());
+            for line in look::lines(l) {
+                println!("{line}");
+            }
         }
+    }
+    if let Some(line) = v.pictures_to_review(&ctx.config) {
+        println!("{line}");
     }
     let stale = v.checks.iter().filter_map(|c| match &c.state {
         CheckState::Stale(why) => Some((&c.id, why)),
@@ -1488,7 +1552,23 @@ fn print_status(ctx: &Ctx, v: &View) {
     if let Some((at, text)) = &v.last_note {
         println!("note ({}): {text}", ago(ctx.now, *at));
     }
-    println!("next: {}", v.next);
+    let (lines, open) = host;
+    for line in lines {
+        println!("{line}");
+    }
+    if open > 0 {
+        let notes = if open == 1 {
+            "the open note".to_owned()
+        } else {
+            format!("the {open} open notes")
+        };
+        println!(
+            "next: fearlezz --notes shows {notes} a person left, with their pictures; then {}",
+            v.next
+        );
+    } else {
+        println!("next: {}", v.next);
+    }
 }
 
 fn since(ctx: &Ctx, when: &str) -> Result<()> {
@@ -1509,13 +1589,6 @@ fn since(ctx: &Ctx, when: &str) -> Result<()> {
                     None => println!("  stage {to}"),
                 },
                 Event::Retired => {}
-                Event::Approve {
-                    check,
-                    said,
-                    by: Some(by),
-                    ..
-                } => println!("  approved {check} on GitHub by @{by}: \"{said}\""),
-                Event::Approve { check, said, .. } => println!("  approved {check}: \"{said}\""),
                 Event::Ran { outcome, .. } => {
                     runs += 1;
                     red += usize::from(*outcome == Outcome::Failed);

@@ -11,13 +11,33 @@ routes = [
   { pattern = "fearlezz.seamlezz.net", custom_domain = true },
 ]
 
+# The page (ee/app) is built first: the worker serves it as static assets.
 [build]
-command = "worker-build --release"
+command = "bun install --frozen-lockfile --cwd ../app && bun run --cwd ../app build && worker-build --release"
+
+# The page: the worker answers every path itself (who may see a work comes first) and fetches
+# the page from here; only the hashed scripts and styles under /assets are served directly.
+[assets]
+directory = "../app/dist"
+binding = "ASSETS"
+run_worker_first = ["/*", "!/assets/*"]
+html_handling = "none"
+not_found_handling = "none"
+
+# One room per piece of work and one per repository, holding the live connections of the pages
+# open on it.
+[[durable_objects.bindings]]
+name = "WORK"
+class_name = "WorkRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WorkRoom"]
 
 [vars]
-# Where people sign in and CI uploads.
+# Where people sign in and CI streams its runs.
 APP_ORIGIN = "https://fearlezz.seamlezz.com"
-# Where proof files are served: another site, so a proof's page cannot use the sign in.
+# Where the runs' files are served: another site, so nothing CI wrote can use the sign in.
 FILES_ORIGIN = "https://fearlezz.seamlezz.net"
 # The host's origin, which CI asks its OIDC token for: APP_ORIGIN, the default host of the core.
 AUDIENCE = "https://fearlezz.seamlezz.com"
@@ -41,3 +61,7 @@ database_name = "fearlezz-proofs"
 # In Western Europe; local runs and the tests use a local copy, never this one.
 database_id = "ac62746a-bf66-4e97-8ae5-af025298186d"
 migrations_dir = "migrations"
+
+# Closes the local runs that said nothing for an hour (`api::close_silent`).
+[triggers]
+crons = ["*/10 * * * *"]

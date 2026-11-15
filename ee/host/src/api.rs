@@ -1,36 +1,528 @@
-//! The upload protocol, version 1: CI asks whether its repository is installed, sends the proof
-//! with the hashes of its files, sends the blobs the host lacks, and marks the proof done.
+//! The protocol, version 2: CI, or a signed in CLI, asks whether its repository is installed,
+//! opens a run before any check runs, says when each check starts and ends with the files it
+//! made, sends the blobs the host lacks, asks whether an admin accepted what its change weakens,
+//! and closes the run with `proof.json`. Every write is a `work::Write` the work's room runs,
+//! one at a time, landing in D1 and then going to the pages open on the work.
+//!
+//! CI writes with its OIDC token, which acts for one repository and ref. A person's CLI writes
+//! with its host token (`cli.rs`), and only that person's local runs of repositories they may
+//! write: a local run is the agent's word, so it never moves the work's head, its review, the
+//! GitHub check run or the pull request comment.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use fearlezz_proof::{Proof, SCHEMA};
+use fearlezz_proof::events::{
+    Accepted, Change, Closed, Done, Files, Keys, Missing, Open, Opened, Run, RunCheck, RunState,
+    Source, Step, Weakened,
+};
+use fearlezz_proof::look::Look;
+use fearlezz_proof::{Check, SCHEMA};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use wasm_bindgen::JsValue;
-use worker::{Data, Env, Request, Response};
+use worker::{D1Database, Data, Env, Request, Response};
 
-use crate::oidc::{self, Run};
-use crate::{Answer, Config, Refusal, crypto, github, now};
+use crate::cli::{self, Person};
+use crate::oidc::{self, Token};
+use crate::work::{self, Derive, Event, Statement, WorkRow, Write};
+use crate::{Answer, Config, Refusal, crypto, github, now, review, room, say};
+
+/// Who writes a run.
+enum Writer {
+    /// A CI job, by its OIDC token: one repository and ref.
+    Ci(Token),
+    /// A person's CLI, by its host token: their own local runs.
+    Local(Person),
+}
+
+impl Writer {
+    /// The writer of the request: a CLI token when it carries one, CI's OIDC token otherwise.
+    async fn of(req: &Request, env: &Env, config: &Config) -> Result<Writer, Refusal> {
+        if cli::carries(req)? {
+            return Ok(Writer::Local(cli::person(req, env, config).await?));
+        }
+        Ok(Writer::Ci(oidc::check(req, env, config).await?))
+    }
+
+    /// What a run it opens is kept under (`runs.git_ref`): only a writer with the same writes
+    /// it again. A CI token's ref, or the person's login for a local run.
+    fn git_ref(&self) -> String {
+        match self {
+            Writer::Ci(token) => token.git_ref.clone(),
+            Writer::Local(person) => format!("local:{}", person.login.to_lowercase()),
+        }
+    }
+}
+
+/// Refuses a person who may not send local runs of `repository`.
+async fn may_write(
+    env: &Env,
+    config: &Config,
+    person: &Person,
+    repository: &str,
+) -> Result<(), Refusal> {
+    say::require(
+        env,
+        config,
+        &person.login,
+        &person.token,
+        repository,
+        say::Act::LocalRun,
+    )
+    .await
+}
 
 pub async fn installed(req: &Request, env: &Env, config: &Config) -> Answer {
-    let run = oidc::check(req, env, config).await?;
-    let answer = match github::installation(config, &run.repo()).await? {
+    let repo = match Writer::of(req, env, config).await? {
+        Writer::Ci(token) => token.repo(),
+        // A CLI token speaks for a person, who names the repository they would send.
+        Writer::Local(person) => {
+            let url = req.url()?;
+            let repository = url
+                .query_pairs()
+                .find(|(name, _)| name == "repository")
+                .map(|(_, value)| value.into_owned())
+                .filter(|r| r.split('/').count() == 2)
+                .ok_or_else(|| Refusal::new(400, "name the repository: ?repository=owner/name"))?;
+            may_write(env, config, &person, &repository).await?;
+            repository.to_lowercase()
+        }
+    };
+    let answer = match github::installation(config, &repo).await? {
         Some(_) => json!({"installed": true}),
         None => json!({"installed": false, "install": config.install_url}),
     };
     Ok(Response::from_json(&answer)?)
 }
 
-#[derive(Deserialize)]
-struct Upload {
-    proof: Value,
-    files: BTreeMap<String, File>,
+pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
+    let writer = Writer::of(&req, env, config).await?;
+    let mut open: Open = req
+        .json()
+        .await
+        .map_err(|e| Refusal::new(400, format!("send the run as protocol 2 opens it: {e}")))?;
+    let repository = match &writer {
+        Writer::Ci(token) => {
+            ci_may_open(token, &open)?;
+            token.repository.clone()
+        }
+        Writer::Local(person) => {
+            if !matches!(open.source, Source::Local { .. }) {
+                return Err(Refusal::new(400, "a CLI token opens only a local run"));
+            }
+            if open.pull.is_some() {
+                return Err(Refusal::new(
+                    400,
+                    "a local run names no pull request; its work is found by its branch",
+                ));
+            }
+            if open.repository.split('/').count() != 2 {
+                return Err(Refusal::new(400, "name the repository as owner/name"));
+            }
+            may_write(env, config, person, &open.repository).await?;
+            // Who ran it is the token's word, not the run's.
+            open.source = Source::Local {
+                login: person.login.clone(),
+            };
+            open.repository.clone()
+        }
+    };
+    let repo = repository.to_lowercase();
+    if github::installation(config, &repo).await?.is_none() {
+        return Err(Refusal::new(
+            403,
+            format!(
+                "the Fearlezz app is not installed on {repository}: {}",
+                config.install_url
+            ),
+        ));
+    }
+
+    let db = env.d1("DB")?;
+    let local = matches!(writer, Writer::Local(_));
+    let pull = open.pull.as_ref();
+    // A work is one branch; the pull request it gets is kept once a run names one. A local run
+    // finds or makes the work and changes nothing of it: its head is what CI and GitHub say.
+    let statement = if local {
+        db.prepare(
+            "INSERT INTO works (id, repo, repository, branch) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT (repo, branch) DO UPDATE SET seq = works.seq \
+             RETURNING id, repository, branch, pull, pull_title, pull_url",
+        )
+        .bind(&[
+            crypto::random_id()?.into(),
+            repo.as_str().into(),
+            repository.as_str().into(),
+            open.branch.as_str().into(),
+        ])?
+    } else {
+        db.prepare(
+            "INSERT INTO works (id, repo, repository, branch, pull, pull_title, pull_url, head) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             ON CONFLICT (repo, branch) DO UPDATE SET repository = excluded.repository, \
+             pull = COALESCE(excluded.pull, works.pull), pull_title = COALESCE(excluded.pull_title, works.pull_title), \
+             pull_url = COALESCE(excluded.pull_url, works.pull_url), head = excluded.head \
+             RETURNING id, repository, branch, pull, pull_title, pull_url",
+        )
+        .bind(&[
+            crypto::random_id()?.into(),
+            repo.as_str().into(),
+            repository.as_str().into(),
+            open.branch.as_str().into(),
+            pull.map_or(JsValue::NULL, |p| (p.number as f64).into()),
+            pull.map_or(JsValue::NULL, |p| p.title.as_str().into()),
+            pull.and_then(|p| p.url.as_deref())
+                .map_or(JsValue::NULL, JsValue::from),
+            open.head.as_str().into(),
+        ])?
+    };
+    let work: WorkRow = statement
+        .first(None)
+        .await?
+        .ok_or_else(|| worker::Error::RustError("D1 kept no work".into()))?;
+
+    let id = crypto::random_id()?;
+    let opened = now() as f64;
+    let source = serde_json::to_string(&open.source)?;
+    let mut planned: Vec<&String> = Vec::new();
+    for check in &open.checks {
+        if !planned.contains(&check) {
+            planned.push(check);
+        }
+    }
+    let mut statements = vec![Statement::new(
+        "INSERT INTO runs (id, work, git_ref, head, base, source, state, opened, touched) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7, ?7)",
+        [
+            id.as_str().into(),
+            work.id.as_str().into(),
+            writer.git_ref().into(),
+            open.head.as_str().into(),
+            open.base.as_str().into(),
+            source.into(),
+            opened.into(),
+        ],
+    )];
+    for (position, check) in planned.iter().enumerate() {
+        statements.push(Statement::new(
+            "INSERT INTO checks (run, id, position) VALUES (?1, ?2, ?3)",
+            [id.as_str().into(), check.as_str().into(), position.into()],
+        ));
+    }
+
+    let run = Run {
+        id: id.clone(),
+        head: open.head,
+        base: open.base,
+        source: open.source,
+        state: RunState::Running,
+        opened,
+        checks: planned
+            .into_iter()
+            .map(|check| RunCheck {
+                id: check.clone(),
+                started: None,
+                entry: None,
+                look: None,
+                keys: Keys::new(),
+            })
+            .collect(),
+    };
+    let change = Change::Opened {
+        work: work.work(),
+        run,
+    };
+    let write = Write {
+        statements,
+        event: Some(Event::run(id.as_str(), change)),
+        derive: if local { Derive::No } else { Derive::FirstRun },
+    };
+    room::write(env, &work.id, &write).await?;
+    let url = work::page_url(
+        config,
+        &work.repository,
+        &work.branch,
+        work.pull.map(|n| n as u64),
+    );
+    let answer = Opened { run: id, url };
+    Ok(Response::from_json(&answer)?.with_status(201))
 }
 
+/// Refuses a run CI's token may not open: one of another repository or ref, or not CI's.
+fn ci_may_open(token: &Token, open: &Open) -> Result<(), Refusal> {
+    if open.repository.to_lowercase() != token.repo() {
+        return Err(Refusal::new(403, "the token is for another repository"));
+    }
+    if !matches!(open.source, Source::Ci { .. }) {
+        return Err(Refusal::new(400, "an OIDC token opens only a CI run"));
+    }
+    let allowed = match &open.pull {
+        Some(pull) => token.is_for_pull(pull.number, &open.branch),
+        None => token.is_for_branch(&open.branch),
+    };
+    if !allowed {
+        let what = match &open.pull {
+            Some(pull) => format!("pull request {} from {}", pull.number, open.branch),
+            None => format!("a push of {}", open.branch),
+        };
+        return Err(Refusal::new(
+            403,
+            format!("the token is for {}, not {what}", token.git_ref),
+        ));
+    }
+    Ok(())
+}
+
+/// A run as the calls after opening it need it.
 #[derive(Deserialize)]
-struct File {
-    sha256: String,
-    size: u64,
+struct RunRow {
+    work: String,
+    head: String,
+    git_ref: String,
+    state: String,
+    repo: String,
+    repository: String,
+    branch: String,
+    pull: Option<f64>,
+}
+
+impl RunRow {
+    /// Whether it is a local run, which never moves the work's review.
+    fn local(&self) -> bool {
+        self.git_ref.starts_with("local:")
+    }
+}
+
+/// The run `id`, when the writer may write it. Only a CI token of the run's own repository
+/// finds a CI run, and only one for the same ref (the same pull request, or the same pushed
+/// branch) may write it; a person's CLI finds only their own local runs, while they may write
+/// the repository. A closed run takes nothing more.
+async fn writable(
+    env: &Env,
+    config: &Config,
+    db: &D1Database,
+    writer: &Writer,
+    id: &str,
+) -> Result<RunRow, Refusal> {
+    let select = "SELECT r.work, r.head, r.git_ref, r.state, w.repo, w.repository, w.branch, w.pull FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1";
+    let row: Option<RunRow> = match writer {
+        Writer::Ci(token) => {
+            db.prepare(format!("{select} AND w.repo = ?2"))
+                .bind(&[id.into(), token.repo().as_str().into()])?
+                .first(None)
+                .await?
+        }
+        Writer::Local(_) => {
+            db.prepare(format!("{select} AND r.git_ref = ?2"))
+                .bind(&[id.into(), writer.git_ref().as_str().into()])?
+                .first(None)
+                .await?
+        }
+    };
+    let row = row.ok_or_else(|| Refusal::new(404, "no such run for this repository"))?;
+    match writer {
+        Writer::Ci(token) if row.git_ref != token.git_ref => {
+            return Err(Refusal::new(
+                403,
+                format!(
+                    "the token is for {}, not {}, which opened this run",
+                    token.git_ref, row.git_ref
+                ),
+            ));
+        }
+        Writer::Ci(_) => {}
+        Writer::Local(person) => may_write(env, config, person, &row.repository).await?,
+    }
+    if work::state(&row.state) != RunState::Running {
+        return Err(Refusal::new(409, "the run is closed; open another"));
+    }
+    Ok(row)
+}
+
+/// The statement that notes a run just said something, for the rule that closes a silent
+/// local run: every write for a run counts, a blob upload too (`touch_naming`).
+fn touch(run: &str) -> Statement {
+    Statement::new(
+        "UPDATE runs SET touched = ?2 WHERE id = ?1",
+        [run.into(), now().into()],
+    )
+}
+
+/// Notes that the writer's open runs of `repo` that name the blob `sha256` just said
+/// something: a run sending large films for an hour is busy, not silent.
+async fn touch_naming(
+    db: &D1Database,
+    writer: &Writer,
+    repo: &str,
+    sha256: &str,
+) -> worker::Result<()> {
+    db.prepare(
+        "UPDATE runs SET touched = ?4 WHERE state = 'running' AND git_ref = ?1 \
+         AND work IN (SELECT id FROM works WHERE repo = ?2) \
+         AND id IN (SELECT run FROM files WHERE sha256 = ?3)",
+    )
+    .bind(&[
+        writer.git_ref().as_str().into(),
+        repo.into(),
+        sha256.into(),
+        (now() as f64).into(),
+    ])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
+    let writer = Writer::of(&req, env, config).await?;
+    let step: Step = req
+        .json()
+        .await
+        .map_err(|e| Refusal::new(400, format!("send a check's start or end: {e}")))?;
+    let db = env.d1("DB")?;
+    let run = writable(env, config, &db, &writer, id).await?;
+    // A check the run did not plan joins at the end.
+    let place = "(SELECT COALESCE(MAX(position), -1) + 1 FROM checks WHERE run = ?1)";
+    let (mut statements, change, files) = match step {
+        Step::Started { check } => {
+            refuse_empty(&check)?;
+            let at = now() as f64;
+            let statement = Statement::new(
+                format!(
+                    "INSERT INTO checks (run, id, position, started) VALUES (?1, ?2, {place}, ?3) \
+                     ON CONFLICT (run, id) DO UPDATE SET started = excluded.started"
+                ),
+                [id.into(), check.as_str().into(), at.into()],
+            );
+            (vec![statement], Change::Started { check, at }, Files::new())
+        }
+        Step::Finished { check, files, look } => {
+            refuse_empty(&check.id)?;
+            refuse_bad_files(&files)?;
+            if let Some(look) = &look
+                && look.check != check.id
+            {
+                return Err(Refusal::new(
+                    400,
+                    format!("the look is of {}, not of {}", look.check, check.id),
+                ));
+            }
+            let mut statements = vec![entry(id, &check)?];
+            if let Some(look) = &look {
+                statements.push(record_look(id, look)?);
+            }
+            statements.extend(record_files(id, &files));
+            let change = Change::Finished {
+                check: *check,
+                look,
+                keys: Keys::new(),
+            };
+            (statements, change, files)
+        }
+    };
+    statements.push(touch(id));
+    // A look moves the review once its pictures are all in, which the room tells.
+    let looks = matches!(&change, Change::Finished { look: Some(_), .. });
+    let write = Write {
+        statements,
+        event: Some(Event::run(id, change)),
+        derive: if looks && !run.local() {
+            Derive::Review
+        } else {
+            Derive::No
+        },
+    };
+    room::write(env, &run.work, &write).await?;
+    let missing = lacks(&db, &run.repo, &files).await?;
+    Ok(Response::from_json(&Missing { missing })?)
+}
+
+/// `POST /api/v2/runs/<run>/weakenings`: a CI run asks, before it judges what its change
+/// weakens, whether an admin accepted exactly that at its head. `200 {"accepted": <accept> |
+/// null}`; a local run is refused, since it is never reviewed.
+pub async fn weakenings(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
+    let writer = Writer::of(&req, env, config).await?;
+    let ask: Weakened = req
+        .json()
+        .await
+        .map_err(|e| Refusal::new(400, format!("send {{\"weakened\": [...]}}: {e}")))?;
+    let db = env.d1("DB")?;
+    let run = writable(env, config, &db, &writer, id).await?;
+    if run.local() {
+        return Err(Refusal::new(
+            409,
+            "a local run is never reviewed, so nothing it weakens is accepted",
+        ));
+    }
+    let accepted = review::accept(&db, &run.work, &run.head)
+        .await?
+        .filter(|a| a.covers(&run.head, &ask.weakened));
+    Ok(Response::from_json(&Accepted { accepted })?)
+}
+
+/// The statement that records a check's entry, adding the check when the run did not plan it.
+fn entry(run: &str, check: &Check) -> worker::Result<Statement> {
+    let place = "(SELECT COALESCE(MAX(position), -1) + 1 FROM checks WHERE run = ?1)";
+    Ok(Statement::new(
+        format!(
+            "INSERT INTO checks (run, id, position, entry) VALUES (?1, ?2, {place}, ?3) \
+             ON CONFLICT (run, id) DO UPDATE SET entry = excluded.entry"
+        ),
+        [
+            run.into(),
+            check.id.as_str().into(),
+            serde_json::to_string(check)?.into(),
+        ],
+    ))
+}
+
+/// The statement that records a check's look, adding the check when the run did not plan it.
+fn record_look(run: &str, look: &Look) -> worker::Result<Statement> {
+    let place = "(SELECT COALESCE(MAX(position), -1) + 1 FROM checks WHERE run = ?1)";
+    Ok(Statement::new(
+        format!(
+            "INSERT INTO checks (run, id, position, look) VALUES (?1, ?2, {place}, ?3) \
+             ON CONFLICT (run, id) DO UPDATE SET look = excluded.look"
+        ),
+        [
+            run.into(),
+            look.check.as_str().into(),
+            serde_json::to_string(look)?.into(),
+        ],
+    ))
+}
+
+/// The statements that record a run's files, a later one replacing an earlier at its path.
+fn record_files(run: &str, files: &Files) -> Vec<Statement> {
+    files
+        .iter()
+        .map(|(path, file)| {
+            Statement::new(
+                "INSERT INTO files (run, path, sha256, size) VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT (run, path) DO UPDATE SET sha256 = excluded.sha256, size = excluded.size",
+                [
+                    run.into(),
+                    path.as_str().into(),
+                    file.sha256.as_str().into(),
+                    file.size.into(),
+                ],
+            )
+        })
+        .collect()
+}
+
+/// The blobs among `files` the repository does not hold yet, sorted, once each.
+async fn lacks(db: &D1Database, repo: &str, files: &Files) -> worker::Result<Vec<String>> {
+    let wanted: BTreeSet<&str> = files.values().map(|f| f.sha256.as_str()).collect();
+    let mut missing = Vec::new();
+    for sha in wanted {
+        let held: Option<f64> = db
+            .prepare("SELECT 1 AS held FROM blobs WHERE repo = ?1 AND sha256 = ?2")
+            .bind(&[repo.into(), sha.into()])?
+            .first(Some("held"))
+            .await?;
+        if held.is_none() {
+            missing.push(sha.to_owned());
+        }
+    }
+    Ok(missing)
 }
 
 /// The version a `proof.json` says it is, read before the rest, which another version may
@@ -40,14 +532,14 @@ struct Version {
     schema: u32,
 }
 
-pub async fn create(mut req: Request, env: &Env, config: &Config) -> Answer {
-    let run = oidc::check(&req, env, config).await?;
-    let upload: Upload = req
+pub async fn done(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
+    let writer = Writer::of(&req, env, config).await?;
+    let body: Value = req
         .json()
         .await
         .map_err(|_| Refusal::new(400, "send {\"proof\": <proof.json>, \"files\": {...}}"))?;
-    let not_proof = || Refusal::new(400, "proof is not a proof.json");
-    let version: Version = serde_json::from_value(upload.proof.clone()).map_err(|_| not_proof())?;
+    let version: Version = serde_json::from_value(body["proof"].clone())
+        .map_err(|_| Refusal::new(400, "proof is not a proof.json"))?;
     if version.schema != SCHEMA {
         return Err(Refusal::new(
             400,
@@ -57,91 +549,88 @@ pub async fn create(mut req: Request, env: &Env, config: &Config) -> Answer {
             ),
         ));
     }
-    // Kept as sent; read here only to refuse what is no proof.
-    let proof: Proof = serde_json::from_value(upload.proof.clone()).map_err(|_| not_proof())?;
-    if let Some(repository) = &proof.repository
-        && repository.to_lowercase() != run.repo()
-    {
-        return Err(Refusal::new(403, "the token is for another repository"));
-    }
-    let pull = proof.pull.map(|p| p.number);
-    refuse_other_pull(&run, pull)?;
-    if let Some((path, _)) = upload
-        .files
-        .iter()
-        .find(|(_, file)| !is_sha256(&file.sha256))
-    {
-        return Err(Refusal::new(
-            400,
-            format!("{path}: sha256 is not 64 lowercase hex digits"),
-        ));
-    }
-    if github::installation(config, &run.repo()).await?.is_none() {
-        return Err(Refusal::new(
-            403,
-            format!(
-                "the Fearlezz app is not installed on {}: {}",
-                run.repository, config.install_url
-            ),
-        ));
-    }
-
+    let done: Done = serde_json::from_value(body)
+        .map_err(|e| Refusal::new(400, format!("proof is not a proof.json: {e}")))?;
+    refuse_bad_files(&done.files)?;
     let db = env.d1("DB")?;
-    let id = crypto::random_id()?;
-    let repo = run.repo();
-    let mut statements = vec![
-        db.prepare(
-            "INSERT INTO proofs (id, repo, pull, proof, created) VALUES (?1, ?2, ?3, ?4, ?5)",
-        )
-        .bind(&[
-            id.as_str().into(),
-            repo.as_str().into(),
-            pull.map_or(JsValue::NULL, |n| (n as f64).into()),
-            upload.proof.to_string().into(),
-            (now() as f64).into(),
-        ])?,
-    ];
-    for (path, file) in &upload.files {
-        statements.push(
-            db.prepare("INSERT INTO files (proof, path, sha256, size) VALUES (?1, ?2, ?3, ?4)")
-                .bind(&[
-                    id.as_str().into(),
-                    path.as_str().into(),
-                    file.sha256.as_str().into(),
-                    (file.size as f64).into(),
-                ])?,
-        );
+    let run = writable(env, config, &db, &writer, id).await?;
+    if let Some(repository) = &done.proof.repository
+        && repository.to_lowercase() != run.repo
+    {
+        return Err(Refusal::new(403, "the proof is of another repository"));
     }
-    db.batch(statements).await?;
+    let recorded = record_files(id, &done.files)
+        .iter()
+        .map(|s| s.prepare(&db))
+        .collect::<worker::Result<Vec<_>>>()?;
+    if !recorded.is_empty() {
+        db.batch(recorded).await?;
+    }
+    let missing = run_lacks(&db, &run.repo, id).await?;
+    if !missing.is_empty() {
+        let answer = json!({
+            "error": format!("{} files are still missing; send them, then done again", missing.len()),
+            "missing": missing,
+        });
+        return Ok(Response::from_json(&answer)?.with_status(409));
+    }
+    let mut statements = vec![Statement::new(
+        "UPDATE runs SET state = 'done', proof = ?2 WHERE id = ?1",
+        [id.into(), serde_json::to_string(&done.proof)?.into()],
+    )];
+    // The proof's entries are the final word: red before green and instability come last.
+    for check in &done.proof.checks {
+        statements.push(entry(id, check)?);
+    }
+    for look in &done.proof.looks {
+        statements.push(record_look(id, look)?);
+    }
+    statements.push(touch(id));
+    let change = Change::Done {
+        checks: done.proof.checks.clone(),
+        looks: done.proof.looks.clone(),
+        keys: Default::default(),
+    };
+    let write = Write {
+        statements,
+        event: Some(Event::run(id, change)),
+        derive: if run.local() {
+            Derive::No
+        } else {
+            Derive::Review
+        },
+    };
+    room::write(env, &run.work, &write).await?;
+    let url = work::page_url(
+        config,
+        &run.repository,
+        &run.branch,
+        run.pull.map(|n| n as u64),
+    );
+    Ok(Response::from_json(&Closed { url })?)
+}
 
+/// Every blob a run's files name that the repository does not hold yet.
+async fn run_lacks(db: &D1Database, repo: &str, run: &str) -> worker::Result<Vec<String>> {
     #[derive(Deserialize)]
-    struct Held {
+    struct Row {
         sha256: String,
     }
-    let held: BTreeSet<String> = db
+    Ok(db
         .prepare(
-            "SELECT sha256 FROM blobs WHERE repo = ?1 AND sha256 IN (SELECT sha256 FROM files WHERE proof = ?2)",
+            "SELECT DISTINCT f.sha256 FROM files f WHERE f.run = ?1 AND NOT EXISTS (SELECT 1 FROM blobs b WHERE b.repo = ?2 AND b.sha256 = f.sha256) ORDER BY f.sha256",
         )
-        .bind(&[repo.as_str().into(), id.as_str().into()])?
+        .bind(&[run.into(), repo.into()])?
         .all()
         .await?
-        .results::<Held>()?
+        .results::<Row>()?
         .into_iter()
-        .map(|h| h.sha256)
-        .collect();
-    let missing: BTreeSet<&str> = upload
-        .files
-        .values()
-        .map(|f| f.sha256.as_str())
-        .filter(|sha| !held.contains(*sha))
-        .collect();
-    let url = page_url(config, &run, &id);
-    let answer = json!({"id": id, "url": url, "missing": missing});
-    Ok(Response::from_json(&answer)?.with_status(201))
+        .map(|row| row.sha256)
+        .collect())
 }
 
 pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Answer {
-    let run = oidc::check(&req, env, config).await?;
+    let writer = Writer::of(&req, env, config).await?;
     if !is_sha256(sha256) {
         return Err(Refusal::new(
             400,
@@ -149,12 +638,19 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
         ));
     }
     let db = env.d1("DB")?;
-    let repo = run.repo();
-    // Only a proof of this repository makes room for a blob, so a token from a repository
+    let repo = match &writer {
+        Writer::Ci(token) => token.repo(),
+        Writer::Local(person) => {
+            let (repo, repository) = local_blob_repo(&db, &writer.git_ref(), sha256).await?;
+            may_write(env, config, person, &repository).await?;
+            repo
+        }
+    };
+    // Only a run of this repository makes room for a blob, so a token from a repository
     // without the app stores nothing.
     let size: Option<f64> = db
         .prepare(
-            "SELECT f.size FROM files f JOIN proofs p ON p.id = f.proof WHERE p.repo = ?1 AND f.sha256 = ?2 LIMIT 1",
+            "SELECT f.size FROM files f JOIN runs r ON r.id = f.run JOIN works w ON w.id = r.work WHERE w.repo = ?1 AND f.sha256 = ?2 LIMIT 1",
         )
         .bind(&[repo.as_str().into(), sha256.into()])?
         .first(Some("size"))
@@ -162,7 +658,7 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
     let Some(size) = size else {
         return Err(Refusal::new(
             409,
-            "no proof of this repository names this blob",
+            "no run of this repository names this blob",
         ));
     };
     let length = req
@@ -175,6 +671,8 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
             format!("send the blob's {size} bytes with Content-Length"),
         ));
     }
+    // Touched as the bytes start and once they are stored, so a long upload counts all along.
+    touch_naming(&db, &writer, &repo, sha256).await?;
     let body = match req.inner().body() {
         Some(stream) => Data::ReadableStream(stream),
         None => Data::Empty,
@@ -198,109 +696,152 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
         }
         return Err(error.into());
     }
+    let held: Option<f64> = db
+        .prepare("SELECT 1 AS held FROM blobs WHERE repo = ?1 AND sha256 = ?2")
+        .bind(&[repo.as_str().into(), sha256.into()])?
+        .first(Some("held"))
+        .await?;
     db.prepare("INSERT OR IGNORE INTO blobs (repo, sha256) VALUES (?1, ?2)")
         .bind(&[repo.as_str().into(), sha256.into()])?
         .run()
         .await?;
+    touch_naming(&db, &writer, &repo, sha256).await?;
+    if held.is_none() {
+        show_completed_looks(env, &db, &repo, sha256).await?;
+    }
     Ok(Response::empty()?.with_status(204))
 }
 
-pub async fn done(req: &Request, env: &Env, config: &Config, id: &str) -> Answer {
-    let run = oidc::check(req, env, config).await?;
-    let db = env.d1("DB")?;
-    let repo = run.repo();
+/// The repository a person's blob is for, as a CLI token names none: one whose open local run
+/// of theirs names the blob, one that still lacks it first. `409` when no such run names it.
+async fn local_blob_repo(
+    db: &D1Database,
+    git_ref: &str,
+    sha256: &str,
+) -> Result<(String, String), Refusal> {
     #[derive(Deserialize)]
     struct Row {
-        pull: Option<f64>,
-        proof: String,
+        repo: String,
+        repository: String,
     }
     let row: Option<Row> = db
-        .prepare("SELECT pull, proof FROM proofs WHERE id = ?1 AND repo = ?2")
-        .bind(&[id.into(), repo.as_str().into()])?
+        .prepare(
+            "SELECT w.repo, w.repository FROM files f JOIN runs r ON r.id = f.run JOIN works w ON w.id = r.work \
+             WHERE r.git_ref = ?1 AND r.state = 'running' AND f.sha256 = ?2 \
+             ORDER BY EXISTS (SELECT 1 FROM blobs b WHERE b.repo = w.repo AND b.sha256 = f.sha256) LIMIT 1",
+        )
+        .bind(&[git_ref.into(), sha256.into()])?
         .first(None)
         .await?;
-    let Some(row) = row else {
-        return Err(Refusal::new(404, "no such proof for this repository"));
-    };
-    let pull = row.pull.map(|n| n as u64);
-    refuse_other_pull(&run, pull)?;
-    let missing: f64 = db
+    let row = row.ok_or_else(|| Refusal::new(409, "no run of yours names this blob"))?;
+    Ok((row.repo, row.repository))
+}
+
+/// Sends pages each look the blob `sha256` may have just completed: every look of a run of
+/// `repo` with a file of these bytes that now holds every file it names. Sending one that was
+/// complete before changes nothing on a page.
+async fn show_completed_looks(
+    env: &Env,
+    db: &D1Database,
+    repo: &str,
+    sha256: &str,
+) -> worker::Result<()> {
+    #[derive(Deserialize)]
+    struct Row {
+        run: String,
+        work: String,
+        git_ref: String,
+        entry: String,
+        look: String,
+    }
+    let rows = db
         .prepare(
-            "SELECT COUNT(*) AS missing FROM files f WHERE f.proof = ?1 AND NOT EXISTS (SELECT 1 FROM blobs b WHERE b.repo = ?2 AND b.sha256 = f.sha256)",
+            "SELECT c.run, r.work, r.git_ref, c.entry, c.look FROM checks c JOIN runs r ON r.id = c.run JOIN works w ON w.id = r.work WHERE w.repo = ?1 AND c.look IS NOT NULL AND c.entry IS NOT NULL AND EXISTS (SELECT 1 FROM files f WHERE f.run = c.run AND f.sha256 = ?2)",
         )
-        .bind(&[id.into(), repo.as_str().into()])?
-        .first(Some("missing"))
+        .bind(&[repo.into(), sha256.into()])?
+        .all()
         .await?
-        .unwrap_or(0.0);
-    if missing > 0.0 {
-        return Err(Refusal::new(
-            409,
-            format!("{missing} files are still missing"),
-        ));
-    }
-    let mut statements = vec![
-        db.prepare("UPDATE proofs SET done = 1 WHERE id = ?1")
-            .bind(&[id.into()])?,
-    ];
-    if let Some(pull) = pull {
-        // Runs finish in any order, so a slow run of an earlier push must not replace the proof
-        // of the head GitHub shows now; it is the latest only while nothing else is.
-        let proof: Proof = serde_json::from_str(&row.proof).map_err(|e| {
-            worker::Error::RustError(format!("a stored proof does not read back: {e}"))
-        })?;
-        let sql = if current(config, &repo, pull, &proof.head).await? {
-            "INSERT INTO latest (repo, pull, proof) VALUES (?1, ?2, ?3) ON CONFLICT (repo, pull) DO UPDATE SET proof = excluded.proof"
-        } else {
-            "INSERT INTO latest (repo, pull, proof) VALUES (?1, ?2, ?3) ON CONFLICT (repo, pull) DO NOTHING"
+        .results::<Row>()?;
+    for row in rows {
+        let look: Look = work::read(&row.look)?;
+        if !work::complete(&look, &work::held(db, &row.run).await?) {
+            continue;
+        }
+        let change = Change::Finished {
+            check: work::read(&row.entry)?,
+            look: Some(Box::new(look)),
+            keys: Keys::new(),
         };
-        statements.push(db.prepare(sql).bind(&[
-            repo.as_str().into(),
-            (pull as f64).into(),
-            id.into(),
-        ])?);
+        let write = Write {
+            statements: Vec::new(),
+            event: Some(Event::run(row.run, change)),
+            derive: if row.git_ref.starts_with("local:") {
+                Derive::No
+            } else {
+                Derive::Review
+            },
+        };
+        room::write(env, &row.work, &write).await?;
     }
-    db.batch(statements).await?;
-    Ok(Response::from_json(
-        &json!({"url": page_url(config, &run, id)}),
-    )?)
+    Ok(())
 }
 
-/// Whether `head` is the head of pull request `pull` as GitHub says now, asked as the app.
-async fn current(config: &Config, repo: &str, pull: u64, head: &str) -> Result<bool, Refusal> {
-    let Some(token) = github::installation_token(config, repo).await? else {
-        return Err(Refusal::new(
-            403,
-            format!(
-                "the Fearlezz app is not installed on {repo}: {}",
-                config.install_url
-            ),
-        ));
+/// Closes run `run` of work `work` as cancelled, while it still runs: it ended without saying
+/// done. Its pages hear it; the review moves only for a CI run.
+pub async fn cancel(env: &Env, run: &str, work: &str, local: bool) -> worker::Result<()> {
+    let write = Write {
+        statements: vec![Statement::new(
+            "UPDATE runs SET state = 'cancelled' WHERE id = ?1 AND state = 'running'",
+            [run.into()],
+        )],
+        event: Some(Event::run(run, Change::Cancelled {})),
+        derive: if local { Derive::No } else { Derive::Review },
     };
-    match github::head(config, repo, pull, &token).await? {
-        Some(now) => Ok(now.sha == head),
-        None => Err(worker::Error::RustError(format!(
-            "GitHub refused the installation token of {repo}"
-        ))
-        .into()),
-    }
+    room::write(env, work, &write).await
 }
 
-/// A pull request's proof comes only from a run of that pull request.
-fn refuse_other_pull(run: &Run, pull: Option<u64>) -> Result<(), Refusal> {
-    match pull {
-        Some(number) if !run.is_for_pull(number) => Err(Refusal::new(
-            403,
-            format!(
-                "the token is for {}, not pull request {number}",
-                run.git_ref
-            ),
+/// How long a local run may stay silent before it is closed as cancelled.
+const SILENT_SECONDS: f64 = 3600.0;
+
+/// The one rule for a local run that never says done, beside CI's (a run is closed when its
+/// job ends, `webhook.rs`): it has no job, so once it said nothing for an hour it is closed
+/// as cancelled. Run on the host's schedule.
+pub async fn close_silent(env: &Env) -> worker::Result<()> {
+    #[derive(Deserialize)]
+    struct Row {
+        id: String,
+        work: String,
+    }
+    let db = env.d1("DB")?;
+    let rows = db
+        .prepare(
+            "SELECT id, work FROM runs WHERE state = 'running' AND git_ref LIKE 'local:%' AND touched < ?1",
+        )
+        .bind(&[(now() as f64 - SILENT_SECONDS).into()])?
+        .all()
+        .await?
+        .results::<Row>()?;
+    for row in rows {
+        cancel(env, &row.id, &row.work, true).await?;
+    }
+    Ok(())
+}
+
+fn refuse_empty(check: &str) -> Result<(), Refusal> {
+    if check.trim().is_empty() {
+        return Err(Refusal::new(400, "a check needs its id"));
+    }
+    Ok(())
+}
+
+fn refuse_bad_files(files: &Files) -> Result<(), Refusal> {
+    match files.iter().find(|(_, file)| !is_sha256(&file.sha256)) {
+        Some((path, _)) => Err(Refusal::new(
+            400,
+            format!("{path}: sha256 is not 64 lowercase hex digits"),
         )),
-        _ => Ok(()),
+        None => Ok(()),
     }
-}
-
-fn page_url(config: &Config, run: &Run, id: &str) -> String {
-    format!("{}/{}/proofs/{id}/", config.app_origin, run.repository)
 }
 
 fn is_sha256(text: &str) -> bool {

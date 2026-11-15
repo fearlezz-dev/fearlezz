@@ -16,7 +16,7 @@ const SIGNIN_SECONDS: i64 = 600;
 
 #[derive(Deserialize)]
 pub struct Session {
-    /// The row's random id, the cookie's value: a secret, never shown on a page.
+    /// The row's id, which the cookie holds.
     pub id: String,
     pub login: String,
     pub token: String,
@@ -31,9 +31,14 @@ struct Signin {
 
 /// The signed in person, if the request carries the id of a session that has not expired.
 pub async fn read(req: &Request, env: &Env) -> worker::Result<Option<Session>> {
-    let Some(id) = cookie(req, SESSION)? else {
-        return Ok(None);
-    };
+    match cookie(req, SESSION)? {
+        Some(id) => find(env, &id).await,
+        None => Ok(None),
+    }
+}
+
+/// The session `id`, unless it ended: logged out of or expired.
+pub async fn find(env: &Env, id: &str) -> worker::Result<Option<Session>> {
     env.d1("DB")?
         .prepare("SELECT id, login, token FROM sessions WHERE id = ?1 AND expires > ?2")
         .bind(&[id.into(), (now() as f64).into()])?

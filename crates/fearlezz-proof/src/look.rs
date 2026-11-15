@@ -9,6 +9,7 @@ use crate::media::Comparison;
 
 /// How a picture differs from its before.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "PictureChange"))]
 #[serde(rename_all = "snake_case")]
 pub enum Change {
     /// Other pictures.
@@ -41,6 +42,7 @@ impl Change {
 
 /// One still or film of a look.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "Picture"))]
 pub struct Item {
     /// Its path below the check's media folder.
     pub name: String,
@@ -56,14 +58,21 @@ pub struct Item {
     pub after: Option<String>,
     /// What comparing them found.
     pub comparison: Option<Comparison>,
-    /// Named by the check's `flaky`: compared and shown, but never blocks or waits for
-    /// approval.
+    /// Named by the check's `flaky`: compared and shown, but never waits for a person's look.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flaky: bool,
 }
 
+impl Item {
+    /// Whether a person looks at it: anything but the same, and never a flaky one.
+    pub fn to_look_at(&self) -> bool {
+        self.change != Change::Same && !self.flaky
+    }
+}
+
 /// One check's pictures compared with its run on the base commit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Look {
     /// The check that took the pictures.
     pub check: String,
@@ -72,7 +81,7 @@ pub struct Look {
     /// How the check did on the base commit.
     pub base_result: String,
     /// Why there is no before (no base branch, the check fails on the base, the look
-    /// failed). Then every picture counts as new and needs approval.
+    /// failed). Then every picture counts as new, for a person to look at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_before: Option<String>,
     /// Something about the comparison a person should know, such as a base run that passed
@@ -81,9 +90,11 @@ pub struct Look {
     pub note: Option<String>,
     /// Every picture.
     pub items: Vec<Item>,
-    /// The report page on this machine; empty in a proof bundle.
+    /// The folder it is saved in on this machine, which its pictures are relative to; empty
+    /// in a proof bundle, whose pictures are relative to the bundle.
     #[serde(default, skip_serializing_if = "no_path")]
-    pub report: PathBuf,
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub dir: PathBuf,
 }
 
 fn no_path(path: &Path) -> bool {
@@ -115,16 +126,8 @@ impl Look {
         parts.join(", ")
     }
 
-    /// Items a person should look at: anything but same, and never a flaky one.
+    /// How many of its pictures a person looks at (see [`Item::to_look_at`]).
     pub fn to_look_at(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|i| i.change != Change::Same && !i.flaky)
-            .count()
-    }
-
-    /// The folder it is saved in.
-    pub fn dir(&self) -> &Path {
-        self.report.parent().unwrap_or(&self.report)
+        self.items.iter().filter(|i| i.to_look_at()).count()
     }
 }

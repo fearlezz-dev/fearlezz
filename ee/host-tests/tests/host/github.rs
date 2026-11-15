@@ -1,8 +1,9 @@
 //! A fake GitHub on a local port: the parts the proof host asks (the Actions OIDC keys, the app's
-//! installation on a repository and its installation tokens, a repository as a token sees it,
-//! the OAuth code exchange and the signed in user, a person's permission, a pull request's head
-//! and the comments people post on it), kept in memory. It checks the app's JWT with
-//! the app's public key, so a test proves the host signs it as GitHub expects.
+//! installation on a repository and its installation tokens, a repository as a token sees it, a
+//! person's permission on it, the OAuth code exchange and the signed in user), kept in memory,
+//! and what the app writes (check runs and pull request comments), recorded with the token that
+//! wrote them, and the Actions jobs of workflow runs with the re-runs the app asks for. It checks the app's JWT with the app's public key, so a test proves the host signs
+//! it as GitHub expects. It also sends webhooks, signed as GitHub signs them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
@@ -36,21 +37,46 @@ pub struct Repo {
     pub admins: BTreeSet<String>,
 }
 
-/// A pull request's head: its commit and the repository it comes from.
-#[derive(Clone)]
-pub struct Head {
-    pub sha: String,
-    pub from: String,
+/// A check run as the app wrote it, and every write to it in order.
+#[derive(Clone, Debug)]
+pub struct CheckRun {
+    pub id: u64,
+    pub repo: String,
+    pub head_sha: String,
+    /// Each body the app sent for it, the create first.
+    pub writes: Vec<Value>,
+    /// The token of each write.
+    pub tokens: Vec<String>,
 }
 
-/// A comment someone posted on a pull request.
+impl CheckRun {
+    /// A field as the latest write that set it left it.
+    pub fn field(&self, name: &str) -> Value {
+        self.writes
+            .iter()
+            .rev()
+            .find_map(|w| w.get(name).cloned())
+            .unwrap_or(Value::Null)
+    }
+
+    /// `queued`, `in_progress`, or the conclusion once completed.
+    pub fn state(&self) -> String {
+        let latest = self.writes.last().unwrap();
+        match latest.get("conclusion").and_then(Value::as_str) {
+            Some(conclusion) => conclusion.to_owned(),
+            None => latest["status"].as_str().unwrap_or_default().to_owned(),
+        }
+    }
+}
+
+/// A comment as the app wrote it on a pull request, and every body it had.
 #[derive(Clone, Debug)]
-pub struct Posted {
+pub struct Comment {
+    pub id: u64,
     pub repo: String,
-    pub pull: u64,
-    /// Whose token posted it.
-    pub login: String,
-    pub body: String,
+    pub issue: u64,
+    pub bodies: Vec<String>,
+    pub tokens: Vec<String>,
 }
 
 pub struct State {
@@ -63,13 +89,42 @@ pub struct State {
     pub oidc_keys: Vec<(String, RsaPublicKey)>,
     /// Every request asked, as method and path, so a test can count what the host asks.
     pub asked: Vec<(String, String)>,
-    /// Pull request heads by repository and number; any other is `HEAD` from its own repository.
-    pub heads: BTreeMap<(String, u64), Head>,
-    pub posted: Vec<Posted>,
+    pub check_runs: Vec<CheckRun>,
+    pub comments: Vec<Comment>,
+    /// The id the next check run or comment gets.
+    pub next_id: u64,
+    /// Device flow sign ins by device code: the code a person enters, and who entered it.
+    pub devices: BTreeMap<String, (String, Option<String>)>,
+    /// Refresh tokens of user tokens and their login; each renews once.
+    pub refreshes: BTreeMap<String, String>,
+    /// The Actions jobs of workflow runs, as GitHub lists them.
+    pub jobs: Vec<ActionsJob>,
+    /// Every job the app asked to run again: its repository, id and the token that asked.
+    pub reruns: Vec<(String, u64, String)>,
+    /// The repositories whose check runs GitHub cannot write, and how it fails them.
+    pub stalls: BTreeMap<String, Stall>,
 }
 
-/// The head of a pull request nobody set one for: the head `proof.json` names in the tests.
-pub const HEAD: &str = "abc1234abc1234abc1234abc1234abc1234abc1";
+/// How GitHub fails to write a repository's check runs.
+#[derive(Clone, Copy, Debug)]
+pub enum Stall {
+    /// It answers nothing for half a minute, then drops the connection.
+    Hang,
+    /// It answers `500` at once.
+    Fail,
+}
+
+/// An Actions job of a workflow run.
+#[derive(Clone, Debug)]
+pub struct ActionsJob {
+    pub repo: String,
+    pub run: u64,
+    pub id: u64,
+    pub name: String,
+    /// The runner that took it.
+    pub runner: String,
+    pub conclusion: String,
+}
 
 pub struct FakeGitHub {
     pub url: String,
@@ -87,13 +142,13 @@ impl FakeGitHub {
             private,
             installation,
             readers: set(readers),
-            writers: BTreeSet::new(),
-            admins: BTreeSet::new(),
+            writers: set(&[]),
+            admins: set(&[]),
         };
-        // Where people approve: a writer, an admin, and a reader who may only look.
-        let team = |private: bool, installation: Option<u64>| Repo {
+        // Who reviews: a writer gives verdicts, an admin accepts weakenings too.
+        let reviewed = |private: bool, installation: u64| Repo {
             private,
-            installation,
+            installation: Some(installation),
             readers: set(&["reader", "writer", "admin"]),
             writers: set(&["writer", "admin"]),
             admins: set(&["admin"]),
@@ -107,20 +162,51 @@ impl FakeGitHub {
                 // Only the caching tests view these, so they can count what the host asks.
                 ("owner/cached".to_owned(), repo(true, Some(4), &["reader"])),
                 ("owner/open".to_owned(), repo(false, Some(5), &[])),
-                ("owner/team".to_owned(), team(false, Some(6))),
-                ("owner/vault".to_owned(), team(true, Some(7))),
+                // The review tests: verdicts, accepts, the check run and the comment.
+                ("owner/review".to_owned(), reviewed(false, 6)),
+                // Private, so a share link is the only way in without a sign in.
+                ("owner/shared".to_owned(), reviewed(true, 8)),
+                // The repository page, private so it needs a reader.
+                ("owner/listing".to_owned(), reviewed(true, 9)),
+                // A private repository whose live pages end with their access: each person
+                // loses it in their own way.
+                (
+                    "owner/watched".to_owned(),
+                    repo(true, Some(10), &["watcher", "leaver"]),
+                ),
+                // Its check runs fail or hang when a test says so.
+                ("owner/stalled".to_owned(), reviewed(false, 11)),
+                // The local run tests: each CLI test signs in as a login of its own.
+                (
+                    "owner/local".to_owned(),
+                    Repo {
+                        private: false,
+                        installation: Some(7),
+                        readers: set(&["reader", "writer", "dev", "refresher"]),
+                        writers: set(&["writer", "dev", "refresher"]),
+                        admins: set(&[]),
+                    },
+                ),
             ]),
             codes: BTreeMap::from([
                 ("reader-code".to_owned(), "reader".to_owned()),
                 ("stranger-code".to_owned(), "stranger".to_owned()),
                 ("writer-code".to_owned(), "writer".to_owned()),
                 ("admin-code".to_owned(), "admin".to_owned()),
+                ("watcher-code".to_owned(), "watcher".to_owned()),
+                ("leaver-code".to_owned(), "leaver".to_owned()),
             ]),
             tokens: BTreeMap::new(),
             oidc_keys: vec![(KID.to_owned(), oidc)],
             asked: Vec::new(),
-            heads: BTreeMap::new(),
-            posted: Vec::new(),
+            check_runs: Vec::new(),
+            comments: Vec::new(),
+            next_id: 1000,
+            devices: BTreeMap::new(),
+            refreshes: BTreeMap::new(),
+            jobs: Vec::new(),
+            reruns: Vec::new(),
+            stalls: BTreeMap::new(),
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -147,25 +233,97 @@ impl FakeGitHub {
             .count()
     }
 
-    /// Sets the head of a pull request, as a push or a fork would.
-    pub fn set_head(&self, repo: &str, pull: u64, sha: &str, from: &str) {
-        let mut state = self.state.lock().unwrap();
-        let head = Head {
-            sha: sha.to_owned(),
-            from: from.to_owned(),
-        };
-        state.heads.insert((repo.to_owned(), pull), head);
-    }
-
-    /// The comments posted on a pull request, oldest first.
-    pub fn posted(&self, repo: &str, pull: u64) -> Vec<Posted> {
+    /// The check runs the app wrote on a repository for a commit, oldest first.
+    pub fn check_runs(&self, repo: &str, head_sha: &str) -> Vec<CheckRun> {
         let state = self.state.lock().unwrap();
         state
-            .posted
+            .check_runs
             .iter()
-            .filter(|p| p.repo == repo && p.pull == pull)
+            .filter(|c| c.repo == repo && c.head_sha == head_sha)
             .cloned()
             .collect()
+    }
+
+    /// The comments the app wrote on a pull request, oldest first.
+    pub fn comments(&self, repo: &str, issue: u64) -> Vec<Comment> {
+        let state = self.state.lock().unwrap();
+        state
+            .comments
+            .iter()
+            .filter(|c| c.repo == repo && c.issue == issue)
+            .cloned()
+            .collect()
+    }
+
+    /// A person enters `user_code` on GitHub's device page and approves the app, signed in as
+    /// `login`.
+    pub fn approve(&self, user_code: &str, login: &str) {
+        let mut state = self.state.lock().unwrap();
+        let device = state
+            .devices
+            .values_mut()
+            .find(|(code, _)| code == user_code)
+            .unwrap_or_else(|| panic!("no device flow shows {user_code}"));
+        device.1 = Some(login.to_owned());
+    }
+
+    /// Every user token `login` got through the device flow or a refresh expires, as GitHub's
+    /// do after eight hours; their refresh tokens still renew them.
+    pub fn expire(&self, login: &str) {
+        let mut state = self.state.lock().unwrap();
+        let prefix = format!("person-{login}-");
+        state.tokens.retain(|token, _| !token.starts_with(&prefix));
+    }
+
+    /// Job `id` named `name` of the first attempt of workflow run `run`, which `runner` took,
+    /// ended with `conclusion`.
+    pub fn job_ended(
+        &self,
+        repo: &str,
+        run: u64,
+        id: u64,
+        name: &str,
+        runner: &str,
+        conclusion: &str,
+    ) {
+        let mut state = self.state.lock().unwrap();
+        state.jobs.push(ActionsJob {
+            repo: repo.to_owned(),
+            run,
+            id,
+            name: name.to_owned(),
+            runner: runner.to_owned(),
+            conclusion: conclusion.to_owned(),
+        });
+    }
+
+    /// `login` may no longer read `repo`.
+    pub fn stop_reading(&self, repo: &str, login: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.repos.get_mut(repo).unwrap().readers.remove(login);
+    }
+
+    /// The jobs of workflow run `run` of `repo` the app asked to run again, in order, each with
+    /// the token that asked.
+    pub fn reruns(&self, repo: &str, run: u64) -> Vec<(u64, String)> {
+        let state = self.state.lock().unwrap();
+        state
+            .reruns
+            .iter()
+            .filter(|(r, id, _)| {
+                r == repo && state.jobs.iter().any(|j| j.id == *id && j.run == run)
+            })
+            .map(|(_, id, token)| (*id, token.clone()))
+            .collect()
+    }
+
+    /// GitHub fails every write to `repo`'s check runs as `stall` says, or writes them again.
+    pub fn stall(&self, repo: &str, stall: Option<Stall>) {
+        let mut state = self.state.lock().unwrap();
+        match stall {
+            Some(stall) => state.stalls.insert(repo.to_owned(), stall),
+            None => state.stalls.remove(repo),
+        };
     }
 
     /// Publishes another Actions OIDC key, as GitHub does when it rotates them.
@@ -201,6 +359,35 @@ fn serve(stream: TcpStream, state: &Mutex<State>, keys: &Keys) {
     let mut body = vec![0; length];
     reader.read_exact(&mut body).unwrap();
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let stall = match path
+        .trim_matches('/')
+        .split('/')
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["repos", owner, name, "check-runs", ..] if method != "GET" => {
+            let stalls = &state.lock().unwrap().stalls;
+            stalls.get(&format!("{owner}/{name}")).copied()
+        }
+        _ => None,
+    };
+    match stall {
+        Some(Stall::Hang) => {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            return;
+        }
+        Some(Stall::Fail) => {
+            let mut stream = stream;
+            let answer = r#"{"message":"Server Error"}"#;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 500 X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                answer.len()
+            );
+            return;
+        }
+        None => {}
+    }
     let token = auth
         .strip_prefix("Bearer ")
         .or_else(|| auth.strip_prefix("token "))
@@ -295,93 +482,198 @@ fn answer(
         }
         ("GET", ["repos", owner, name, "collaborators", login, "permission"]) => {
             let full = format!("{owner}/{name}");
-            let Some(caller) = state.tokens.get(token).cloned() else {
+            if !state.tokens.contains_key(token) {
                 return (401, json!({"message": "Bad credentials"}));
-            };
+            }
             let Some(repo) = state.repos.get(&full) else {
                 return (404, json!({"message": "Not Found"}));
             };
-            if repo.private && !repo.readers.contains(&caller) {
-                return (404, json!({"message": "Not Found"}));
-            }
-            let login = (*login).to_owned();
-            let permission = if repo.admins.contains(&login) {
+            let permission = if repo.admins.contains(*login) {
                 "admin"
-            } else if repo.writers.contains(&login) {
+            } else if repo.writers.contains(*login) {
                 "write"
-            } else if repo.readers.contains(&login) || !repo.private {
+            } else if repo.readers.contains(*login) {
                 "read"
             } else {
                 "none"
             };
+            (200, json!({"permission": permission}))
+        }
+        ("POST", ["repos", owner, name, "check-runs"]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            state.next_id += 1;
+            let id = state.next_id;
+            state.check_runs.push(CheckRun {
+                id,
+                repo,
+                head_sha: body["head_sha"].as_str().unwrap_or_default().to_owned(),
+                writes: vec![body.clone()],
+                tokens: vec![token.to_owned()],
+            });
+            (201, json!({"id": id}))
+        }
+        ("PATCH", ["repos", owner, name, "check-runs", id]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            let id: u64 = id.parse().unwrap_or_default();
+            match state
+                .check_runs
+                .iter_mut()
+                .find(|c| c.id == id && c.repo == repo)
+            {
+                Some(run) => {
+                    run.writes.push(body.clone());
+                    run.tokens.push(token.to_owned());
+                    (200, json!({"id": id}))
+                }
+                None => (404, json!({"message": "Not Found"})),
+            }
+        }
+        (
+            "GET",
+            [
+                "repos",
+                owner,
+                name,
+                "actions",
+                "runs",
+                run,
+                "attempts",
+                "1",
+                "jobs",
+            ],
+        ) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            let run: u64 = run.parse().unwrap_or_default();
+            let jobs: Vec<Value> = state
+                .jobs
+                .iter()
+                .filter(|j| j.repo == repo && j.run == run)
+                .map(|j| json!({"id": j.id, "run_id": j.run, "run_attempt": 1, "name": j.name, "runner_name": j.runner, "status": "completed", "conclusion": j.conclusion}))
+                .collect();
+            (200, json!({"total_count": jobs.len(), "jobs": jobs}))
+        }
+        ("POST", ["repos", owner, name, "actions", "jobs", id, "rerun"]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            let id: u64 = id.parse().unwrap_or_default();
+            if !state.jobs.iter().any(|j| j.repo == repo && j.id == id) {
+                return (404, json!({"message": "Not Found"}));
+            }
+            state.reruns.push((repo, id, token.to_owned()));
+            (201, json!({}))
+        }
+        ("POST", ["repos", owner, name, "issues", issue, "comments"]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            state.next_id += 1;
+            let id = state.next_id;
+            state.comments.push(Comment {
+                id,
+                repo,
+                issue: issue.parse().unwrap_or_default(),
+                bodies: vec![body["body"].as_str().unwrap_or_default().to_owned()],
+                tokens: vec![token.to_owned()],
+            });
             (
-                200,
-                json!({"permission": permission, "user": {"login": login}}),
+                201,
+                json!({"id": id, "html_url": format!("https://github.test/c/{id}")}),
             )
         }
-        ("GET", ["repos", owner, name, "pulls", number]) => {
-            let full = format!("{owner}/{name}");
-            // A person's token, or the token of the app's installation on this repository.
-            let installed = token
-                .strip_prefix("installation-")
-                .and_then(|id| id.parse::<u64>().ok())
-                .is_some_and(|id| {
-                    state
-                        .repos
-                        .get(&full)
-                        .is_some_and(|r| r.installation == Some(id))
-                });
-            if !installed && !state.tokens.contains_key(token) {
-                return (401, json!({"message": "Bad credentials"}));
+        ("PATCH", ["repos", owner, name, "issues", "comments", id]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
             }
-            let Ok(number) = number.parse::<u64>() else {
-                return (404, json!({"message": "Not Found"}));
-            };
-            let head = state
-                .heads
-                .get(&(full.clone(), number))
-                .cloned()
-                .unwrap_or(Head {
-                    sha: HEAD.to_owned(),
-                    from: full.clone(),
-                });
+            let id: u64 = id.parse().unwrap_or_default();
+            match state
+                .comments
+                .iter_mut()
+                .find(|c| c.id == id && c.repo == repo)
+            {
+                Some(comment) => {
+                    comment
+                        .bodies
+                        .push(body["body"].as_str().unwrap_or_default().to_owned());
+                    comment.tokens.push(token.to_owned());
+                    (200, json!({"id": id}))
+                }
+                None => (404, json!({"message": "Not Found"})),
+            }
+        }
+        ("POST", ["login", "device", "code"]) => {
+            if body["client_id"] != CLIENT_ID {
+                return (404, json!({"error": "Not Found"}));
+            }
+            state.next_id += 1;
+            let device = format!("device-{}", state.next_id);
+            let user = format!("FZ{:02}-{:04}", state.next_id % 100, state.next_id);
+            state.devices.insert(device.clone(), (user.clone(), None));
             (
                 200,
                 json!({
-                    "number": number,
-                    "state": "open",
-                    "head": {"sha": head.sha, "repo": {"full_name": head.from}},
-                    "base": {"repo": {"full_name": full}},
+                    "device_code": device, "user_code": user,
+                    "verification_uri": "https://github.com/login/device",
+                    "expires_in": 900, "interval": 5,
                 }),
             )
         }
-        ("POST", ["repos", owner, name, "issues", number, "comments"]) => {
-            let full = format!("{owner}/{name}");
-            let Some(login) = state.tokens.get(token).cloned() else {
-                return (401, json!({"message": "Bad credentials"}));
-            };
-            let readable = state
-                .repos
-                .get(&full)
-                .is_some_and(|r| !r.private || r.readers.contains(&login));
-            let (Ok(number), true) = (number.parse::<u64>(), readable) else {
-                return (404, json!({"message": "Not Found"}));
-            };
-            let Some(body) = body.get("body").and_then(Value::as_str) else {
-                return (422, json!({"message": "body is missing"}));
-            };
-            let id = state.posted.len() + 1;
-            state.posted.push(Posted {
-                repo: full.clone(),
-                pull: number,
-                login: login.clone(),
-                body: body.to_owned(),
-            });
-            let url = format!("https://github.com/{full}/pull/{number}#issuecomment-{id}");
-            (
-                201,
-                json!({"id": id, "body": body, "html_url": url, "user": {"login": login, "type": "User"}}),
-            )
+        ("POST", ["login", "oauth", "access_token"])
+            if body["grant_type"] == "urn:ietf:params:oauth:grant-type:device_code" =>
+        {
+            if body["client_id"] != CLIENT_ID {
+                return (200, json!({"error": "incorrect_client_credentials"}));
+            }
+            let code = body["device_code"].as_str().unwrap_or_default();
+            match state.devices.get(code).cloned() {
+                None => (200, json!({"error": "expired_token"})),
+                Some((_, None)) => (200, json!({"error": "authorization_pending"})),
+                Some((_, Some(login))) => {
+                    state.devices.remove(code);
+                    (200, user_token(state, &login))
+                }
+            }
+        }
+        ("POST", ["login", "oauth", "access_token"]) if body["grant_type"] == "refresh_token" => {
+            let field = |name: &str| body.get(name).and_then(Value::as_str).unwrap_or_default();
+            if field("client_id") != CLIENT_ID || field("client_secret") != CLIENT_SECRET {
+                return (200, json!({"error": "incorrect_client_credentials"}));
+            }
+            let refresh = field("refresh_token").to_owned();
+            match state.refreshes.remove(&refresh) {
+                Some(login) => (200, user_token(state, &login)),
+                None => (200, json!({"error": "bad_refresh_token"})),
+            }
         }
         ("POST", ["login", "oauth", "access_token"]) => {
             let field = |name: &str| body.get(name).and_then(Value::as_str).unwrap_or_default();
@@ -401,6 +693,39 @@ fn answer(
         },
         _ => (404, json!({"message": "Not Found"})),
     }
+}
+
+/// Whether `token` is the app's installation token on `repo`: only the app writes check runs
+/// and its own comments.
+/// A new expiring user token for `login` with its refresh token, as GitHub answers it.
+fn user_token(state: &mut State, login: &str) -> Value {
+    state.next_id += 1;
+    let token = format!("person-{login}-{}", state.next_id);
+    let refresh = format!("refresh-{}", state.next_id);
+    state.tokens.insert(token.clone(), login.to_owned());
+    state.refreshes.insert(refresh.clone(), login.to_owned());
+    json!({
+        "access_token": token, "token_type": "bearer", "expires_in": 28800,
+        "refresh_token": refresh, "refresh_token_expires_in": 15_897_600,
+    })
+}
+
+fn writes_as_app(state: &State, repo: &str, token: &str) -> bool {
+    let installation = token
+        .strip_prefix("installation-")
+        .and_then(|id| id.parse::<u64>().ok());
+    installation.is_some() && state.repos.get(repo).and_then(|r| r.installation) == installation
+}
+
+/// The `X-Hub-Signature-256` GitHub sends with a webhook: HMAC-SHA256 of the body with the
+/// webhook's secret.
+pub fn signature(secret: &str, body: &[u8]) -> String {
+    use hmac::Mac as _;
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(body);
+    let bytes = mac.finalize().into_bytes();
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256={hex}")
 }
 
 /// A public key as a JWKS entry, the way GitHub publishes its Actions keys.

@@ -115,8 +115,6 @@ pub(crate) struct Check {
     test_globs: Globs,
     /// The stills and films it takes, and which of them are flaky.
     pub pictures: Pictures,
-    /// The environment's shell it runs inside, part of its inputs.
-    pub shell: Option<String>,
     /// Work Fearlezz does itself instead of running a command.
     pub builtin: Option<Builtin>,
 }
@@ -131,8 +129,8 @@ pub(crate) struct Pictures {
     pub films: Option<MediaGlob>,
     /// For a check that records an app's window while its command runs.
     pub record: Option<crate::record::Spec>,
-    /// Pictures (ids or globs, as written) that are compared and shown but never block or
-    /// wait for approval.
+    /// Pictures (ids or globs, as written) that are compared and shown but never wait for a
+    /// person's look.
     pub flaky: Globs,
 }
 
@@ -520,7 +518,6 @@ impl Config {
                 .with_context(|| format!("check {id}: inputs"))?;
             checks.push(Check {
                 inputs,
-                shell: env.shell.clone(),
                 builtin: None,
                 tests: c
                     .tests
@@ -674,7 +671,6 @@ fn builtin_check(id: &str, stages: &Stages, inputs: Globs, on: Scope, builtin: B
             level: None,
             fix: None,
         }),
-        shell: None,
         builtin: Some(builtin),
         tests: None,
         test_files: Vec::new(),

@@ -15,6 +15,8 @@ pub const ISSUER: &str = "https://token.actions.githubusercontent.com";
 pub const INSTALL_URL: &str = "https://github.com/apps/fearlezz/installations/new";
 /// Signs the sign in cookie and the grants of the files origin.
 pub const SIGNING_KEY: &str = "a signing key only the tests know";
+/// The secret GitHub signs the app's webhooks with.
+pub const WEBHOOK_SECRET: &str = "a webhook secret only the tests know";
 
 pub struct Worker {
     /// The app origin, where people sign in and CI uploads.
@@ -69,6 +71,7 @@ impl Worker {
             ),
             ("GITHUB_APP_KEY", app_key_pem.to_owned()),
             ("SIGNING_KEY", SIGNING_KEY.to_owned()),
+            ("WEBHOOK_SECRET", WEBHOOK_SECRET.to_owned()),
         ];
         let mut cmd = wrangler(&host);
         cmd.args([
@@ -83,7 +86,9 @@ impl Worker {
         .args(["--inspector-port", &free_port().to_string()])
         // The config routes both production domains to the worker, and wrangler dev would
         // otherwise show every request as the first one, folding the files origin into the app.
-        .arg("--infer-origin-from-routes=false");
+        .arg("--infer-origin-from-routes=false")
+        // The schedule runs when a test asks `/__scheduled`, not by the clock.
+        .arg("--test-scheduled");
         for (name, value) in vars {
             cmd.arg("--var").arg(format!("{name}:{value}"));
         }
@@ -117,6 +122,35 @@ impl Worker {
             "wrangler dev did not answer within 10 minutes:\n{}",
             self.log()
         );
+    }
+
+    /// Runs one SQL statement on the worker's local D1, for a record no call can make yet. The
+    /// database is one SQLite file the running worker writes too, so a statement that finds it
+    /// busy is tried again.
+    pub fn sql(&self, statement: &str) {
+        let host = Path::new(env!("CARGO_MANIFEST_DIR")).join("../host");
+        let persist = self.state.path().to_str().unwrap().to_owned();
+        let mut said = String::new();
+        for _ in 0..10 {
+            let ran = wrangler(&host)
+                .args(["d1", "execute", "DB", "--local", "--persist-to", &persist])
+                .args(["--command", statement])
+                .output()
+                .unwrap();
+            if ran.status.success() {
+                return;
+            }
+            said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&ran.stdout),
+                String::from_utf8_lossy(&ran.stderr)
+            );
+            if !said.contains("SQLITE_BUSY") && !said.contains("locked") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        panic!("{statement} failed:\n{said}");
     }
 
     pub fn log(&self) -> String {

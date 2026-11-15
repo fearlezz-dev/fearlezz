@@ -14,6 +14,12 @@ bench = false
 # Only serde: the proof host builds this to wasm, where every dependency costs worker size.
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
+# Off by default: only the generator of the host page's TypeScript types turns it on.
+ts-rs = { version = "12.0.1", optional = true }
+
+[features]
+# TypeScript declarations of what the host's page reads (`events`, and the check entries in it).
+ts = ["dep:ts-rs"]
 
 [dev-dependencies]
 serde_json = "1.0.154"

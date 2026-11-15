@@ -12,7 +12,9 @@ publish = false
 [profile.dev.package."*"]
 opt-level = 3
 
+# The worker is built to wasm, where its size is what matters: "z" over "s" saves about 6%.
+# Panics already abort on wasm32-unknown-unknown.
 [profile.release]
-opt-level = "s"
+opt-level = "z"
 lto = true
 codegen-units = 1

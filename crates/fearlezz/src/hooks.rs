@@ -116,6 +116,8 @@ pub(crate) struct Work {
     pub needs_proof: bool,
     pub now: String,
     pub next: String,
+    /// Notes people left on the proof host that are still open.
+    pub open_notes: usize,
 }
 
 pub(crate) enum Answer {
@@ -143,15 +145,6 @@ pub(crate) fn judge(config: &Config, work: &Work, event: Event, input: &Input) -
              why they fail. Ask the developer: fearlezz say ask \"<question>\""
                 .into(),
         ),
-        // CI takes `/fearlezz approve` from anyone with write access and `/fearlezz accept`
-        // from an admin, either of which may be the account the agent works with.
-        Event::BeforeShell if posts_approval(command) => Answer::Deny(
-            "Fearlezz: approving changed pictures or accepting a weakened proof is for a person, \
-             in their own words. Show the developer the pictures or what weakened and ask them \
-             to comment /fearlezz approve (or, with admin rights, /fearlezz accept) on the pull \
-             request themselves."
-                .into(),
-        ),
         Event::BeforeShell if work.needs_proof && opens_pull_request(command) && !work.ready => {
             Answer::Deny(format!(
                 "Fearlezz: a pull request that is not a draft needs the work ready to merge. Open \
@@ -167,6 +160,17 @@ pub(crate) fn judge(config: &Config, work: &Work, event: Event, input: &Input) -
             )),
             None => Answer::Nothing,
         },
+        Event::Stop if !input.again && work.open_notes > 0 => {
+            let (notes, them) = match work.open_notes {
+                1 => ("1 open note".to_owned(), "it"),
+                n => (format!("{n} open notes"), "them"),
+            };
+            Answer::KeepGoing(format!(
+                "Fearlezz: the proof host holds {notes} a person left on this work. Read {them} \
+                 with fearlezz --notes and settle {them}, or ask the developer: fearlezz say ask \
+                 \"<question>\""
+            ))
+        }
         Event::Stop if input.again || work.waiting || work.ready || !work.needs_proof => {
             Answer::Nothing
         }
@@ -240,15 +244,6 @@ fn merges_past_checks(line: &str) -> bool {
         ["gh", "pr", "merge", rest @ ..] => rest.contains(&"--admin"),
         _ => false,
     })
-}
-
-/// A line that sends `/fearlezz approve` or `/fearlezz accept` somewhere with a tool that can
-/// post a comment.
-fn posts_approval(line: &str) -> bool {
-    (line.contains("/fearlezz approve") || line.contains("/fearlezz accept"))
-        && commands(line)
-            .iter()
-            .any(|w| matches!(w.first(), Some(&("gh" | "curl" | "wget" | "hub" | "http"))))
 }
 
 /// `gh pr create` without `--draft`, or `gh pr ready` without `--undo`.

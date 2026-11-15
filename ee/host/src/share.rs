@@ -1,218 +1,214 @@
-//! Share links: a person with write access makes a link anyone can open, until revoked. A link
-//! names one pull request and always shows its latest whole proof, the one
-//! `/<owner>/<repo>/pull/<n>` leads to, so the people it reaches follow the work as it moves.
+//! Share links: a person with write access makes a link that shows anyone a work's live page,
+//! view only, until someone with write access revokes it. A link names the work (one branch,
+//! its pull request when it has one), so the people it reaches follow new runs.
 //!
-//! Opening a link skips the repository's access check for that pull request alone, and only
-//! views: its shell never posts approvals or accepts, whoever holds it. The files still come
-//! from the files origin under the same grant of one proof that expires within the hour; the
-//! link lives here, on the app origin, and never reaches the files origin.
+//! Opening a link skips the repository's access check for that work alone, and only views: the
+//! page through a link offers no verdict, note, resolve or accept and asks no one to sign in,
+//! and every write still takes a session (`say.rs`). The files come from the files origin
+//! under the same one hour grant of one run as any other view, asked afresh by each page, for
+//! the runs of the link's work alone. The page sends no referrer and asks not to be indexed.
+//!
+//! The token is 128 random bits, kept only as its HMAC with the signing key, like the CLI's
+//! token: the list shows who made each link and when, and the link itself is shown once, when
+//! it is made. Revoking deletes the row and ends the pages open on it.
 
-use fearlezz_proof::waits::Role;
 use serde::Deserialize;
 use serde_json::json;
-use worker::{Env, Request, Response};
+use worker::{D1Database, Env, Headers, Request, Response};
 
-use crate::approve::{same_origin, sign_in_again};
-use crate::github;
+use crate::room::Viewer;
+use crate::say::Act;
 use crate::session::{self, Session};
-use crate::{Answer, Config, Refusal, crypto, files, now, pages, repo_key};
+use crate::work::{self, Place};
+use crate::{Answer, Config, Refusal, crypto, now, pages, repo_key, room, say};
 
 fn not_found() -> Refusal {
     Refusal::new(404, "not found")
 }
 
-/// Makes a link to the pull request and answers it: `201 {"url", "token", "made_by", "made_at"}`.
-pub async fn make(
-    req: Request,
-    env: &Env,
-    config: &Config,
-    owner: &str,
-    name: &str,
-    number: &str,
-) -> Answer {
-    same_origin(&req, config)?;
-    let pull = pull(number)?;
-    let person = writer(&req, env, config, owner, name, "share").await?;
-    // Only a pull request with a whole proof has anything to show.
-    if pages::latest(env, &repo_key(owner, name), pull)
-        .await?
-        .is_none()
-    {
-        return Err(not_found());
-    }
-    let token = crypto::random_id()?;
-    let made_at = now();
-    env.d1("DB")?
-        .prepare(
-            "INSERT INTO shares (token, repo, pull, made_by, made_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        )
-        .bind(&[
-            token.as_str().into(),
-            repo_key(owner, name).into(),
-            (pull as f64).into(),
-            person.login.as_str().into(),
-            (made_at as f64).into(),
-        ])?
-        .run()
-        .await?;
-    let link = Link {
-        token,
-        made_by: person.login,
-        made_at: made_at as f64,
-    };
-    Ok(Response::from_json(&link.json(config))?.with_status(201))
+/// A live link, as the host keeps it.
+#[derive(Deserialize)]
+pub struct Link {
+    pub id: String,
+    pub work: String,
 }
 
-/// The pull request's live links, newest first: `200 {"links": [...]}`.
-pub async fn list(
+/// The tag of the pages open through link `id`, which revoking it ends.
+fn tag(id: &str) -> String {
+    format!("share:{id}")
+}
+
+async fn hash(config: &Config, token: &str) -> worker::Result<String> {
+    let mac = crypto::hmac_sign(&config.signing_key, format!("share.{token}").as_bytes()).await?;
+    Ok(hex::encode(mac))
+}
+
+/// The live link `token` opens, if any.
+pub async fn find(env: &Env, config: &Config, token: &str) -> worker::Result<Option<Link>> {
+    env.d1("DB")?
+        .prepare("SELECT id, work FROM shares WHERE hash = ?1")
+        .bind(&[hash(config, token).await?.into()])?
+        .first(None)
+        .await
+}
+
+/// `/-/share/<token>`: the work's page, for anyone holding the link. An unknown or revoked
+/// token is a bare `404`, so it confirms no repository.
+pub async fn page(env: &Env, config: &Config, token: &str) -> Answer {
+    find(env, config, token).await?.ok_or_else(not_found)?;
+    let headers = Headers::new();
+    headers.set("Referrer-Policy", "no-referrer")?;
+    headers.set("X-Robots-Tag", "noindex, nofollow")?;
+    pages::app(env, config, &headers).await
+}
+
+/// `/live/-/share/<token>`: the live connection of the link's work, ended when it is revoked.
+pub async fn live(req: &Request, env: &Env, config: &Config, token: &str) -> Answer {
+    let link = find(env, config, token).await?.ok_or_else(not_found)?;
+    let viewer = Viewer::Link { tag: tag(&link.id) };
+    pages::connect(req, env, &link.work, &viewer).await
+}
+
+/// The work a share call names: `{"repository": "owner/name", "branch"}`.
+#[derive(Deserialize)]
+struct Named {
+    repository: String,
+    branch: String,
+}
+
+/// The work `named` names, when the request's person may write its repository: `404` for a
+/// work or private repository they may not see, `403` without write access, `401` when their
+/// GitHub sign in expired.
+async fn writable(
     req: &Request,
     env: &Env,
     config: &Config,
-    owner: &str,
-    name: &str,
-    number: &str,
-) -> Answer {
-    let pull = pull(number)?;
-    writer(req, env, config, owner, name, "see its share links").await?;
-    let links: Vec<Link> = env
-        .d1("DB")?
-        .prepare(
-            "SELECT token, made_by, made_at FROM shares WHERE repo = ?1 AND pull = ?2 AND revoked_at IS NULL ORDER BY made_at DESC, rowid DESC",
-        )
-        .bind(&[repo_key(owner, name).into(), (pull as f64).into()])?
+    person: &Session,
+    named: &Named,
+) -> Result<(D1Database, String, String), Refusal> {
+    let (owner, name) = named.repository.split_once('/').ok_or_else(not_found)?;
+    let repo = repo_key(owner, name);
+    if !pages::open(req, env, config, &repo).await? {
+        return Err(not_found());
+    }
+    let db = env.d1("DB")?;
+    let work = work::find(&db, &repo, &Place::Branch(named.branch.clone()))
+        .await?
+        .ok_or_else(not_found)?;
+    say::require(
+        env,
+        config,
+        &person.login,
+        &person.token,
+        &named.repository,
+        Act::Share,
+    )
+    .await?;
+    Ok((db, work, repo))
+}
+
+/// `POST /api/v2/shares`: makes a link to a work. `201 {"url", "share": {"id", "made_by",
+/// "made_at"}}`; the URL holds the token and is shown only now.
+pub async fn make(mut req: Request, env: &Env, config: &Config) -> Answer {
+    let person = say::person(&req, env, config, "share a work").await?;
+    let named: Named = req
+        .json()
+        .await
+        .map_err(|_| Refusal::new(400, "send {\"repository\": \"owner/name\", \"branch\"}"))?;
+    let (db, work, _) = writable(&req, env, config, &person, &named).await?;
+    let token = crypto::random_id()?;
+    let id = crypto::random_id()?;
+    let made_at = now() as f64;
+    db.prepare("INSERT INTO shares (id, hash, work, made_by, made_at) VALUES (?1, ?2, ?3, ?4, ?5)")
+        .bind(&[
+            id.as_str().into(),
+            hash(config, &token).await?.into(),
+            work.as_str().into(),
+            person.login.as_str().into(),
+            made_at.into(),
+        ])?
+        .run()
+        .await?;
+    let answer = json!({
+        "url": format!("{}/-/share/{token}", config.app_origin),
+        "share": {"id": id, "made_by": person.login, "made_at": made_at},
+    });
+    Ok(Response::from_json(&answer)?.with_status(201))
+}
+
+/// `GET /api/v2/shares?repository=<owner/name>&branch=<branch>`: the work's live links, newest
+/// first, `200 {"shares": [{"id", "made_by", "made_at"}]}`.
+pub async fn list(req: &Request, env: &Env, config: &Config) -> Answer {
+    let person = session::read(req, env)
+        .await?
+        .ok_or_else(|| Refusal::new(401, "sign in to see the share links"))?;
+    let url = req.url()?;
+    let param = |name: &str| {
+        url.query_pairs()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.into_owned())
+    };
+    let (Some(repository), Some(branch)) = (param("repository"), param("branch")) else {
+        return Err(Refusal::new(
+            400,
+            "name the work: ?repository=owner/name&branch=",
+        ));
+    };
+    let named = Named { repository, branch };
+    let (db, work, _) = writable(req, env, config, &person, &named).await?;
+    #[derive(Deserialize, serde::Serialize)]
+    struct Listed {
+        id: String,
+        made_by: String,
+        made_at: f64,
+    }
+    let shares: Vec<Listed> = db
+        .prepare("SELECT id, made_by, made_at FROM shares WHERE work = ?1 ORDER BY made_at DESC, rowid DESC")
+        .bind(&[work.as_str().into()])?
         .all()
         .await?
         .results()?;
-    let links: Vec<_> = links.iter().map(|link| link.json(config)).collect();
-    Ok(Response::from_json(&json!({ "links": links }))?)
+    let headers = Headers::new();
+    headers.set("Cache-Control", "no-store")?;
+    Ok(Response::from_json(&json!({ "shares": shares }))?.with_headers(headers))
 }
 
-/// Revokes a live link of the pull request: `200 {"revoked": "<token>"}`. A link of another
-/// pull request, or one already revoked, is `404`.
-pub async fn revoke(
-    req: Request,
-    env: &Env,
-    config: &Config,
-    owner: &str,
-    name: &str,
-    number: &str,
-    token: &str,
-) -> Answer {
-    same_origin(&req, config)?;
-    let pull = pull(number)?;
-    writer(&req, env, config, owner, name, "revoke its share links").await?;
-    let revoked = env
-        .d1("DB")?
-        .prepare(
-            "UPDATE shares SET revoked_at = ?1 WHERE token = ?2 AND repo = ?3 AND pull = ?4 AND revoked_at IS NULL",
-        )
-        .bind(&[
-            (now() as f64).into(),
-            token.into(),
-            repo_key(owner, name).into(),
-            (pull as f64).into(),
-        ])?
-        .run()
-        .await?
-        .meta()?
-        .and_then(|meta| meta.changes)
-        .unwrap_or(0);
-    if revoked == 0 {
-        return Err(not_found());
-    }
-    Ok(Response::from_json(&json!({ "revoked": token }))?)
-}
-
-/// `/s/<token>`: the shell of the pull request's latest whole proof, without a session. An
-/// unknown or revoked token is a bare `404`, so it confirms no repository.
-pub async fn view(env: &Env, config: &Config, token: &str) -> Answer {
+/// `POST /api/v2/shares/<id>/revoke`: ends a link, and every page open on it. `200
+/// {"revoked": "<id>"}`; a link that is gone, or one of a repository the person may not see,
+/// is `404`.
+pub async fn revoke(req: Request, env: &Env, config: &Config, id: &str) -> Answer {
+    let person = say::person(&req, env, config, "revoke a share link").await?;
     #[derive(Deserialize)]
-    struct Shared {
+    struct Row {
+        work: String,
         repo: String,
-        pull: f64,
+        repository: String,
     }
-    let shared: Option<Shared> = env
-        .d1("DB")?
-        .prepare("SELECT repo, pull FROM shares WHERE token = ?1 AND revoked_at IS NULL")
-        .bind(&[token.into()])?
+    let db = env.d1("DB")?;
+    let row: Option<Row> = db
+        .prepare("SELECT s.work, w.repo, w.repository FROM shares s JOIN works w ON w.id = s.work WHERE s.id = ?1")
+        .bind(&[id.into()])?
         .first(None)
         .await?;
-    let shared = shared.ok_or_else(not_found)?;
-    let pull = shared.pull as u64;
-    let id = pages::latest(env, &shared.repo, pull)
-        .await?
-        .ok_or_else(not_found)?;
-    let proof = pages::whole(env, &shared.repo, &id)
-        .await?
-        .ok_or_else(not_found)?;
-    // The repository as GitHub spells it, from the proof; the host keeps it lowercased.
-    let full = serde_json::from_str::<serde_json::Value>(&proof.proof)
-        .ok()
-        .and_then(|p| p["repository"].as_str().map(str::to_owned))
-        .filter(|full| full.to_lowercase() == shared.repo)
-        .unwrap_or_else(|| shared.repo.clone());
-    let view = pages::View {
-        title: pages::title(&full, &proof.proof),
-        frame: format!(
-            "{}index.html",
-            files::folder(config, &shared.repo, &id).await?
-        ),
-        act: pages::Act::ViewOnly {
-            pull: format!("/{full}/pull/{pull}"),
-        },
-    };
-    pages::render(config, view)
-}
-
-fn pull(number: &str) -> Result<u64, Refusal> {
-    number.parse().map_err(|_| not_found())
-}
-
-/// The signed in person, when GitHub gives them write access to the repository: `401` without a
-/// session, `404` for a private repository they cannot read, `403` without write access, as
-/// approving refuses.
-async fn writer(
-    req: &Request,
-    env: &Env,
-    config: &Config,
-    owner: &str,
-    name: &str,
-    what: &str,
-) -> Result<Session, Refusal> {
-    let Some(person) = session::read(req, env).await? else {
-        return Err(Refusal::new(401, format!("sign in to {what} on this page")));
-    };
-    if !pages::open(req, env, config, &repo_key(owner, name)).await? {
-        return Err(sign_in_again());
+    let row = row.ok_or_else(not_found)?;
+    if !pages::open(&req, env, config, &row.repo).await? {
+        return Err(not_found());
     }
-    let full = format!("{owner}/{name}");
-    match github::permission(config, &full, &person.login, &person.token).await? {
-        Some(role) if role >= Role::Write => Ok(person),
-        Some(_) => Err(Refusal::new(
-            403,
-            format!(
-                "@{} cannot {what} here: that needs write access to {full} on GitHub",
-                person.login
-            ),
-        )),
-        None => Err(sign_in_again()),
+    say::require(
+        env,
+        config,
+        &person.login,
+        &person.token,
+        &row.repository,
+        Act::Share,
+    )
+    .await?;
+    db.prepare("DELETE FROM shares WHERE id = ?1")
+        .bind(&[id.into()])?
+        .run()
+        .await?;
+    if let Err(error) = room::close(env, &row.work, &tag(id), "This link was revoked.").await {
+        worker::console_error!("the pages of share link {id} were not ended: {error}");
     }
-}
-
-#[derive(Deserialize)]
-struct Link {
-    token: String,
-    made_by: String,
-    made_at: f64,
-}
-
-impl Link {
-    fn json(&self, config: &Config) -> serde_json::Value {
-        json!({
-            "url": format!("{}/s/{}", config.app_origin, self.token),
-            "token": self.token,
-            "made_by": self.made_by,
-            "made_at": self.made_at as i64,
-        })
-    }
+    Ok(Response::from_json(&json!({ "revoked": id }))?)
 }

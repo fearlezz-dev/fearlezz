@@ -8,25 +8,33 @@ use serde::Deserialize;
 use serde_json::Value;
 use worker::{Env, Fetch, Request, Url};
 
-use crate::{Config, Refusal, cache, crypto, now};
+use crate::{Config, Refusal, cache, crypto, github, now};
 
-/// What a token says about the run that holds it.
-pub struct Run {
+/// What a token says about the CI run that holds it.
+pub struct Token {
     /// `owner/name` as GitHub spells it.
     pub repository: String,
-    /// The ref the run is for: `refs/pull/<n>/merge` on a pull request.
+    /// The ref the run is for: `refs/pull/<n>/merge` on a pull request, `refs/heads/<branch>`
+    /// on a push.
     pub git_ref: String,
+    /// A pull request's head branch; empty for any other event.
+    pub head_ref: String,
 }
 
-impl Run {
+impl Token {
     /// The repository as the host keys it.
     pub fn repo(&self) -> String {
         self.repository.to_lowercase()
     }
 
-    /// Whether the run is for this pull request.
-    pub fn is_for_pull(&self, number: u64) -> bool {
-        self.git_ref == format!("refs/pull/{number}/merge")
+    /// Whether the run is for this pull request from this branch.
+    pub fn is_for_pull(&self, number: u64, branch: &str) -> bool {
+        self.git_ref == format!("refs/pull/{number}/merge") && self.head_ref == branch
+    }
+
+    /// Whether the run is for a push of this branch.
+    pub fn is_for_branch(&self, branch: &str) -> bool {
+        self.git_ref == format!("refs/heads/{branch}")
     }
 }
 
@@ -35,7 +43,7 @@ fn refused(why: &str) -> Refusal {
 }
 
 /// The run a request's token speaks for, or a refusal with `401`.
-pub async fn check(req: &Request, env: &Env, config: &Config) -> Result<Run, Refusal> {
+pub async fn check(req: &Request, env: &Env, config: &Config) -> Result<Token, Refusal> {
     let header = req.headers().get("Authorization")?.unwrap_or_default();
     let token = header
         .strip_prefix("Bearer ")
@@ -79,9 +87,10 @@ pub async fn check(req: &Request, env: &Env, config: &Config) -> Result<Run, Ref
     if claims.exp <= now - 60 || claims.nbf.is_some_and(|nbf| nbf > now + 60) {
         return Err(refused("expired or not yet valid"));
     }
-    Ok(Run {
+    Ok(Token {
         repository: claims.repository,
         git_ref: claims.git_ref,
+        head_ref: claims.head_ref,
     })
 }
 
@@ -101,6 +110,8 @@ struct Claims {
     repository: String,
     #[serde(rename = "ref")]
     git_ref: String,
+    #[serde(default)]
+    head_ref: String,
 }
 
 /// GitHub keeps its keys for months and publishes a new one before signing with it.
@@ -128,7 +139,7 @@ async fn key(env: &Env, config: &Config, kid: &str) -> Result<web_sys::CryptoKey
     let mut jwk = cached.as_deref().and_then(|jwks| find(jwks, kid));
     if jwk.is_none() {
         let url = Url::parse(&config.oidc_jwks).map_err(worker::Error::from)?;
-        let mut response = Fetch::Url(url).send().await?;
+        let mut response = Fetch::Url(url).send_with_signal(&github::timeout()).await?;
         let jwks = response.text().await?;
         if response.status_code() == 200 && serde_json::from_str::<Jwks>(&jwks).is_ok() {
             cache::put(env, JWKS, &jwks, JWKS_SECONDS).await?;
