@@ -108,6 +108,14 @@ decided:
       pictures changed and a person reviews them on the pull request; it does not wait.
 
 open:
+  - id: look-before-its-files
+    ask: >-
+      A finished event carries the look before CI has sent the pictures the host lacks (the
+      host answers missing, then CI sends them), so a page open at that moment asks for a
+      picture the host does not hold yet, gets 404 and shows it broken until reload. Seen as a
+      flake of a_look_that_arrives_shows_without_a_reload. Remove the cause on the host (send the
+      look live only once every file it names is held, from the blob upload that completes it),
+      or let the page wait for and retry a picture that is not there yet? Not settled.
   - id: base-shell
     ask: >-
       A check's shell still comes from the change's [env] on the base checkout (same class as the
