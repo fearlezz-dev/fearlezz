@@ -260,6 +260,24 @@ fn a_film_is_keyed_by_which_states_changed_not_by_its_bytes() {
 }
 
 #[test]
+fn a_new_or_gone_film_is_keyed_by_its_bytes() {
+    // Nothing compared it, so another recording is another film: its verdict never carries over.
+    for change in [Change::New, Change::Gone] {
+        let mut item = film(&[]);
+        item.change = change;
+        item.comparison = None;
+        match change {
+            Change::New => item.before = None,
+            _ => item.after = None,
+        }
+        let a = review::key(&item, |_| Some("x".into())).unwrap();
+        let b = review::key(&item, |_| Some("y".into())).unwrap();
+        assert_ne!(a, b, "{change:?}: another recording");
+        assert_eq!(review::key(&item, |_| None), None, "{change:?}: bytes not known yet");
+    }
+}
+
+#[test]
 fn weakenings_wait_for_an_admins_accept_of_the_head() {
     let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
     let mut proof = proof.unwrap();

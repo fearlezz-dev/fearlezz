@@ -156,8 +156,9 @@ and GitHub gets it as the check run and the comment.
 
 - **Verdicts are per picture**, on a CI run only, by a signed in person with write access.
   A picture to look at is changed, new, gone, timing or unreadable, and not flaky. A verdict is
-  kept by check, picture and content: a still by the SHA-256 of its before and after, a film by
-  which of its stable states changed (its bytes differ each time it is recorded). So a picture
+  kept by check, picture and content: a still by the SHA-256 of its before and after, a changed
+  film by which of its stable states changed (its bytes differ each time it is recorded), a new
+  or gone film by its bytes, so its verdict never carries over to another recording. So a picture
   that did not change keeps its verdict across runs and pushes; the page says "carried over".
   A verdict has a kind: `looks_right`, or `needs_change`, which a person can give only while
   the picture has an open note. A `needs_change` verdict holds for the content it was given on:
