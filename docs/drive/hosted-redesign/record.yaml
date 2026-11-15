@@ -127,14 +127,12 @@ decided:
       Needs change is derived from open notes on the picture; only looks right is a stored verdict.
       Resolving the last note brings the picture back to not looked at yet.
     why: The verdict and the notes drifted apart (review finding).
+  - id: every-matrix-leg
+    what: The review counts every leg of the newest run attempt of each job.
+  - id: base-shell-fix
+    what: A base checkout uses the base commit's own shell, like the prepare fix, in this branch.
 
-open:
-  - id: base-shell
-    ask: >-
-      A check's shell still comes from the change's [env] on the base checkout (same class as the
-      prepare fix f5d16d9). Fix it too? Raise at the next check-in.
-  - id: matrix-review
-    ask: The review counts only the newest run per job, so of two matrix legs only one is reviewed. Count every leg of the newest attempt?
+open: []
 
 slices:
   - id: core-cut
