@@ -348,6 +348,10 @@ fn main() {
             a_run_whose_leg_is_not_known_keeps_its_pictures,
         ),
         (
+            "a_job_its_workflow_names_is_matched_and_its_rerun_replaces_it",
+            a_job_its_workflow_names_is_matched_and_its_rerun_replaces_it,
+        ),
+        (
             "writes_at_once_reach_a_live_page_in_the_order_of_their_numbers",
             writes_at_once_reach_a_live_page_in_the_order_of_their_numbers,
         ),
@@ -2530,7 +2534,20 @@ fn a_job_that_ends_without_done_cancels_its_run() {
     let job = Job::pull("owner/review", 110, "review/cancel").at(&head, 1110);
     let run = job.open(&["tests"]);
     job.started(&run.id, "tests");
-    // Another job of the same workflow run ending leaves it running.
+    let answer = webhook(
+        "workflow_job",
+        &workflow_job(
+            "in_progress",
+            1110,
+            "proof",
+            Some(RUNNER),
+            "review/cancel",
+            &head,
+        ),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    // Another job of the same workflow run ending on the same runner, as a self hosted one
+    // runs several, leaves it running: the names tell the two apart.
     let answer = webhook(
         "workflow_job",
         &workflow_job(
@@ -2753,6 +2770,25 @@ fn a_run_whose_leg_is_not_known_keeps_its_pictures() {
     let review = review_of(136);
     assert_eq!(keys(&review).len(), 1, "{review:#}");
     assert!(!keys(&review).contains(&first[0]), "{review:#}");
+}
+
+fn a_job_its_workflow_names_is_matched_and_its_rerun_replaces_it() {
+    // The workflow names the job `Proof` with `name:`; its GITHUB_JOB is `proof`.
+    let job = Job::pull("owner/review", 137, "review/named")
+        .at(&commit("a137"), 1137)
+        .on("runner-named");
+    job.picked_up("Proof");
+    let (mut look, files) = one_still(b"named", b"named");
+    look["items"][0]["change"] = json!("same");
+    proven(&job, &look, &files, &weakened());
+    assert_eq!(review_of(137)["state"], "failed");
+
+    // Run again on GitHub, the job proves without the weakening: it replaces the failed run.
+    let again = job.again().on("runner-named-2");
+    again.picked_up("Proof");
+    proven(&again, &look, &files, &json!({}));
+    let review = review_of(137);
+    assert_eq!(review["state"], "approved", "{review:#}");
 }
 
 fn writes_at_once_reach_a_live_page_in_the_order_of_their_numbers() {

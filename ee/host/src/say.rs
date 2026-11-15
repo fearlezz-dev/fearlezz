@@ -336,7 +336,7 @@ pub async fn accept(req: Request, env: &Env, config: &Config, id: &str) -> Answe
 }
 
 /// Runs the failed proof job of a CI run again, as the app: the one job of its workflow run's
-/// attempt that its runner took, as `jobs::is` names it.
+/// attempt that is the run's own (`jobs::own`), when it failed.
 async fn rerun(config: &Config, run: &RunRow) -> worker::Result<()> {
     let Source::Ci {
         job,
@@ -351,10 +351,15 @@ async fn rerun(config: &Config, run: &RunRow) -> worker::Result<()> {
     let Some(token) = github::installation_token(config, &run.repository).await? else {
         return Err(worker::Error::RustError("the app is not installed".into()));
     };
-    let failed = github::failed_jobs(&token, config, &run.repository, run_id, run_attempt).await?;
-    let mine = failed
+    let all = github::jobs(&token, config, &run.repository, run_id, run_attempt).await?;
+    let on_runner: Vec<&github::ActionsJob> = all
+        .iter()
+        .filter(|j| j.runner.as_deref() == Some(runner_name.as_str()))
+        .collect();
+    let own = jobs::own(on_runner.iter().map(|j| j.name.as_str()), &job);
+    let mine = on_runner
         .into_iter()
-        .find(|failed| jobs::is(&failed.name, failed.runner.as_deref(), &job, &runner_name))
+        .find(|j| Some(j.name.as_str()) == own && j.conclusion.as_deref() == Some("failure"))
         .ok_or_else(|| {
             worker::Error::RustError(format!(
                 "no failed job {job} on {runner_name} in workflow run {run_id}"

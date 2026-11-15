@@ -215,10 +215,32 @@ async fn cancel(env: &Env, repo: &str, job: &WorkflowJob) -> worker::Result<()> 
         work: String,
         source: String,
     }
+    #[derive(Deserialize)]
+    struct NameRow {
+        name: String,
+    }
     let Some(runner) = &job.runner_name else {
         return Ok(());
     };
     let db = env.d1("DB")?;
+    let binds = [
+        repo.into(),
+        (job.run_id as f64).into(),
+        f64::from(job.run_attempt).into(),
+        runner.as_str().into(),
+    ];
+    // Every job of the attempt this runner took, this one stored already.
+    let names: Vec<String> = db
+        .prepare(
+            "SELECT name FROM jobs WHERE repo = ?1 AND workflow_run = ?2 AND run_attempt = ?3 AND runner = ?4",
+        )
+        .bind(&binds)?
+        .all()
+        .await?
+        .results::<NameRow>()?
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
     let rows = db
         .prepare(
             "SELECT r.id, r.work, r.source FROM runs r JOIN works w ON w.id = r.work \
@@ -226,22 +248,15 @@ async fn cancel(env: &Env, repo: &str, job: &WorkflowJob) -> worker::Result<()> 
              AND json_extract(r.source, '$.run_id') = ?2 AND json_extract(r.source, '$.run_attempt') = ?3 \
              AND json_extract(r.source, '$.runner_name') = ?4",
         )
-        .bind(&[
-            repo.into(),
-            (job.run_id as f64).into(),
-            f64::from(job.run_attempt).into(),
-            runner.as_str().into(),
-        ])?
+        .bind(&binds)?
         .all()
         .await?
         .results::<Row>()?;
     for row in rows {
         let own = match read::<Source>(&row.source)? {
-            Source::Ci {
-                job: id,
-                runner_name,
-                ..
-            } => jobs::is(&job.name, Some(runner), &id, &runner_name),
+            Source::Ci { job: id, .. } => {
+                jobs::own(names.iter().map(String::as_str), &id) == Some(job.name.as_str())
+            }
             Source::Local { .. } => false,
         };
         if own {

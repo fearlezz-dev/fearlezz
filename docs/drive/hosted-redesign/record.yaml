@@ -136,16 +136,18 @@ decided:
     what: >-
       The review counts the newest run of every leg, where a leg is the job plus the display
       name GitHub gives it (proof (macos-latest)), known to the host from the stored
-      workflow_job webhook and tied to a run by run id, attempt and runner name. A partial re-run
+      workflow_job webhook and tied to a run by run id, attempt and runner name alone, so a job
+      the workflow names (name: Proof) is matched; the name chooses only when one runner took
+      several jobs of the attempt (self hosted), and when that stays unclear the run has no leg. A partial re-run
       (re-run failed jobs, or the accept's re-run) replaces only the legs it ran; the other legs
       keep their newest run and their pictures keep waiting. A run whose leg is not known yet
-      (no webhook named its job, or its runner took two jobs of that name) is a leg of its own:
+      (no webhook named its job yet, or which of its runner's jobs is unclear) is a leg of its own:
       nothing replaces it, so its pictures never drop out, until the webhook names it and the
       review is derived again.
     why: >-
       Decided by the developer (open partial-rerun): the accept re-runs only the asking leg, so
       counting only the newest attempt dropped the other legs' pictures from review.
-    built: ee/host-tests/tests/host.rs (a_partial_rerun_replaces_only_the_legs_it_ran, a_run_whose_leg_is_not_known_keeps_its_pictures)
+    built: ee/host-tests/tests/host.rs (a_partial_rerun_replaces_only_the_legs_it_ran, a_run_whose_leg_is_not_known_keeps_its_pictures, a_job_its_workflow_names_is_matched_and_its_rerun_replaces_it, a_job_that_ends_without_done_cancels_its_run)
   - id: base-shell-fix
     what: >-
       A base checkout uses the base commit's own shell, like the prepare fix, in this branch. The

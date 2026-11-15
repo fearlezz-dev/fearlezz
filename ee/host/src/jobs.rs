@@ -1,10 +1,13 @@
 //! CI jobs as GitHub's `workflow_job` webhook names them, matched to Fearlezz runs:
 //!
-//! - A job is a Fearlezz run's own when it is of the run's workflow run and attempt, the run's
-//!   runner took it, and its name is the run's job id (`GITHUB_JOB`), alone or with a matrix's
-//!   values after it (`proof (macos-latest)`). The runner tells the legs of a matrix apart, as
-//!   every leg has the same job id. A job whose workflow gives it another name is not matched.
-//! - A queued job has no runner yet: one whose name a Fearlezz run of the repository named waits
+//! - A job is a Fearlezz run's own when it is of the run's workflow run and attempt and the
+//!   run's runner took it (`own`): its name need not be the run's job id (`GITHUB_JOB`), as a
+//!   workflow may name it (`name: Proof`). The runner tells the legs of a matrix apart, as every
+//!   leg has the same job id. Only when one runner took several jobs of the attempt (a self
+//!   hosted one) does the name choose: the one that is the job id, alone or with a matrix's
+//!   values after it (`proof (macos-latest)`); when that leaves it unclear, no job is the run's.
+//! - A queued job has no runner yet: one whose name a Fearlezz run of the repository named, by
+//!   the same reading of names, waits
 //!   on the page of the work of its branch until a runner takes it.
 //! - A completed job closes, as cancelled, its own run if that is still running: the job ended
 //!   without the run saying done.
@@ -25,10 +28,19 @@ fn named(name: &str, job: &str) -> bool {
             .is_some_and(|rest| rest.starts_with(" ("))
 }
 
-/// Whether the job named `name` on `runner`, of a run's workflow run and attempt, is the run's
-/// own: its job id `job` on its runner `runner_name`.
-pub fn is(name: &str, runner: Option<&str>, job: &str, runner_name: &str) -> bool {
-    runner == Some(runner_name) && named(name, job)
+/// Which of `names`, the jobs of one workflow run attempt that a run's runner took, is the run's
+/// own, `job` being its job id: the only one, or else the only one `job` names. None while
+/// that stays unclear.
+pub fn own<'a>(names: impl IntoIterator<Item = &'a str>, job: &str) -> Option<&'a str> {
+    let names: Vec<&str> = names.into_iter().collect();
+    if let [name] = names.as_slice() {
+        return Some(name);
+    }
+    let mut named = names.into_iter().filter(|name| named(name, job));
+    match (named.next(), named.next()) {
+        (Some(name), None) => Some(name),
+        _ => None,
+    }
 }
 
 /// The statement that reads, for each CI run of work `work` at `head`, the names of the jobs
@@ -49,9 +61,8 @@ pub fn legs_statement(
     .bind(&[work.into(), head.into()])
 }
 
-/// The leg of each run `legs_statement` read, by run id: the name of the one job that is the
-/// run's own, as `is` names it. A run whose job no webhook named yet, or whose runner took
-/// more than one job of its name, has none.
+/// The leg of each run `legs_statement` read, by run id: the name of the job that is the run's
+/// own (`own`). A run whose job no webhook named yet, or is unclear, has none.
 pub fn legs(result: &D1Result) -> worker::Result<BTreeMap<String, String>> {
     #[derive(Deserialize)]
     struct LegRow {
@@ -59,15 +70,20 @@ pub fn legs(result: &D1Result) -> worker::Result<BTreeMap<String, String>> {
         job: String,
         name: String,
     }
-    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut found: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
     for row in result.results::<LegRow>()? {
-        if named(&row.name, &row.job) {
-            found.entry(row.run).or_default().push(row.name);
-        }
+        found
+            .entry(row.run)
+            .or_insert((row.job, Vec::new()))
+            .1
+            .push(row.name);
     }
     Ok(found
         .into_iter()
-        .filter_map(|(run, mut names)| (names.len() == 1).then(|| (run, names.remove(0))))
+        .filter_map(|(run, (job, names))| {
+            let name = own(names.iter().map(String::as_str), &job)?.to_owned();
+            Some((run, name))
+        })
         .collect())
 }
 

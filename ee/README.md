@@ -183,9 +183,9 @@ comment, so runs that open at once still make one comment and one check run.
 - **An accept is per head**, by an admin of the repository, of exactly what a finished CI run
   of it weakens, which failed its proof job. The host keeps it and runs that failed job again
   as the app: it lists the jobs of the run's workflow run attempt (`GET /repos/{owner}/{repo}/
-  actions/runs/{run_id}/attempts/{attempt}/jobs`) and re-runs the failed one its runner took
-  whose name is the run's job, alone or with a matrix's values (`POST /repos/{owner}/{repo}/
-  actions/jobs/{job_id}/rerun`). The job asks for
+  actions/runs/{run_id}/attempts/{attempt}/jobs`) and re-runs the run's own job when it failed
+  (`POST /repos/{owner}/{repo}/actions/jobs/{job_id}/rerun`): the job its runner took, see
+  below. The job asks for
   the accept before it judges its weakenings (Protocol above) and passes, so the required job
   stays the one gate and the host's review honours only its own accept, never one a proof names.
 
@@ -241,9 +241,13 @@ webhook secret before anything in it is read (`401` when the signature does not 
   the repository, alone or with a matrix's values after it (`proof (macos-latest)`), shows on
   its branch's page as waiting for a runner. A completed one cancels its own run if that never
   said done: the run of its workflow run, attempt and runner (`run_id`, `run_attempt`,
-  `runner_name`) whose job its name is, so a matrix leg ending leaves its siblings running.
+  `runner_name`), so a matrix leg ending leaves its siblings running. A job is a run's own by
+  workflow run, attempt and runner alone, whatever its workflow names it (`name: Proof`); only
+  when one runner took several jobs of the attempt (a self hosted one) does the name choose,
+  the one that is the run's `GITHUB_JOB` alone or with a matrix's values, and when that leaves
+  it unclear no job is the run's.
   Once a runner took a job (in progress or completed), its name is the leg of that same run, and
-  the review is derived again. A job its workflow renames with `name:` is not matched.
+  the review is derived again.
 
 **Deploying review.** In the GitHub App's settings, add the permissions and events above, set
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared
