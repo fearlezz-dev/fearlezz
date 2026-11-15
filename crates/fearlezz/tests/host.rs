@@ -109,11 +109,7 @@ fn the_run_streams_to_the_host_while_its_checks_run() {
     assert_eq!(open["repository"], "owner/repo", "{open:#}");
     assert_eq!(open["branch"], "feat/x", "{open:#}");
     assert_eq!(open["base"], "main", "{open:#}");
-    assert_eq!(
-        open["checks"],
-        serde_json::json!(["lint", "tests"]),
-        "{open:#}"
-    );
+    assert_eq!(open["checks"], json!(["lint", "tests"]), "{open:#}");
     assert_eq!(open["source"]["kind"], "ci", "{open:#}");
     assert_eq!(open["source"]["job"], "proof", "{open:#}");
     assert_eq!(
@@ -150,7 +146,7 @@ fn a_finished_check_sends_its_entry_and_output_and_only_missing_blobs() {
     let finished = host
         .api()
         .into_iter()
-        .map(|r| serde_json::from_slice::<serde_json::Value>(&r.body).unwrap_or_default())
+        .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap_or_default())
         .find(|b| b["finished"]["check"]["id"] == "tests")
         .expect("a finished tests check");
     let check = &finished["finished"]["check"];
@@ -503,7 +499,7 @@ fn a_finished_check_sends_its_look_with_the_pictures() {
     let finished = host
         .api()
         .into_iter()
-        .map(|r| serde_json::from_slice::<serde_json::Value>(&r.body).unwrap_or_default())
+        .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap_or_default())
         .find(|b| b["finished"]["check"]["id"] == "screens")
         .expect("a finished screens check");
     let look = &finished["finished"]["look"];

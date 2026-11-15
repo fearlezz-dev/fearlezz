@@ -265,9 +265,10 @@ fn a_new_or_gone_film_is_keyed_by_its_bytes() {
         let mut item = film(&[]);
         item.change = change;
         item.comparison = None;
-        match change {
-            Change::New => item.before = None,
-            _ => item.after = None,
+        if change == Change::New {
+            item.before = None;
+        } else {
+            item.after = None;
         }
         let a = review::key(&item, |_| Some("x".into())).unwrap();
         let b = review::key(&item, |_| Some("y".into())).unwrap();
