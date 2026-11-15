@@ -235,7 +235,8 @@ pub fn review(
     notes: &[Note],
     accept: Option<&Accept>,
 ) -> Review {
-    let mut seen: Vec<(Leg<'_>, Option<&(Run, Option<Proof>)>)> = Vec::new();
+    // Each leg, with its newest run that did not end without its proof, if it has one.
+    let mut seen: Vec<(Leg<'_>, Option<&ProvenRun>)> = Vec::new();
     for entry in runs {
         let Some(leg) = Leg::of(&entry.0, head, legs) else {
             continue;
@@ -247,7 +248,7 @@ pub fn review(
         }
     }
     let unproven = seen.iter().any(|(_, chosen)| chosen.is_none());
-    let live: Vec<&(Run, Option<Proof>)> = seen.iter().filter_map(|(_, chosen)| *chosen).collect();
+    let live: Vec<&ProvenRun> = seen.iter().filter_map(|(_, chosen)| *chosen).collect();
 
     let open: Vec<&Note> = notes.iter().filter(|n| n.is_open()).collect();
     let mut pictures: Vec<Picture> = Vec::new();
@@ -332,6 +333,9 @@ pub fn review(
         notes: open.into_iter().cloned().collect(),
     }
 }
+
+/// A run with its proof once done.
+type ProvenRun = (Run, Option<Proof>);
 
 /// The leg of a CI job a run proves: the job (`GITHUB_JOB`) with the display name GitHub gives
 /// it, which tells the legs of a matrix apart (`proof (macos-latest)`) and stays the same when
