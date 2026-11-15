@@ -5,7 +5,7 @@
 //!
 //! The check run says `queued` until a CI run of the head opens, `in_progress` while one runs,
 //! `failure` when the proof failed, `cancelled` when every run of the head ended without its
-//! proof, `failure` too while a person says a picture needs change (its summary lists the open notes),
+//! proof, `failure` too while an open note says a picture needs change (its summary lists the notes),
 //! `action_required` while a picture waits for a verdict or a weakening for an admin's accept,
 //! and `success` once nothing waits. `action_required` needs no requested actions: it
 //! completes the check run (so a required check blocks the merge), and GitHub sends people to

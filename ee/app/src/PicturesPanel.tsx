@@ -18,8 +18,8 @@ import {
   title,
 } from "./pictures";
 import { type Draft, type Shown as Noted, fromWhere, makeNote, notesOn, resolveNote, sidesOf } from "./notes";
-import type { PictureChange, Run, Snapshot, VerdictKind } from "./proof";
-import { type Viewer, canSay, carried, localBy, maySignIn, onlyViews, signIn, toLookAt, verdict as say, verdictOf } from "./review";
+import type { PictureChange, Run, Snapshot } from "./proof";
+import { type Viewer, canSay, carried, localBy, maySignIn, onlyViews, signIn, standingOf, toLookAt, verdict as say, verdictOf } from "./review";
 import { MODES, type Mode, type Noting, Stage } from "./Stage";
 import { ago } from "./ago";
 
@@ -158,7 +158,7 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
                         data-picture={p.key}
                         data-change={p.picture.change}
                         data-flaky={String(!!p.picture.flaky)}
-                        data-verdict={verdictOf(props.state, props.run, p)?.kind ?? "none"}
+                        data-verdict={standingOf(props.state, props.run, p)}
                         aria-current={current()?.key === p.key ? "true" : undefined}
                         onClick={() => pick(p.key)}
                       >
@@ -171,10 +171,10 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
                           <span class="mini">flaky</span>
                         </Show>
                         <Switch>
-                          <Match when={verdictOf(props.state, props.run, p)?.kind === "looks_right"}>
+                          <Match when={standingOf(props.state, props.run, p) === "looks_right"}>
                             <span class="right" title="Looks right" aria-label="looks right" />
                           </Match>
-                          <Match when={verdictOf(props.state, props.run, p)?.kind === "needs_change"}>
+                          <Match when={standingOf(props.state, props.run, p) === "needs_change"}>
                             <span class="needs" title="Needs change" aria-label="needs change" />
                           </Match>
                         </Switch>
@@ -297,7 +297,7 @@ function ReviewBar(props: {
   onDraft: (draft: Draft | undefined) => void;
 }) {
   const [error, setError] = createSignal("");
-  const [sending, setSending] = createSignal<VerdictKind | "note" | null>(null);
+  const [sending, setSending] = createSignal<"looks_right" | "note" | null>(null);
   const [words, setWords] = createSignal("");
   const verdict = createMemo(() => verdictOf(props.state, props.run, props.shown));
   const never = () => {
@@ -306,11 +306,12 @@ function ReviewBar(props: {
     if (!toLookAt(props.shown)) return "Unchanged pictures need no verdict.";
     return "";
   };
-  const state = () => (never() ? "never" : (verdict()?.kind ?? "none"));
+  const standing = createMemo(() => standingOf(props.state, props.run, props.shown));
+  const state = () => (never() ? "never" : standing());
   const both = () => props.shown.picture.before != null && props.shown.picture.after != null;
-  const send = async (kind: VerdictKind) => {
-    setSending(kind);
-    setError((await say(props.run.id, props.shown, kind)) ?? "");
+  const send = async () => {
+    setSending("looks_right");
+    setError((await say(props.run.id, props.shown)) ?? "");
     setSending(null);
   };
   const whole = () => {
@@ -344,12 +345,20 @@ function ReviewBar(props: {
   };
   return (
     <div class="verdict" data-said={state()} aria-live="polite">
-      <Show when={verdict()}>
+      <Show when={standing() === "needs_change"}>
+        <p class="said bad">
+          <span class="needs" aria-hidden="true" />
+          <span>
+            <b>Needs change</b>, by {props.notes.length === 1 ? "its open note" : `its ${props.notes.length} open notes`}
+          </span>
+        </p>
+      </Show>
+      <Show when={standing() === "looks_right" && verdict()}>
           {(v) => (
-            <p class={`said ${v().kind === "looks_right" ? "ok" : "bad"}`}>
-              <span class={v().kind === "looks_right" ? "right" : "needs"} aria-hidden="true" />
+            <p class="said ok">
+              <span class="right" aria-hidden="true" />
               <span>
-                <b>{v().kind === "looks_right" ? "Looks right" : "Needs change"}</b>, said by <b>{v().by}</b>, {ago(Date.now() / 1000 - v().at)}
+                <b>Looks right</b>, said by <b>{v().by}</b>, {ago(Date.now() / 1000 - v().at)}
                 <Show when={carried(v(), props.run)}>
                   {(where) => <span class="carried">, {where()}</span>}
                 </Show>
@@ -455,26 +464,18 @@ function ReviewBar(props: {
           <div class="act verdicts">
             <button
               type="button"
-              class="btn bad"
-              data-say="needs_change"
-              aria-pressed={verdict()?.kind === "needs_change"}
-              disabled={!!sending() || props.notes.length === 0}
-              onClick={() => void send("needs_change")}
-            >
-              Needs change
-            </button>
-            <button
-              type="button"
               class="btn ok"
               data-say="looks_right"
-              aria-pressed={verdict()?.kind === "looks_right"}
+              aria-pressed={!!verdict()}
               disabled={!!sending()}
-              onClick={() => void send("looks_right")}
+              onClick={() => void send()}
             >
               Looks right
             </button>
             <span class="hint">
-              {props.notes.length ? "A verdict holds for this picture as long as it stays the same." : "Needs change asks for a note first."}
+              {props.notes.length
+                ? "It needs change until its notes are resolved; looks right holds once they are, as long as it stays the same."
+                : "Looks right holds as long as it stays the same. To ask for a change, make a note."}
             </span>
           </div>
         </Match>

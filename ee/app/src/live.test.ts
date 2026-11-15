@@ -78,7 +78,6 @@ describe("review", () => {
     check: "screens",
     picture: "card.png",
     key: "still:b:a",
-    kind: "looks_right",
     by,
     at: 1,
     run: "r1",

@@ -115,9 +115,6 @@ pub fn a_local_run_takes_notes_but_never_a_verdict_or_an_accept() {
     assert_eq!(answer.status, 201, "a note: {}", answer.text());
     assert_eq!(answer.json()["note"]["run"], run.as_str());
 
-    let needs = json!({"check": "screens", "picture": "card/light.png", "kind": "needs_change"});
-    let answer = say(&run, "verdicts", Some(&writer), &[], &needs);
-    assert_eq!(answer.status, 409, "needs change: {}", answer.text());
     let answer = say(&run, "accept", Some(&admin), &[], &json!({}));
     assert_eq!(answer.status, 409, "an accept: {}", answer.text());
     assert!(answer.text().contains("local run"), "{}", answer.text());

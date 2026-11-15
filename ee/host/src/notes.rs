@@ -128,8 +128,9 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
 }
 
 /// `POST /api/v2/notes/<id>/resolve`: a person with write access resolves a note, which then
-/// leaves the pages and the agent's reading. `200 {"note"}`. It changes no verdict: whether
-/// the picture looks right is said on its own.
+/// leaves the pages and the agent's reading. `200 {"note"}`. Once a picture's last note is
+/// resolved it no longer needs change: it looks right when a verdict holds for its content, and
+/// waits for a look otherwise.
 pub async fn resolve(req: Request, env: &Env, config: &Config, id: &str) -> Answer {
     let person = say::person(&req, env, config, "resolve a note").await?;
     let db = env.d1("DB")?;

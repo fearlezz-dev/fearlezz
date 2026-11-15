@@ -1,11 +1,13 @@
-// Review on the page: who looks at it and what they may do, the verdict on a picture's
-// content, what waits for this person, and what they can say (a verdict, looks right or needs
-// change, and an accept). Notes are in notes.ts.
+// Review on the page: who looks at it and what they may do, where a picture stands (an open
+// note on it says it needs change, else a verdict on its content says it looks right), what
+// waits for this person, and what they can say (looks right, and an accept). Notes are in
+// notes.ts.
 // The host derives where review stands; the page only words it for the person looking.
 
-import type { PictureVerdict, Review, Run, Snapshot, VerdictKind } from "./proof";
+import type { PictureVerdict, Review, Run, Snapshot } from "./proof";
 import type { Shown } from "./pictures";
 import { post, refusal } from "./api";
+import { notesOn } from "./notes";
 
 /** Who the page is shown to: nobody signed in (or anyone, through a share link, which only
  * views), or a login and what GitHub lets them do. */
@@ -39,6 +41,13 @@ export function verdictOf(state: Snapshot, run: Run, p: Shown): PictureVerdict |
   return (state.verdicts ?? []).find((v) => v.check === p.check && v.picture === p.picture.name && v.key === key);
 }
 
+/** Where a picture of a run stands: an open note on it says it needs change, which outweighs a
+ * looks right verdict on its content; without either it waits for a look (`none`). */
+export function standingOf(state: Snapshot, run: Run, p: Shown): "needs_change" | "looks_right" | "none" {
+  if (notesOn(state, p.check, p.picture.name, run).length) return "needs_change";
+  return verdictOf(state, run, p) ? "looks_right" : "none";
+}
+
 /** Where a verdict came from, beside who gave it: an earlier push, or an earlier run. */
 export function carried(verdict: PictureVerdict, run: Run): string {
   if (verdict.head !== run.head) return `carried over from an earlier push (${verdict.head.slice(0, 7)})`;
@@ -51,7 +60,7 @@ const pictures = (n: number) => `${n} ${n === 1 ? "picture" : "pictures"}`;
 /** What waits, said to the person looking: what they can settle, and what waits for others. */
 export function waitsFor(review: Review, viewer: Viewer | undefined): string {
   const head = review.head.slice(0, 7);
-  const looks = review.pictures.filter((p) => !p.verdict).length;
+  const looks = review.pictures.filter((p) => p.standing === "waits").length;
   const weakened = review.weakened.length > 0 && !review.accept;
   const parts: string[] = [];
   if (looks) {
@@ -63,9 +72,9 @@ export function waitsFor(review: Review, viewer: Viewer | undefined): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)} at ${head}`;
 }
 
-/** Where review stands when a person said pictures need change, in one line. */
+/** Where review stands when open notes say pictures need change, in one line. */
 export function standing(review: Review): string {
-  const n = review.pictures.filter((p) => p.verdict?.kind === "needs_change").length;
+  const n = new Set((review.notes ?? []).map((note) => `${note.check}\n${note.picture}`)).size;
   return `${pictures(n)} ${n === 1 ? "needs" : "need"} change at ${review.head.slice(0, 7)}`;
 }
 
@@ -74,8 +83,7 @@ export function standing(review: Review): string {
 const say = async (run: string, what: "verdicts" | "accept", body: object) =>
   refusal(await post(`/api/v2/runs/${encodeURIComponent(run)}/${what}`, body));
 
-export const verdict = (run: string, p: Shown, kind: VerdictKind) =>
-  say(run, "verdicts", { check: p.check, picture: p.picture.name, kind });
+export const verdict = (run: string, p: Shown) => say(run, "verdicts", { check: p.check, picture: p.picture.name });
 
 export const accept = (run: string) => say(run, "accept", {});
 

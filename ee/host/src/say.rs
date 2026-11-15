@@ -12,7 +12,7 @@
 use fearlezz_proof::events::{Live, Source, WorkChange};
 use fearlezz_proof::look::Look;
 use fearlezz_proof::review::Role;
-use fearlezz_proof::review::{self, Verdict, VerdictKind};
+use fearlezz_proof::review::{self, Verdict};
 use fearlezz_proof::{Proof, events::RunState};
 use serde::Deserialize;
 use serde_json::json;
@@ -29,7 +29,6 @@ const ROLE_SECONDS: i64 = 300;
 struct Ask {
     check: String,
     picture: String,
-    kind: VerdictKind,
 }
 
 /// A run, as saying something about it needs it.
@@ -144,16 +143,14 @@ pub async fn role(
 }
 
 /// `POST /api/v2/runs/<run>/verdicts`: a person with write access says a picture of a CI run
-/// looks right, or needs change once they made a note on it of what should change. It holds
-/// for that picture's content, so later runs showing the same keep it.
+/// looks right. It holds for that picture's content, so later runs showing the same keep it.
+/// What should change is a note, never a verdict.
 pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
     let person = person(&req, env, config, "give a verdict").await?;
-    let ask: Ask = req.json().await.map_err(|_| {
-        Refusal::new(
-            400,
-            "send {\"check\", \"picture\", \"kind\": \"looks_right\" | \"needs_change\"}",
-        )
-    })?;
+    let ask: Ask = req
+        .json()
+        .await
+        .map_err(|_| Refusal::new(400, "send {\"check\", \"picture\"}"))?;
     let db = env.d1("DB")?;
     let run = run(&req, env, config, &db, id).await?;
     run.reviewed("verdicts are given")?;
@@ -188,28 +185,10 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
     let held = work::held(&db, id).await?;
     let key = review::key(item, |path| held.get(path).cloned())
         .ok_or_else(|| Refusal::new(409, "its pictures are not all in yet; wait for them"))?;
-    if ask.kind == VerdictKind::NeedsChange {
-        let noted: Option<f64> = db
-            .prepare("SELECT 1 AS noted FROM notes WHERE work = ?1 AND check_id = ?2 AND picture = ?3 AND state = 'open' LIMIT 1")
-            .bind(&[
-                run.work.as_str().into(),
-                ask.check.as_str().into(),
-                ask.picture.as_str().into(),
-            ])?
-            .first(Some("noted"))
-            .await?;
-        if noted.is_none() {
-            return Err(Refusal::new(
-                409,
-                "say what should change first: make a note on the picture, then say it needs change",
-            ));
-        }
-    }
     let verdict = Verdict {
         check: ask.check,
         picture: ask.picture,
         key,
-        kind: ask.kind,
         by: person.login,
         at: now() as f64,
         run: id.to_owned(),
@@ -219,8 +198,8 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
         &db,
         vec![
             db.prepare(
-                "INSERT INTO verdicts (work, check_id, picture, key, kind, login, at, run, head) VALUES (?1, ?2, ?3, ?4, ?9, ?5, ?6, ?7, ?8) \
-                 ON CONFLICT (work, check_id, picture, key) DO UPDATE SET kind = excluded.kind, login = excluded.login, at = excluded.at, run = excluded.run, head = excluded.head",
+                "INSERT INTO verdicts (work, check_id, picture, key, login, at, run, head) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+                 ON CONFLICT (work, check_id, picture, key) DO UPDATE SET login = excluded.login, at = excluded.at, run = excluded.run, head = excluded.head",
             )
             .bind(&[
                 run.work.as_str().into(),
@@ -231,7 +210,6 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
                 verdict.at.into(),
                 verdict.run.as_str().into(),
                 verdict.head.as_str().into(),
-                verdict.kind.word().into(),
             ])?,
             work::bump(&db, &run.work)?,
         ],

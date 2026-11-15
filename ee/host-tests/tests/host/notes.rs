@@ -1,5 +1,5 @@
-//! Notes and the feedback loop: a person marks what should change on a picture and says it
-//! needs change; the agent reads the notes with its CLI token, which the CLI gets through
+//! Notes and the feedback loop: a person marks what should change on a picture, which then
+//! needs change until its notes are resolved; the agent reads the notes with its CLI token, which the CLI gets through
 //! GitHub's device flow run by the host and which can never write; open notes follow the work
 //! to later runs until a person resolves them.
 
@@ -12,10 +12,6 @@ pub fn ask(picture: &str, side: &str, region: [f64; 4], words: &str) -> Value {
         "check": "screens", "picture": picture, "side": side,
         "region": {"x": x, "y": y, "w": w, "h": h}, "words": words,
     })
-}
-
-fn needs_change(picture: &str) -> Value {
-    json!({"check": "screens", "picture": picture, "kind": "needs_change"})
 }
 
 /// A writer's note on the after of `card/light.png` of `run`; its id.
@@ -129,7 +125,7 @@ pub fn a_note_needs_a_session_write_access_and_a_picture_of_the_run() {
     assert_eq!(review_of(120)["notes"][0]["id"], note["id"]);
 }
 
-pub fn needs_change_needs_an_open_note_and_fails_the_check_run() {
+pub fn an_open_note_makes_its_picture_need_change_and_fails_the_check_run() {
     let head = commit("a121");
     webhook(
         "pull_request",
@@ -139,47 +135,7 @@ pub fn needs_change_needs_an_open_note_and_fails_the_check_run() {
     let (look, files) = one_still(b"check before", b"check after");
     let run = proven(&job, &look, &files, &json!({}));
     let writer = sign_in("writer-code", "/");
-
-    let answer = say(
-        &run,
-        "verdicts",
-        Some(&writer),
-        &[],
-        &needs_change("card/light.png"),
-    );
-    assert_eq!(answer.status, 409, "without a note: {}", answer.text());
-    assert!(answer.text().contains("note"), "{}", answer.text());
-
-    let id = noted(&run, "The button text is cut off");
-    let answer = say(
-        &run,
-        "verdicts",
-        Some(&writer),
-        &[],
-        &needs_change("card/light.png"),
-    );
-    assert_eq!(answer.status, 201, "{}", answer.text());
-    assert_eq!(review_of(121)["state"], "needs_change");
-    let check = check_run(&head);
-    assert_eq!(check.state(), "failure", "{:?}", check.writes);
-    let summary = check.field("output")["summary"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(summary.contains("card/light.png"), "{summary}");
-    assert!(summary.contains("The button text is cut off"), "{summary}");
-
-    // Resolving the notes does not by itself make it look right: a person says that.
-    let answer = resolve(&id, Some(&writer), &[]);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    let review = review_of(121);
-    assert_eq!(review["state"], "needs_change", "{review:#}");
-    assert!(review["notes"].as_array().is_none_or(Vec::is_empty));
-    let summary = check_run(&head).field("output")["summary"].clone();
-    assert!(
-        !summary.as_str().unwrap().contains("cut off"),
-        "{summary:#}"
-    );
+    // Said to look right first; a note then says what should change, which outweighs it.
     let answer = say(
         &run,
         "verdicts",
@@ -189,6 +145,55 @@ pub fn needs_change_needs_an_open_note_and_fails_the_check_run() {
     );
     assert_eq!(answer.status, 201, "{}", answer.text());
     assert_eq!(check_run(&head).state(), "success");
+
+    let id = noted(&run, "The button text is cut off");
+    let review = review_of(121);
+    assert_eq!(review["state"], "needs_change", "{review:#}");
+    assert_eq!(
+        review["pictures"][0]["standing"], "needs_change",
+        "{review:#}"
+    );
+    let check = check_run(&head);
+    assert_eq!(check.state(), "failure", "{:?}", check.writes);
+    let summary = check.field("output")["summary"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(summary.contains("card/light.png"), "{summary}");
+    assert!(summary.contains("The button text is cut off"), "{summary}");
+
+    // Resolving the last note: the looks right verdict on its content holds again.
+    let answer = resolve(&id, Some(&writer), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let review = review_of(121);
+    assert_eq!(review["state"], "approved", "{review:#}");
+    assert!(review["notes"].as_array().is_none_or(Vec::is_empty));
+    let check = check_run(&head);
+    assert_eq!(check.state(), "success", "{:?}", check.writes);
+    let summary = check.field("output")["summary"].clone();
+    assert!(
+        !summary.as_str().unwrap().contains("cut off"),
+        "{summary:#}"
+    );
+}
+
+pub fn resolving_the_last_note_brings_a_picture_back_to_not_looked_at() {
+    let job = Job::pull("owner/review", 128, "notes/back").at(&commit("a128"), 1128);
+    let (look, files) = one_still(b"back before", b"back after");
+    let run = proven(&job, &look, &files, &json!({}));
+    let first = noted(&run, "Too dark");
+    let second = noted(&run, "Too tight");
+    let writer = sign_in("writer-code", "/");
+    resolve(&first, Some(&writer), &[]);
+    assert_eq!(
+        review_of(128)["state"],
+        "needs_change",
+        "one note is still open"
+    );
+    resolve(&second, Some(&writer), &[]);
+    let review = review_of(128);
+    assert_eq!(review["state"], "waits", "{review:#}");
+    assert_eq!(review["pictures"][0]["standing"], "waits", "{review:#}");
 }
 
 pub fn an_open_note_follows_the_work_until_a_writer_resolves_it() {
@@ -196,18 +201,9 @@ pub fn an_open_note_follows_the_work_until_a_writer_resolves_it() {
     let (look, files) = one_still(b"follow before", b"follow after");
     let run = proven(&first, &look, &files, &json!({}));
     let id = noted(&run, "More room around the button");
-    let writer = sign_in("writer-code", "/");
-    let answer = say(
-        &run,
-        "verdicts",
-        Some(&writer),
-        &[],
-        &needs_change("card/light.png"),
-    );
-    assert_eq!(answer.status, 201, "{}", answer.text());
 
-    // The agent changed the picture: its new content waits for a fresh verdict, and the note
-    // still shows, from the run it was made on.
+    // The agent changed the picture: the note still shows, from the run it was made on, and
+    // the picture needs change until a person resolves it.
     let (fixed, fixed_files) = one_still(b"follow before", b"follow after, with room");
     proven(
         &first.at(&commit("b122"), 2122),
@@ -217,7 +213,7 @@ pub fn an_open_note_follows_the_work_until_a_writer_resolves_it() {
     );
     let review = review_of(122);
     assert_eq!(review["head"], commit("b122"), "{review:#}");
-    assert_eq!(review["state"], "waits", "{review:#}");
+    assert_eq!(review["state"], "needs_change", "{review:#}");
     assert!(review["pictures"][0]["verdict"].is_null(), "{review:#}");
     assert_eq!(review["notes"][0]["id"], id.as_str(), "{review:#}");
     let snapshot = live("/owner/review/pull/122", &[]).json();
@@ -228,9 +224,15 @@ pub fn an_open_note_follows_the_work_until_a_writer_resolves_it() {
     assert_eq!(answer.status, 403, "a reader: {}", answer.text());
     let answer = resolve(&id, None, &[]);
     assert_eq!(answer.status, 401, "{}", answer.text());
+    let writer = sign_in("writer-code", "/");
     let answer = resolve(&id, Some(&writer), &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(answer.json()["note"]["resolved_by"], "writer");
+    assert_eq!(
+        review_of(122)["state"],
+        "waits",
+        "its new content waits for a look"
+    );
     let snapshot = live("/owner/review/pull/122", &[]).json();
     assert!(
         snapshot["notes"].as_array().is_none_or(Vec::is_empty),
@@ -453,10 +455,10 @@ pub fn a_note_drawn_on_the_page_is_saved_and_shows_in_another_tab() {
     let second = browser.open(&url);
     browser.wait_for(&verdict_shows("none"));
     browser.eval("window.stayed = true");
-    // Needs change waits for a note.
+    // Needs change is not a button: a note says it.
     assert_eq!(
-        browser.eval(r#"document.querySelector('button[data-say="needs_change"]').disabled"#),
-        json!(true)
+        browser.eval(r#"!!document.querySelector('button[data-say="needs_change"]')"#),
+        json!(false)
     );
 
     browser.on(&first);
@@ -482,7 +484,9 @@ pub fn a_note_drawn_on_the_page_is_saved_and_shows_in_another_tab() {
         "{region:#}"
     );
 
-    // The other tab shows it numbered, on its side, and in the list, without a reload.
+    // The picture needs change now. The other tab shows the note numbered, on its side, and in
+    // the list, without a reload.
+    browser.wait_for(&verdict_shows("needs_change"));
     browser.on(&second);
     browser
         .wait_for(r#"!!document.querySelector('[data-draw="after"] [data-region][data-n="1"]')"#);
@@ -508,14 +512,11 @@ pub fn a_note_drawn_on_the_page_is_saved_and_shows_in_another_tab() {
         .unwrap();
     assert_eq!(both["side"], "both", "{both:#}");
 
-    // Needs change, now that it has notes; it shows in the other tab.
-    browser.eval(r#"document.querySelector('button[data-say="needs_change"]').click()"#);
-    browser.wait_for(&verdict_shows("needs_change"));
     browser.on(&second);
     browser.wait_for(&verdict_shows("needs_change"));
     browser.wait_for(r#"document.querySelector('[data-picture="screens/card/light.png"]').dataset.verdict === "needs_change""#);
 
-    // Resolve in one tab; it leaves the other.
+    // Resolve in one tab; it leaves the other, where the other note still says needs change.
     browser.eval(
         "document.querySelector('[data-notes] li[data-n=\"1\"] button[data-resolve]').click()",
     );
@@ -524,6 +525,7 @@ pub fn a_note_drawn_on_the_page_is_saved_and_shows_in_another_tab() {
         r#"!document.querySelector('[data-region][data-says="The button text is cut off."]')"#,
     );
     browser.wait_for("!document.querySelector('[data-notes]').textContent.includes('cut off')");
+    browser.wait_for(&verdict_shows("needs_change"));
     browser.on(&second);
     assert_eq!(
         browser.eval("window.stayed === true"),
@@ -617,7 +619,6 @@ pub fn pictures(shoot: &dyn Fn(&mut browser::Browser, &str)) {
     shoot(&mut writer, "notes-light-compose");
     writer.eval("document.querySelector('[data-add-note]').click()");
     writer.wait_for(r#"document.querySelectorAll('[data-region][data-n="2"]').length === 2"#);
-    writer.eval(r#"document.querySelector('button[data-say="needs_change"]').click()"#);
     writer.wait_for(&verdict_shows("needs_change"));
     for dark in [false, true] {
         writer.view(1280, 900, false, dark);

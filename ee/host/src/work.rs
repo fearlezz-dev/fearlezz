@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use fearlezz_proof::events::{Keys, Live, Run, RunCheck, RunState, Snapshot, Source, Work};
 use fearlezz_proof::look::Look;
 use fearlezz_proof::notes::{Note, NoteState, Region, Side};
-use fearlezz_proof::review::{self, Review, Verdict, VerdictKind};
+use fearlezz_proof::review::{self, Review, Verdict};
 use fearlezz_proof::{Check, Proof, Pull};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
@@ -203,7 +203,6 @@ struct VerdictRow {
     check_id: String,
     picture: String,
     key: String,
-    kind: String,
     login: String,
     at: f64,
     run: String,
@@ -216,7 +215,6 @@ impl VerdictRow {
             check: self.check_id,
             picture: self.picture,
             key: self.key,
-            kind: VerdictKind::of(&self.kind),
             by: self.login,
             at: self.at,
             run: self.run,
@@ -226,7 +224,8 @@ impl VerdictRow {
 }
 
 /// The work's verdicts, in the order given.
-const VERDICTS: &str = "SELECT check_id, picture, key, kind, login, at, run, head FROM verdicts WHERE work = ?1 ORDER BY at";
+const VERDICTS: &str =
+    "SELECT check_id, picture, key, login, at, run, head FROM verdicts WHERE work = ?1 ORDER BY at";
 
 /// A note as stored.
 #[derive(Deserialize)]

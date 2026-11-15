@@ -341,8 +341,12 @@ fn main() {
             notes::a_note_needs_a_session_write_access_and_a_picture_of_the_run,
         ),
         (
-            "needs_change_needs_an_open_note_and_fails_the_check_run",
-            notes::needs_change_needs_an_open_note_and_fails_the_check_run,
+            "an_open_note_makes_its_picture_need_change_and_fails_the_check_run",
+            notes::an_open_note_makes_its_picture_need_change_and_fails_the_check_run,
+        ),
+        (
+            "resolving_the_last_note_brings_a_picture_back_to_not_looked_at",
+            notes::resolving_the_last_note_brings_a_picture_back_to_not_looked_at,
         ),
         (
             "an_open_note_follows_the_work_until_a_writer_resolves_it",
@@ -1986,7 +1990,10 @@ fn a_verdict_needs_a_session_write_access_the_app_origin_and_json() {
     assert_eq!(review["state"], "approved", "{review:#}");
     let verdict = &review["pictures"][0]["verdict"];
     assert_eq!(verdict["by"], "writer", "{review:#}");
-    assert_eq!(verdict["kind"], "looks_right", "{review:#}");
+    assert_eq!(
+        review["pictures"][0]["standing"], "looks_right",
+        "{review:#}"
+    );
     assert_eq!(verdict["run"], run.as_str(), "{review:#}");
 }
 

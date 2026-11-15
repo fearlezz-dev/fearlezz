@@ -15,8 +15,8 @@ use fearlezz_proof::look::{Change as PictureChange, Item as Picture, Look};
 use fearlezz_proof::media::{Comparison, Moment, Pair, Verdict as Likeness};
 use fearlezz_proof::notes::{Note, NoteState, Region, Side as NoteSide};
 use fearlezz_proof::review::{
-    Accept, Job, Picture as ReviewPicture, Review, State as ReviewState, Verdict as PictureVerdict,
-    VerdictKind,
+    Accept, Job, Picture as ReviewPicture, Review, Standing as PictureStanding,
+    State as ReviewState, Verdict as PictureVerdict,
 };
 use fearlezz_proof::{Case, Check, Item, Pull, Ran, Red, Verdict};
 use ts_rs::{Config, TS};
@@ -36,8 +36,8 @@ fn declarations() -> String {
         Review::decl(&cfg),
         ReviewState::decl(&cfg),
         ReviewPicture::decl(&cfg),
+        PictureStanding::decl(&cfg),
         PictureVerdict::decl(&cfg),
-        VerdictKind::decl(&cfg),
         Accept::decl(&cfg),
         Note::decl(&cfg),
         NoteSide::decl(&cfg),

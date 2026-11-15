@@ -217,9 +217,15 @@ name: string,
  */
 key: string, 
 /**
- * The verdict on it, when someone gave one on this content.
+ * Where it stands: an open note on it outweighs a looks right verdict.
+ */
+standing: PictureStanding, 
+/**
+ * The looks right verdict on it, when someone gave one on this content.
  */
 verdict?: PictureVerdict | null, };
+
+export type PictureStanding = "waits" | "needs_change" | "looks_right";
 
 export type PictureVerdict = { 
 /**
@@ -234,10 +240,6 @@ picture: string,
  * What the picture showed, as [`key`] names it.
  */
 key: string, 
-/**
- * What they said.
- */
-kind: VerdictKind, 
 /**
  * Their GitHub login.
  */
@@ -254,8 +256,6 @@ run: string,
  * The commit that run proved.
  */
 head: string, };
-
-export type VerdictKind = "looks_right" | "needs_change";
 
 export type Accept = { 
 /**

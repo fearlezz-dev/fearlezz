@@ -98,8 +98,9 @@ pub fn the_repository_page_lists_its_works_with_what_waits() {
     assert_eq!(pull["work"]["pull"]["title"], "Pull request 401");
     assert_eq!(pull["latest"]["state"], "done");
     assert_eq!(pull["latest"]["source"]["kind"], "ci");
-    // Two changed stills, a new one and a changed film; the flaky and the same one never wait.
-    assert_eq!(pull["pictures"], 4, "{pull:#}");
+    // Two changed stills, a new one and a changed film; the flaky and the same one never wait,
+    // and the one with a note needs change.
+    assert_eq!(pull["pictures"], 3, "{pull:#}");
     assert_eq!(pull["notes"], 1, "{pull:#}");
     assert_eq!(pull["weakened"], true, "{pull:#}");
 

@@ -8,7 +8,7 @@ use fearlezz_proof::floor::{Part, Weakening};
 use fearlezz_proof::look::{Change, Item, Look};
 use fearlezz_proof::media::{Comparison, Pair, Verdict as Likeness};
 use fearlezz_proof::notes::{Note, NoteState, Region, Side};
-use fearlezz_proof::review::{self, Accept, State, Verdict, VerdictKind};
+use fearlezz_proof::review::{self, Accept, State, Verdict};
 use fearlezz_proof::{Check, Proof, Ran};
 
 fn still(name: &str, change: Change) -> Item {
@@ -141,7 +141,6 @@ fn verdict(picture: &str, key: &str, head: &str) -> Verdict {
         check: "screens".into(),
         picture: picture.into(),
         key: key.into(),
-        kind: VerdictKind::LooksRight,
         by: "writer".into(),
         at: 5.0,
         run: "r0".into(),
@@ -273,7 +272,11 @@ fn a_new_or_gone_film_is_keyed_by_its_bytes() {
         let a = review::key(&item, |_| Some("x".into())).unwrap();
         let b = review::key(&item, |_| Some("y".into())).unwrap();
         assert_ne!(a, b, "{change:?}: another recording");
-        assert_eq!(review::key(&item, |_| None), None, "{change:?}: bytes not known yet");
+        assert_eq!(
+            review::key(&item, |_| None),
+            None,
+            "{change:?}: bytes not known yet"
+        );
     }
 }
 
@@ -378,7 +381,7 @@ fn note(picture: &str, words: &str, state: NoteState) -> Note {
 }
 
 #[test]
-fn a_picture_that_needs_change_fails_the_review_and_the_summary_lists_the_notes() {
+fn an_open_note_makes_its_picture_need_change_and_the_summary_lists_the_notes() {
     let runs = [run(
         "r1",
         "aaa1234",
@@ -388,9 +391,6 @@ fn a_picture_that_needs_change_fails_the_review_and_the_summary_lists_the_notes(
             still("menu.png", Change::Changed),
         ],
     )];
-    let key = runs[0].0.checks[0].keys["card.png"].clone();
-    let mut said = verdict("card.png", &key, "aaa1234");
-    said.kind = VerdictKind::NeedsChange;
     let notes = [
         note(
             "card.png",
@@ -399,10 +399,16 @@ fn a_picture_that_needs_change_fails_the_review_and_the_summary_lists_the_notes(
         ),
         note("card.png", "an old one", NoteState::Resolved),
     ];
-    let review = review::review("aaa1234", &runs, &[said], &notes, None);
+    let review = review::review("aaa1234", &runs, &[], &notes, None);
     assert_eq!(review.state, State::NeedsChange);
     assert_eq!(review.title(), "1 picture needs change at aaa1234");
     assert_eq!(review.notes.len(), 1, "only open notes wait");
+    let waiting: Vec<&str> = review.waiting().map(|p| p.name.as_str()).collect();
+    assert_eq!(
+        waiting,
+        ["menu.png"],
+        "a picture with a note waits for no look"
+    );
     let summary = review.summary();
     assert!(summary.contains("Pictures that need change"), "{summary}");
     assert!(summary.contains("`screens` card.png, after"), "{summary}");
@@ -413,26 +419,24 @@ fn a_picture_that_needs_change_fails_the_review_and_the_summary_lists_the_notes(
 }
 
 #[test]
-fn a_needs_change_verdict_holds_only_for_the_content_it_was_given_on() {
-    // The agent changed the picture: its new content waits for a fresh verdict, while the
-    // open notes on it stay.
-    let first = run(
+fn an_open_note_outweighs_looks_right_until_it_is_resolved() {
+    let runs = [run(
         "r1",
         "aaa",
         RunState::Done,
         &[still("card.png", Change::Changed)],
-    );
-    let mut said = verdict("card.png", &first.0.checks[0].keys["card.png"], "aaa");
-    said.kind = VerdictKind::NeedsChange;
-    let notes = [note("card.png", "too tight", NoteState::Open)];
-    let later = run(
-        "r2",
-        "bbb",
-        RunState::Done,
-        &[still("card.png", Change::Changed)],
-    );
-    let review = review::review("bbb", &[later], &[said], &notes, None);
+    )];
+    let right = verdict("card.png", &runs[0].0.checks[0].keys["card.png"], "aaa");
+    let open = [note("card.png", "too tight", NoteState::Open)];
+    let review = review::review("aaa", &runs, std::slice::from_ref(&right), &open, None);
+    assert_eq!(review.state, State::NeedsChange);
+
+    // Resolving the last note: the looks right verdict on its content holds again.
+    let resolved = [note("card.png", "too tight", NoteState::Resolved)];
+    let review = review::review("aaa", &runs, &[right], &resolved, None);
+    assert_eq!(review.state, State::Approved);
+    // Without one, the picture is back to not looked at yet.
+    let review = review::review("aaa", &runs, &[], &resolved, None);
     assert_eq!(review.state, State::Waits);
-    assert!(review.pictures[0].verdict.is_none());
-    assert_eq!(review.notes[0].words, "too tight");
+    assert_eq!(review.waiting().count(), 1);
 }

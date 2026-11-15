@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 use fearlezz_proof::notes::{Feedback, Noted, Side};
+use fearlezz_proof::review::Standing;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -287,10 +288,11 @@ fn lines(feedback: &Feedback) -> Vec<String> {
         .unwrap_or(0);
     if let Some(review) = &feedback.review {
         for p in &review.pictures {
-            let said = match &p.verdict {
-                Some(v) if p.needs_change() => format!("needs change, said by {}", v.by),
-                Some(v) => format!("looks right, said by {}", v.by),
-                None => "not looked at yet".into(),
+            let said = match (p.standing, &p.verdict) {
+                (Standing::NeedsChange, _) => "needs change".into(),
+                (Standing::LooksRight, Some(v)) => format!("looks right, said by {}", v.by),
+                (Standing::LooksRight, None) => "looks right".into(),
+                (Standing::Waits, _) => "not looked at yet".into(),
             };
             let notes = open(&p.check, &p.name);
             let notes = if notes > 0 {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { picturesOf } from "./pictures";
 import type { Picture, Review, Run, Snapshot } from "./proof";
-import { carried, localBy, standing, verdictOf, waitsFor } from "./review";
+import { carried, localBy, standing, standingOf, verdictOf, waitsFor } from "./review";
 
 const picture: Picture = {
   name: "card.png",
@@ -28,7 +28,7 @@ const state = (runs: Run[]): Snapshot => ({
   work: { repository: "owner/repo", branch: "feat/x" },
   runs,
   verdicts: [
-    { check: "screens", picture: "card.png", key: "k1", kind: "looks_right", by: "writer", at: 1, run: "r1", head: "aaa1111" },
+    { check: "screens", picture: "card.png", key: "k1", by: "writer", at: 1, run: "r1", head: "aaa1111" },
   ],
 });
 
@@ -51,8 +51,8 @@ describe("waitsFor", () => {
     head: "aaa1111bbb",
     state: "waits",
     pictures: [
-      { check: "screens", name: "a.png", key: "1" },
-      { check: "screens", name: "b.png", key: "2" },
+      { check: "screens", name: "a.png", key: "1", standing: "waits" },
+      { check: "screens", name: "b.png", key: "2", standing: "waits" },
     ],
     weakened: [{ check: "tests", how: "it is gone" }],
   };
@@ -68,23 +68,44 @@ describe("waitsFor", () => {
   });
 });
 
+const note = (id: string, picture: string, state: "open" | "resolved" = "open") => ({
+  id,
+  check: "screens",
+  picture,
+  run: "r1",
+  head: "aaa1111",
+  side: "after" as const,
+  region: { x: 0, y: 0, w: 1, h: 1 },
+  words: "too tight",
+  by: "writer",
+  at: 2,
+  state,
+});
+
 describe("needs change", () => {
-  test("the headline says which pictures need change", () => {
+  test("the headline counts the pictures open notes are on", () => {
     const review: Review = {
       head: "aaa1111bbb",
       state: "needs_change",
       pictures: [
-        {
-          check: "screens",
-          name: "a.png",
-          key: "1",
-          verdict: { check: "screens", picture: "a.png", key: "1", kind: "needs_change", by: "w", at: 1, run: "r1", head: "aaa1111bbb" },
-        },
-        { check: "screens", name: "b.png", key: "2" },
+        { check: "screens", name: "a.png", key: "1", standing: "needs_change" },
+        { check: "screens", name: "b.png", key: "2", standing: "waits" },
       ],
       weakened: [],
+      notes: [note("n1", "a.png"), note("n2", "a.png")],
     };
     expect(standing(review)).toBe("1 picture needs change at aaa1111");
+  });
+
+  test("an open note on a picture outweighs looks right, until it is resolved", () => {
+    const first = run("r1", "aaa1111", "k1");
+    const shown = picturesOf(first)[0]!;
+    expect(standingOf(state([first]), first, shown)).toBe("looks_right");
+    const noted = { ...state([first]), notes: [note("n1", "card.png")] };
+    expect(standingOf(noted, first, shown)).toBe("needs_change");
+    const resolved = { ...state([first]), notes: [note("n1", "card.png", "resolved")] };
+    expect(standingOf(resolved, first, shown)).toBe("looks_right");
+    expect(standingOf({ ...resolved, verdicts: [] }, first, shown)).toBe("none");
   });
 });
 

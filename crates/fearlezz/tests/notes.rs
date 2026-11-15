@@ -62,8 +62,9 @@ fn note(id: &str, picture: &str, side: &str, region: [f64; 4], time: Option<f64>
     note
 }
 
-/// What the fake host says waits for `feat/x`: a still that needs change with one note, and a
-/// film nobody looked at yet with one note at a moment.
+/// What the fake host says waits for `feat/x`: a still with one note, which needs change though
+/// it was said to look right before, a film with one note at a moment, a still nobody looked at
+/// yet and one that looks right.
 fn feedback(host: &FakeHost) -> Value {
     let still = note("n1", "card.png", "after", [0.25, 0.25, 0.5, 0.5], None);
     let film = note("n2", "flow.gif", "both", [0.8, 0.1, 0.15, 0.2], Some(1.5));
@@ -73,10 +74,14 @@ fn feedback(host: &FakeHost) -> Value {
         "review": {
             "head": "abc1234def", "state": "needs_change", "weakened": [],
             "pictures": [
-                {"check": "screens", "name": "card.png", "key": "k1", "verdict": {
-                    "check": "screens", "picture": "card.png", "key": "k1", "kind": "needs_change",
+                {"check": "screens", "name": "card.png", "key": "k1", "standing": "needs_change",
+                 "verdict": {"check": "screens", "picture": "card.png", "key": "k1",
                     "by": "writer", "at": 11.0, "run": "r1", "head": "abc1234def"}},
-                {"check": "screens", "name": "flow.gif", "key": "k2"},
+                {"check": "screens", "name": "flow.gif", "key": "k2", "standing": "needs_change"},
+                {"check": "screens", "name": "menu.png", "key": "k3", "standing": "waits"},
+                {"check": "screens", "name": "about.png", "key": "k4", "standing": "looks_right",
+                 "verdict": {"check": "screens", "picture": "about.png", "key": "k4",
+                    "by": "writer", "at": 12.0, "run": "r1", "head": "abc1234def"}},
             ],
             "notes": [still, film],
         },
@@ -203,16 +208,29 @@ fn status_shows_what_waits_on_the_host_and_leads_to_the_notes() {
         .find(|l| l.contains("card.png"))
         .unwrap_or_default();
     assert!(
-        card.contains("needs change") && card.contains("1 open note"),
+        card.contains("needs change")
+            && card.contains("1 open note")
+            && !card.contains("looks right"),
+        "an open note outweighs looks right: {}",
+        out.stdout
+    );
+    let line = |name: &str| {
+        out.lines()
+            .into_iter()
+            .find(|l| l.contains(name))
+            .unwrap_or_default()
+    };
+    assert!(line("flow.gif").contains("needs change"), "{}", out.stdout);
+    assert!(
+        line("menu.png").contains("not looked at yet"),
         "{}",
         out.stdout
     );
-    let film = out
-        .lines()
-        .into_iter()
-        .find(|l| l.contains("flow.gif"))
-        .unwrap_or_default();
-    assert!(film.contains("not looked at yet"), "{}", out.stdout);
+    assert!(
+        line("about.png").contains("looks right, said by writer"),
+        "{}",
+        out.stdout
+    );
     assert!(
         out.last_line().starts_with("next: fearlezz --notes"),
         "{}",

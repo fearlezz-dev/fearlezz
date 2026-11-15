@@ -160,20 +160,21 @@ and GitHub gets it as the check run and the comment.
   film by which of its stable states changed (its bytes differ each time it is recorded), a new
   or gone film by its bytes, so its verdict never carries over to another recording. So a picture
   that did not change keeps its verdict across runs and pushes; the page says "carried over".
-  A verdict has a kind: `looks_right`, or `needs_change`, which a person can give only while
-  the picture has an open note. A `needs_change` verdict holds for the content it was given on:
-  once the picture changes, it waits for a look again.
+  A verdict only says a picture looks right: what should change is a note.
+- **A picture needs change while an open note is on it**, whatever verdict its content has;
+  that is derived, never stored. Resolving its last note brings it back to looks right when a
+  verdict holds for its current content, and to not looked at yet otherwise. Each picture of
+  the review says where it stands (`standing`: `waits`, `needs_change` or `looks_right`).
 - **Notes** say what should change, on a CI run or a local one (so feedback reaches the agent
   before a pull request exists): a region of a picture's before, its after or both (in
   fractions of the picture), at a moment of a film, with the person's words. A note is kept by
   check and picture, so an open note shows on every later run of the work until a person with
-  write access resolves it. Resolving changes no verdict: whether the picture now looks right
-  is said on its own.
+  write access resolves it.
 - **An accept is per head**, by an admin of the repository, and covers every weakening of it.
 
 | Call | Does |
 | --- | --- |
-| `POST /api/v2/runs/<run>/verdicts` | Body `{"check", "picture", "kind": "looks_right" \| "needs_change"}`. `201 {"verdict"}`. `403` without write access; `409` for a local run, a picture with nothing to look at, one whose files are not all in yet, or `needs_change` without an open note on the picture. |
+| `POST /api/v2/runs/<run>/verdicts` | Body `{"check", "picture"}`: it looks right. `201 {"verdict"}`. `403` without write access; `409` for a local run, a picture with nothing to look at, or one whose files are not all in yet. |
 | `POST /api/v2/runs/<run>/notes` | On a CI or a local run. Body `{"check", "picture", "side": "before" \| "after" \| "both", "region": {"x", "y", "w", "h"}, "time"?, "words"}`. `201 {"note"}`. `400` for empty words (at most 2000 characters), a region outside the picture, a side the picture lacks, or a time on a still; `403` without write access; `409` for a picture the run does not have. |
 | `POST /api/v2/notes/<id>/resolve` | Body `{}`. `200 {"note"}`. `403` without write access. |
 | `POST /api/v2/runs/<run>/accept` | Body `{}`. `201 {"accept"}`. `403` unless admin, `409` unless the run is done with weakenings that wait. |
@@ -192,7 +193,7 @@ permission, cached 5 minutes per login and repository.
 | no CI run of the head yet | `queued` | Waiting for CI to prove `<head>` |
 | a CI run is running | `in_progress` | CI is proving `<head>` |
 | the proof failed | completed, `failure` | The proof of `<head>` failed |
-| a picture needs change | completed, `failure` | "1 picture needs change at `<head>`" |
+| an open note says a picture needs change | completed, `failure` | "1 picture needs change at `<head>`" |
 | every run ended without done | completed, `cancelled` | The CI run of `<head>` ended without its proof |
 | a picture or a weakening waits | completed, `action_required` | what waits, for example "2 pictures wait for a look" |
 | everything looks right and is accepted | completed, `success` | Everything looks right |
@@ -200,8 +201,8 @@ permission, cached 5 minutes per login and repository.
 Waiting is `action_required`, not `neutral`: it completes the check run, so a required check
 blocks the merge, and GitHub shows it as asking for something; `neutral` would let a required
 check pass. Its details link is the work's page. The summary lists the pictures that need
-change, the ones that wait, the ones that look right and by whom, the open notes with their
-words, and the weakenings with their accept. Make `Fearlezz review`
+change by their open notes with their words, the ones that wait, the ones that look right and
+by whom, and the weakenings with their accept. Make `Fearlezz review`
 a required check in the branch's protection to hold merges to review. A check run that is
 completed and goes back to running is created anew; otherwise it is edited, and an unchanged
 one is not sent again.
@@ -229,7 +230,8 @@ webhook secret before anything in it is read (`401` when the signature does not 
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared
 in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
 deploy applies the D1 migrations (`0006_review.sql`, `0007_notes.sql`, `0008_local_runs.sql`,
-which ends the sign ins made before it, and `0009_shares_and_activity.sql`) and the schedule (`[triggers]` in `wrangler.toml`). Existing installations
+which ends the sign ins made before it, `0009_shares_and_activity.sql` and
+`0010_verdicts_without_kind.sql`) and the schedule (`[triggers]` in `wrangler.toml`). Existing installations
 must approve the new permissions before the host can write their check runs. For
 `fearlezz setup login`, also tick **Enable Device Flow** in the app's settings.
 

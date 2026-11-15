@@ -63,9 +63,7 @@ impl Row {
             seq: self.seq as u64,
             active: self.active,
             latest,
-            pictures: review.as_ref().map_or(0, |r| {
-                r.pictures.iter().filter(|p| p.verdict.is_none()).count() as u32
-            }),
+            pictures: review.as_ref().map_or(0, |r| r.waiting().count() as u32),
             notes: self.notes as u32,
             weakened: review
                 .as_ref()

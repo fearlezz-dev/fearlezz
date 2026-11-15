@@ -39,37 +39,8 @@ impl Role {
     }
 }
 
-/// What a person says of a picture.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(rename_all = "snake_case")]
-pub enum VerdictKind {
-    /// The picture looks right.
-    LooksRight,
-    /// It does not look right yet: what should change is in the open notes on it, which a
-    /// person makes before saying this.
-    NeedsChange,
-}
-
-impl VerdictKind {
-    /// How it is stored and sent: `looks_right` or `needs_change`.
-    pub fn word(self) -> &'static str {
-        match self {
-            VerdictKind::LooksRight => "looks_right",
-            VerdictKind::NeedsChange => "needs_change",
-        }
-    }
-
-    /// The kind a stored word names; anything else is the one before notes came.
-    pub fn of(word: &str) -> VerdictKind {
-        match word {
-            "needs_change" => VerdictKind::NeedsChange,
-            _ => VerdictKind::LooksRight,
-        }
-    }
-}
-
-/// A person's verdict on one picture, as its content was when they gave it.
+/// A person's word that one picture looks right, as its content was when they gave it. What
+/// should change is never a verdict: it is an open note on the picture.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "PictureVerdict"))]
 pub struct Verdict {
@@ -79,8 +50,6 @@ pub struct Verdict {
     pub picture: String,
     /// What the picture showed, as [`key`] names it.
     pub key: String,
-    /// What they said.
-    pub kind: VerdictKind,
     /// Their GitHub login.
     pub by: String,
     /// When, in seconds since the epoch.
@@ -116,12 +85,25 @@ pub enum State {
     Failed,
     /// Every CI run of the head ended without its proof.
     Cancelled,
-    /// A person said a picture needs change: the agent has notes to act on.
+    /// An open note says what should change: the agent has notes to act on.
     NeedsChange,
     /// A picture waits for a verdict, or a weakening for an admin's accept.
     Waits,
     /// Every picture to look at looks right and every weakening is accepted.
     Approved,
+}
+
+/// Where one picture stands in review.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "PictureStanding"))]
+#[serde(rename_all = "snake_case")]
+pub enum Standing {
+    /// Not looked at yet: no open note on it, and no looks right verdict on its content.
+    Waits,
+    /// An open note on it says what should change.
+    NeedsChange,
+    /// A person said its content looks right.
+    LooksRight,
 }
 
 /// One picture of the head's runs a person looks at: changed, new, gone, timing or unreadable,
@@ -135,7 +117,9 @@ pub struct Picture {
     pub name: String,
     /// What it shows, as [`key`] names it.
     pub key: String,
-    /// The verdict on it, when someone gave one on this content.
+    /// Where it stands: an open note on it outweighs a looks right verdict.
+    pub standing: Standing,
+    /// The looks right verdict on it, when someone gave one on this content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
 }
@@ -237,6 +221,7 @@ pub fn review(
         .filter(|(run, _)| run.state != RunState::Cancelled)
         .collect();
 
+    let open: Vec<&Note> = notes.iter().filter(|n| n.is_open()).collect();
     let mut pictures: Vec<Picture> = Vec::new();
     for (run, _) in &live {
         for check in &run.checks {
@@ -255,10 +240,19 @@ pub fn review(
                     .iter()
                     .find(|v| v.check == check.id && v.picture == item.name && &v.key == key)
                     .cloned();
+                let noted = open
+                    .iter()
+                    .any(|n| n.check == check.id && n.picture == item.name);
+                let standing = match (noted, &verdict) {
+                    (true, _) => Standing::NeedsChange,
+                    (false, Some(_)) => Standing::LooksRight,
+                    (false, None) => Standing::Waits,
+                };
                 pictures.push(Picture {
                     check: check.id.clone(),
                     name: item.name.clone(),
                     key: key.clone(),
+                    standing,
                     verdict,
                 });
             }
@@ -293,9 +287,9 @@ pub fn review(
         State::Cancelled
     } else if failed {
         State::Failed
-    } else if pictures.iter().any(Picture::needs_change) {
+    } else if !open.is_empty() {
         State::NeedsChange
-    } else if pictures.iter().any(|p| p.verdict.is_none())
+    } else if pictures.iter().any(|p| p.standing == Standing::Waits)
         || (!weakened.is_empty() && accept.is_none())
     {
         State::Waits
@@ -308,23 +302,7 @@ pub fn review(
         pictures,
         weakened,
         accept,
-        notes: notes.iter().filter(|n| n.is_open()).cloned().collect(),
-    }
-}
-
-impl Picture {
-    /// Whether a person said its content needs change.
-    pub fn needs_change(&self) -> bool {
-        self.verdict
-            .as_ref()
-            .is_some_and(|v| v.kind == VerdictKind::NeedsChange)
-    }
-
-    /// Whether a person said its content looks right.
-    pub fn looks_right(&self) -> bool {
-        self.verdict
-            .as_ref()
-            .is_some_and(|v| v.kind == VerdictKind::LooksRight)
+        notes: open.into_iter().cloned().collect(),
     }
 }
 
@@ -338,9 +316,27 @@ fn pictures(n: usize) -> String {
 }
 
 impl Review {
-    /// The pictures that wait for a verdict.
+    /// The pictures that wait for a look.
     pub fn waiting(&self) -> impl Iterator<Item = &Picture> {
-        self.pictures.iter().filter(|p| p.verdict.is_none())
+        self.standing(Standing::Waits)
+    }
+
+    /// The pictures that stand at `standing`.
+    pub fn standing(&self, standing: Standing) -> impl Iterator<Item = &Picture> {
+        self.pictures.iter().filter(move |p| p.standing == standing)
+    }
+
+    /// The pictures open notes are on, by check and name, once each in the order of the notes:
+    /// what needs change, whether or not the head's runs show it to look at.
+    pub fn noted(&self) -> Vec<(&str, &str)> {
+        let mut noted: Vec<(&str, &str)> = Vec::new();
+        for n in &self.notes {
+            let at = (n.check.as_str(), n.picture.as_str());
+            if !noted.contains(&at) {
+                noted.push(at);
+            }
+        }
+        noted
     }
 
     /// Whether the weakenings wait for an admin's accept.
@@ -357,7 +353,7 @@ impl Review {
             State::Failed => format!("The proof of {head} failed"),
             State::Cancelled => format!("The CI run of {head} ended without its proof"),
             State::NeedsChange => {
-                let n = self.pictures.iter().filter(|p| p.needs_change()).count();
+                let n = self.noted().len();
                 let verb = if n == 1 { "needs" } else { "need" };
                 format!("{} {verb} change at {head}", pictures(n))
             }
@@ -392,22 +388,8 @@ impl Review {
                     .map(|p| format!("- `{}` {}", p.check, p.name)),
             );
         }
-        let changes: Vec<(&Picture, &Verdict)> = self
-            .pictures
-            .iter()
-            .filter(|p| p.needs_change())
-            .filter_map(|p| Some((p, p.verdict.as_ref()?)))
-            .collect();
-        if !changes.is_empty() {
-            lines.push("\nPictures that need change:".into());
-            lines.extend(
-                changes
-                    .iter()
-                    .map(|(p, v)| format!("- `{}` {}, by {}", p.check, p.name, v.by)),
-            );
-        }
         if !self.notes.is_empty() {
-            lines.push("\nOpen notes:".into());
+            lines.push("\nPictures that need change, by their open notes:".into());
             lines.extend(self.notes.iter().map(|n| {
                 let at = n.time.map(|t| format!(" at {t:.2} s")).unwrap_or_default();
                 format!(
@@ -421,9 +403,7 @@ impl Review {
             }));
         }
         let right: Vec<(&Picture, &Verdict)> = self
-            .pictures
-            .iter()
-            .filter(|p| p.looks_right())
+            .standing(Standing::LooksRight)
             .filter_map(|p| Some((p, p.verdict.as_ref()?)))
             .collect();
         if !right.is_empty() {
