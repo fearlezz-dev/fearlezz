@@ -345,10 +345,34 @@ async fn writable(
 }
 
 /// The statement that notes a run just said something, for the rule that closes a silent
-/// local run.
+/// local run: every write for a run counts, a blob upload too (`touch_naming`).
 fn touch(db: &D1Database, run: &str) -> worker::Result<D1PreparedStatement> {
     db.prepare("UPDATE runs SET touched = ?2 WHERE id = ?1")
         .bind(&[run.into(), (now() as f64).into()])
+}
+
+/// Notes that the writer's open runs of `repo` that name the blob `sha256` just said
+/// something: a run sending large films for an hour is busy, not silent.
+async fn touch_naming(
+    db: &D1Database,
+    writer: &Writer,
+    repo: &str,
+    sha256: &str,
+) -> worker::Result<()> {
+    db.prepare(
+        "UPDATE runs SET touched = ?4 WHERE state = 'running' AND git_ref = ?1 \
+         AND work IN (SELECT id FROM works WHERE repo = ?2) \
+         AND id IN (SELECT run FROM files WHERE sha256 = ?3)",
+    )
+    .bind(&[
+        writer.git_ref().as_str().into(),
+        repo.into(),
+        sha256.into(),
+        (now() as f64).into(),
+    ])?
+    .run()
+    .await?;
+    Ok(())
 }
 
 pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
@@ -658,6 +682,8 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
             format!("send the blob's {size} bytes with Content-Length"),
         ));
     }
+    // Touched as the bytes start and once they are stored, so a long upload counts all along.
+    touch_naming(&db, &writer, &repo, sha256).await?;
     let body = match req.inner().body() {
         Some(stream) => Data::ReadableStream(stream),
         None => Data::Empty,
@@ -690,6 +716,7 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
         .bind(&[repo.as_str().into(), sha256.into()])?
         .run()
         .await?;
+    touch_naming(&db, &writer, &repo, sha256).await?;
     if held.is_none() {
         show_completed_looks(env, config, &db, &repo, sha256).await?;
     }

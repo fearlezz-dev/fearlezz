@@ -389,6 +389,10 @@ fn main() {
             local::a_silent_local_run_is_cancelled_after_an_hour,
         ),
         (
+            "a_local_run_uploading_its_files_is_not_silent",
+            local::a_local_run_uploading_its_files_is_not_silent,
+        ),
+        (
             "the_host_renews_an_expired_github_token",
             local::the_host_renews_an_expired_github_token,
         ),

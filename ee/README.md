@@ -199,8 +199,9 @@ webhook secret before anything in it is read (`401` when the signature does not 
 - `pull_request` opened, synchronize or reopened: the pull request's head becomes its work's
   head, so the check run says it waits for CI. A pull request from a fork is passed over: its
   CI gets no OIDC token, so no hosted run comes.
-- A local run has no job: one that said nothing for an hour (no start, end or done) is
-  closed as cancelled by the host's schedule (a cron trigger every 10 minutes).
+- A local run has no job: one that said nothing for an hour (no start, end, blob upload or
+  done) is closed as cancelled by the host's schedule (a cron trigger every 10 minutes). A blob
+  counts for each open run of its writer that names it, as its bytes start and once stored.
 - `workflow_job`: a job runs Fearlezz when its name is the `GITHUB_JOB` of an earlier run of
   the repository, alone or with a matrix's values after it (`proof (macos-latest)`). A queued
   or waiting one shows on its branch's page as waiting for a runner; a completed one cancels

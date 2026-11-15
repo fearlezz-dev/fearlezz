@@ -233,6 +233,32 @@ pub fn a_silent_local_run_is_cancelled_after_an_hour() {
     assert_eq!(answer.status, 409, "closed: {}", answer.text());
 }
 
+pub fn a_local_run_uploading_its_files_is_not_silent() {
+    let token = cli_token("writer");
+    let job = Job::local("owner/review", "local/uploading", &token);
+    let run = job.open(&["screens"]);
+    let film = b"local/uploading: a long film";
+    let answer = job.finished(
+        &run.id,
+        &entry("screens", "passed"),
+        &[("looks/screens/after/long.webm", film)],
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    // The check ended two hours ago; the run has been sending its films since.
+    world().worker.sql(&format!(
+        "UPDATE runs SET touched = touched - 7200 WHERE id = '{}'",
+        run.id
+    ));
+    let answer = job.send(film);
+    assert_eq!(answer.status, 204, "{}", answer.text());
+    let answer = get("/__scheduled?cron=*/10+*+*+*+*", &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(
+        run_on("/owner/review/work/local/uploading", &run.id)["state"],
+        "running"
+    );
+}
+
 pub fn the_host_renews_an_expired_github_token() {
     let token = cli_token("refresher");
     // Eight hours later: GitHub's user token expired, its refresh token still holds.
