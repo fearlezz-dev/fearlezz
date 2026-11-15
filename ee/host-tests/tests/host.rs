@@ -2608,8 +2608,8 @@ fn a_matrix_leg_ending_leaves_its_siblings_running() {
 }
 
 fn every_leg_of_the_newest_attempt_is_reviewed() {
-    let linux = Job::pull("owner/review", 117, "review/legs")
-        .at(&commit("a117"), 1117)
+    let linux = Job::pull("owner/review", 134, "review/legs")
+        .at(&commit("a134"), 1134)
         .on("runner-linux");
     let macos = linux.on("runner-macos");
     let (linux_look, linux_files) = one_still(b"legs before", b"legs after on linux");
@@ -2623,7 +2623,7 @@ fn every_leg_of_the_newest_attempt_is_reviewed() {
             .map(|p| p["key"].as_str().unwrap().to_owned())
             .collect()
     };
-    let review = review_of(117);
+    let review = review_of(134);
     assert_eq!(keys(&review).len(), 2, "each leg's picture: {review:#}");
     assert_eq!(review["state"], "waits", "{review:#}");
 
@@ -2632,19 +2632,19 @@ fn every_leg_of_the_newest_attempt_is_reviewed() {
     let picture = looks_right("card/light.png");
     let answer = say(&linux_run, "verdicts", Some(&writer), &[], &picture);
     assert_eq!(answer.status, 201, "{}", answer.text());
-    let review = review_of(117);
+    let review = review_of(134);
     assert_eq!(review["state"], "waits", "{review:#}");
     let answer = say(&macos_run, "verdicts", Some(&writer), &[], &picture);
     assert_eq!(answer.status, 201, "{}", answer.text());
-    assert_eq!(review_of(117)["state"], "approved");
-    let first = keys(&review_of(117));
+    assert_eq!(review_of(134)["state"], "approved");
+    let first = keys(&review_of(134));
 
     // The workflow run again: its legs replace those of the attempt before.
     let (linux_look, linux_files) = one_still(b"legs before", b"legs after on linux, again");
     let (macos_look, macos_files) = one_still(b"legs before", b"legs after on macos, again");
     proven(&linux.again(), &linux_look, &linux_files, &json!({}));
     proven(&macos.again(), &macos_look, &macos_files, &json!({}));
-    let review = review_of(117);
+    let review = review_of(134);
     let again = keys(&review);
     assert_eq!(again.len(), 2, "each leg's picture: {review:#}");
     assert!(again.iter().all(|k| !first.contains(k)), "{review:#}");

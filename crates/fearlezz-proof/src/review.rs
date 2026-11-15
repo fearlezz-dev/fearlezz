@@ -231,26 +231,15 @@ pub fn review(
     notes: &[Note],
     accept: Option<&Accept>,
 ) -> Review {
-    fn ci<'a>(run: &'a Run, head: &str) -> Option<(&'a str, u64, u32)> {
-        match &run.source {
-            Source::Ci {
-                job,
-                run_id,
-                run_attempt,
-                ..
-            } if run.head == head => Some((job.as_str(), *run_id, *run_attempt)),
-            _ => None,
-        }
-    }
     let mut attempts: Vec<(&str, u64, u32)> = Vec::new();
-    for attempt in runs.iter().filter_map(|(run, _)| ci(run, head)) {
-        if !attempts.iter().any(|(job, ..)| *job == attempt.0) {
-            attempts.push(attempt);
+    for newest in runs.iter().filter_map(|(run, _)| attempt(run, head)) {
+        if !attempts.iter().any(|(job, ..)| *job == newest.0) {
+            attempts.push(newest);
         }
     }
     let counted: Vec<&(Run, Option<Proof>)> = runs
         .iter()
-        .filter(|(run, _)| ci(run, head).is_some_and(|attempt| attempts.contains(&attempt)))
+        .filter(|(run, _)| attempt(run, head).is_some_and(|attempt| attempts.contains(&attempt)))
         .collect();
     let live: Vec<&(Run, Option<Proof>)> = counted
         .iter()
@@ -340,6 +329,20 @@ pub fn review(
         accept,
         notes: open.into_iter().cloned().collect(),
     }
+}
+
+/// The job, workflow run and attempt of `run` when it is a CI run of `head`.
+fn attempt<'a>(run: &'a Run, head: &str) -> Option<(&'a str, u64, u32)> {
+    let Source::Ci {
+        job,
+        run_id,
+        run_attempt,
+        ..
+    } = &run.source
+    else {
+        return None;
+    };
+    (run.head == head).then_some((job.as_str(), *run_id, *run_attempt))
 }
 
 /// `1 picture` or `3 pictures`.
