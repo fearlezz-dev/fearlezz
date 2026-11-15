@@ -144,7 +144,8 @@ The room takes a socket before it reads the snapshot, so nothing written between
 missed; the page drops events its snapshot already holds by `seq`. A dropped connection opens
 again with a fresh snapshot. Asked without upgrading, `/live/...` answers the snapshot as JSON.
 A live connection without access gets `401`, an unknown work `404`, and a work that is gone
-closes with `1008`, as does a share link's page when the link is revoked.
+closes with `1008`, as does a share link's page when the link is revoked and a page whose
+viewer lost access (Who sees a page).
 
 **Types.** The page's TypeScript types (`ee/app/src/proof.ts`) are generated from
 `fearlezz-proof` with ts-rs; a test of `ee-tests` fails when they drift, and
@@ -345,6 +346,11 @@ this rule alike; a share link opens one work's page to anyone holding it (Share 
   repository, and whether a repository is public, each for 5 minutes; GitHub's OIDC keys for
   an hour, fetched again once when a token names a key id the cached set lacks. So a change
   of access on GitHub shows here within 5 minutes.
+- **A live page follows the same rule while it stays open.** Its room asks again for each page
+  a person opened before every event it sends, and on an alarm at least every 5 minutes while
+  one is open, and closes with `1008` ("Your access to this page ended; sign in again to see
+  it.") a page whose session ended (logged out or expired) or whose access GitHub took away.
+  A share link's pages stay until the link is revoked.
 
 ### Code
 

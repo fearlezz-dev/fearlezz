@@ -460,6 +460,10 @@ fn main() {
             repository::a_private_repository_page_needs_a_reader,
         ),
         (
+            "a_live_page_of_a_private_repository_ends_with_its_access",
+            repository::a_live_page_of_a_private_repository_ends_with_its_access,
+        ),
+        (
             "the_repository_page_updates_live",
             repository::the_repository_page_updates_live,
         ),

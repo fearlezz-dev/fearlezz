@@ -6,10 +6,19 @@
 //! repository's room sends each work as it now stands. The sockets hibernate with the object,
 //! so an idle room costs nothing while its pages stay connected.
 //!
+//! A page stays open only while its viewer may still see it, the rule every page follows
+//! (`pages::sees`, GitHub's word cached 5 minutes): before each event, and on an alarm at least
+//! every 5 minutes, the room asks again for each page a person opened, and closes with `1008`
+//! the pages whose session ended or whose access GitHub took away. A share link's pages stay
+//! until the link is revoked.
+//!
 //! A work's room is named by the work's id, a repository's by `repo:<owner/name>`; ids are hex,
 //! so the two never meet. The class keeps its first name, `WorkRoom`.
 
+use std::time::Duration;
+
 use fearlezz_proof::events::Live;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::{JsCast as _, JsValue};
 use worker::worker_sys::DurableObjectState;
 use worker::{
@@ -17,26 +26,117 @@ use worker::{
     WebSocketIncomingMessage, WebSocketPair, durable_object,
 };
 
-use crate::{repository, work};
+use crate::pages::{self, SIGHT_SECONDS};
+use crate::{Config, repository, session, work};
+
+/// Who a page's live connection is held for, which says how long it stays open.
+#[derive(Serialize, Deserialize)]
+pub enum Viewer {
+    /// Someone the repository's rule let in, with their session when signed in: open while
+    /// the rule still lets them in.
+    Person {
+        session: Option<String>,
+        repo: String,
+    },
+    /// Someone holding a share link: open until the link is revoked, which closes the sockets
+    /// carrying its `tag`.
+    Link { tag: String },
+}
+
+/// Why a page whose viewer may no longer see it is closed.
+const ACCESS_ENDED: &str = "Your access to this page ended; sign in again to see it.";
 
 /// The pages open in a room, owned, so a write the room runs holds them.
-pub struct Pages(State);
+pub struct Pages {
+    state: State,
+    env: Env,
+}
 
 impl Pages {
-    fn of(state: &State) -> Pages {
+    fn of(state: &State, env: &Env) -> Pages {
         let raw: &JsValue = state.as_raw().as_ref();
-        Pages(State::from(
-            raw.clone().unchecked_into::<DurableObjectState>(),
-        ))
+        Pages {
+            state: State::from(raw.clone().unchecked_into::<DurableObjectState>()),
+            env: env.clone(),
+        }
     }
 
-    /// Sends `text` to every open page.
+    /// Sends `text` to every open page whose viewer may still see it.
     pub async fn send(&self, text: &str) {
-        for socket in self.0.get_websockets() {
+        for socket in self.admitted().await {
             // A page that went away is cleaned up by its close; the rest still get it.
             if let Err(error) = socket.send_with_str(text) {
                 worker::console_log!("a page missed an event: {error}");
             }
+        }
+    }
+
+    /// The open pages whose viewers may still see them, after closing the rest. A person's
+    /// access is asked once per session for all their pages; when the asking itself fails
+    /// (D1 or GitHub down), the page stays and is asked again next time.
+    async fn admitted(&self) -> Vec<WebSocket> {
+        let config = match Config::from(&self.env) {
+            Ok(config) => config,
+            Err(error) => {
+                worker::console_error!("the room cannot read its settings: {error}");
+                return self.state.get_websockets();
+            }
+        };
+        let mut asked: Vec<(Option<String>, String, bool)> = Vec::new();
+        let mut open = Vec::new();
+        for socket in self.state.get_websockets() {
+            let Ok(Some(Viewer::Person { session, repo })) = socket.deserialize_attachment() else {
+                open.push(socket);
+                continue;
+            };
+            let known = asked
+                .iter()
+                .find(|(s, r, _)| *s == session && *r == repo)
+                .map(|(_, _, sees)| *sees);
+            let sees = match known {
+                Some(sees) => sees,
+                None => {
+                    let sees = sees(&self.env, &config, session.as_deref(), &repo).await;
+                    asked.push((session, repo, sees));
+                    sees
+                }
+            };
+            if sees {
+                open.push(socket);
+            } else if let Err(error) = socket.close(Some(1008), Some(ACCESS_ENDED)) {
+                worker::console_log!("a page did not close: {error}");
+            }
+        }
+        open
+    }
+
+    /// Whether a person still has a page open here, whose access the alarm asks again.
+    fn has_people(&self) -> bool {
+        self.state.get_websockets().iter().any(|socket| {
+            matches!(
+                socket.deserialize_attachment(),
+                Ok(Some(Viewer::Person { .. }))
+            )
+        })
+    }
+}
+
+/// Whether the person of session `session` (gone once they log out or it expires), or anyone
+/// without one, may still see the repository `repo`'s pages.
+async fn sees(env: &Env, config: &Config, session: Option<&str>, repo: &str) -> bool {
+    let asked = async {
+        let session = match session {
+            Some(id) => session::find(env, id).await?,
+            None => None,
+        };
+        pages::sees(env, config, session.as_ref(), repo).await
+    };
+    match asked.await {
+        Ok(sees) => sees,
+        Err(refusal) if refusal.status < 500 => false,
+        Err(refusal) => {
+            worker::console_error!("whether a page may stay open was not known: {refusal:?}");
+            true
         }
     }
 }
@@ -73,20 +173,18 @@ pub async fn send(env: &Env, room: &str, text: &str) -> Result<()> {
 }
 
 /// Hands a page's live connection to room `room`, which answers it with what `of` names
-/// (`work=<id>` or `repo=<owner/name>`). `tag`, when given, marks the socket so `close` can
-/// end it.
+/// (`work=<id>` or `repo=<owner/name>`) and holds it for `viewer`.
 pub async fn connect(
     env: &Env,
     req: &Request,
     room: &str,
     of: (&str, &str),
-    tag: Option<&str>,
+    viewer: &Viewer,
 ) -> Result<Response> {
     let mut url = url::Url::parse("https://room/connect").map_err(worker::Error::from)?;
-    url.query_pairs_mut().append_pair(of.0, of.1);
-    if let Some(tag) = tag {
-        url.query_pairs_mut().append_pair("tag", tag);
-    }
+    url.query_pairs_mut()
+        .append_pair(of.0, of.1)
+        .append_pair("viewer", &serde_json::to_string(viewer)?);
     let mut init = RequestInit::new();
     init.with_headers(req.headers().clone());
     fetch(env, room, url.as_str(), &init).await
@@ -117,6 +215,17 @@ pub struct WorkRoom {
 }
 
 impl WorkRoom {
+    /// Makes sure the alarm that asks again about people's access is set.
+    async fn watch(&self) -> Result<()> {
+        let storage = self.state.storage();
+        if storage.get_alarm().await?.is_none() {
+            storage
+                .set_alarm(Duration::from_secs(SIGHT_SECONDS as u64))
+                .await?;
+        }
+        Ok(())
+    }
+
     /// What a page gets first: the work's snapshot or the repository's listing, as JSON; none
     /// when there is no such work or repository.
     async fn snapshot(&self, of: &str, name: &str) -> Result<Option<String>> {
@@ -159,15 +268,24 @@ impl DurableObject for WorkRoom {
                 else {
                     return Response::error("connect names no work or repository", 400);
                 };
+                let Some(viewer) =
+                    param("viewer").and_then(|v| serde_json::from_str::<Viewer>(&v).ok())
+                else {
+                    return Response::error("connect names no viewer", 400);
+                };
                 let pair = WebSocketPair::new()?;
                 // Accepted before the snapshot is read: an event that lands meanwhile reaches
                 // this socket too, and the page drops what its snapshot already holds by
                 // sequence number, so nothing between the two is missed.
-                match param("tag") {
-                    Some(tag) => self
+                match &viewer {
+                    Viewer::Link { tag } => self
                         .state
                         .accept_websocket_with_tags(&pair.server, &[tag.as_str()]),
-                    None => self.state.accept_web_socket(&pair.server),
+                    Viewer::Person { .. } => self.state.accept_web_socket(&pair.server),
+                }
+                pair.server.serialize_attachment(&viewer)?;
+                if matches!(viewer, Viewer::Person { .. }) {
+                    self.watch().await?;
                 }
                 match self.snapshot(of, &name).await? {
                     Some(text) => pair.server.send_with_str(text)?,
@@ -176,7 +294,9 @@ impl DurableObject for WorkRoom {
                 Response::from_websocket(pair.client)
             }
             "/event" => {
-                Pages::of(&self.state).send(&req.text().await?).await;
+                Pages::of(&self.state, &self.env)
+                    .send(&req.text().await?)
+                    .await;
                 Response::empty()
             }
             "/write" => {
@@ -184,7 +304,7 @@ impl DurableObject for WorkRoom {
                     return Response::error("write names no work", 400);
                 };
                 let write: work::Write = req.json().await?;
-                let (pages, env) = (Pages::of(&self.state), self.env.clone());
+                let (pages, env) = (Pages::of(&self.state, &self.env), self.env.clone());
                 // No other event reaches the room until the write is done: writes to the work
                 // run one at a time. A failure is the answer's, never the gate's, which would
                 // reset the object and drop its pages.
@@ -214,6 +334,17 @@ impl DurableObject for WorkRoom {
             }
             _ => Response::error("not found", 404),
         }
+    }
+
+    /// Asks again whether each person with a page open may still see it, and keeps asking
+    /// while one has.
+    async fn alarm(&self) -> Result<Response> {
+        let pages = Pages::of(&self.state, &self.env);
+        pages.admitted().await;
+        if pages.has_people() {
+            self.watch().await?;
+        }
+        Response::empty()
     }
 
     /// Pages only listen; what they send is ignored.

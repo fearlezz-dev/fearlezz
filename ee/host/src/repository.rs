@@ -10,7 +10,8 @@ use fearlezz_proof::review::Review;
 use serde::Deserialize;
 use worker::{D1Database, Env, Headers, Request, Response};
 
-use crate::session::to_sign_in;
+use crate::room::Viewer;
+use crate::session::{self, to_sign_in};
 use crate::work::{self, WorkRow};
 use crate::{Answer, Config, Refusal, pages, repo_key, room};
 
@@ -131,7 +132,8 @@ pub async fn page(req: &Request, env: &Env, config: &Config, owner: &str, name: 
 /// Without a session a private repository answers `401`.
 pub async fn live(req: &Request, env: &Env, config: &Config, owner: &str, name: &str) -> Answer {
     let repo = repo_key(owner, name);
-    if !pages::open(req, env, config, &repo).await? {
+    let session = session::read(req, env).await?;
+    if !pages::sees(env, config, session.as_ref(), &repo).await? {
         return Err(Refusal::new(401, "sign in to see this repository"));
     }
     let db = env.d1("DB")?;
@@ -146,7 +148,12 @@ pub async fn live(req: &Request, env: &Env, config: &Config, owner: &str, name: 
     if !holds(&db, &repo).await? {
         return Err(Refusal::new(404, "not found"));
     }
-    Ok(room::connect(env, req, &room::of_repository(&repo), ("repo", &repo), None).await?)
+    let room = room::of_repository(&repo);
+    let viewer = Viewer::Person {
+        session: session.map(|s| s.id),
+        repo: repo.clone(),
+    };
+    Ok(room::connect(env, req, &room, ("repo", &repo), &viewer).await?)
 }
 
 /// Whether the host holds any work of the repository `repo`.

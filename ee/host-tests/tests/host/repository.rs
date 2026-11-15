@@ -142,6 +142,55 @@ pub fn a_private_repository_page_needs_a_reader() {
     assert_eq!(answer.status, 404, "{}", answer.text());
 }
 
+pub fn a_live_page_of_a_private_repository_ends_with_its_access() {
+    let job = Job::push("owner/watched", "watched/live");
+    let run = job.open(&["logout", "expiry", "kept", "lost"]);
+    let url = world().worker.url.clone();
+    let page = format!("{url}/owner/watched/work/watched/live");
+    let running = |check: &str| {
+        format!(r#"document.querySelector('[data-check="{check}"]')?.dataset.state === "running""#)
+    };
+    let gone = "!document.querySelector('[data-check]') && document.body.textContent.includes('sign in again')";
+    let mut browser = browser::Browser::start();
+
+    // Signed out: the page ends at the next event.
+    let watcher = sign_in("watcher-code", "/");
+    browser.sign_in(&url, &watcher);
+    browser.open(&page);
+    browser.wait_for("!!document.querySelector('[data-check=\"logout\"]')");
+    let answer = get("/logout", &[("Cookie", &watcher)]);
+    assert_eq!(answer.status, 302, "{}", answer.text());
+    job.started(&run.id, "logout");
+    browser.wait_for(gone);
+
+    // The session expires: eight hours pass.
+    let watcher = sign_in("watcher-code", "/");
+    browser.sign_in(&url, &watcher);
+    browser.open(&page);
+    browser.wait_for("!!document.querySelector('[data-check=\"expiry\"]')");
+    let id = watcher.strip_prefix("session=").unwrap();
+    world().worker.sql(&format!(
+        "UPDATE sessions SET expires = 0 WHERE id = '{id}'"
+    ));
+    job.started(&run.id, "expiry");
+    browser.wait_for(gone);
+
+    // GitHub takes the access away: the page keeps it while GitHub's word is cached, and ends
+    // once it is asked again, five minutes later.
+    let leaver = sign_in("leaver-code", "/");
+    browser.sign_in(&url, &leaver);
+    browser.open(&page);
+    browser.wait_for("!!document.querySelector('[data-check=\"kept\"]')");
+    world().github.stop_reading("owner/watched", "leaver");
+    job.started(&run.id, "kept");
+    browser.wait_for(&running("kept"));
+    world()
+        .worker
+        .sql("UPDATE cache SET expires = 0 WHERE key = 'reads:leaver:owner/watched'");
+    job.started(&run.id, "lost");
+    browser.wait_for(gone);
+}
+
 pub fn the_repository_page_updates_live() {
     let job = Job::push("owner/listing", "list/live");
     Job::push("owner/listing", "list/before").open(&["tests"]);

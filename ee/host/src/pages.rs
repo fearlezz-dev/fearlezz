@@ -6,12 +6,13 @@
 
 use worker::{Env, Headers, Request, Response};
 
-use crate::session::{self, to_sign_in};
+use crate::room::Viewer;
+use crate::session::{self, Session, to_sign_in};
 use crate::work::{self, Place};
 use crate::{Answer, Config, Refusal, cache, files, github, repo_key, room, share};
 
 /// How long the host trusts GitHub's word on who may see a repository.
-const SIGHT_SECONDS: i64 = 300;
+pub const SIGHT_SECONDS: i64 = 300;
 
 fn not_found() -> Refusal {
     Refusal::new(404, "not found")
@@ -20,7 +21,19 @@ fn not_found() -> Refusal {
 /// Whether the request may see the repository's pages: `false` means sign in first, and a
 /// person GitHub shows nothing of it gets `404`.
 pub async fn open(req: &Request, env: &Env, config: &Config, repo: &str) -> Result<bool, Refusal> {
-    if let Some(session) = session::read(req, env).await? {
+    let session = session::read(req, env).await?;
+    sees(env, config, session.as_ref(), repo).await
+}
+
+/// Whether the person of `session`, or anyone without one, may see the repository's pages, as
+/// `open` says it for a request. A live page asks it again while it stays open (`room.rs`).
+pub async fn sees(
+    env: &Env,
+    config: &Config,
+    session: Option<&Session>,
+    repo: &str,
+) -> Result<bool, Refusal> {
+    if let Some(session) = session {
         match reads(env, config, &session.login, &session.token, repo).await? {
             Some(true) => return Ok(true),
             Some(false) => return Err(not_found()),
@@ -135,17 +148,22 @@ pub async fn live(
     place: &Place,
 ) -> Answer {
     let repo = repo_key(owner, name);
-    if !open(req, env, config, &repo).await? {
+    let session = session::read(req, env).await?;
+    if !sees(env, config, session.as_ref(), &repo).await? {
         return Err(Refusal::new(401, "sign in to see this work"));
     }
     let db = env.d1("DB")?;
     let id = work::find(&db, &repo, place).await?.ok_or_else(not_found)?;
-    connect(req, env, &id, None).await
+    let viewer = Viewer::Person {
+        session: session.map(|s| s.id),
+        repo,
+    };
+    connect(req, env, &id, &viewer).await
 }
 
-/// The live connection to the work `id`, once the caller decided the request may see it.
-/// `tag` marks the socket, so a share link's pages can be ended when it is revoked.
-pub async fn connect(req: &Request, env: &Env, id: &str, tag: Option<&str>) -> Answer {
+/// The live connection to the work `id`, once the caller decided the request may see it, held
+/// for `viewer` as long as they still may.
+pub async fn connect(req: &Request, env: &Env, id: &str, viewer: &Viewer) -> Answer {
     if !upgrades(req)? {
         let db = env.d1("DB")?;
         let snapshot = work::snapshot(&db, id).await?.ok_or_else(not_found)?;
@@ -154,7 +172,7 @@ pub async fn connect(req: &Request, env: &Env, id: &str, tag: Option<&str>) -> A
         headers.set("Cache-Control", "no-store")?;
         return Ok(Response::from_json(&live)?.with_headers(headers));
     }
-    Ok(room::connect(env, req, id, ("work", id), tag).await?)
+    Ok(room::connect(env, req, id, ("work", id), viewer).await?)
 }
 
 /// A grant to the files of a run, for a page that shows it: the run's folder on the files

@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 use worker::{D1Database, Env, Headers, Request, Response};
 
+use crate::room::Viewer;
 use crate::say::Act;
 use crate::session::{self, Session};
 use crate::work::{self, Place};
@@ -64,7 +65,8 @@ pub async fn page(env: &Env, config: &Config, token: &str) -> Answer {
 /// `/live/-/share/<token>`: the live connection of the link's work, ended when it is revoked.
 pub async fn live(req: &Request, env: &Env, config: &Config, token: &str) -> Answer {
     let link = find(env, config, token).await?.ok_or_else(not_found)?;
-    pages::connect(req, env, &link.work, Some(&tag(&link.id))).await
+    let viewer = Viewer::Link { tag: tag(&link.id) };
+    pages::connect(req, env, &link.work, &viewer).await
 }
 
 /// The work a share call names: `{"repository": "owner/name", "branch"}`.

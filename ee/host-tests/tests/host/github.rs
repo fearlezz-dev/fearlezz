@@ -157,6 +157,12 @@ impl FakeGitHub {
                 ("owner/shared".to_owned(), reviewed(true, 8)),
                 // The repository page, private so it needs a reader.
                 ("owner/listing".to_owned(), reviewed(true, 9)),
+                // A private repository whose live pages end with their access: each person
+                // loses it in their own way.
+                (
+                    "owner/watched".to_owned(),
+                    repo(true, Some(10), &["watcher", "leaver"]),
+                ),
                 // The local run tests: each CLI test signs in as a login of its own.
                 (
                     "owner/local".to_owned(),
@@ -174,6 +180,8 @@ impl FakeGitHub {
                 ("stranger-code".to_owned(), "stranger".to_owned()),
                 ("writer-code".to_owned(), "writer".to_owned()),
                 ("admin-code".to_owned(), "admin".to_owned()),
+                ("watcher-code".to_owned(), "watcher".to_owned()),
+                ("leaver-code".to_owned(), "leaver".to_owned()),
             ]),
             tokens: BTreeMap::new(),
             oidc_keys: vec![(KID.to_owned(), oidc)],
@@ -273,6 +281,12 @@ impl FakeGitHub {
             runner: runner.to_owned(),
             conclusion: conclusion.to_owned(),
         });
+    }
+
+    /// `login` may no longer read `repo`.
+    pub fn stop_reading(&self, repo: &str, login: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.repos.get_mut(repo).unwrap().readers.remove(login);
     }
 
     /// The jobs of workflow run `run` of `repo` the app asked to run again, in order, each with
