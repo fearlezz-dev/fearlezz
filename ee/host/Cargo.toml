@@ -7,6 +7,11 @@ publish.workspace = true
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# Routes only the tests build in (`wrangler.toml` passes HOST_FEATURES to the build), never a
+# deployed worker: `POST /__test/sql` runs a statement through the worker's own D1 binding.
+test-hooks = []
+
 [dependencies]
 # The proof bundle, shared with the core: proof.json and what in it waits for a person.
 fearlezz-proof = { path = "../../crates/fearlezz-proof" }

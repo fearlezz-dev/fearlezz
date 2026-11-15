@@ -88,7 +88,9 @@ impl Worker {
         // otherwise show every request as the first one, folding the files origin into the app.
         .arg("--infer-origin-from-routes=false")
         // The schedule runs when a test asks `/__scheduled`, not by the clock.
-        .arg("--test-scheduled");
+        .arg("--test-scheduled")
+        // The routes only tests have, as `/__test/sql`.
+        .env("HOST_FEATURES", "test-hooks");
         for (name, value) in vars {
             cmd.arg("--var").arg(format!("{name}:{value}"));
         }
@@ -124,33 +126,17 @@ impl Worker {
         );
     }
 
-    /// Runs one SQL statement on the worker's local D1, for a record no call can make yet. The
-    /// database is one SQLite file the running worker writes too, so a statement that finds it
-    /// busy is tried again.
+    /// Runs one SQL statement on the worker's local D1, for a record no call can make yet,
+    /// through the worker's own binding (`test-hooks`): the worker stays the database's one
+    /// writer.
     pub fn sql(&self, statement: &str) {
-        let host = Path::new(env!("CARGO_MANIFEST_DIR")).join("../host");
-        let persist = self.state.path().to_str().unwrap().to_owned();
-        let mut said = String::new();
-        for _ in 0..10 {
-            let ran = wrangler(&host)
-                .args(["d1", "execute", "DB", "--local", "--persist-to", &persist])
-                .args(["--command", statement])
-                .output()
-                .unwrap();
-            if ran.status.success() {
-                return;
-            }
-            said = format!(
-                "{}{}",
-                String::from_utf8_lossy(&ran.stdout),
-                String::from_utf8_lossy(&ran.stderr)
-            );
-            if !said.contains("SQLITE_BUSY") && !said.contains("locked") {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(300));
-        }
-        panic!("{statement} failed:\n{said}");
+        let answer = crate::agent()
+            .post(&format!("{}/__test/sql", self.url))
+            .send(statement)
+            .unwrap();
+        let status = answer.status().as_u16();
+        let said = answer.into_body().read_to_string().unwrap_or_default();
+        assert_eq!(status, 204, "{statement} failed: {said}");
     }
 
     pub fn log(&self) -> String {
