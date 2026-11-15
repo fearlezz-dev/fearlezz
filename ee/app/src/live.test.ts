@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Feed, apply, stateOf } from "./live";
-import type { Check, Live, Run, Snapshot } from "./proof";
+import { Feed, apply, applyWork, stateOf } from "./live";
+import type { Check, Live, PictureVerdict, Review, Run, Snapshot } from "./proof";
 
 const run: Run = {
   id: "r1",
@@ -70,5 +70,49 @@ describe("Feed", () => {
     const state = feed.take({ kind: "snapshot", ...snapshot });
     expect(state?.seq).toBe(4);
     expect(state?.runs[0]!.checks.map(stateOf)).toEqual(["planned", "running"]);
+  });
+});
+
+describe("review", () => {
+  const verdict = (by: string): PictureVerdict => ({
+    check: "screens",
+    picture: "card.png",
+    key: "still:b:a",
+    kind: "looks_right",
+    by,
+    at: 1,
+    run: "r1",
+    head: "abc1234",
+  });
+
+  test("a verdict joins the work's, replacing one on the same content", () => {
+    const one = applyWork(snapshot, 4, { kind: "verdict", verdict: verdict("writer") });
+    const two = applyWork(one, 5, { kind: "verdict", verdict: verdict("admin") });
+    expect(two.verdicts?.map((v) => v.by)).toEqual(["admin"]);
+    expect(applyWork(two, 5, { kind: "verdict", verdict: verdict("x") })).toBe(two);
+  });
+
+  test("the review and the waiting jobs are replaced as they come", () => {
+    const review: Review = { head: "abc1234", state: "waits", pictures: [], weakened: [] };
+    const next = applyWork(snapshot, 4, { kind: "review", review });
+    expect(next.review?.state).toBe("waits");
+    const waiting = applyWork(next, 5, { kind: "waiting", waiting: [{ name: "proof", head: "def", since: 1 }] });
+    expect(waiting.waiting?.map((j) => j.name)).toEqual(["proof"]);
+  });
+
+  test("a look brings the keys of its pictures, and a cancelled run is cancelled", () => {
+    const look = { check: "tests", base_commit: "b", base_result: "passed", items: [] };
+    const next = apply(snapshot, 4, "r1", { kind: "finished", check: passed("tests"), look, keys: { "card.png": "k" } });
+    expect(next.runs[0]!.checks[1]!.keys).toEqual({ "card.png": "k" });
+    const done = apply(next, 5, "r1", { kind: "done", checks: [], looks: [look], keys: { tests: { "card.png": "k2" } } });
+    expect(done.runs[0]!.checks[1]!.keys).toEqual({ "card.png": "k2" });
+    expect(apply(done, 6, "r1", { kind: "cancelled" }).runs[0]!.state).toBe("cancelled");
+  });
+
+  test("work events before the snapshot wait for it too", () => {
+    const feed = new Feed();
+    expect(feed.take({ kind: "work", seq: 4, change: { kind: "verdict", verdict: verdict("writer") } })).toBeUndefined();
+    const state = feed.take({ kind: "snapshot", ...snapshot });
+    expect(state?.verdicts?.length).toBe(1);
   });
 });

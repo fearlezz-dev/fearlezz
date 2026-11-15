@@ -1,8 +1,8 @@
 // A run's pictures: counts that filter, grouping by the parts of their names, every picture in
-// the order that directs attention, and the one on the stage. j and k step between pictures,
-// 1 to 5 pick the way to compare.
+// the order that directs attention, the one on the stage and the verdict on it. j and k step
+// between pictures, 1 to 5 pick the way to compare.
 
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { grantOf } from "./grant";
 import {
   GROUP_WORDS,
@@ -17,14 +17,15 @@ import {
   picturesOf,
   title,
 } from "./pictures";
-import type { PictureChange, Run } from "./proof";
+import type { PictureChange, Run, Snapshot } from "./proof";
+import { type Viewer, canSay, carried, looksRight, signIn, toLookAt, verdictOf } from "./review";
 import { MODES, type Mode, Stage } from "./Stage";
 
 // The way to compare and the grouping stay as a person moves between pictures and runs.
 const [mode, setMode] = createSignal<Mode>("side");
 const [by, setBy] = createSignal<GroupBy>("change");
 
-export function PicturesPanel(props: { run: Run }) {
+export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer | undefined }) {
   const files = grantOf(() => props.run.id);
   const pictures = createMemo(() => picturesOf(props.run));
   const [filter, setFilter] = createSignal<PictureChange | null>(null);
@@ -116,6 +117,7 @@ export function PicturesPanel(props: { run: Run }) {
                         data-picture={p.key}
                         data-change={p.picture.change}
                         data-flaky={String(!!p.picture.flaky)}
+                        data-verdict={verdictOf(props.state, props.run, p)?.kind ?? "none"}
                         aria-current={current()?.key === p.key ? "true" : undefined}
                         onClick={() => pick(p.key)}
                       >
@@ -126,6 +128,9 @@ export function PicturesPanel(props: { run: Run }) {
                         </Show>
                         <Show when={p.picture.flaky}>
                           <span class="mini">flaky</span>
+                        </Show>
+                        <Show when={verdictOf(props.state, props.run, p)}>
+                          <span class="right" title="Looks right" aria-label="looks right" />
                         </Show>
                         <Show when={checks() > 1 && grouping() !== "check"}>
                           <span class="mini">{p.check}</span>
@@ -191,6 +196,9 @@ export function PicturesPanel(props: { run: Run }) {
           />
         )}
       </Show>
+      <Show when={current()}>
+        {(p) => <VerdictBar shown={p()} run={props.run} state={props.state} viewer={props.viewer} repository={props.state.work.repository} />}
+      </Show>
       <details class="keys">
         <summary>Keys</summary>
         <p>
@@ -199,4 +207,80 @@ export function PicturesPanel(props: { run: Run }) {
       </details>
     </section>
   );
+}
+
+/** The verdict on the picture on the stage: who said it looks right and when, or what this
+ * person can do about it. */
+function VerdictBar(props: { shown: Shown; run: Run; state: Snapshot; viewer: Viewer | undefined; repository: string }) {
+  const [error, setError] = createSignal("");
+  const [sending, setSending] = createSignal(false);
+  const verdict = createMemo(() => verdictOf(props.state, props.run, props.shown));
+  const never = () => {
+    if (props.run.source.kind !== "ci") return "A local run is never reviewed; its pictures get a verdict on CI.";
+    if (props.shown.picture.flaky) return "Flaky pictures never wait for a verdict.";
+    if (!toLookAt(props.shown)) return "Unchanged pictures need no verdict.";
+    return "";
+  };
+  const state = () => (never() ? "never" : (verdict()?.kind ?? "none"));
+  const send = async () => {
+    setSending(true);
+    setError((await looksRight(props.run.id, props.shown)) ?? "");
+    setSending(false);
+  };
+  return (
+    <div class="verdict" data-said={state()} aria-live="polite">
+      <Switch>
+        <Match when={never()}>
+          <p class="hint">{never()}</p>
+        </Match>
+        <Match when={verdict()}>
+          {(v) => (
+            <p class="said ok">
+              <span class="right" aria-hidden="true" />
+              <span>
+                <b>Looks right</b> to <b>{v().by}</b>, {ago(Date.now() / 1000 - v().at)}
+                <Show when={carried(v(), props.run)}>
+                  {(where) => <span class="carried">, {where()}</span>}
+                </Show>
+              </span>
+            </p>
+          )}
+        </Match>
+        <Match when={canSay(props.viewer)}>
+          <div class="act">
+            <button type="button" class="btn ok" data-say="looks_right" disabled={sending()} onClick={() => void send()}>
+              Looks right
+            </button>
+            <span class="hint">It holds for this picture as long as it stays the same.</span>
+          </div>
+        </Match>
+        <Match when={props.viewer?.login}>
+          <p class="hint" data-cannot>
+            Giving a verdict needs write access to {props.repository}.
+          </p>
+        </Match>
+        <Match when={props.viewer}>
+          <p class="hint">
+            <a href={signIn()} data-sign-in>
+              Sign in
+            </a>{" "}
+            to say whether it looks right.
+          </p>
+        </Match>
+      </Switch>
+      <Show when={error()}>
+        <p class="error" role="alert">
+          {error()}
+        </p>
+      </Show>
+    </div>
+  );
+}
+
+/** How long ago, roughly, as people say it. */
+function ago(seconds: number): string {
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+  return `${Math.floor(seconds / 86400)} days ago`;
 }

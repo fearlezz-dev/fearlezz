@@ -13,7 +13,15 @@ run: string,
 /**
  * What changed.
  */
-change: Change, };
+change: Change, } | { "kind": "work", 
+/**
+ * Its place in the work's events.
+ */
+seq: number, 
+/**
+ * What changed.
+ */
+change: WorkChange, };
 
 export type Snapshot = { 
 /**
@@ -27,7 +35,19 @@ work: Work,
 /**
  * Its runs, newest first.
  */
-runs: Array<Run>, };
+runs: Array<Run>, 
+/**
+ * Where review of its newest head stands.
+ */
+review?: Review | null, 
+/**
+ * Every verdict given on its pictures.
+ */
+verdicts?: Array<PictureVerdict>, 
+/**
+ * Its CI jobs that wait for a runner.
+ */
+waiting?: Array<Job>, };
 
 export type Change = { "kind": "opened", 
 /**
@@ -53,7 +73,11 @@ check: Check,
 /**
  * Its pictures compared with the base commit, when it takes pictures.
  */
-look?: Look | null, } | { "kind": "done", 
+look?: Look | null, 
+/**
+ * What each picture of the look shows, as a verdict follows it.
+ */
+keys?: { [key in string]: string }, } | { "kind": "done", 
 /**
  * Every check's entry.
  */
@@ -61,7 +85,141 @@ checks: Array<Check>,
 /**
  * Every look, each of the check named by its `check`.
  */
-looks: Array<Look>, };
+looks: Array<Look>, 
+/**
+ * What each picture of each look shows, by check.
+ */
+keys?: { [key in string]: { [key in string]: string } }, } | { "kind": "cancelled", };
+
+export type WorkChange = { "kind": "verdict", 
+/**
+ * The verdict.
+ */
+verdict: PictureVerdict, } | { "kind": "review", 
+/**
+ * The review, none while the work has no head.
+ */
+review?: Review | null, } | { "kind": "waiting", 
+/**
+ * Every one.
+ */
+waiting: Array<Job>, };
+
+export type Review = { 
+/**
+ * The commit it is of.
+ */
+head: string, 
+/**
+ * Where it stands.
+ */
+state: ReviewState, 
+/**
+ * Every picture to look at, in the order of its runs and looks.
+ */
+pictures: Array<ReviewPicture>, 
+/**
+ * What the head weakens, waiting for an admin's accept.
+ */
+weakened: Array<Weakening>, 
+/**
+ * The accept of those weakenings, once an admin gave it.
+ */
+accept?: Accept | null, };
+
+export type ReviewState = "ci" | "running" | "failed" | "cancelled" | "waits" | "approved";
+
+export type ReviewPicture = { 
+/**
+ * The check that took it.
+ */
+check: string, 
+/**
+ * Its name in its look.
+ */
+name: string, 
+/**
+ * What it shows, as [`key`] names it.
+ */
+key: string, 
+/**
+ * The verdict on it, when someone gave one on this content.
+ */
+verdict?: PictureVerdict | null, };
+
+export type PictureVerdict = { 
+/**
+ * The check that took the picture.
+ */
+check: string, 
+/**
+ * The picture's name in its look.
+ */
+picture: string, 
+/**
+ * What the picture showed, as [`key`] names it.
+ */
+key: string, 
+/**
+ * What they said.
+ */
+kind: VerdictKind, 
+/**
+ * Their GitHub login.
+ */
+by: string, 
+/**
+ * When, in seconds since the epoch.
+ */
+at: number, 
+/**
+ * The run they gave it on.
+ */
+run: string, 
+/**
+ * The commit that run proved.
+ */
+head: string, };
+
+export type VerdictKind = "looks_right";
+
+export type Accept = { 
+/**
+ * The commit it accepts the weakenings of.
+ */
+head: string, 
+/**
+ * Their GitHub login.
+ */
+by: string, 
+/**
+ * When, in seconds since the epoch.
+ */
+at: number, };
+
+export type Weakening = { 
+/**
+ * How it weakened, such as `it runs another command`.
+ */
+how: string, } & ({ "check": string } | { "setting": string });
+
+export type Job = { 
+/**
+ * Its name, as its workflow names it.
+ */
+name: string, 
+/**
+ * The commit it will prove.
+ */
+head: string, 
+/**
+ * Its page on GitHub.
+ */
+url?: string | null, 
+/**
+ * Since when it waits, in seconds since the epoch.
+ */
+since: number, };
 
 export type Work = { 
 /**
@@ -121,7 +279,7 @@ opened: number,
  */
 checks: Array<RunCheck>, };
 
-export type RunState = "running" | "done";
+export type RunState = "running" | "done" | "cancelled";
 
 export type Source = { "kind": "ci", 
 /**
@@ -131,7 +289,7 @@ job: string,
 /**
  * The workflow run's page.
  */
-run_url?: string | null, };
+run_url?: string | null, } | { "kind": "local", };
 
 export type RunCheck = { 
 /**
@@ -149,7 +307,11 @@ entry?: Check | null,
 /**
  * Its pictures compared with the base commit, once compared.
  */
-look?: Look | null, };
+look?: Look | null, 
+/**
+ * What each picture of its look shows, by name, as a verdict follows it.
+ */
+keys?: { [key in string]: string }, };
 
 export type Look = { 
 /**

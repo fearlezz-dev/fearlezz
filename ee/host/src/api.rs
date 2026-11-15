@@ -6,9 +6,11 @@
 use std::collections::BTreeSet;
 
 use fearlezz_proof::events::{
-    Change, Closed, Done, Files, Live, Missing, Open, Opened, Run, RunCheck, RunState, Step,
+    Change, Closed, Done, Files, Keys, Live, Missing, Open, Opened, Run, RunCheck, RunState,
+    Source, Step,
 };
 use fearlezz_proof::look::Look;
+use fearlezz_proof::review as reviews;
 use fearlezz_proof::{Check, SCHEMA};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -17,7 +19,7 @@ use worker::{D1Database, D1PreparedStatement, Data, Env, Request, Response};
 
 use crate::oidc::{self, Token};
 use crate::work::{self, WorkRow};
-use crate::{Answer, Config, Refusal, crypto, github, now};
+use crate::{Answer, Config, Refusal, crypto, github, now, review};
 
 pub async fn installed(req: &Request, env: &Env, config: &Config) -> Answer {
     let token = oidc::check(req, env, config).await?;
@@ -36,6 +38,9 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
         .map_err(|e| Refusal::new(400, format!("send the run as protocol 2 opens it: {e}")))?;
     if open.repository.to_lowercase() != token.repo() {
         return Err(Refusal::new(403, "the token is for another repository"));
+    }
+    if !matches!(open.source, Source::Ci { .. }) {
+        return Err(Refusal::new(400, "an OIDC token opens only a CI run"));
     }
     let allowed = match &open.pull {
         Some(pull) => token.is_for_pull(pull.number, &open.branch),
@@ -67,10 +72,10 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
     // A work is one branch; the pull request it gets is kept once a run names one.
     let work: WorkRow = db
         .prepare(
-            "INSERT INTO works (id, repo, repository, branch, pull, pull_title, pull_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+            "INSERT INTO works (id, repo, repository, branch, pull, pull_title, pull_url, head) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
              ON CONFLICT (repo, branch) DO UPDATE SET repository = excluded.repository, \
              pull = COALESCE(excluded.pull, works.pull), pull_title = COALESCE(excluded.pull_title, works.pull_title), \
-             pull_url = COALESCE(excluded.pull_url, works.pull_url) \
+             pull_url = COALESCE(excluded.pull_url, works.pull_url), head = excluded.head \
              RETURNING id, repository, branch, pull, pull_title, pull_url",
         )
         .bind(&[
@@ -82,6 +87,7 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
             pull.map_or(JsValue::NULL, |p| p.title.as_str().into()),
             pull.and_then(|p| p.url.as_deref())
                 .map_or(JsValue::NULL, JsValue::from),
+            open.head.as_str().into(),
         ])?
         .first(None)
         .await?
@@ -137,6 +143,7 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
                 started: None,
                 entry: None,
                 look: None,
+                keys: Keys::new(),
             })
             .collect(),
     };
@@ -145,6 +152,7 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
         run,
     };
     notify(env, &work.id, seq, &id, change).await;
+    refresh(env, config, &work.id, true).await;
     let url = work::page_url(
         config,
         &work.repository,
@@ -235,6 +243,7 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
             let change = Change::Finished {
                 check: *check,
                 look,
+                keys: Keys::new(),
             };
             (statements, change, files)
         }
@@ -247,12 +256,22 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
         Change::Finished {
             check,
             look: Some(look),
-        } if !work::complete(&look, &work::held(&db, id).await?) => {
-            Change::Finished { check, look: None }
+            ..
+        } => {
+            let (look, keys) = work::shown(*look, &work::held(&db, id).await?).unzip();
+            Change::Finished {
+                check,
+                look: look.map(Box::new),
+                keys: keys.unwrap_or_default(),
+            }
         }
         change => change,
     };
+    let shows_look = matches!(&change, Change::Finished { look: Some(_), .. });
     notify(env, &run.work, seq, id, change).await;
+    if shows_look {
+        refresh(env, config, &run.work, false).await;
+    }
     let missing = lacks(&db, &token.repo(), &files).await?;
     Ok(Response::from_json(&Missing { missing })?)
 }
@@ -384,11 +403,20 @@ pub async fn done(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     }
     statements.push(work::bump(&db, &run.work)?);
     let seq = work::commit(&db, statements).await?;
+    let held = work::held(&db, id).await?;
+    let keys = done
+        .proof
+        .looks
+        .iter()
+        .map(|look| (look.check.clone(), reviews::keys(&look.items, &held)))
+        .collect();
     let change = Change::Done {
         checks: done.proof.checks.clone(),
         looks: done.proof.looks.clone(),
+        keys,
     };
     notify(env, &run.work, seq, id, change).await;
+    refresh(env, config, &run.work, false).await;
     let url = work::page_url(
         config,
         &run.repository,
@@ -415,6 +443,14 @@ async fn run_lacks(db: &D1Database, repo: &str, run: &str) -> worker::Result<Vec
         .into_iter()
         .map(|row| row.sha256)
         .collect())
+}
+
+/// Derives the work's review again after a run changed; a failure is logged, and never fails
+/// CI's call.
+async fn refresh(env: &Env, config: &Config, work: &str, first_run: bool) {
+    if let Err(error) = review::refresh(env, config, work, first_run).await {
+        worker::console_error!("the review of work {work} was not derived again: {error}");
+    }
 }
 
 async fn notify(env: &Env, work: &str, seq: u64, run: &str, change: Change) {
@@ -494,7 +530,7 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
         .run()
         .await?;
     if held.is_none() {
-        show_completed_looks(env, &db, &repo, sha256).await?;
+        show_completed_looks(env, config, &db, &repo, sha256).await?;
     }
     Ok(Response::empty()?.with_status(204))
 }
@@ -504,6 +540,7 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
 /// complete before changes nothing on a page.
 async fn show_completed_looks(
     env: &Env,
+    config: &Config,
     db: &D1Database,
     repo: &str,
     sha256: &str,
@@ -525,16 +562,18 @@ async fn show_completed_looks(
         .results::<Row>()?;
     for row in rows {
         let look: Look = work::read(&row.look)?;
-        if !work::complete(&look, &work::held(db, &row.run).await?) {
+        let Some((look, keys)) = work::shown(look, &work::held(db, &row.run).await?) else {
             continue;
-        }
+        };
         let check: Check = work::read(&row.entry)?;
         let seq = work::commit(db, vec![work::bump(db, &row.work)?]).await?;
         let change = Change::Finished {
             check,
             look: Some(Box::new(look)),
+            keys,
         };
         notify(env, &row.work, seq, &row.run, change).await;
+        refresh(env, config, &row.work, false).await;
     }
     Ok(())
 }

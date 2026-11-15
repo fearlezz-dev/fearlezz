@@ -2,7 +2,7 @@
 // later event applied in turn. Events the snapshot already holds (by sequence number) are
 // dropped, so a page opened while a run goes misses nothing and counts nothing twice.
 
-import type { Change, Check, Live, Look, Ran, Run, RunCheck, Snapshot } from "./proof";
+import type { Change, Check, Live, Look, Ran, Run, RunCheck, Snapshot, WorkChange } from "./proof";
 
 /** A check as a person reads it: not started yet, running, or how it came out. */
 export type CheckState = "planned" | "running" | Ran;
@@ -28,6 +28,23 @@ export function apply(state: Snapshot, seq: number, run: string, change: Change)
   };
 }
 
+/** The snapshot with the work's event `seq` applied, or the same snapshot when it holds it. */
+export function applyWork(state: Snapshot, seq: number, change: WorkChange): Snapshot {
+  if (seq <= state.seq) return state;
+  const next = { ...state, seq };
+  switch (change.kind) {
+    case "verdict": {
+      const v = change.verdict;
+      const same = (o: typeof v) => o.check === v.check && o.picture === v.picture && o.key === v.key;
+      return { ...next, verdicts: [...(state.verdicts ?? []).filter((o) => !same(o)), v] };
+    }
+    case "review":
+      return { ...next, review: change.review ?? null };
+    case "waiting":
+      return { ...next, waiting: change.waiting };
+  }
+}
+
 function changeRun(run: Run, change: Change): Run {
   switch (change.kind) {
     case "opened":
@@ -36,14 +53,21 @@ function changeRun(run: Run, change: Change): Run {
       return { ...run, checks: upsert(run.checks, change.check, { started: change.at }) };
     case "finished": {
       const checks = withEntry(run.checks, change.check);
-      return { ...run, checks: change.look ? withLook(checks, change.look) : checks };
+      return { ...run, checks: change.look ? withLook(checks, change.look, change.keys ?? {}) : checks };
     }
-    case "done":
+    case "done": {
+      const keys = change.keys ?? {};
       return {
         ...run,
         state: "done",
-        checks: change.looks.reduce(withLook, change.checks.reduce(withEntry, run.checks)),
+        checks: change.looks.reduce(
+          (checks, look) => withLook(checks, look, keys[look.check] ?? {}),
+          change.checks.reduce(withEntry, run.checks),
+        ),
       };
+    }
+    case "cancelled":
+      return { ...run, state: "cancelled" };
   }
 }
 
@@ -51,8 +75,8 @@ function withEntry(checks: RunCheck[], entry: Check): RunCheck[] {
   return upsert(checks, entry.id, { entry });
 }
 
-function withLook(checks: RunCheck[], look: Look): RunCheck[] {
-  return upsert(checks, look.check, { look });
+function withLook(checks: RunCheck[], look: Look, keys: Record<string, string>): RunCheck[] {
+  return upsert(checks, look.check, { look, keys });
 }
 
 /** The checks with `id` changed by `fields`, or added at the end when the run did not plan it. */
@@ -68,21 +92,27 @@ export type Status = { kind: "connecting" } | { kind: "live"; state: Snapshot } 
  * the snapshot (the room takes a socket before it reads the snapshot) until it comes. */
 export class Feed {
   private state: Snapshot | undefined;
-  private early: Extract<Live, { kind: "event" }>[] = [];
+  private early: Exclude<Live, { kind: "snapshot" }>[] = [];
 
   /** The work after `message`, once the snapshot came. */
   take(message: Live): Snapshot | undefined {
     if (message.kind === "snapshot") {
       const { kind: _, ...snapshot } = message;
-      this.state = this.early.reduce((s, e) => apply(s, e.seq, e.run, e.change), snapshot as Snapshot);
+      this.state = this.early.reduce(step, snapshot as Snapshot);
       this.early = [];
     } else if (this.state) {
-      this.state = apply(this.state, message.seq, message.run, message.change);
+      this.state = step(this.state, message);
     } else {
       this.early.push(message);
     }
     return this.state;
   }
+}
+
+function step(state: Snapshot, message: Exclude<Live, { kind: "snapshot" }>): Snapshot {
+  return message.kind === "event"
+    ? apply(state, message.seq, message.run, message.change)
+    : applyWork(state, message.seq, message.change);
 }
 
 /** Keeps a live connection to the work at `path` (the page's own path) open, handing on each

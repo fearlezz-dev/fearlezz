@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use github::FakeGitHub;
-use worker::{AUDIENCE, INSTALL_URL, ISSUER, SIGNING_KEY, Worker};
+use worker::{AUDIENCE, INSTALL_URL, ISSUER, SIGNING_KEY, WEBHOOK_SECRET, Worker};
 
 struct World {
     worker: Worker,
@@ -278,6 +278,55 @@ fn main() {
         (
             "pictures_group_by_the_parts_of_their_names",
             pictures_group_by_the_parts_of_their_names,
+        ),
+        (
+            "a_verdict_needs_a_session_write_access_the_app_origin_and_json",
+            a_verdict_needs_a_session_write_access_the_app_origin_and_json,
+        ),
+        (
+            "a_bearer_token_never_gives_a_verdict_or_an_accept",
+            a_bearer_token_never_gives_a_verdict_or_an_accept,
+        ),
+        (
+            "a_verdict_on_a_local_run_is_refused",
+            a_verdict_on_a_local_run_is_refused,
+        ),
+        (
+            "a_verdict_carries_over_to_a_later_run_with_the_same_pictures",
+            a_verdict_carries_over_to_a_later_run_with_the_same_pictures,
+        ),
+        (
+            "a_film_verdict_follows_its_changed_states",
+            a_film_verdict_follows_its_changed_states,
+        ),
+        ("accept_needs_an_admin", accept_needs_an_admin),
+        (
+            "the_check_run_follows_the_review_through_a_whole_flow",
+            the_check_run_follows_the_review_through_a_whole_flow,
+        ),
+        (
+            "one_comment_is_created_then_edited",
+            one_comment_is_created_then_edited,
+        ),
+        (
+            "a_webhook_with_a_wrong_signature_is_refused",
+            a_webhook_with_a_wrong_signature_is_refused,
+        ),
+        (
+            "a_job_that_ends_without_done_cancels_its_run",
+            a_job_that_ends_without_done_cancels_its_run,
+        ),
+        (
+            "a_queued_job_shows_as_waiting_for_a_runner",
+            a_queued_job_shows_as_waiting_for_a_runner,
+        ),
+        (
+            "a_verdict_given_in_one_tab_shows_in_another",
+            a_verdict_given_in_one_tab_shows_in_another,
+        ),
+        (
+            "the_page_says_what_each_person_can_do",
+            the_page_says_what_each_person_can_do,
         ),
     ];
     let mut trials: Vec<Trial> = tests
@@ -1632,6 +1681,725 @@ fn pictures_group_by_the_parts_of_their_names() {
     );
 }
 
+// Review: verdicts and accepts on the page, the check run and comment the app writes, and
+// GitHub's webhooks. Every review test works on `owner/review`, where `writer` has write
+// access and `admin` admin rights, each on its own pull request.
+
+/// A commit of forty hex digits, from a short name.
+fn commit(name: &str) -> String {
+    format!("{name:0<40}")
+}
+
+/// The look of check `screens` with one changed still, and its files, by their bytes.
+fn one_still(before: &[u8], after: &[u8]) -> (Value, Vec<(&'static str, Vec<u8>)>) {
+    let files = vec![
+        ("looks/screens/before/card/light.png", before.to_vec()),
+        ("looks/screens/after/card/light.png", after.to_vec()),
+    ];
+    let look = look_of(
+        "screens",
+        &[still(
+            "card/light.png",
+            "changed",
+            Some(files[0].0),
+            Some(files[1].0),
+        )],
+    );
+    (look, files)
+}
+
+/// A run of `job` whose check `screens` ends with `look` and its files, every file sent, and
+/// then done with `extra` over its proof.
+fn proven(job: &Job, look: &Value, files: &[(&str, Vec<u8>)], extra: &Value) -> String {
+    let run = job.open(&["screens"]);
+    let files: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    let answer = job.finished_with_look(&run.id, &entry("screens", "passed"), &files, look);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    for (_, bytes) in &files {
+        job.send(bytes);
+    }
+    let answer = job.close_with(
+        &run.id,
+        &[entry("screens", "passed")],
+        std::slice::from_ref(look),
+        &files,
+        extra,
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    run.id
+}
+
+/// The work's review as its page gets it.
+fn review_of(pull: u64) -> Value {
+    live(&format!("/owner/review/pull/{pull}"), &[]).json()["review"].clone()
+}
+
+/// What the page sends to say something about run `run` (`verdicts` or `accept`): JSON from
+/// the app origin with the session `cookie`, and `headers` besides or instead.
+fn say(
+    run: &str,
+    what: &str,
+    cookie: Option<&str>,
+    headers: &[(&str, &str)],
+    body: &Value,
+) -> Answer {
+    let origin = world().worker.url.clone();
+    let mut all: Vec<(&str, &str)> =
+        vec![("Origin", &origin), ("Content-Type", "application/json")];
+    for (name, value) in headers {
+        all.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        all.push((name, value));
+    }
+    if let Some(cookie) = cookie {
+        all.push(("Cookie", cookie));
+    }
+    let path = format!("/api/v2/runs/{run}/{what}");
+    request("POST", &path, &all, Some(body.to_string().into_bytes()))
+}
+
+fn looks_right(picture: &str) -> Value {
+    json!({"check": "screens", "picture": picture, "kind": "looks_right"})
+}
+
+/// A weakening that waits for an admin's accept, as a hosted CI run closes with it.
+fn weakened() -> Value {
+    json!({
+        "weakened": [{"check": "tests", "how": "it runs another command"}],
+        "weakenings_wait": true,
+    })
+}
+
+/// Sends a GitHub webhook of `event`, signed with the app's webhook secret.
+fn webhook(event: &str, payload: &Value) -> Answer {
+    let body = payload.to_string().into_bytes();
+    let signature = github::signature(WEBHOOK_SECRET, &body);
+    let headers = [
+        ("X-GitHub-Event", event),
+        ("X-Hub-Signature-256", signature.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    request("POST", "/api/github/webhook", &headers, Some(body))
+}
+
+/// The `pull_request` webhook of `action` for pull request `number` of `owner/review` at `head`.
+fn pull_request(action: &str, number: u64, branch: &str, head: &str) -> Value {
+    json!({
+        "action": action,
+        "number": number,
+        "pull_request": {
+            "number": number,
+            "title": format!("Pull request {number}"),
+            "html_url": format!("https://github.com/owner/review/pull/{number}"),
+            "head": {"sha": head, "ref": branch, "repo": {"full_name": "owner/review"}},
+            "base": {"ref": "main", "repo": {"full_name": "owner/review"}},
+        },
+        "repository": {"full_name": "owner/review"},
+        "installation": {"id": 6},
+    })
+}
+
+/// The `workflow_job` webhook of `action` for job `name` of workflow run `run`.
+fn workflow_job(action: &str, run: u64, name: &str, branch: &str, head: &str) -> Value {
+    json!({
+        "action": action,
+        "workflow_job": {
+            "id": run * 10,
+            "run_id": run,
+            "name": name,
+            "head_sha": head,
+            "head_branch": branch,
+            "status": action,
+            "conclusion": if action == "completed" { json!("cancelled") } else { Value::Null },
+            "html_url": format!("https://github.com/owner/review/actions/runs/{run}/job/{}", run * 10),
+        },
+        "repository": {"full_name": "owner/review"},
+        "installation": {"id": 6},
+    })
+}
+
+/// The latest check run the app wrote for `head` of `owner/review`.
+fn check_run(head: &str) -> github::CheckRun {
+    let runs = world().github.check_runs("owner/review", head);
+    runs.last()
+        .cloned()
+        .unwrap_or_else(|| panic!("no check run for {head}"))
+}
+
+fn a_verdict_needs_a_session_write_access_the_app_origin_and_json() {
+    let job = Job::pull("owner/review", 101, "review/guarded").at(&commit("a101"), 1101);
+    let (look, files) = one_still(b"guarded before", b"guarded after");
+    let run = proven(&job, &look, &files, &json!({}));
+    let body = looks_right("card/light.png");
+    let writer = sign_in("writer-code", "/");
+    let reader = sign_in("reader-code", "/");
+
+    let answer = say(&run, "verdicts", None, &[], &body);
+    assert_eq!(answer.status, 401, "without a session: {}", answer.text());
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[("Origin", "https://elsewhere.test")],
+        &body,
+    );
+    assert_eq!(answer.status, 403, "from another site: {}", answer.text());
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[("Origin", "null")],
+        &body,
+    );
+    assert_eq!(answer.status, 403, "from no site: {}", answer.text());
+    let form = [("Content-Type", "application/x-www-form-urlencoded")];
+    let answer = say(&run, "verdicts", Some(&writer), &form, &body);
+    assert_eq!(answer.status, 415, "a form: {}", answer.text());
+    let answer = say(&run, "verdicts", Some(&reader), &[], &body);
+    assert_eq!(answer.status, 403, "a reader: {}", answer.text());
+    assert!(answer.text().contains("write access"), "{}", answer.text());
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("nothing.png"),
+    );
+    assert_eq!(
+        answer.status,
+        409,
+        "a picture the run lacks: {}",
+        answer.text()
+    );
+    assert_eq!(review_of(101)["state"], "waits");
+
+    let answer = say(&run, "verdicts", Some(&writer), &[], &body);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let review = review_of(101);
+    assert_eq!(review["state"], "approved", "{review:#}");
+    let verdict = &review["pictures"][0]["verdict"];
+    assert_eq!(verdict["by"], "writer", "{review:#}");
+    assert_eq!(verdict["kind"], "looks_right", "{review:#}");
+    assert_eq!(verdict["run"], run.as_str(), "{review:#}");
+}
+
+fn a_bearer_token_never_gives_a_verdict_or_an_accept() {
+    // A token is how programs speak to the host (CI's OIDC token now, the CLI's own later);
+    // only a person in a browser gives a verdict or an accept.
+    let job = Job::pull("owner/review", 102, "review/bearer").at(&commit("a102"), 1102);
+    let (look, files) = one_still(b"bearer before", b"bearer after");
+    let run = proven(&job, &look, &files, &weakened());
+    let auth = format!("Bearer {}", job.token());
+    let bearer = [("Authorization", auth.as_str())];
+    let writer = sign_in("writer-code", "/");
+    let admin = sign_in("admin-code", "/");
+    let body = looks_right("card/light.png");
+    for cookie in [None, Some(writer.as_str())] {
+        let answer = say(&run, "verdicts", cookie, &bearer, &body);
+        assert_eq!(answer.status, 403, "{}", answer.text());
+    }
+    let answer = say(&run, "accept", Some(&admin), &bearer, &json!({}));
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    let review = review_of(102);
+    assert!(review["pictures"][0]["verdict"].is_null(), "{review:#}");
+    assert!(review["accept"].is_null(), "{review:#}");
+}
+
+fn a_verdict_on_a_local_run_is_refused() {
+    let job = Job::pull("owner/review", 103, "review/local").at(&commit("a103"), 1103);
+    let (look, files) = one_still(b"local before", b"local after");
+    let run = proven(&job, &look, &files, &json!({}));
+    // No call opens a local run yet; its record is what one will look like.
+    world().worker.sql(&format!(
+        r#"UPDATE runs SET source = '{{"kind":"local"}}' WHERE id = '{run}'"#
+    ));
+    let writer = sign_in("writer-code", "/");
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("card/light.png"),
+    );
+    assert_eq!(answer.status, 409, "{}", answer.text());
+    assert!(answer.text().contains("local run"), "{}", answer.text());
+}
+
+fn a_verdict_carries_over_to_a_later_run_with_the_same_pictures() {
+    let first = Job::pull("owner/review", 104, "review/carries").at(&commit("a104"), 1104);
+    let (look, files) = one_still(b"carries before", b"carries after");
+    let run = proven(&first, &look, &files, &json!({}));
+    let writer = sign_in("writer-code", "/");
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("card/light.png"),
+    );
+    assert_eq!(answer.status, 201, "{}", answer.text());
+
+    // A later push whose picture is the same keeps the verdict, and says where it came from.
+    let second = first.at(&commit("b104"), 2104);
+    let later = proven(&second, &look, &files, &json!({}));
+    let review = review_of(104);
+    assert_eq!(review["head"], commit("b104"), "{review:#}");
+    assert_eq!(review["state"], "approved", "{review:#}");
+    let verdict = &review["pictures"][0]["verdict"];
+    assert_eq!(verdict["head"], commit("a104"), "{review:#}");
+    assert_eq!(verdict["run"], run.as_str(), "{review:#}");
+    assert_ne!(verdict["run"], later.as_str());
+
+    // Another after loses it.
+    let third = first.at(&commit("c104"), 3104);
+    let (changed, changed_files) = one_still(b"carries before", b"carries after, changed");
+    proven(&third, &changed, &changed_files, &json!({}));
+    let review = review_of(104);
+    assert_eq!(review["state"], "waits", "{review:#}");
+    assert!(review["pictures"][0]["verdict"].is_null(), "{review:#}");
+}
+
+/// A changed film whose states named in `changed` differ, recorded as `bytes`.
+fn film_look(bytes: &[u8], changed: &[usize]) -> (Value, Vec<(&'static str, Vec<u8>)>) {
+    let files = vec![
+        (
+            "looks/screens/before/checkout.webm",
+            b"film before".to_vec(),
+        ),
+        ("looks/screens/after/checkout.webm", bytes.to_vec()),
+    ];
+    let pairs: Vec<Value> = (0..3)
+        .map(|state| {
+            let px = if changed.contains(&state) { 900 } else { 0 };
+            json!({
+                "before": state, "after": state, "before_frame": 0, "after_frame": 0,
+                "before_at": state as f64, "after_at": state as f64, "px": px, "boxes": [],
+            })
+        })
+        .collect();
+    let item = json!({
+        "name": "checkout.webm", "kind": "film", "change": "changed", "summary": "changes",
+        "before": files[0].0, "after": files[1].0,
+        "comparison": {
+            "verdict": "changed", "still": false,
+            "size_before": [640, 400], "size_after": [640, 400],
+            "total_before": 3.0, "total_after": 3.0, "max_shift": 0.0, "max_shift_at": null,
+            "states_before": 3, "states_after": 3, "moments": [], "pairs": pairs,
+        },
+    });
+    (look_of("screens", &[item]), files)
+}
+
+fn a_film_verdict_follows_its_changed_states() {
+    let first = Job::pull("owner/review", 105, "review/film").at(&commit("a105"), 1105);
+    let (look, files) = film_look(b"film after, recording 1", &[1]);
+    let run = proven(&first, &look, &files, &json!({}));
+    let writer = sign_in("writer-code", "/");
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("checkout.webm"),
+    );
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    // Films differ in their bytes each time they are recorded; the same change keeps it.
+    let (again, again_files) = film_look(b"film after, recording 2", &[1]);
+    proven(
+        &first.at(&commit("b105"), 2105),
+        &again,
+        &again_files,
+        &json!({}),
+    );
+    assert_eq!(review_of(105)["state"], "approved");
+    // Another state that changed is another change.
+    let (other, other_files) = film_look(b"film after, recording 3", &[1, 2]);
+    proven(
+        &first.at(&commit("c105"), 3105),
+        &other,
+        &other_files,
+        &json!({}),
+    );
+    assert_eq!(review_of(105)["state"], "waits");
+}
+
+fn accept_needs_an_admin() {
+    let job = Job::pull("owner/review", 106, "review/accept").at(&commit("a106"), 1106);
+    let (look, files) = one_still(b"accept before", b"accept before");
+    let mut look = look;
+    look["items"][0]["change"] = json!("same");
+    let run = proven(&job, &look, &files, &weakened());
+    let review = review_of(106);
+    assert_eq!(review["state"], "waits", "{review:#}");
+    assert_eq!(review["weakened"][0]["check"], "tests", "{review:#}");
+
+    let writer = sign_in("writer-code", "/");
+    let answer = say(&run, "accept", Some(&writer), &[], &json!({}));
+    assert_eq!(answer.status, 403, "{}", answer.text());
+    assert!(answer.text().contains("admin"), "{}", answer.text());
+    let admin = sign_in("admin-code", "/");
+    let answer = say(&run, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let review = review_of(106);
+    assert_eq!(review["state"], "approved", "{review:#}");
+    assert_eq!(review["accept"]["by"], "admin", "{review:#}");
+
+    // A run that weakens nothing has nothing to accept.
+    let plain = job.at(&commit("b106"), 2106);
+    let other = proven(&plain, &look, &files, &json!({}));
+    let answer = say(&other, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 409, "{}", answer.text());
+}
+
+fn the_check_run_follows_the_review_through_a_whole_flow() {
+    let page = format!("{}/owner/review/pull/107", world().worker.url);
+    let first = commit("a107");
+    // A push to the pull request: its head waits for CI.
+    let answer = webhook(
+        "pull_request",
+        &pull_request("synchronize", 107, "review/flow", &first),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    let check = check_run(&first);
+    assert_eq!(check.field("name"), "Fearlezz review");
+    assert_eq!(check.state(), "queued");
+    assert_eq!(check.field("details_url"), page.as_str());
+    assert!(
+        check.field("output")["title"]
+            .as_str()
+            .unwrap()
+            .contains("Waiting for CI"),
+        "{:?}",
+        check.writes
+    );
+
+    // CI opens its run: in progress.
+    let job = Job::pull("owner/review", 107, "review/flow").at(&first, 1107);
+    let run = job.open(&["screens"]);
+    assert_eq!(check_run(&first).state(), "in_progress");
+
+    // Done, with a changed picture and a weakening: both wait for a person.
+    let (look, files) = one_still(b"flow before", b"flow after");
+    let listed: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    job.finished_with_look(&run.id, &entry("screens", "passed"), &listed, &look);
+    for (_, bytes) in &listed {
+        job.send(bytes);
+    }
+    let answer = job.close_with(
+        &run.id,
+        &[entry("screens", "passed")],
+        &[look],
+        &listed,
+        &weakened(),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let check = check_run(&first);
+    assert_eq!(check.state(), "action_required", "{:?}", check.writes);
+    let summary = check.field("output")["summary"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(summary.contains("card/light.png"), "{summary}");
+    assert!(summary.contains("check `tests` is weaker"), "{summary}");
+
+    // A writer's verdict leaves the weakening waiting; an admin's accept settles the head.
+    let writer = sign_in("writer-code", "/");
+    let answer = say(
+        &run.id,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("card/light.png"),
+    );
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    assert_eq!(check_run(&first).state(), "action_required");
+    let admin = sign_in("admin-code", "/");
+    let answer = say(&run.id, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let check = check_run(&first);
+    assert_eq!(check.state(), "success", "{:?}", check.writes);
+    assert!(
+        check.tokens.iter().all(|t| t == "installation-6"),
+        "the app writes it: {:?}",
+        check.tokens
+    );
+
+    // The next push gets a check run of its own, which fails with its proof.
+    let second = commit("b107");
+    webhook(
+        "pull_request",
+        &pull_request("synchronize", 107, "review/flow", &second),
+    );
+    assert_eq!(check_run(&second).state(), "queued");
+    let next = job.at(&second, 2107);
+    let run = next.open(&["tests"]);
+    next.done(&run.id, &[entry("tests", "failed")], &[]);
+    assert_eq!(check_run(&second).state(), "failure");
+    assert_eq!(
+        check_run(&first).state(),
+        "success",
+        "the first head keeps its own"
+    );
+}
+
+fn one_comment_is_created_then_edited() {
+    let first = commit("a108");
+    webhook(
+        "pull_request",
+        &pull_request("opened", 108, "review/comment", &first),
+    );
+    assert!(
+        world().github.comments("owner/review", 108).is_empty(),
+        "no hosted run yet"
+    );
+    let job = Job::pull("owner/review", 108, "review/comment").at(&first, 1108);
+    let run = job.open(&["tests"]);
+    let comments = world().github.comments("owner/review", 108);
+    assert_eq!(comments.len(), 1, "{comments:?}");
+    let page = format!("{}/owner/review/pull/108", world().worker.url);
+    assert!(comments[0].bodies[0].contains(&page), "{comments:?}");
+    assert!(comments[0].bodies[0].contains("proving"), "{comments:?}");
+
+    job.done(&run.id, &[entry("tests", "passed")], &[]);
+    let next = job.at(&commit("b108"), 2108);
+    let run = next.open(&["tests"]);
+    next.done(&run.id, &[entry("tests", "failed")], &[]);
+    let comments = world().github.comments("owner/review", 108);
+    assert_eq!(comments.len(), 1, "one comment, edited: {comments:?}");
+    let bodies = &comments[0].bodies;
+    assert!(bodies.len() >= 3, "{bodies:?}");
+    assert!(bodies.last().unwrap().contains("failed"), "{bodies:?}");
+    assert!(
+        bodies.iter().all(|b| b.lines().count() == 1),
+        "one line: {bodies:?}"
+    );
+    assert!(
+        comments[0].tokens.iter().all(|t| t == "installation-6"),
+        "as the app: {comments:?}"
+    );
+}
+
+fn a_webhook_with_a_wrong_signature_is_refused() {
+    let body = json!({"zen": "Keep it logically awesome.", "hook_id": 1}).to_string();
+    let wrong = github::signature("another secret", body.as_bytes());
+    for headers in [
+        vec![("X-GitHub-Event", "ping")],
+        vec![
+            ("X-GitHub-Event", "ping"),
+            ("X-Hub-Signature-256", wrong.as_str()),
+        ],
+        vec![
+            ("X-GitHub-Event", "ping"),
+            ("X-Hub-Signature-256", "sha256=00"),
+        ],
+    ] {
+        let answer = request(
+            "POST",
+            "/api/github/webhook",
+            &headers,
+            Some(body.clone().into_bytes()),
+        );
+        assert_eq!(answer.status, 401, "{headers:?}: {}", answer.text());
+    }
+    // A forged push to a pull request writes nothing to GitHub.
+    let head = commit("a109");
+    let payload = pull_request("synchronize", 109, "review/forged", &head).to_string();
+    let wrong = github::signature("another secret", payload.as_bytes());
+    let headers = [
+        ("X-GitHub-Event", "pull_request"),
+        ("X-Hub-Signature-256", wrong.as_str()),
+    ];
+    let answer = request(
+        "POST",
+        "/api/github/webhook",
+        &headers,
+        Some(payload.into_bytes()),
+    );
+    assert_eq!(answer.status, 401, "{}", answer.text());
+    assert!(world().github.check_runs("owner/review", &head).is_empty());
+    let answer = webhook(
+        "ping",
+        &json!({"zen": "Keep it logically awesome.", "hook_id": 1}),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+}
+
+fn a_job_that_ends_without_done_cancels_its_run() {
+    let head = commit("a110");
+    let job = Job::pull("owner/review", 110, "review/cancel").at(&head, 1110);
+    let run = job.open(&["tests"]);
+    job.started(&run.id, "tests");
+    // Another job of the same workflow run ending leaves it running.
+    let answer = webhook(
+        "workflow_job",
+        &workflow_job("completed", 1110, "build", "review/cancel", &head),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    let snapshot = live("/owner/review/pull/110", &[]).json();
+    assert_eq!(snapshot["runs"][0]["state"], "running", "{snapshot:#}");
+    // Its own job ending without done closes it as cancelled.
+    webhook(
+        "workflow_job",
+        &workflow_job("completed", 1110, "proof", "review/cancel", &head),
+    );
+    let snapshot = live("/owner/review/pull/110", &[]).json();
+    assert_eq!(snapshot["runs"][0]["state"], "cancelled", "{snapshot:#}");
+    assert_eq!(snapshot["review"]["state"], "cancelled", "{snapshot:#}");
+    assert_eq!(check_run(&head).state(), "cancelled");
+    let answer = job.finished(&run.id, &entry("tests", "passed"), &[]);
+    assert_eq!(
+        answer.status,
+        409,
+        "a closed run takes nothing more: {}",
+        answer.text()
+    );
+}
+
+fn a_queued_job_shows_as_waiting_for_a_runner() {
+    // The work and its job are known from an earlier run.
+    let job = Job::pull("owner/review", 111, "review/queued").at(&commit("a111"), 1111);
+    let run = job.open(&["tests"]);
+    job.done(&run.id, &[entry("tests", "passed")], &[]);
+    let head = commit("b111");
+    let page = "/owner/review/pull/111";
+    webhook(
+        "workflow_job",
+        &workflow_job("queued", 2111, "proof", "review/queued", &head),
+    );
+    // A job that never ran Fearlezz is not shown.
+    webhook(
+        "workflow_job",
+        &workflow_job("queued", 2111, "lint", "review/queued", &head),
+    );
+    let snapshot = live(page, &[]).json();
+    let waiting = snapshot["waiting"].as_array().cloned().unwrap_or_default();
+    assert_eq!(waiting.len(), 1, "{snapshot:#}");
+    assert_eq!(waiting[0]["name"], "proof", "{snapshot:#}");
+    assert_eq!(waiting[0]["head"], head.as_str(), "{snapshot:#}");
+    let mut browser = browser::Browser::start();
+    browser.open(&format!("{}{page}", world().worker.url));
+    browser.wait_for(r#"!!document.querySelector('[data-waiting="proof"]')"#);
+    // Once a runner takes it, it no longer waits.
+    webhook(
+        "workflow_job",
+        &workflow_job("in_progress", 2111, "proof", "review/queued", &head),
+    );
+    browser.wait_for(r#"!document.querySelector('[data-waiting="proof"]')"#);
+    let snapshot = live(page, &[]).json();
+    assert!(
+        snapshot
+            .get("waiting")
+            .is_none_or(|w| w.as_array().unwrap().is_empty()),
+        "{snapshot:#}"
+    );
+}
+
+/// A pull request of `owner/review` whose run shows the pictures of `shots`, done with `extra`
+/// over its proof.
+fn review_with_pictures(number: u64, branch: &str, extra: &Value) -> (Job, String) {
+    let job = Job::pull("owner/review", number, branch).at(&commit(&format!("a{number}")), number);
+    let run = job.open(&["screens"]);
+    run_with_pictures(&job, &run.id);
+    let shots = shots();
+    let files: Vec<(&str, &[u8])> = shots
+        .files
+        .iter()
+        .map(|(p, b)| (p.as_str(), b.as_slice()))
+        .collect();
+    let answer = job.close_with(
+        &run.id,
+        &[entry("screens", "passed")],
+        std::slice::from_ref(&shots.look),
+        &files,
+        extra,
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    (job, run.id)
+}
+
+/// Whether the picture on the stage shows the verdict `state`.
+fn verdict_shows(state: &str) -> String {
+    format!(r#"document.querySelector('[data-said]')?.dataset.said === "{state}""#)
+}
+
+fn a_verdict_given_in_one_tab_shows_in_another() {
+    review_with_pictures(112, "review/tabs", &json!({}));
+    let url = format!("{}/owner/review/pull/112", world().worker.url);
+    let mut browser = browser::Browser::start();
+    browser.sign_in(&world().worker.url, &sign_in("writer-code", "/"));
+    let first = browser.open(&url);
+    browser.wait_for(&verdict_shows("none"));
+    let second = browser.open(&url);
+    browser.wait_for(&verdict_shows("none"));
+    browser.eval("window.stayed = true");
+    // The headline says what waits for this person, once the host says who they are.
+    browser.wait_for(
+        "document.querySelector('[data-standing]').textContent.includes('wait for your look')",
+    );
+
+    browser.on(&first);
+    browser.eval(r#"document.querySelector('button[data-say="looks_right"]').click()"#);
+    browser.wait_for(&verdict_shows("looks_right"));
+    browser.on(&second);
+    browser.wait_for(&verdict_shows("looks_right"));
+    assert_eq!(
+        browser.eval("document.querySelector('[data-said]').textContent.includes('writer')"),
+        json!(true)
+    );
+    browser.wait_for(r#"document.querySelector('[data-picture="screens/card/light.png"]').dataset.verdict === "looks_right""#);
+    assert_eq!(
+        browser.eval("window.stayed === true"),
+        json!(true),
+        "no reload"
+    );
+}
+
+fn the_page_says_what_each_person_can_do() {
+    review_with_pictures(113, "review/roles", &weakened());
+    let url = format!("{}/owner/review/pull/113", world().worker.url);
+    let app = world().worker.url.clone();
+    // Signed out: a way to sign in.
+    let mut browser = browser::Browser::start();
+    browser.open(&url);
+    browser.wait_for(&verdict_shows("none"));
+    browser.wait_for(r#"!!document.querySelector('[data-said] a[data-sign-in]')"#);
+    assert_eq!(
+        browser.eval("!!document.querySelector('button[data-say]')"),
+        json!(false)
+    );
+    // A reader: why there is nothing to press.
+    let mut reader = browser::Browser::start();
+    reader.sign_in(&app, &sign_in("reader-code", "/"));
+    reader.open(&url);
+    reader.wait_for(r#"!!document.querySelector('[data-said] [data-cannot]')"#);
+    assert_eq!(
+        reader.eval("document.querySelector('[data-said] [data-cannot]').textContent.includes('write access')"),
+        json!(true)
+    );
+    reader.wait_for(r#"!!document.querySelector('[data-weakenings] [data-cannot]')"#);
+    // A writer gives verdicts but cannot accept.
+    let mut writer = browser::Browser::start();
+    writer.sign_in(&app, &sign_in("writer-code", "/"));
+    writer.open(&url);
+    writer.wait_for(r#"!!document.querySelector('button[data-say="looks_right"]')"#);
+    writer.wait_for(r#"!!document.querySelector('[data-weakenings] [data-cannot]')"#);
+    assert_eq!(
+        writer.eval("!!document.querySelector('button[data-accept]')"),
+        json!(false)
+    );
+    // An admin accepts beside what it weakens.
+    let mut admin = browser::Browser::start();
+    admin.sign_in(&app, &sign_in("admin-code", "/"));
+    admin.open(&url);
+    admin.wait_for(r#"!!document.querySelector('[data-weakenings] button[data-accept]')"#);
+    assert_eq!(
+        admin.eval("document.querySelector('[data-weakenings]').textContent.includes('it runs another command')"),
+        json!(true)
+    );
+    admin.eval("document.querySelector('button[data-accept]').click()");
+    admin.wait_for(r#"document.querySelector('[data-weakenings]').dataset.accepted === "true""#);
+    reader.wait_for(r#"document.querySelector('[data-weakenings]').dataset.accepted === "true""#);
+}
+
 /// Not a test of behaviour: pictures of the page with a changed still, a new still and a
 /// changed film, light and dark and at phone width, written to `ee/target/tmp` for a person
 /// to look at. `cargo test --manifest-path ee/Cargo.toml --test host -- --ignored pictures`.
@@ -1679,16 +2447,51 @@ fn pictures() {
         browser.wait_for(&loaded("img", "after"));
         shoot(&mut browser, &format!("wide-light-{mode}"));
     }
+
+    // Review: what waits for an admin, before and after their verdict, then a reader's view.
+    review_with_pictures(190, "review/shots", &weakened());
+    let url = format!("{}/owner/review/pull/190", world().worker.url);
+    let mut admin = browser::Browser::start();
+    admin.sign_in(&world().worker.url, &sign_in("admin-code", "/"));
+    admin.open(&url);
+    for dark in [false, true] {
+        admin.view(1280, 900, false, dark);
+        admin.wait_for(&verdict_shows("none"));
+        admin.wait_for(&loaded("img", "after"));
+        let scheme = if dark { "dark" } else { "light" };
+        shoot(&mut admin, &format!("review-{scheme}-waits"));
+    }
+    admin.eval(r#"document.querySelector('button[data-say="looks_right"]').click()"#);
+    admin.wait_for(&verdict_shows("looks_right"));
+    for dark in [false, true] {
+        admin.view(1280, 900, false, dark);
+        let scheme = if dark { "dark" } else { "light" };
+        shoot(&mut admin, &format!("review-{scheme}-looks-right"));
+    }
+    admin.view(390, 844, true, false);
+    shoot(&mut admin, "review-phone-light");
+    let mut reader = browser::Browser::start();
+    reader.sign_in(&world().worker.url, &sign_in("reader-code", "/"));
+    reader.open(&url);
+    reader.view(1280, 900, false, false);
+    reader.wait_for(r#"!!document.querySelector('[data-weakenings] [data-cannot]')"#);
+    reader.wait_for(&loaded("img", "after"));
+    shoot(&mut reader, "review-light-reader");
 }
 
 // Helpers.
 
 /// A CI job of one repository: a pull request's run from its head branch, or a push of a
 /// branch. It speaks protocol version 2 with the OIDC token Actions would give it.
+#[derive(Clone)]
 struct Job {
     repository: &'static str,
     branch: String,
     pull: Option<u64>,
+    /// The commit it proves.
+    head: String,
+    /// The workflow run it is a job of, as its run page names it.
+    workflow_run: u64,
 }
 
 /// A run the host opened.
@@ -1703,6 +2506,8 @@ impl Job {
             repository,
             branch: branch.to_owned(),
             pull: Some(number),
+            head: HEAD.to_owned(),
+            workflow_run: 1,
         }
     }
 
@@ -1711,6 +2516,17 @@ impl Job {
             repository,
             branch: branch.to_owned(),
             pull: None,
+            head: HEAD.to_owned(),
+            workflow_run: 1,
+        }
+    }
+
+    /// The same job proving another commit, as a later push brings, in workflow run `run`.
+    fn at(&self, head: &str, workflow_run: u64) -> Job {
+        Job {
+            head: head.to_owned(),
+            workflow_run,
+            ..self.clone()
         }
     }
 
@@ -1749,9 +2565,13 @@ impl Job {
         let mut body = json!({
             "repository": self.repository,
             "branch": self.branch,
-            "head": "abc1234abc1234abc1234abc1234abc1234abc1",
+            "head": self.head,
             "base": "main",
-            "source": {"kind": "ci", "job": "proof", "run_url": "https://github.com/run/1"},
+            "source": {
+                "kind": "ci",
+                "job": "proof",
+                "run_url": format!("https://github.com/{}/actions/runs/{}", self.repository, self.workflow_run),
+            },
             "checks": checks,
         });
         if let Some(n) = self.pull {
@@ -1824,8 +2644,8 @@ impl Job {
         let mut proof = json!({
             "schema": 1,
             "repository": self.repository,
-            "commit": "abc1234",
-            "head": "abc1234abc1234abc1234abc1234abc1234abc1",
+            "commit": &self.head[..7],
+            "head": self.head,
             "base": "main",
             "checks": checks,
             "weakened": [],
@@ -1835,6 +2655,28 @@ impl Job {
             proof["pull"] = json!({"number": n, "title": format!("Pull request {n}")});
         }
         json!({"proof": proof, "files": manifest(files)})
+    }
+
+    /// Closes a run as `close` does, with `extra` laid over its proof.
+    fn close_with(
+        &self,
+        run: &str,
+        checks: &[Value],
+        looks: &[Value],
+        files: &[(&str, &[u8])],
+        extra: &Value,
+    ) -> Answer {
+        let path = format!("/api/v2/runs/{run}/done");
+        let mut body = self.closing(checks, looks, files);
+        for (name, value) in extra.as_object().unwrap() {
+            body["proof"][name] = value.clone();
+        }
+        api(
+            "POST",
+            &path,
+            &self.token(),
+            Some(body.to_string().into_bytes()),
+        )
     }
 
     fn done(&self, run: &str, checks: &[Value], files: &[(&str, &[u8])]) -> Answer {
@@ -1858,6 +2700,9 @@ impl Job {
         )
     }
 }
+
+/// The commit a job proves unless it says another.
+const HEAD: &str = "abc1234abc1234abc1234abc1234abc1234abc1";
 
 /// A check's entry in the proof, as it ended.
 fn entry(id: &str, outcome: &str) -> Value {

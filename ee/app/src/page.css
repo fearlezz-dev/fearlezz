@@ -297,6 +297,54 @@ figure.layers { margin: 0; }
 .keys { margin: 18px 0 0; font-size: 0.9rem; color: var(--quiet); }
 .keys p { margin: 6px 0 0; }
 
+/* Review: the verdict under the picture on the stage, and what the change weakens. */
+.verdict, .weakenings {
+  background: var(--mat); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 18px;
+}
+.verdict { margin: 12px 0 0; min-height: 64px; display: flex; flex-direction: column; justify-content: center; }
+.verdict .hint, .weakenings .hint { margin: 0; }
+.weakenings { margin: 0 0 20px; }
+.weakenings h2 { font-size: 1.05rem; margin: 0 0 8px; }
+.weakenings ul { margin: 0 0 12px; padding: 0; list-style: none; display: grid; gap: 4px; }
+.weakenings li { padding-left: 18px; position: relative; overflow-wrap: anywhere; }
+.weakenings li::before {
+  content: ""; position: absolute; left: 2px; top: 0.55em; width: 8px; height: 8px; border-radius: 2px;
+  background: var(--bad); transform: rotate(45deg);
+}
+.act { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.btn {
+  border: 2px solid currentColor; background: none; border-radius: 10px; padding: 7px 18px; font-weight: 700;
+  transition: background 0.2s, color 0.2s, transform 0.15s var(--ease);
+}
+.btn.ok { color: var(--ok); }
+.btn.ok:hover:not(:disabled) { background: var(--ok); color: var(--on-accent); }
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.said { margin: 0; display: flex; align-items: center; gap: 10px; }
+.said.ok b:first-child { color: var(--ok); }
+.carried { color: var(--quiet); }
+.error { margin: 8px 0 0; color: var(--bad); font-size: 0.9rem; }
+/* A tick: looks right. */
+.right {
+  flex: none; display: inline-block; width: 18px; height: 18px; border-radius: 50%; background: var(--ok);
+  position: relative;
+}
+.right::after {
+  content: ""; position: absolute; left: 6px; top: 3px; width: 4px; height: 8px;
+  border: solid var(--on-accent); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.chip-pic .right { width: 14px; height: 14px; }
+.chip-pic .right::after { left: 4.5px; top: 2px; width: 3px; height: 6px; }
+@media (prefers-reduced-motion: no-preference) {
+  .said .right { animation: tick-in 0.35s var(--ease) both; }
+}
+@keyframes tick-in { from { transform: scale(0.4); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* A CI job that waits for a runner, and runs that ended otherwise. */
+.run.waiting .run-head { cursor: default; }
+.run.waiting .run-head:hover { background: none; }
+.pill.queued { color: var(--timing); background: color-mix(in srgb, var(--timing) 14%, transparent); }
+.pill.cancelled { color: var(--quiet); background: var(--sunk); }
+
 @media (max-width: 700px) {
   main { padding-top: 18px; }
   .layers.side { grid-template-columns: 1fr; }

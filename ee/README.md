@@ -14,8 +14,17 @@ may read the repository.
 
 A repository opts in by installing the Fearlezz GitHub App and letting its workflow request
 GitHub's OIDC token (`permissions: id-token: write`). CI asks whether the repository is
-installed before it sends anything. The app needs the repository permission **Metadata** read
-(who may read a repository).
+installed before it sends anything. The app needs these repository permissions:
+
+| Permission | For |
+| --- | --- |
+| **Metadata** read | who may read a repository, and who may write or administer it |
+| **Checks** write | the `Fearlezz review` check run |
+| **Pull requests** write | the one review comment on each pull request |
+| **Actions** read | the `workflow_job` webhook |
+
+and subscribes to the webhook events **Pull request** and **Workflow job**, sent to
+`<APP_ORIGIN>/api/github/webhook` with the webhook secret.
 
 ### Protocol, version 2
 
@@ -32,7 +41,7 @@ The bodies are the serde types of `crates/fearlezz-proof/src/events.rs`.
 | Call | Does |
 | --- | --- |
 | `GET /api/v2/installed` | `200 {"installed": true}`, or `200 {"installed": false, "install": "<url>"}`. |
-| `POST /api/v2/runs` | Body `Open`: `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?}, "checks": ["<id>", ...]}`, the checks it plans in order. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
+| `POST /api/v2/runs` | Body `Open` (only a CI source; an OIDC token never opens a local run, `400`): `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?}, "checks": ["<id>", ...]}`, the checks it plans in order. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
 | `POST /api/v2/runs/<run>/checks` | Body `{"started": {"check": "<id>"}}` when a check starts, or `{"finished": {"check": <proof.json check entry>, "files": {"<path>": {"sha256", "size"}}, "look"?: <look>}}` when it ends, with the files it made (its output at `outputs/<id>.log`, its pictures at `looks/<folder>/...`) and, for a check that takes pictures, its look: the pictures compared with the base commit, as in `proof.json` (`400` when the look is of another check). A check the run did not plan joins at the end. `200 {"missing": ["<sha256>", ...]}`: the blobs the host does not hold yet. |
 | `PUT /api/v2/blobs/<sha256>` | The bytes of one missing file, with `Content-Length`. Stored by content, per repository, so a file that did not change is sent once. `204`. |
 | `POST /api/v2/runs/<run>/done` | Body `{"proof": <proof.json>, "files": {...}}`: every file of the bundle. `409 {"error", "missing": [...]}` while a blob is missing (send them and say done again); otherwise the run is done, the proof's entries and looks are the checks' final word, and it answers `200 {"url": "<page url>"}`. |
@@ -43,7 +52,10 @@ the host cannot read (an unknown `proof.json` schema, bytes that do not hash to 
 `Content-Length` other than the file's size), `404` for a run of another repository, and `409`
 for a run that is done, or a blob no run of the repository names.
 
-**A host error never fails the proof.** CI prints `proof page: <url>` in its log and links the
+**A host error never fails the proof**, with one exception that fails safe. When the host took
+the run (opened it and answered done), what the change weakens waits for an admin's accept on
+the page (see Review) and does not fail the job; when the host cannot be reached or refuses,
+the weakening fails the job as it does without a host. CI prints `proof page: <url>` in its log and links the
 page in the job summary; when a call fails it prints `proof page not sent: <why>` and stops
 sending for that run, and the proof goes on.
 
@@ -73,8 +85,12 @@ are `events::Live`:
   its checks in order (planned, `started` at a time, or with their `entry`, and their `look`
   once compared);
 - then `{"kind": "event", "seq", "run", "change"}` for each write, where `change` is `opened`
-  (a new run), `started`, `finished` (with the check's look, if any) or `done` (with every
-  look).
+  (a new run), `started`, `finished` (with the check's look and its pictures' content keys, if
+  any), `done` (with every look and key) or `cancelled` (its job ended without done);
+- and `{"kind": "work", "seq", "change"}` for what belongs to the work, not one run: a
+  `verdict`, the head's `review` as it now stands, or the CI jobs `waiting` for a runner.
+
+The snapshot also carries the work's `review`, its `verdicts` and its `waiting` jobs.
 
 A look reaches pages, in a snapshot or an event, only once every picture it names is held: CI
 sends a check's end before the pictures the host lacks, so until then a page could only show
@@ -101,6 +117,76 @@ closes with `1008`.
 **Types.** The page's TypeScript types (`ee/app/src/proof.ts`) are generated from
 `fearlezz-proof` with ts-rs; a test of `ee-tests` fails when they drift, and
 `FEARLEZZ_WRITE_TYPES=1 cargo test --manifest-path ee/Cargo.toml --test types` writes them.
+
+### Review
+
+The host is where review happens. Its one model is `crates/fearlezz-proof/src/review.rs`: the
+review of a work's head is derived from the head's CI runs (the newest of each job), the work's
+verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
+Every write that can move it (a run opening, a look arriving, done, a cancel, a verdict, an
+accept, a push to the pull request) derives it again; when it changed, open pages get it live
+and GitHub gets it as the check run and the comment.
+
+- **Verdicts are per picture**, on a CI run only, by a signed in person with write access.
+  A picture to look at is changed, new, gone, timing or unreadable, and not flaky. A verdict is
+  kept by check, picture and content: a still by the SHA-256 of its before and after, a film by
+  which of its stable states changed (its bytes differ each time it is recorded). So a picture
+  that did not change keeps its verdict across runs and pushes; the page says "carried over".
+  A verdict has a kind; `looks_right` is the only one so far.
+- **An accept is per head**, by an admin of the repository, and covers every weakening of it.
+
+| Call | Does |
+| --- | --- |
+| `POST /api/v2/runs/<run>/verdicts` | Body `{"check", "picture", "kind": "looks_right"}`. `201 {"verdict"}`. `403` without write access; `409` for a local run, a picture with nothing to look at, or one whose files are not all in yet. |
+| `POST /api/v2/runs/<run>/accept` | Body `{}`. `201 {"accept"}`. `403` unless admin, `409` unless the run is done with weakenings that wait. |
+| `GET /api/v2/viewer/<owner>/<repo>` | `{"login", "role": "admin" \| "write" \| "read"}`, or `{"login": null}` signed out. |
+
+Both writes take only a browser session: a request with an `Authorization` header is `403`
+(a CI token or any bearer never gives a verdict), one whose `Origin` is not the app origin is
+`403`, one whose body is not `application/json` is `415`, and one without a session is `401`.
+A run the person may not see is `404`. Write and admin access come from GitHub's collaborator
+permission, cached 5 minutes per login and repository.
+
+**The check run** `Fearlezz review`, written as the app on the pull request's head:
+
+| Review | Check run | Title |
+| --- | --- | --- |
+| no CI run of the head yet | `queued` | Waiting for CI to prove `<head>` |
+| a CI run is running | `in_progress` | CI is proving `<head>` |
+| the proof failed | completed, `failure` | The proof of `<head>` failed |
+| every run ended without done | completed, `cancelled` | The CI run of `<head>` ended without its proof |
+| a picture or a weakening waits | completed, `action_required` | what waits, for example "2 pictures wait for a look" |
+| everything looks right and is accepted | completed, `success` | Everything looks right |
+
+Waiting is `action_required`, not `neutral`: it completes the check run, so a required check
+blocks the merge, and GitHub shows it as asking for something; `neutral` would let a required
+check pass. Its details link is the work's page. The summary lists the pictures that wait, the
+ones that look right and by whom, and the weakenings with their accept. Make `Fearlezz review`
+a required check in the branch's protection to hold merges to review. A check run that is
+completed and goes back to running is created anew; otherwise it is edited, and an unchanged
+one is not sent again.
+
+**The comment.** One comment on the pull request, created on its first hosted run and edited
+afterwards: where review stands and a link to the page. Nothing more is written on a closed
+pull request.
+
+**Webhooks** (`POST /api/github/webhook`), each checked against `X-Hub-Signature-256` with the
+webhook secret before anything in it is read (`401` when the signature does not hold):
+
+- `pull_request` opened, synchronize or reopened: the pull request's head becomes its work's
+  head, so the check run says it waits for CI. A pull request from a fork is passed over: its
+  CI gets no OIDC token, so no hosted run comes.
+- `workflow_job`: a job runs Fearlezz when its name is the `GITHUB_JOB` of an earlier run of
+  the repository, alone or with a matrix's values after it (`proof (macos-latest)`). A queued
+  or waiting one shows on its branch's page as waiting for a runner; a completed one cancels
+  the runs of its workflow run and job that never said done. A job its workflow renames with
+  `name:` is not matched.
+
+**Deploying review.** In the GitHub App's settings, add the permissions and events above, set
+the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared
+in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
+deploy applies the D1 migrations (`0006_review.sql`). Existing installations must approve the
+new permissions before the host can write their check runs.
 
 ### Two origins
 

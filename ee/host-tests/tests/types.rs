@@ -5,10 +5,17 @@
 
 use std::path::Path;
 
-use fearlezz_proof::events::{Change, Live, Run, RunCheck, RunState, Snapshot, Source, Work};
+use fearlezz_proof::events::{
+    Change, Live, Run, RunCheck, RunState, Snapshot, Source, Work, WorkChange,
+};
 use fearlezz_proof::findings::{Finding, Level};
 use fearlezz_proof::look::{Change as PictureChange, Item as Picture, Look};
 use fearlezz_proof::media::{Comparison, Moment, Pair, Verdict as Likeness};
+use fearlezz_proof::review::{
+    Accept, Job, Picture as ReviewPicture, Review, State as ReviewState, Verdict as PictureVerdict,
+    VerdictKind,
+};
+use fearlezz_proof::waits::Weakening;
 use fearlezz_proof::{Case, Check, Item, Pull, Ran, Red, Verdict};
 use ts_rs::{Config, TS};
 
@@ -20,6 +27,15 @@ fn declarations() -> String {
         Live::decl(&cfg),
         Snapshot::decl(&cfg),
         Change::decl(&cfg),
+        WorkChange::decl(&cfg),
+        Review::decl(&cfg),
+        ReviewState::decl(&cfg),
+        ReviewPicture::decl(&cfg),
+        PictureVerdict::decl(&cfg),
+        VerdictKind::decl(&cfg),
+        Accept::decl(&cfg),
+        Weakening::decl(&cfg),
+        Job::decl(&cfg),
         Work::decl(&cfg),
         Pull::decl(&cfg),
         Run::decl(&cfg),

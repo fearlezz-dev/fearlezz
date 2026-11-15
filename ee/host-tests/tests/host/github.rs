@@ -1,7 +1,9 @@
 //! A fake GitHub on a local port: the parts the proof host asks (the Actions OIDC keys, the app's
-//! installation on a repository and its installation tokens, a repository as a token sees it,
-//! the OAuth code exchange and the signed in user), kept in memory. It checks the app's JWT with
-//! the app's public key, so a test proves the host signs it as GitHub expects.
+//! installation on a repository and its installation tokens, a repository as a token sees it, a
+//! person's permission on it, the OAuth code exchange and the signed in user), kept in memory,
+//! and what the app writes (check runs and pull request comments), recorded with the token that
+//! wrote them. It checks the app's JWT with the app's public key, so a test proves the host signs
+//! it as GitHub expects. It also sends webhooks, signed as GitHub signs them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
@@ -29,6 +31,52 @@ pub struct Repo {
     pub installation: Option<u64>,
     /// Logins with at least read access.
     pub readers: BTreeSet<String>,
+    /// Logins with write access.
+    pub writers: BTreeSet<String>,
+    /// Logins with admin rights.
+    pub admins: BTreeSet<String>,
+}
+
+/// A check run as the app wrote it, and every write to it in order.
+#[derive(Clone, Debug)]
+pub struct CheckRun {
+    pub id: u64,
+    pub repo: String,
+    pub head_sha: String,
+    /// Each body the app sent for it, the create first.
+    pub writes: Vec<Value>,
+    /// The token of each write.
+    pub tokens: Vec<String>,
+}
+
+impl CheckRun {
+    /// A field as the latest write that set it left it.
+    pub fn field(&self, name: &str) -> Value {
+        self.writes
+            .iter()
+            .rev()
+            .find_map(|w| w.get(name).cloned())
+            .unwrap_or(Value::Null)
+    }
+
+    /// `queued`, `in_progress`, or the conclusion once completed.
+    pub fn state(&self) -> String {
+        let latest = self.writes.last().unwrap();
+        match latest.get("conclusion").and_then(Value::as_str) {
+            Some(conclusion) => conclusion.to_owned(),
+            None => latest["status"].as_str().unwrap_or_default().to_owned(),
+        }
+    }
+}
+
+/// A comment as the app wrote it on a pull request, and every body it had.
+#[derive(Clone, Debug)]
+pub struct Comment {
+    pub id: u64,
+    pub repo: String,
+    pub issue: u64,
+    pub bodies: Vec<String>,
+    pub tokens: Vec<String>,
 }
 
 pub struct State {
@@ -41,6 +89,10 @@ pub struct State {
     pub oidc_keys: Vec<(String, RsaPublicKey)>,
     /// Every request asked, as method and path, so a test can count what the host asks.
     pub asked: Vec<(String, String)>,
+    pub check_runs: Vec<CheckRun>,
+    pub comments: Vec<Comment>,
+    /// The id the next check run or comment gets.
+    pub next_id: u64,
 }
 
 pub struct FakeGitHub {
@@ -59,6 +111,16 @@ impl FakeGitHub {
             private,
             installation,
             readers: set(readers),
+            writers: set(&[]),
+            admins: set(&[]),
+        };
+        // Who reviews: a writer gives verdicts, an admin accepts weakenings too.
+        let reviewed = |private: bool, installation: u64| Repo {
+            private,
+            installation: Some(installation),
+            readers: set(&["reader", "writer", "admin"]),
+            writers: set(&["writer", "admin"]),
+            admins: set(&["admin"]),
         };
         let state = State {
             repos: BTreeMap::from([
@@ -69,14 +131,21 @@ impl FakeGitHub {
                 // Only the caching tests view these, so they can count what the host asks.
                 ("owner/cached".to_owned(), repo(true, Some(4), &["reader"])),
                 ("owner/open".to_owned(), repo(false, Some(5), &[])),
+                // The review tests: verdicts, accepts, the check run and the comment.
+                ("owner/review".to_owned(), reviewed(false, 6)),
             ]),
             codes: BTreeMap::from([
                 ("reader-code".to_owned(), "reader".to_owned()),
                 ("stranger-code".to_owned(), "stranger".to_owned()),
+                ("writer-code".to_owned(), "writer".to_owned()),
+                ("admin-code".to_owned(), "admin".to_owned()),
             ]),
             tokens: BTreeMap::new(),
             oidc_keys: vec![(KID.to_owned(), oidc)],
             asked: Vec::new(),
+            check_runs: Vec::new(),
+            comments: Vec::new(),
+            next_id: 1000,
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -101,6 +170,28 @@ impl FakeGitHub {
             .iter()
             .filter(|(m, p)| m == method && p == path)
             .count()
+    }
+
+    /// The check runs the app wrote on a repository for a commit, oldest first.
+    pub fn check_runs(&self, repo: &str, head_sha: &str) -> Vec<CheckRun> {
+        let state = self.state.lock().unwrap();
+        state
+            .check_runs
+            .iter()
+            .filter(|c| c.repo == repo && c.head_sha == head_sha)
+            .cloned()
+            .collect()
+    }
+
+    /// The comments the app wrote on a pull request, oldest first.
+    pub fn comments(&self, repo: &str, issue: u64) -> Vec<Comment> {
+        let state = self.state.lock().unwrap();
+        state
+            .comments
+            .iter()
+            .filter(|c| c.repo == repo && c.issue == issue)
+            .cloned()
+            .collect()
     }
 
     /// Publishes another Actions OIDC key, as GitHub does when it rotates them.
@@ -228,6 +319,112 @@ fn answer(
                 }),
             )
         }
+        ("GET", ["repos", owner, name, "collaborators", login, "permission"]) => {
+            let full = format!("{owner}/{name}");
+            if !state.tokens.contains_key(token) {
+                return (401, json!({"message": "Bad credentials"}));
+            }
+            let Some(repo) = state.repos.get(&full) else {
+                return (404, json!({"message": "Not Found"}));
+            };
+            let permission = if repo.admins.contains(*login) {
+                "admin"
+            } else if repo.writers.contains(*login) {
+                "write"
+            } else if repo.readers.contains(*login) {
+                "read"
+            } else {
+                "none"
+            };
+            (200, json!({"permission": permission}))
+        }
+        ("POST", ["repos", owner, name, "check-runs"]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            state.next_id += 1;
+            let id = state.next_id;
+            state.check_runs.push(CheckRun {
+                id,
+                repo,
+                head_sha: body["head_sha"].as_str().unwrap_or_default().to_owned(),
+                writes: vec![body.clone()],
+                tokens: vec![token.to_owned()],
+            });
+            (201, json!({"id": id}))
+        }
+        ("PATCH", ["repos", owner, name, "check-runs", id]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            let id: u64 = id.parse().unwrap_or_default();
+            match state
+                .check_runs
+                .iter_mut()
+                .find(|c| c.id == id && c.repo == repo)
+            {
+                Some(run) => {
+                    run.writes.push(body.clone());
+                    run.tokens.push(token.to_owned());
+                    (200, json!({"id": id}))
+                }
+                None => (404, json!({"message": "Not Found"})),
+            }
+        }
+        ("POST", ["repos", owner, name, "issues", issue, "comments"]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            state.next_id += 1;
+            let id = state.next_id;
+            state.comments.push(Comment {
+                id,
+                repo,
+                issue: issue.parse().unwrap_or_default(),
+                bodies: vec![body["body"].as_str().unwrap_or_default().to_owned()],
+                tokens: vec![token.to_owned()],
+            });
+            (
+                201,
+                json!({"id": id, "html_url": format!("https://github.test/c/{id}")}),
+            )
+        }
+        ("PATCH", ["repos", owner, name, "issues", "comments", id]) => {
+            let repo = format!("{owner}/{name}");
+            if !writes_as_app(state, &repo, token) {
+                return (
+                    403,
+                    json!({"message": "Resource not accessible by integration"}),
+                );
+            }
+            let id: u64 = id.parse().unwrap_or_default();
+            match state
+                .comments
+                .iter_mut()
+                .find(|c| c.id == id && c.repo == repo)
+            {
+                Some(comment) => {
+                    comment
+                        .bodies
+                        .push(body["body"].as_str().unwrap_or_default().to_owned());
+                    comment.tokens.push(token.to_owned());
+                    (200, json!({"id": id}))
+                }
+                None => (404, json!({"message": "Not Found"})),
+            }
+        }
         ("POST", ["login", "oauth", "access_token"]) => {
             let field = |name: &str| body.get(name).and_then(Value::as_str).unwrap_or_default();
             if field("client_id") != CLIENT_ID || field("client_secret") != CLIENT_SECRET {
@@ -246,6 +443,26 @@ fn answer(
         },
         _ => (404, json!({"message": "Not Found"})),
     }
+}
+
+/// Whether `token` is the app's installation token on `repo`: only the app writes check runs
+/// and its own comments.
+fn writes_as_app(state: &State, repo: &str, token: &str) -> bool {
+    let installation = token
+        .strip_prefix("installation-")
+        .and_then(|id| id.parse::<u64>().ok());
+    installation.is_some() && state.repos.get(repo).and_then(|r| r.installation) == installation
+}
+
+/// The `X-Hub-Signature-256` GitHub sends with a webhook: HMAC-SHA256 of the body with the
+/// webhook's secret.
+pub fn signature(secret: &str, body: &[u8]) -> String {
+    use hmac::Mac as _;
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(body);
+    let bytes = mac.finalize().into_bytes();
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256={hex}")
 }
 
 /// A public key as a JWKS entry, the way GitHub publishes its Actions keys.

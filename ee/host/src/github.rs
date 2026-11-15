@@ -1,11 +1,14 @@
-//! What the host asks GitHub: whether the app is installed on a repository, whether a
-//! repository is public or a person may read it, and who signed in.
+//! What the host asks GitHub and writes there: whether the app is installed on a repository,
+//! whether a repository is public or a person may read it, what a person may do on it, who
+//! signed in, and, as the app, its check runs and pull request comments.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use worker::{Fetch, Headers, Method, Request, RequestInit, Result};
+
+use fearlezz_proof::waits::Role;
 
 use crate::{Config, crypto, now};
 
@@ -156,4 +159,44 @@ pub async fn login(config: &Config, token: &str) -> Result<Option<String>> {
     let url = format!("{}/user", config.github_api);
     let reply = call(Method::Get, &url, Some(token), None).await?;
     Ok(reply.body["login"].as_str().map(str::to_owned))
+}
+
+/// What a person may do on a repository, as GitHub's collaborator permission says it with
+/// their own token; None when the token no longer works.
+pub async fn permission(
+    config: &Config,
+    repo: &str,
+    login: &str,
+    token: &str,
+) -> Result<Option<Role>> {
+    let url = format!(
+        "{}/repos/{repo}/collaborators/{login}/permission",
+        config.github_api
+    );
+    let reply = call(Method::Get, &url, Some(token), None).await?;
+    Ok(match (reply.status, reply.body["permission"].as_str()) {
+        (401, _) => None,
+        (200, Some(permission)) => Some(Role::of(permission)),
+        _ => Some(Role::Less),
+    })
+}
+
+/// Writes as the app with an installation token: creates (POST to `path`) or updates (PATCH)
+/// one of its records on `repo`, answering the record's id.
+pub async fn write(
+    token: &str,
+    config: &Config,
+    method: Method,
+    path: &str,
+    body: &Value,
+) -> Result<u64> {
+    let url = format!("{}{path}", config.github_api);
+    let reply = call(method, &url, Some(token), Some(body)).await?;
+    match (reply.status, reply.body["id"].as_u64()) {
+        (200 | 201, Some(id)) => Ok(id),
+        (status, _) => Err(worker::Error::RustError(format!(
+            "GitHub answered {status} to {path}: {}",
+            reply.body["message"].as_str().unwrap_or_default()
+        ))),
+    }
 }

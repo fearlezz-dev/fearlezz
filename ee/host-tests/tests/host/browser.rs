@@ -140,6 +140,14 @@ impl Browser {
         page
     }
 
+    /// Holds a signed in person's session, as `Cookie: <pair>` names it, for every page of `url`
+    /// opened from now on.
+    pub fn sign_in(&mut self, url: &str, pair: &str) {
+        let (name, value) = pair.split_once('=').unwrap();
+        let cookie = json!({"name": name, "value": value, "url": url, "httpOnly": true});
+        self.send("Storage.setCookies", json!({"cookies": [cookie]}), false);
+    }
+
     /// Sends commands to `page`, one `open` gave.
     pub fn on(&mut self, page: &str) {
         self.page = Some(page.to_owned());

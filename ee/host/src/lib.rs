@@ -1,6 +1,8 @@
 //! The proof host: takes the runs CI streams (OIDC authenticated, files stored by content in
 //! R2, records in D1) and shows each piece of work live to the people GitHub lets read its
-//! repository. `ee/README.md` is the protocol.
+//! repository, who review it there: a verdict per picture, an admin's accept of a weakening.
+//! The host is the authority for review and writes it to GitHub as the app. `ee/README.md` is
+//! the protocol.
 //!
 //! It answers on two origins. The app origin holds sign in, the API, the work pages (the app
 //! in `ee/app`, served from static assets) and their live connections, each held by the work's
@@ -12,10 +14,14 @@ mod cache;
 mod crypto;
 mod files;
 mod github;
+mod jobs;
 mod oidc;
 mod pages;
+mod review;
 mod room;
+mod say;
 mod session;
+mod webhook;
 mod work;
 
 pub use room::WorkRoom;
@@ -49,6 +55,14 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         ("POST", ["api", "v2", "runs", run, "done"]) => api::done(req, env, config, run).await,
         ("PUT", ["api", "v2", "blobs", sha256]) => api::blob(req, env, config, sha256).await,
         ("GET", ["api", "v2", "runs", run, "grant"]) => pages::grant(&req, env, config, run).await,
+        ("POST", ["api", "v2", "runs", run, "verdicts"]) => {
+            say::verdict(req, env, config, run).await
+        }
+        ("POST", ["api", "v2", "runs", run, "accept"]) => say::accept(req, env, config, run).await,
+        ("GET", ["api", "v2", "viewer", owner, repo]) => {
+            say::viewer(&req, env, config, owner, repo).await
+        }
+        ("POST", ["api", "github", "webhook"]) => webhook::receive(req, env, config).await,
         ("GET", ["login"]) => session::login(&req, config).await,
         ("GET", ["callback"]) => session::callback(&req, env, config).await,
         ("GET", ["logout"]) => session::logout(&req, env).await,
@@ -127,6 +141,8 @@ pub struct Config {
     pub app_key: String,
     /// Seals the sign in cookie and the grants of the files origin.
     pub signing_key: String,
+    /// What GitHub signs the app's webhooks with.
+    pub webhook_secret: String,
 }
 
 impl Config {
@@ -148,6 +164,7 @@ impl Config {
             client_secret: secret("GITHUB_CLIENT_SECRET")?,
             app_key: secret("GITHUB_APP_KEY")?,
             signing_key: secret("SIGNING_KEY")?,
+            webhook_secret: secret("WEBHOOK_SECRET")?,
         })
     }
 }
