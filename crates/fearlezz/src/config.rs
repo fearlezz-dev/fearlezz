@@ -32,6 +32,9 @@ pub(crate) struct Config {
     pub no_proof: Globs,
     /// The proof host CI sends its bundle to, when it is not the default one.
     pub host: Option<String>,
+    /// The table it was read from, pieces merged in and checks turned off left out, so a part
+    /// of it can be shown as written.
+    table: toml::Table,
 }
 
 /// What makes a checkout usable and runs its services. Every part is optional; a project
@@ -467,7 +470,7 @@ impl Config {
             checks.retain(|_, c| c.get("off").and_then(toml::Value::as_bool) != Some(true));
         }
 
-        let raw: RawConfig = toml::Value::Table(table).try_into()?;
+        let raw: RawConfig = toml::Value::Table(table.clone()).try_into()?;
         let order = match raw.stages {
             Some(s) => s.order,
             None => DEFAULT_STAGES.iter().map(ToString::to_string).collect(),
@@ -630,7 +633,33 @@ impl Config {
             base: raw.base.unwrap_or_else(|| "main".into()),
             env,
             host: raw.host.map(|h| h.url),
+            table,
         })
+    }
+
+    /// The part at `path` (`check.tests`, `no_proof`, `lints.ruff.E501`) as TOML, nested
+    /// under its own path, so a table keeps its header: `[check.tests]` with its fields, or
+    /// `no_proof = [...]`. None when the config has no such part. A key may hold dots itself.
+    pub(crate) fn part(&self, path: &str) -> Option<String> {
+        fn find<'a>(table: &'a toml::Table, path: &str) -> Option<(Vec<&'a str>, &'a toml::Value)> {
+            table.iter().find_map(|(key, value)| {
+                if path == key {
+                    return Some((vec![key.as_str()], value));
+                }
+                let rest = path.strip_prefix(key.as_str())?.strip_prefix('.')?;
+                let (mut keys, found) = find(value.as_table()?, rest)?;
+                keys.insert(0, key.as_str());
+                Some((keys, found))
+            })
+        }
+        let (keys, value) = find(&self.table, path)?;
+        let nested = keys.iter().rev().fold(value.clone(), |inner, key| {
+            toml::Value::Table(toml::Table::from_iter([(key.to_string(), inner)]))
+        });
+        let toml::Value::Table(nested) = nested else {
+            return None;
+        };
+        toml::to_string(&nested).ok()
     }
 
     /// Whether a change to `path` needs proof: `no_proof` does not declare it.

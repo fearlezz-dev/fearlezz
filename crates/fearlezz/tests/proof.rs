@@ -219,7 +219,114 @@ fn the_bundle_says_what_the_change_weakens() {
     let weakened = proof["weakened"].as_array().unwrap();
     assert_eq!(weakened.len(), 1, "{proof:#}");
     assert_eq!(weakened[0]["check"], "lint", "{proof:#}");
-    assert!(weakened[0]["how"].is_string(), "{proof:#}");
+    assert!(weakened[0]["hows"][0].is_string(), "{proof:#}");
+}
+
+#[test]
+fn a_check_weakened_two_ways_is_one_weakening_with_both() {
+    let repo = repo(CHECKS, &[("src/a.txt", "a\n")]);
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace(
+            "run = \"echo looking; test ! -e src/broken\"\nstage = \"working\"",
+            "run = \"true\"\nstage = \"look\"",
+        ),
+    );
+    repo.commit("weaker lint");
+    let (out, _, proof) = prove(&repo, &[]);
+    assert!(!out.ok, "{}", out.stdout);
+    let weakened = proof["weakened"].as_array().unwrap();
+    assert_eq!(weakened.len(), 1, "{proof:#}");
+    let w = &weakened[0];
+    assert_eq!(w["check"], "lint", "{proof:#}");
+    assert_eq!(
+        w["hows"],
+        serde_json::json!([
+            "it runs another command",
+            "it moves to a later stage than working"
+        ]),
+        "{proof:#}"
+    );
+    assert!(
+        w["was"]
+            .as_str()
+            .is_some_and(|t| t.contains("run = \"echo looking"))
+    );
+    assert!(
+        w["now"]
+            .as_str()
+            .is_some_and(|t| t.contains("stage = \"look\""))
+    );
+}
+
+#[test]
+fn a_weakened_check_carries_what_it_was_and_what_it_is_now() {
+    let repo = repo(CHECKS, &[("src/a.txt", "a\n")]);
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("echo looking; test ! -e src/broken", "true"),
+    );
+    repo.commit("weaker lint");
+    let (_, _, proof) = prove(&repo, &[]);
+    let w = &proof["weakened"][0];
+    let was = w["was"].as_str().unwrap_or_else(|| panic!("{proof:#}"));
+    let now = w["now"].as_str().unwrap_or_else(|| panic!("{proof:#}"));
+    assert!(was.starts_with("[check.lint]\n"), "{was}");
+    assert!(
+        was.contains("run = \"echo looking; test ! -e src/broken\"\n"),
+        "{was}"
+    );
+    assert!(was.contains("stage = \"working\"\n"), "{was}");
+    assert!(now.starts_with("[check.lint]\n"), "{now}");
+    assert!(now.contains("run = \"true\"\n"), "{now}");
+}
+
+#[test]
+fn a_weakened_setting_carries_what_it_was_and_what_it_is_now() {
+    let repo = repo(
+        &format!("no_proof = [\"docs/**\"]\n{CHECKS}"),
+        &[("src/a.txt", "a\n")],
+    );
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("[\"docs/**\"]", "[\"docs/**\", \"src/**\"]"),
+    );
+    repo.commit("less proof");
+    let (_, _, proof) = prove(&repo, &[]);
+    let w = &proof["weakened"][0];
+    assert_eq!(w["setting"], "no_proof", "{proof:#}");
+    assert_eq!(w["was"], "no_proof = [\"docs/**\"]\n", "{proof:#}");
+    assert_eq!(
+        w["now"], "no_proof = [\"docs/**\", \"src/**\"]\n",
+        "{proof:#}"
+    );
+}
+
+#[test]
+fn a_gone_check_carries_only_what_it_was() {
+    let repo = repo(CHECKS, &[("src/a.txt", "a\n")]);
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("[check.lint]\n", "[check.lint]\noff = true\n"),
+    );
+    repo.commit("no lint");
+    let (_, _, proof) = prove(&repo, &[]);
+    let w = &proof["weakened"][0];
+    assert_eq!(w["hows"], serde_json::json!(["it is gone"]), "{proof:#}");
+    assert!(
+        w["was"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("[check.lint]\n"))
+    );
+    assert!(w.get("now").is_none(), "{proof:#}");
 }
 
 /// Every shell script in `tests/` must pass; they are the check's test files.

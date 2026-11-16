@@ -188,6 +188,7 @@ pub(crate) fn summary(
         )?,
         (None, None) => {}
     }
+    diffs(proof, &mut text)?;
     for note in proof.notes() {
         writeln!(text, "{note}\n")?;
     }
@@ -225,6 +226,81 @@ pub(crate) fn summary(
         writeln!(text, "```\n\n</details>")?;
     }
     Ok(text)
+}
+
+/// Each weakened part that names itself as it was and is now, as one diff of the config.
+fn diffs(proof: &Proof, text: &mut String) -> std::fmt::Result {
+    for w in &proof.weakened {
+        if w.was.is_none() && w.now.is_none() {
+            continue;
+        }
+        let was: Vec<&str> = w.was.as_deref().unwrap_or("").lines().collect();
+        let now: Vec<&str> = w.now.as_deref().unwrap_or("").lines().collect();
+        let lines = diff(&was, &now);
+        // A fence longer than any run of backticks in the config keeps it closed.
+        let ticks = lines
+            .iter()
+            .flat_map(|l| l.split(|c| c != '`'))
+            .map(str::len)
+            .max()
+            .unwrap_or(0);
+        let fence = "`".repeat(ticks.max(2) + 1);
+        writeln!(text, "`{}`: {}\n", w.part.name(), cell(&w.why()))?;
+        writeln!(text, "{fence}diff")?;
+        for line in &lines {
+            writeln!(text, "{line}")?;
+        }
+        writeln!(text, "{fence}\n")?;
+    }
+    Ok(())
+}
+
+/// The lines of `was` and `now` as a unified diff without headers: a line only in `was` gets
+/// `-`, only in `now` `+`, in both a space, kept in order along their longest common lines.
+fn diff(was: &[&str], now: &[&str]) -> Vec<String> {
+    // shared[i][j]: how many lines `was[i..]` and `now[j..]` share, in order. Past the end of
+    // either they share none.
+    let mut shared = vec![vec![0usize; now.len() + 1]; was.len() + 1];
+    let at = |s: &[Vec<usize>], i: usize, j: usize| s.get(i).and_then(|r| r.get(j)).copied();
+    for (i, w) in was.iter().enumerate().rev() {
+        for (j, n) in now.iter().enumerate().rev() {
+            let count = if w == n {
+                at(&shared, i + 1, j + 1).map_or(1, |c| c + 1)
+            } else {
+                at(&shared, i + 1, j)
+                    .max(at(&shared, i, j + 1))
+                    .unwrap_or(0)
+            };
+            if let Some(cell) = shared.get_mut(i).and_then(|r| r.get_mut(j)) {
+                *cell = count;
+            }
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    let mut lines = Vec::new();
+    loop {
+        match (was.get(i), now.get(j)) {
+            (None, None) => break,
+            (Some(w), Some(n)) if w == n => {
+                lines.push(format!(" {w}"));
+                i += 1;
+                j += 1;
+            }
+            (Some(w), None) => {
+                lines.push(format!("-{w}"));
+                i += 1;
+            }
+            (Some(w), Some(_)) if at(&shared, i + 1, j) >= at(&shared, i, j + 1) => {
+                lines.push(format!("-{w}"));
+                i += 1;
+            }
+            (_, Some(n)) => {
+                lines.push(format!("+{n}"));
+                j += 1;
+            }
+        }
+    }
+    lines
 }
 
 /// The pictures that differ from the base, each check with its counts and then each picture,

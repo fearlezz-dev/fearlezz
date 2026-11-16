@@ -43,6 +43,10 @@ describe("the repository page", () => {
     expect(standingOf(listed("a", 1, 1, { latest: { head: "h", source: ci, state: "done", failed: 2 } }))).toBe("failed");
     expect(standingOf(listed("a", 1, 1, { latest: { head: "h", source: ci, state: "done", failed: 0 } }))).toBe("passed");
     expect(standingOf(listed("a", 1, 1, { latest: { head: "h", source: ci, state: "cancelled", failed: 0 } }))).toBe("cancelled");
+    // Passed checks with pictures, notes or a weakening still open wait for a person, not done.
+    const done = { head: "h", source: ci, state: "done" as const, failed: 0 };
+    expect(standingOf(listed("a", 1, 1, { latest: done, weakened: true }))).toBe("waits");
+    expect(standingOf(listed("a", 1, 1, { latest: done, pictures: 2 }))).toBe("waits");
     expect(waitsOn(listed("a", 1, 1, { pictures: 1, notes: 2, weakened: true }))).toEqual([
       "1 picture to look at",
       "2 open notes",

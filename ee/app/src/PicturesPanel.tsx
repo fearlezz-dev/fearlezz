@@ -3,7 +3,7 @@
 // and k step between pictures, 1 to 5 pick the way to compare.
 
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
-import { grantOf } from "./grant";
+import { fileUrl, grantOf } from "./grant";
 import {
   GROUP_WORDS,
   type Group,
@@ -105,14 +105,7 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
   return (
     <section class="pictures" data-pictures aria-labelledby="pictures-title">
       <div class="pictures-head">
-        <h2 id="pictures-title">Does it look right to you?</h2>
-        <Show when={localBy(props.run)}>
-          {(who) => (
-            <p class="unproven" data-unproven>
-              <b>{who()}'s local run</b> is the agent's word. Notes reach the agent now; verdicts wait for CI.
-            </p>
-          )}
-        </Show>
+        <h2 id="pictures-title" class="visually-hidden">Pictures</h2>
         <nav class="counts" aria-label="Show only">
           <For each={counts(pictures())}>
             {(c) => (
@@ -121,73 +114,81 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
                 class={`count ${c.change}`}
                 data-filter={c.change}
                 aria-pressed={filter() === c.change}
+                title={filter() === c.change ? "Show all" : `Show only ${WORDS[c.change].toLowerCase()}`}
                 onClick={() => setFilter(filter() === c.change ? null : c.change)}
               >
                 <b class="num">{c.n}</b>
-                <span>{WORDS[c.change]}</span>
+                <span>{WORDS[c.change].toLowerCase()}</span>
               </button>
             )}
           </For>
         </nav>
         <Show when={options().length > 1}>
-          <div class="group-by">
-            <span id="group-by">Group by</span>
-            <div class="seg" role="group" aria-labelledby="group-by">
-              <For each={options()}>
-                {(option) => (
-                  <button type="button" data-group={option} aria-pressed={grouping() === option} onClick={() => setBy(option)}>
-                    {GROUP_WORDS[option]}
-                  </button>
-                )}
-              </For>
-            </div>
+          <div class="seg group-by" role="group" aria-label="Group by">
+            <For each={options()}>
+              {(option) => (
+                <button
+                  type="button"
+                  data-group={option}
+                  aria-pressed={grouping() === option}
+                  title={`Group by ${GROUP_WORDS[option].toLowerCase()}`}
+                  onClick={() => setBy(option)}
+                >
+                  {GROUP_WORDS[option]}
+                </button>
+              )}
+            </For>
           </div>
+        </Show>
+        <Show when={localBy(props.run)}>
+          {(who) => (
+            <p class="unproven" data-unproven title="A local run is the agent's word: notes reach the agent now, verdicts wait for CI">
+              {who()}'s local run, notes only
+            </p>
+          )}
         </Show>
       </div>
       <div class="navigator">
         <For each={groups()}>
           {(group) => {
             const list = () => (
-              <ul class="chips">
+              <ul class="sheet">
                 <For each={group.pictures}>
                   {(p) => (
                     <li>
                       <button
                         type="button"
-                        class="chip-pic"
+                        class="thumb"
                         data-picture={p.key}
                         data-change={p.picture.change}
                         data-flaky={String(!!p.picture.flaky)}
                         data-verdict={standingOf(props.state, props.run, p)}
                         aria-current={current()?.key === p.key ? "true" : undefined}
+                        title={`${title(p.parts)}: ${WORDS[p.picture.change].toLowerCase()}${p.picture.flaky ? ", flaky" : ""}${checks() > 1 ? `, ${p.check}` : ""}`}
                         onClick={() => pick(p.key)}
                       >
-                        <span class={`dot ${p.picture.change}`} aria-hidden="true" />
-                        <span class="name">{title(p.parts)}</span>
-                        <Show when={isFilm(p.picture)}>
-                          <span class="mini">film</span>
-                        </Show>
-                        <Show when={p.picture.flaky}>
-                          <span class="mini">flaky</span>
-                        </Show>
-                        <Switch>
-                          <Match when={standingOf(props.state, props.run, p) === "looks_right"}>
-                            <span class="right" title="Looks right" aria-label="looks right" />
-                          </Match>
-                          <Match when={standingOf(props.state, props.run, p) === "needs_change"}>
-                            <span class="needs" title="Needs change" aria-label="needs change" />
-                          </Match>
-                        </Switch>
-                        <Show when={notesOn(props.state, p.check, p.picture.name, props.run).length}>
-                          {(n) => (
-                            <span class="mini noted" aria-label={`${n()} open ${n() === 1 ? "note" : "notes"}`}>
-                              {n()}
-                            </span>
-                          )}
-                        </Show>
-                        <Show when={checks() > 1 && grouping() !== "check"}>
-                          <span class="mini">{p.check}</span>
-                        </Show>
+                        <span class="shot">
+                          <Thumb shown={p} files={files()} />
+                          <Switch>
+                            <Match when={standingOf(props.state, props.run, p) === "looks_right"}>
+                              <span class="right" aria-label="looks right" />
+                            </Match>
+                            <Match when={notesOn(props.state, p.check, p.picture.name, props.run).length}>
+                              {(n) => (
+                                <span class="noted" aria-label={`needs change, ${n()} open ${n() === 1 ? "note" : "notes"}`}>
+                                  {n()}
+                                </span>
+                              )}
+                            </Match>
+                          </Switch>
+                          <Show when={isFilm(p.picture)}>
+                            <span class="film-mark" aria-label="film" />
+                          </Show>
+                        </span>
+                        <span class="name">
+                          <span class={`dot ${p.picture.change}`} aria-hidden="true" />
+                          {title(p.parts)}
+                        </span>
                       </button>
                     </li>
                   )}
@@ -199,9 +200,7 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
                 when={group.folded}
                 fallback={
                   <div class="group" data-group-key={group.key} data-group-label={group.label}>
-                    <h3 class={group.change ?? ""}>
-                      {group.label} <span class="n num">{group.pictures.length}</span>
-                    </h3>
+                    <h3 class={group.change ?? ""}>{group.label}</h3>
                     {list()}
                   </div>
                 }
@@ -235,16 +234,13 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
       </div>
       {/* A new stage per picture, and the same one while live events redraw its picture. */}
       <Show when={currentKey()} keyed>
-        {(key) => (
+        {(_key) => (
           <Stage
             shown={current()!}
             files={files()}
             head={props.run.head}
             mode={mode()}
             onMode={setMode}
-            position={order().findIndex((p) => p.key === key) + 1}
-            of={order().length}
-            onStep={step}
             checks={checks()}
             noting={noting}
             onTime={setTime}
@@ -264,6 +260,9 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
             sideBySide={mode() === "side"}
             draft={composing() ? draft() : undefined}
             time={isFilm(p().picture) ? time() : undefined}
+            position={order().findIndex((o) => o.key === p().key) + 1}
+            of={order().length}
+            onStep={step}
             onDraft={(d) => {
               setDraft(d);
               setComposing(!!d);
@@ -271,18 +270,31 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
           />
         )}
       </Show>
-      <details class="keys">
-        <summary>Keys</summary>
-        <p>
-          <kbd>j</kbd> <kbd>k</kbd> next and previous picture, <kbd>1</kbd> to <kbd>5</kbd> how to compare
-        </p>
-      </details>
     </section>
   );
 }
 
-/** Under the picture on the stage: the notes on it, the note being written, and the verdict:
- * who said it looks right or needs change and when, or what this person can do about it. */
+/** A picture in the sheet, small: its after, or its before when it is gone; a film's first
+ * frame. Empty until the files origin grants the run's files. */
+function Thumb(props: { shown: Shown; files: string }) {
+  const path = () => props.shown.picture.after ?? props.shown.picture.before;
+  const src = () => {
+    const p = path();
+    return p && props.files ? fileUrl(props.files, p) : "";
+  };
+  return (
+    <Show when={src()} fallback={<span class="blank" />}>
+      {(url) => (
+        <Show when={isFilm(props.shown.picture)} fallback={<img src={url()} alt="" loading="lazy" decoding="async" draggable={false} />}>
+          <video src={`${url()}#t=0.1`} muted playsinline preload="metadata" aria-hidden="true" />
+        </Show>
+      )}
+    </Show>
+  );
+}
+
+/** Under the picture on the stage: what this person can say about it and where it stands, the
+ * way to the next picture, the notes on it, and the note being written. */
 function ReviewBar(props: {
   shown: Shown;
   run: Run;
@@ -294,17 +306,21 @@ function ReviewBar(props: {
   sideBySide: boolean;
   draft: Draft | undefined;
   time: number | undefined;
+  position: number;
+  of: number;
+  onStep: (by: number) => void;
   onDraft: (draft: Draft | undefined) => void;
 }) {
   const [error, setError] = createSignal("");
   const [sending, setSending] = createSignal<"looks_right" | "note" | null>(null);
   const [words, setWords] = createSignal("");
   const verdict = createMemo(() => verdictOf(props.state, props.run, props.shown));
-  const never = () => {
-    if (localBy(props.run)) return "A local run is unproven, so its pictures get a verdict on CI.";
-    if (props.shown.picture.flaky) return "Flaky pictures never wait for a verdict.";
-    if (!toLookAt(props.shown)) return "Unchanged pictures need no verdict.";
-    return "";
+  // Why this picture gets no verdict, in a few words; the reason in full is its title.
+  const never = (): [string, string] | undefined => {
+    if (localBy(props.run)) return ["Verdicts on CI", "A local run is unproven, so its pictures get a verdict on CI."];
+    if (props.shown.picture.flaky) return ["Flaky", "Flaky pictures change from run to run, so they never wait for a verdict."];
+    if (!toLookAt(props.shown)) return ["Unchanged", "Unchanged pictures need no verdict."];
+    return undefined;
   };
   const standing = createMemo(() => standingOf(props.state, props.run, props.shown));
   const state = () => (never() ? "never" : standing());
@@ -343,29 +359,81 @@ function ReviewBar(props: {
   const resolve = async (id: string) => {
     setError((await resolveNote(id)) ?? "");
   };
+  const noteHint = () =>
+    props.sideBySide
+      ? `Drag on ${both() ? "either picture" : "the picture"} to mark what should change, or note the whole picture`
+      : "Side by side, drag on a picture to mark what should change; or note the whole picture";
   return (
     <div class="verdict" data-said={state()} aria-live="polite">
-      <Show when={standing() === "needs_change"}>
-        <p class="said bad">
-          <span class="needs" aria-hidden="true" />
-          <span>
-            <b>Needs change</b>, by {props.notes.length === 1 ? "its open note" : `its ${props.notes.length} open notes`}
-          </span>
-        </p>
-      </Show>
-      <Show when={standing() === "looks_right" && verdict()}>
+      <div class="decide">
+        <Switch>
+          <Match when={never()}>{(why) => <p class="hint" title={why()[1]}>{why()[0]}</p>}</Match>
+          <Match when={onlyViews(props.viewer)}>
+            <p class="hint" title="Verdicts are given on the work's own page">
+              Only views
+            </p>
+          </Match>
+          <Match when={canSay(props.viewer)}>
+            <button
+              type="button"
+              class="btn ok"
+              data-say="looks_right"
+              aria-pressed={!!verdict()}
+              disabled={!!sending()}
+              title={
+                props.notes.length
+                  ? "It needs change until its notes are resolved; looks right holds once they are, as long as it stays the same"
+                  : "Looks right holds as long as it stays the same"
+              }
+              onClick={() => void send()}
+            >
+              Looks right
+            </button>
+          </Match>
+          <Match when={props.viewer?.login}>
+            <p class="hint" data-cannot title={`Giving a verdict needs write access to ${props.repository}`}>
+              Needs write access
+            </p>
+          </Match>
+          <Match when={maySignIn(props.viewer)}>
+            <a class="plain" href={signIn()} data-sign-in title="Sign in to say whether it looks right">
+              Sign in to review
+            </a>
+          </Match>
+        </Switch>
+        <Show when={props.canNote && !props.draft}>
+          <button type="button" class="btn" data-whole title={noteHint()} onClick={whole}>
+            Note
+          </button>
+        </Show>
+        <Show when={standing() === "needs_change"}>
+          <p class="said bad" title={`${props.notes.length} open ${props.notes.length === 1 ? "note" : "notes"}`}>
+            <span class="needs" aria-hidden="true" />
+            <b>Needs change</b>
+          </p>
+        </Show>
+        <Show when={standing() === "looks_right" && verdict()}>
           {(v) => (
-            <p class="said ok">
+            <p class="said ok" title={[ago(Date.now() / 1000 - v().at), carried(v(), props.run)].filter(Boolean).join(", ")}>
               <span class="right" aria-hidden="true" />
               <span>
-                <b>Looks right</b>, said by <b>{v().by}</b>, {ago(Date.now() / 1000 - v().at)}
-                <Show when={carried(v(), props.run)}>
-                  {(where) => <span class="carried">, {where()}</span>}
-                </Show>
+                by <b>{v().by}</b>
               </span>
             </p>
           )}
-      </Show>
+        </Show>
+        <span class="step">
+          <button type="button" class="ghost" aria-label="Previous picture" title="Previous (k)" onClick={() => props.onStep(-1)} disabled={props.position <= 1}>
+            ‹
+          </button>
+          <span class="num">
+            {props.position} of {props.of}
+          </span>
+          <button type="button" class="ghost" aria-label="Next picture" title="Next (j)" onClick={() => props.onStep(1)} disabled={props.position >= props.of}>
+            ›
+          </button>
+        </span>
+      </div>
       <Show when={props.notes.length}>
         <ol class="note-list" data-notes aria-label="Notes on this picture">
           <For each={props.notes}>
@@ -374,14 +442,14 @@ function ReviewBar(props: {
                 <span class="n" aria-hidden="true">
                   {n.n}
                 </span>
-                <div class="body">
-                  <p class="words">{n.note.words}</p>
-                  <p class="who">
+                <p class="words">
+                  {n.note.words}
+                  <span class="who" title={ago(Date.now() / 1000 - n.note.at)}>
                     {n.note.by}, {n.note.side === "both" ? "both sides" : n.note.side}
-                    <Show when={n.note.time != null}>, at {n.note.time!.toFixed(2)} s</Show>, {ago(Date.now() / 1000 - n.note.at)}
+                    <Show when={n.note.time != null}>, at {n.note.time!.toFixed(2)} s</Show>
                     <Show when={fromWhere(n.note, props.run)}>{(where) => <>, {where()}</>}</Show>
-                  </p>
-                </div>
+                  </span>
+                </p>
                 <Show when={props.canNote}>
                   <button type="button" class="plain resolve" data-resolve onClick={() => void resolve(n.note.id)}>
                     Resolve
@@ -392,107 +460,49 @@ function ReviewBar(props: {
           </For>
         </ol>
       </Show>
-      <Show when={props.canNote}>
-        <Show
-          when={props.draft}
-          fallback={
-            <div class="act note-start">
-              <span class="hint">
-                {props.sideBySide
-                  ? both()
-                    ? "Drag on either picture to mark what should change."
-                    : "Drag on the picture to mark what should change."
-                  : "Side by side, drag on a picture to mark what should change."}
+      <Show when={props.canNote && props.draft}>
+        {(d) => (
+          <form class="compose" data-compose onSubmit={(e) => void add(e)}>
+            <label class="words-field">
+              <span class="label">
+                Note {props.notes.length + 1}
+                <Show when={props.time != null}> at {props.time!.toFixed(2)} s</Show>
               </span>
-              <button type="button" class="plain" data-whole onClick={whole}>
-                Note on the whole picture
+              <textarea
+                data-words
+                rows="2"
+                maxLength={2000}
+                placeholder="What should change? Drag on the picture to point at it."
+                value={words()}
+                onInput={(e) => setWords(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") props.onDraft(undefined);
+                  else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void add(e);
+                }}
+              />
+            </label>
+            <div class="act">
+              <button type="submit" class="btn" data-add-note disabled={!words().trim() || sending() === "note"}>
+                Add note
+              </button>
+              <Show when={both()}>
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    data-both
+                    checked={!!d().both}
+                    onChange={(e) => props.onDraft({ ...d(), both: e.currentTarget.checked })}
+                  />
+                  Both sides
+                </label>
+              </Show>
+              <button type="button" class="plain" data-cancel-note onClick={() => props.onDraft(undefined)}>
+                Cancel
               </button>
             </div>
-          }
-        >
-          {(d) => (
-            <form class="compose" data-compose onSubmit={(e) => void add(e)}>
-              <label class="words-field">
-                <span class="label">
-                  Note {props.notes.length + 1}
-                  <Show when={props.time != null}> at {props.time!.toFixed(2)} s</Show>
-                </span>
-                <textarea
-                  data-words
-                  rows="2"
-                  maxLength={2000}
-                  placeholder="What should change here?"
-                  value={words()}
-                  onInput={(e) => setWords(e.currentTarget.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") props.onDraft(undefined);
-                    else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void add(e);
-                  }}
-                />
-              </label>
-              <div class="act">
-                <Show when={both()}>
-                  <label class="check">
-                    <input
-                      type="checkbox"
-                      data-both
-                      checked={!!d().both}
-                      onChange={(e) => props.onDraft({ ...d(), both: e.currentTarget.checked })}
-                    />
-                    On both sides
-                  </label>
-                </Show>
-                <button type="submit" class="btn" data-add-note disabled={!words().trim() || sending() === "note"}>
-                  Add note
-                </button>
-                <button type="button" class="plain" data-cancel-note onClick={() => props.onDraft(undefined)}>
-                  Cancel
-                </button>
-              </div>
-            </form>
-          )}
-        </Show>
+          </form>
+        )}
       </Show>
-      <Switch>
-        <Match when={never()}>
-          <p class="hint">{never()}</p>
-        </Match>
-        <Match when={onlyViews(props.viewer)}>
-          <p class="hint">Verdicts are given on the work's own page.</p>
-        </Match>
-        <Match when={canSay(props.viewer)}>
-          <div class="act verdicts">
-            <button
-              type="button"
-              class="btn ok"
-              data-say="looks_right"
-              aria-pressed={!!verdict()}
-              disabled={!!sending()}
-              onClick={() => void send()}
-            >
-              Looks right
-            </button>
-            <span class="hint">
-              {props.notes.length
-                ? "It needs change until its notes are resolved; looks right holds once they are, as long as it stays the same."
-                : "Looks right holds as long as it stays the same. To ask for a change, make a note."}
-            </span>
-          </div>
-        </Match>
-        <Match when={props.viewer?.login}>
-          <p class="hint" data-cannot>
-            Giving a verdict needs write access to {props.repository}.
-          </p>
-        </Match>
-        <Match when={maySignIn(props.viewer)}>
-          <p class="hint">
-            <a href={signIn()} data-sign-in>
-              Sign in
-            </a>{" "}
-            to say whether it looks right.
-          </p>
-        </Match>
-      </Switch>
       <Show when={error()}>
         <p class="error" role="alert">
           {error()}

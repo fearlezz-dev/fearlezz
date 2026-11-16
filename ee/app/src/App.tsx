@@ -6,7 +6,8 @@ import { createStore, reconcile } from "solid-js/store";
 import { type CheckState, Feed, type Status, connect, stateOf } from "./live";
 import { PicturesPanel } from "./PicturesPanel";
 import { picturesOf } from "./pictures";
-import type { Job, Review, Run, RunCheck, Snapshot } from "./proof";
+import type { Job, Review, Run, RunCheck, Snapshot, Weakening } from "./proof";
+import { diff } from "./diff";
 import { type Viewer, accept, canAccept, canSay, failedFor, localBy, maySignIn, signIn, standing, toLookAt, viewerOf, waitsFor } from "./review";
 import { ShareControl } from "./ShareControl";
 import { ago } from "./ago";
@@ -72,25 +73,29 @@ export function App(props: { shared?: string | undefined }) {
           {(state) => (
             <>
               <header class="top">
-                <div class="repo">
-                  <Show when={!props.shared} fallback={state().work.repository}>
+                <div class="crumb">
+                  <Show when={!props.shared} fallback={<span>{state().work.repository}</span>}>
                     <a href={`/${state().work.repository}`} data-repository>
                       {state().work.repository}
                     </a>
-                  </Show>{" "}
-                  <span class="branch">{state().work.branch}</span>
-                  <span class={`live ${status()}`}>{status() === "live" ? "live" : "reconnecting"}</span>
+                  </Show>
+                  <code class="branch">{state().work.branch}</code>
+                  <span class={`live ${status()}`} title={status() === "live" ? "Updates live" : "Reconnecting"}>
+                    {status() === "live" ? "live" : "reconnecting"}
+                  </span>
                   <Show when={!props.shared && canSay(viewer())}>
                     <ShareControl work={state().work} />
                   </Show>
                 </div>
-                <Show when={props.shared}>
-                  <p class="shared" data-shared>
-                    A shared link: this page only views.
-                  </p>
-                </Show>
                 <h1 data-title>{title(state())}</h1>
-                <Show when={shown()}>{(run) => <Standing run={run()} review={review()} viewer={viewer()} />}</Show>
+                <div class="status">
+                  <Show when={shown()}>{(run) => <Standing run={run()} review={review()} viewer={viewer()} />}</Show>
+                  <Show when={props.shared}>
+                    <span class="shared" data-shared title="A shared link: this page only views">
+                      Shared, only views
+                    </span>
+                  </Show>
+                </div>
               </header>
               <Show when={state().runs.length > 0} fallback={<p class="note">No runs yet.</p>}>
                 <div class="cols">
@@ -105,16 +110,23 @@ export function App(props: { shared?: string | undefined }) {
                   <aside class="runs" aria-label="Runs">
                     <h2>Runs</h2>
                     <For each={state().waiting ?? []}>{(job) => <Waiting job={job} now={now()} />}</For>
-                    <For each={state().runs}>
-                      {(run) => (
-                        <RunView
-                          run={run}
-                          now={now()}
-                          shown={shown()?.id === run.id}
-                          onShow={() => setPicked(run.id)}
-                        />
-                      )}
+                    <For each={latest(state().runs)}>
+                      {(run) => <RunView run={run} now={now()} shown={shown()?.id === run.id} onShow={() => setPicked(run.id)} />}
                     </For>
+                    <Show when={earlier(state().runs).length}>
+                      {(n) => (
+                        <details class="earlier" open={earlier(state().runs).some((r) => r.id === shown()?.id)}>
+                          <summary>
+                            {n()} earlier {n() === 1 ? "run" : "runs"}
+                          </summary>
+                          <For each={earlier(state().runs)}>
+                            {(run) => (
+                              <RunView run={run} now={now()} shown={shown()?.id === run.id} onShow={() => setPicked(run.id)} />
+                            )}
+                          </For>
+                        </details>
+                      )}
+                    </Show>
                   </aside>
                 </div>
               </Show>
@@ -146,7 +158,8 @@ function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer 
     if (localBy(props.run)) return "local";
     if (props.run.state === "running") return "run";
     const state = props.review?.state;
-    if (state === "waits") return "look";
+    // A weakening that waits for an accept is a decision, not a failure: it reads as one.
+    if (state === "waits" || (state === "failed" && props.review?.weakened.length && !props.review.accept)) return "look";
     if (state === "needs_change") return "bad";
     if (state === "approved") return "ok";
     if (failed() || state === "failed" || props.run.state === "cancelled") return "bad";
@@ -182,9 +195,28 @@ function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer 
     if (toLook()) return `${pictures(toLook())} changed at ${head()}`;
     return `Proved ${head()}`;
   };
+  // The word on the pill; the sentence it shortens is its title.
+  const word = () => {
+    const by = localBy(props.run);
+    if (by) return props.run.state === "running" ? "Running locally" : "Unproven";
+    if (props.run.state === "running") return `Proving ${ended()} of ${props.run.checks.length}`;
+    if (props.run.state === "cancelled") return "Stopped";
+    if (failed()) return `${failed()} failed`;
+    const review = props.review;
+    if (review?.state === "failed") {
+      if (!review.weakened.length || review.accept) return "Failed";
+      return canAccept(props.viewer) ? "Waits for you" : "Waits for an admin";
+    }
+    if (review?.state === "needs_change") return "Needs change";
+    if (review?.state === "waits") return canSay(props.viewer) ? "Waits for you" : "Waits for a look";
+    if (review?.state === "approved") return review.pictures.length || review.weakened.length ? "Looks right" : "Proved";
+    if (toLook()) return "Pictures changed";
+    return "Proved";
+  };
   return (
-    <p class={`standing ${kind()}`} data-standing={kind()}>
-      {text()}
+    <p class={`standing ${kind()}`} data-standing={kind()} title={text()}>
+      <span class="pill">{word()}</span>
+      <code class="head">{head()}</code>
     </p>
   );
 }
@@ -204,59 +236,43 @@ function Weakenings(props: { review: Review; runs: Run[]; viewer: Viewer | undef
   };
   return (
     <section class="weakenings" data-weakenings data-accepted={String(!!props.review.accept)} aria-labelledby="weakenings-title">
-      <h2 id="weakenings-title">What this change weakens</h2>
-      <ul>
-        <For each={props.review.weakened}>
-          {(w) => (
-            <li data-weakening>
-              <b>
-                {"check" in w ? (
-                  <>
-                    check <code>{w.check}</code> is weaker
-                  </>
-                ) : (
-                  <>
-                    <code>{w.setting}</code> is weaker
-                  </>
-                )}
-              </b>
-              : {w.how}
-            </li>
-          )}
-        </For>
-      </ul>
-      <Switch>
-        <Match when={props.review.accept}>
-          {(a) => (
-            <p class="said ok">
-              Accepted by <b>{a().by}</b>, {ago(Date.now() / 1000 - a().at)}
-            </p>
-          )}
-        </Match>
-        <Match when={canAccept(props.viewer)}>
-          <div class="act">
-            <button type="button" class="btn ok" data-accept disabled={sending() || !run()} onClick={() => void send()}>
+      <div class="weakenings-head">
+        <h2 id="weakenings-title">Weaker proof</h2>
+        <Switch>
+          <Match when={props.review.accept}>
+            {(a) => (
+              <p class="said ok" title={ago(Date.now() / 1000 - a().at)}>
+                <span class="right" aria-hidden="true" /> Accepted by <b>{a().by}</b>
+              </p>
+            )}
+          </Match>
+          <Match when={canAccept(props.viewer)}>
+            <button
+              type="button"
+              class="btn ok"
+              data-accept
+              disabled={sending() || !run()}
+              title={`Accepts exactly these weakenings of ${props.review.head.slice(0, 7)} and runs its proof job again`}
+              onClick={() => void send()}
+            >
               Accept
             </button>
-            <span class="hint">
-              It accepts exactly these weakenings of {props.review.head.slice(0, 7)} and runs its proof job again, which then passes.
-            </span>
-          </div>
-        </Match>
-        <Match when={props.viewer?.login}>
-          <p class="hint" data-cannot>
-            Only an admin of {props.repository} can accept a weakened proof.
-          </p>
-        </Match>
-        <Match when={maySignIn(props.viewer)}>
-          <p class="hint">
-            <a href={signIn()} data-sign-in>
-              Sign in
-            </a>{" "}
-            to accept it, if you are an admin of {props.repository}.
-          </p>
-        </Match>
-      </Switch>
+          </Match>
+          <Match when={props.viewer?.login}>
+            <p class="hint" data-cannot title={`Only an admin of ${props.repository} can accept a weaker proof`}>
+              Needs an admin
+            </p>
+          </Match>
+          <Match when={maySignIn(props.viewer)}>
+            <a class="plain" href={signIn()} data-sign-in title={`Accepting needs admin rights on ${props.repository}`}>
+              Sign in to accept
+            </a>
+          </Match>
+        </Switch>
+      </div>
+      <ul>
+        <For each={props.review.weakened}>{(w) => <WeakeningRow weakening={w} />}</For>
+      </ul>
       <Show when={error()}>
         <p class="error" role="alert">
           {error()}
@@ -266,17 +282,76 @@ function Weakenings(props: { review: Review; runs: Run[]; viewer: Viewer | undef
   );
 }
 
+/** One weakened part: its name and each way it weakened, and on request the change itself,
+ * its part of the config on the base and on the head, and why it waits for a person. */
+function WeakeningRow(props: { weakening: Weakening }) {
+  const [open, setOpen] = createSignal(false);
+  const w = () => props.weakening;
+  const name = () => {
+    const weakening = w();
+    return "check" in weakening ? weakening.check : weakening.setting;
+  };
+  const shown = () => w().was != null || w().now != null;
+  return (
+    <li data-weakening data-open={String(open())}>
+      <div class="weakening-row">
+        <code class="name">{name()}</code>
+        <For each={w().hows}>
+          {(how, i) => (
+            <span class="how" data-how>
+              {how.replace(/^it /, "")}
+              {i() < w().hows.length - 1 ? "," : ""}
+            </span>
+          )}
+        </For>
+        <Show when={shown()}>
+          <button type="button" class="plain" data-show-change aria-expanded={open()} onClick={() => setOpen(!open())}>
+            {open() ? "Hide change" : "Show change"}
+          </button>
+        </Show>
+      </div>
+      <Show when={open()}>
+        <div class="change">
+          <Diff was={w().was} now={w().now} />
+          <p class="why">Fearlezz can't tell whether this proves as much as before. Accept only if it does.</p>
+        </div>
+      </Show>
+    </li>
+  );
+}
+
+/** A part of the config before and after, line by line, the words that differ marked. */
+function Diff(props: { was: string | null | undefined; now: string | null | undefined }) {
+  return (
+    <pre class="diff-lines" data-diff>
+      <For each={diff(props.was, props.now)}>
+        {(line) => (
+          <span class={`line ${line.kind}`} data-line={line.kind}>
+            <span class="sign" aria-hidden="true">
+              {line.kind === "same" ? " " : line.kind === "was" ? "-" : "+"}
+            </span>
+            <For each={line.pieces}>{(p) => (p.differs ? <mark>{p.text}</mark> : p.text)}</For>
+          </span>
+        )}
+      </For>
+    </pre>
+  );
+}
+
+/** The runs of the newest head, which the side column shows first; older ones fold away. */
+const latest = (runs: Run[]) => runs.filter((r) => r.head === runs[0]?.head);
+const earlier = (runs: Run[]) => runs.filter((r) => r.head !== runs[0]?.head);
+
 /** A CI job GitHub says waits for a runner, before Fearlezz in it opens a run. */
 function Waiting(props: { job: Job; now: number }) {
   return (
     <section class="run waiting" data-waiting={props.job.name}>
-      <div class="run-head">
+      <div class="run-head" title={`Waits for a runner since ${ago(props.now - props.job.since)}, ${props.job.head.slice(0, 7)}`}>
         <span class="run-title">
-          CI job {props.job.name} <span class="pill queued">queued</span>
+          <b>{props.job.name}</b>
+          <span class="count">queued</span>
         </span>
-        <span class="run-meta">
-          waiting for a runner, <code>{props.job.head.slice(0, 7)}</code>, {ago(props.now - props.job.since)}
-        </span>
+        <span class="bar" aria-hidden="true" />
       </div>
     </section>
   );
@@ -289,14 +364,9 @@ function Looks(props: { run: Run; state: Snapshot; viewer: Viewer | undefined })
     <Show
       when={any()}
       fallback={
-        <section class="pictures empty">
-          <h2>Does it look right to you?</h2>
-          <p class="note">
-            {props.run.state === "running"
-              ? "Pictures show here as the checks that take them finish."
-              : "This run took no pictures."}
-          </p>
-        </section>
+        <p class="pictures empty">
+          {props.run.state === "running" ? "Pictures show here as checks take them." : "No pictures in this run."}
+        </p>
       }
     >
       <PicturesPanel run={props.run} state={props.state} viewer={props.viewer} />
@@ -304,18 +374,20 @@ function Looks(props: { run: Run; state: Snapshot; viewer: Viewer | undefined })
   );
 }
 
+/** A run in one line: its job (or who ran it locally), how many checks ended, and a bar with a
+ * cell per check in its state. The run shown lists its checks. */
 function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => void }) {
   const done = () => props.run.checks.filter((c) => c.entry).length;
-  const failed = () => props.run.checks.some((c) => c.entry?.outcome === "failed");
-  const pill = () =>
-    props.run.state === "running" ? "running" : props.run.state === "cancelled" ? "cancelled" : failed() ? "failed" : "done";
   const by = () => localBy(props.run);
+  const name = () => (props.run.source.kind === "ci" ? props.run.source.job : "local");
   // A local run proves nothing: it ran, it did not prove.
   const verb = () => {
     if (props.run.state === "cancelled") return "Stopped";
     if (by()) return props.run.state === "running" ? "Running" : "Ran";
     return props.run.state === "running" ? "Proving" : "Proved";
   };
+  const about = () =>
+    `${verb()} ${props.run.head.slice(0, 7)}${by() ? `, local, by ${by()}` : ""}, ${ago(props.now - props.run.opened)}`;
   return (
     <section
       class={`run ${by() ? "local" : ""}`}
@@ -324,19 +396,22 @@ function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => v
       data-source={props.run.source.kind}
       data-shown={String(props.shown)}
     >
-      <button type="button" class="run-head" aria-pressed={props.shown} onClick={() => props.onShow()}>
+      <button type="button" class="run-head" aria-pressed={props.shown} title={about()} onClick={() => props.onShow()}>
         <span class="run-title">
-          {verb()} <code>{props.run.head.slice(0, 7)}</code>
+          <b>{name()}</b>
           <Show when={by()}>
-            <span class="tag unproven" data-unproven title="A local run is the agent's word: it is never reviewed">
-              unproven
-            </span>
+            {(who) => (
+              <span class="tag unproven" data-unproven title="A local run is the agent's word: it is never reviewed">
+                {who()}
+              </span>
+            )}
           </Show>
-          <span class={`pill ${pill()}`}>{pill()}</span>
+          <span class="count num">
+            {props.run.state === "cancelled" ? "stopped" : `${done()}/${props.run.checks.length}`}
+          </span>
         </span>
-        <span class="run-meta">
-          <Show when={by()}>{(who) => <>local, by {who()}, </>}</Show>
-          {done()} of {props.run.checks.length} checks, {ago(props.now - props.run.opened)}
+        <span class="bar" aria-hidden="true">
+          <For each={props.run.checks}>{(check) => <i class={stateOf(check)} />}</For>
         </span>
       </button>
       <Show when={props.shown}>
@@ -348,7 +423,7 @@ function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => v
             <Show when={ci().run_url}>
               {(url) => (
                 <a class="job" href={url()} rel="noreferrer">
-                  CI job {ci().job}
+                  Open on GitHub
                 </a>
               )}
             </Show>
@@ -358,7 +433,6 @@ function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => v
     </section>
   );
 }
-
 
 function CheckView(props: { check: RunCheck; now: number }) {
   const state = () => stateOf(props.check);
@@ -371,9 +445,8 @@ function CheckView(props: { check: RunCheck; now: number }) {
   };
   return (
     <li data-check={props.check.id} data-state={state()}>
-      <span class={`dot ${state()}`} aria-hidden="true" />
+      <span class={`dot ${state()}`} role="img" aria-label={WORDS[state()]} title={WORDS[state()]} />
       <span class="id">{props.check.id}</span>
-      <span class="state">{WORDS[state()]}</span>
       <span class="seconds">{seconds()}</span>
     </li>
   );

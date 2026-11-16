@@ -86,10 +86,20 @@ pub struct Accept {
 }
 
 impl Accept {
-    /// Whether it accepts exactly `weakened` at `head`: nothing more, nothing less.
+    /// Whether it accepts exactly `weakened` at `head`: nothing more, nothing less. It compares
+    /// each part and the ways it weakened, in any order, never the part as it was and is now:
+    /// that TOML is how a reader sees the change, and rendering it otherwise accepts nothing new.
     pub fn covers(&self, head: &str, weakened: &[Weakening]) -> bool {
         let sorted = |w: &[Weakening]| {
-            let mut w = w.to_vec();
+            let mut w: Vec<_> = w
+                .iter()
+                .map(|w| {
+                    let mut hows = w.hows.clone();
+                    hows.sort();
+                    hows.dedup();
+                    (w.part.clone(), hows)
+                })
+                .collect();
             w.sort();
             w.dedup();
             w

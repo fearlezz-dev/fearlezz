@@ -36,14 +36,15 @@ export class ListingFeed {
 }
 
 /** Where a work's newest run stands, in one word. */
-export type Standing = "none" | "running" | "passed" | "failed" | "cancelled";
+export type Standing = "none" | "running" | "passed" | "waits" | "failed" | "cancelled";
 
 export function standingOf(listed: Listed): Standing {
   const latest = listed.latest;
   if (!latest) return "none";
   if (latest.state === "running") return "running";
   if (latest.state === "cancelled") return "cancelled";
-  return latest.failed > 0 ? "failed" : "passed";
+  if (latest.failed > 0) return "failed";
+  return waitsOn(listed).length ? "waits" : "passed";
 }
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;

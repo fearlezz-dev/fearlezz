@@ -258,6 +258,39 @@ fn the_job_summary_names_each_blocker_and_what_to_do() {
 }
 
 #[test]
+fn the_job_summary_shows_each_weakening_as_a_diff_of_the_config() {
+    let repo = branch_with_change();
+    with_checks(&repo, &CHECKS.replace("test ! -e src/broken", "true"));
+    let (out, text) = summary(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    let diff = "```diff\n [check.tests]\n inputs = [\"src/**\"]\n\
+                -run = \"echo run >> .runs/tests; test ! -e src/broken\"\n\
+                +run = \"echo run >> .runs/tests; true\"\n stage = \"working\"\n```";
+    assert!(text.contains(diff), "{text}");
+    assert!(text.contains("`tests`: it runs another command"), "{text}");
+}
+
+#[test]
+fn the_job_summary_shows_a_check_weakened_two_ways_as_one_diff() {
+    let repo = branch_with_change();
+    with_checks(
+        &repo,
+        &CHECKS.replace("test ! -e src/broken", "true").replacen(
+            "stage = \"working\"",
+            "stage = \"merge\"",
+            1,
+        ),
+    );
+    let (out, text) = summary(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert_eq!(text.matches("```diff").count(), 1, "{text}");
+    assert!(
+        text.contains("`tests`: it runs another command; it moves to a later stage than working"),
+        "{text}"
+    );
+}
+
+#[test]
 fn the_status_comment_is_gone() {
     let repo = branch_with_change();
     assert!(!repo.fz(&["run", "--ci", "--comment", "x.md"]).ok);

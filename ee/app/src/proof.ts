@@ -354,9 +354,18 @@ export type NoteState = "open" | "resolved";
 
 export type Weakening = { 
 /**
- * How it weakened, such as `it runs another command`.
+ * Each way it weakened, such as `it runs another command`, in the order found.
  */
-how: string, } & ({ "check": string } | { "setting": string });
+hows: Array<string>, 
+/**
+ * The part as the base branch's config has it, as TOML (`[check.tests]` with its fields,
+ * or `no_proof = [...]`), absent where it has no such part.
+ */
+was?: string, 
+/**
+ * The part as the change's config has it, as TOML, absent where it is gone.
+ */
+now?: string, } & ({ "check": string } | { "setting": string });
 
 export type Job = { 
 /**

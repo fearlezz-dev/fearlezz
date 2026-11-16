@@ -27,7 +27,7 @@ pub(crate) enum Gate {
 /// What a change takes away from the proof the base branch requires.
 #[derive(Default)]
 pub(crate) struct Floor {
-    /// What weakened, and how.
+    /// What weakened, one per part of the config, with every way it did.
     pub weakened: Vec<Weakening>,
 }
 
@@ -41,9 +41,23 @@ impl Floor {
             return Ok(Floor::default());
         }
         let base = Config::load(&base.root, &git.common)?;
-        Ok(Floor {
-            weakened: weakenings(&base, head, &wt.files),
-        })
+        let mut weakened: Vec<Weakening> = Vec::new();
+        for (part, how) in weakenings(&base, head, &wt.files) {
+            if let Some(w) = weakened.iter_mut().find(|w| w.part == part) {
+                if !w.hows.contains(&how) {
+                    w.hows.push(how);
+                }
+            } else {
+                let path = part.path();
+                weakened.push(Weakening {
+                    was: base.part(&path),
+                    now: head.part(&path),
+                    part,
+                    hows: vec![how],
+                });
+            }
+        }
+        Ok(Floor { weakened })
     }
 
     pub(crate) fn holds(&self) -> bool {
@@ -60,7 +74,11 @@ impl Floor {
         let mut lines: Vec<String> = self
             .weakened
             .iter()
-            .map(|w| format!("weakens {}: {}", w.part.name(), w.how))
+            .flat_map(|w| {
+                w.hows
+                    .iter()
+                    .map(|how| format!("weakens {}: {how}", w.part.name()))
+            })
             .collect();
         if !self.weakened.is_empty() {
             lines.push(match gate {
@@ -85,16 +103,12 @@ impl Floor {
 /// How `head` proves less than `base`: a check gone, running another command, at a later
 /// stage, reporting or reading findings otherwise, taking fewer pictures (see
 /// [`config::Pictures::weakenings`]), rules covering fewer of `files`, and new `no_proof` globs
-/// or dropped negations. Which files a check reads is only a speed hint, so it never weakens.
-fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<Weakening> {
+/// or dropped negations, each as the part and how, in the order found. Which files a check
+/// reads is only a speed hint, so it never weakens.
+fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, String)> {
     let mut found = Vec::new();
     for b in &base.checks {
-        let mut say = |how: String| {
-            found.push(Weakening {
-                part: Part::Check(b.id.clone()),
-                how,
-            });
-        };
+        let mut say = |how: String| found.push((Part::Check(b.id.clone()), how));
         let Some(h) = head.checks.iter().find(|h| h.id == b.id) else {
             say("it is gone".into());
             continue;
@@ -168,7 +182,7 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<Weakening> 
     }
     // Checks that share a lints table would name its weakenings once each.
     let mut seen = std::collections::BTreeSet::new();
-    found.retain(|w| seen.insert(w.clone()));
+    found.retain(|w: &(Part, String)| seen.insert(w.clone()));
     found.extend(settings(base.settings.weakenings(&head.settings)));
     found.extend(settings(env_weakenings(&base.env, &head.env)));
     for w in head.no_proof.widenings(&base.no_proof) {
@@ -180,20 +194,16 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<Weakening> 
             ),
             Widening::Reordered => "it reorders its globs so more files need no proof".into(),
         };
-        found.push(Weakening {
-            part: Part::Setting("no_proof".into()),
-            how,
-        });
+        found.push((Part::Setting("no_proof".into()), how));
     }
     found
 }
 
 /// Weakenings of parts of the config other than a check, each as its path and how.
-fn settings(found: Vec<(String, String)>) -> impl Iterator<Item = Weakening> {
-    found.into_iter().map(|(path, how)| Weakening {
-        part: Part::Setting(path),
-        how,
-    })
+fn settings(found: Vec<(String, String)>) -> impl Iterator<Item = (Part, String)> {
+    found
+        .into_iter()
+        .map(|(path, how)| (Part::Setting(path), how))
 }
 
 /// How `head` makes checks run in another environment: any command, variable, cloned folder
