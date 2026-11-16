@@ -583,7 +583,10 @@ fn framework_rules_run_only_with_their_framework_piece() {
     assert!(plain.contains("\"noDuplicateJsxProps\""), "{plain}");
 
     let react = rules("use = [\"typescript\", \"react\"]\n");
-    assert!(react.contains("\"useHookAtTopLevel\": \"error\""), "{react}");
+    assert!(
+        react.contains("\"useHookAtTopLevel\": \"error\""),
+        "{react}"
+    );
     assert!(!react.contains("noReactSpecificProps"), "{react}");
     for (piece, rule) in [
         ("next", "noImgElement"),

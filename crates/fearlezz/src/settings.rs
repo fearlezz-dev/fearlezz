@@ -277,7 +277,13 @@ impl Settings {
                 // Fearlezz decides every Biome rule ("preset": "none"), so a rule a piece
                 // dropped leaves biome.json instead of keeping the level Biome gives it.
                 Tool::Biome if table.get("linter").and_then(|l| l.get("rules")).is_some() => {
-                    vec![json_file(root, &path, &table, true, &[&["linter", "rules"]])?]
+                    vec![json_file(
+                        root,
+                        &path,
+                        &table,
+                        true,
+                        &[&["linter", "rules"]],
+                    )?]
                 }
                 Tool::Biome | Tool::Tsconfig => vec![json_file(root, &path, &table, true, &[])?],
                 Tool::Eslint => vec![(path, eslint_file(&table)?)],

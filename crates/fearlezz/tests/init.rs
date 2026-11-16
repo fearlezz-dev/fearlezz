@@ -111,13 +111,23 @@ fn init_adds_the_piece_of_each_framework_package_json_depends_on() {
         config.contains(r#"use = ["typescript", "react", "next", "vue", "safety"]"#),
         "{config}"
     );
-    assert!(out.stdout.contains("react (package.json)"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("react (package.json)"),
+        "{}",
+        out.stdout
+    );
 
     // Without a framework, only the language.
-    let plain = project(&[("package.json", "{ \"dependencies\": { \"zod\": \"3.0.0\" } }\n")]);
+    let plain = project(&[(
+        "package.json",
+        "{ \"dependencies\": { \"zod\": \"3.0.0\" } }\n",
+    )]);
     assert!(plain.fz(&["setup", "init"]).ok);
     let config = std::fs::read_to_string(plain.path("fearlezz.toml")).unwrap();
-    assert!(config.contains(r#"use = ["typescript", "safety"]"#), "{config}");
+    assert!(
+        config.contains(r#"use = ["typescript", "safety"]"#),
+        "{config}"
+    );
 }
 
 #[test]
