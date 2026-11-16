@@ -1,0 +1,27 @@
+# React: the rules of Biome's react domain (hooks, keys, props), at the levels decided on
+# the Lint Desk. With `typescript`; `setup init` adds it when package.json depends on react.
+
+[lints.biome]
+"correctness/noChildrenProp" = "gate"
+"correctness/noNestedComponentDefinitions" = "gate"
+"correctness/noReactPropAssignments" = "flag"
+"correctness/noRenderReturnValue" = "gate"
+"correctness/useExhaustiveDependencies" = "gate"
+"correctness/useHookAtTopLevel" = "gate"
+"correctness/useJsxKeyInIterable" = "gate"
+"correctness/useUniqueElementIds" = "flag"
+"nursery/noReactObjectTypeAsDefaultProp" = "off"
+"nursery/useReactCompiler" = "off"
+"nursery/useReactFunctionComponentDefinition" = "off"
+"nursery/useReactNamingConvention" = "off"
+"performance/noJsxPropsBind" = "hint"
+"performance/noSyncScripts" = "flag"
+"security/noDangerouslySetInnerHtml" = "gate"
+"security/noDangerouslySetInnerHtmlWithChildren" = "gate"
+"style/useComponentExportOnlyModules" = "hint"
+"style/useReactFunctionComponents" = "flag"
+"suspicious/noArrayIndexKey" = "gate"
+"suspicious/noDuplicatedSpreadProps" = "gate"
+"suspicious/noLeakedRender" = "flag"
+"suspicious/noReactForwardRef" = "flag"
+"suspicious/noUnknownAttribute" = "flag"

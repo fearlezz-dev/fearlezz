@@ -205,6 +205,26 @@ fn biome_rules_go_under_their_group_and_other_keys_stay() {
 }
 
 #[test]
+fn a_biome_rule_no_table_names_leaves_biome_json() {
+    // Fearlezz owns linter.rules: a rule a piece dropped (or one written by hand) would keep
+    // the level Biome gives it and gate, so sync writes the rules whole. The rest stays.
+    let repo = synced(
+        "[lints.biome]\n\"suspicious/noDebugger\" = \"gate\"\n",
+        &[(
+            "biome.json",
+            r#"{ "linter": { "enabled": true, "rules": { "preset": "none", "suspicious": { "noDebugger": "error", "noReactSpecificProps": "error" } } } }"#,
+        )],
+    );
+    let doc: serde_json::Value = serde_json::from_str(&read(&repo, "biome.json")).unwrap();
+    assert_eq!(doc["linter"]["enabled"], true, "{doc}");
+    assert_eq!(
+        doc["linter"]["rules"],
+        serde_json::json!({ "preset": "none", "suspicious": { "noDebugger": "error" } }),
+        "{doc}"
+    );
+}
+
+#[test]
 fn a_json_file_keeps_its_indentation_and_key_order() {
     let repo = synced(
         "[settings.tsconfig.compilerOptions]\nstrict = true\n",

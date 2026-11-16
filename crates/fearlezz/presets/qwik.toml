@@ -1,0 +1,9 @@
+# Qwik: the rules of Biome's qwik domain, at the levels decided on the Lint Desk. With
+# `typescript`; `setup init` adds it when package.json depends on Qwik.
+
+[lints.biome]
+"correctness/noQwikUseVisibleTask" = "gate"
+"correctness/useImageSize" = "gate"
+"correctness/useQwikClasslist" = "gate"
+"correctness/useQwikMethodUsage" = "gate"
+"correctness/useQwikValidLexicalScope" = "gate"

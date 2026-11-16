@@ -560,6 +560,43 @@ fn the_typescript_piece_has_biome_skip_what_git_ignores() {
 }
 
 #[test]
+fn framework_rules_run_only_with_their_framework_piece() {
+    // Biome runs every rule it is given, so a Solid or Qwik rule in the typescript piece would
+    // gate a React project (`noReactSpecificProps` flags its className).
+    let rules = |config: &str| {
+        let repo = Repo::new(config, &[]);
+        let out = repo.fz(&["setup", "sync"]);
+        assert!(out.ok, "{}", out.stderr);
+        std::fs::read_to_string(repo.path("biome.json")).unwrap()
+    };
+    let plain = rules("use = [\"typescript\"]\n");
+    for framework in [
+        "useHookAtTopLevel",
+        "noImgElement",
+        "useQwikValidLexicalScope",
+        "noReactSpecificProps",
+        "useVueVForKey",
+    ] {
+        assert!(!plain.contains(framework), "{framework}: {plain}");
+    }
+    // Rules of JSX itself stay.
+    assert!(plain.contains("\"noDuplicateJsxProps\""), "{plain}");
+
+    let react = rules("use = [\"typescript\", \"react\"]\n");
+    assert!(react.contains("\"useHookAtTopLevel\": \"error\""), "{react}");
+    assert!(!react.contains("noReactSpecificProps"), "{react}");
+    for (piece, rule) in [
+        ("next", "noImgElement"),
+        ("qwik", "useQwikValidLexicalScope"),
+        ("solid", "noReactSpecificProps"),
+        ("vue", "useVueVForKey"),
+    ] {
+        let with = rules(&format!("use = [\"typescript\", \"{piece}\"]\n"));
+        assert!(with.contains(&format!("\"{rule}\"")), "{piece}: {with}");
+    }
+}
+
+#[test]
 fn the_flutter_piece_excludes_the_folders_flutter_adds_to_the_analyzer() {
     let repo = Repo::new("use = [\"flutter\"]\n", &[]);
     let out = repo.fz(&["setup", "sync"]);

@@ -98,6 +98,29 @@ fn init_uses_the_pieces_of_the_languages_it_finds() {
 }
 
 #[test]
+fn init_adds_the_piece_of_each_framework_package_json_depends_on() {
+    // A Next app depends on react too, so it gets the rules of both.
+    let repo = project(&[(
+        "package.json",
+        r#"{ "dependencies": { "next": "15.0.0", "react": "19.0.0" }, "devDependencies": { "vue": "3.5.0" } }"#,
+    )]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(
+        config.contains(r#"use = ["typescript", "react", "next", "vue", "safety"]"#),
+        "{config}"
+    );
+    assert!(out.stdout.contains("react (package.json)"), "{}", out.stdout);
+
+    // Without a framework, only the language.
+    let plain = project(&[("package.json", "{ \"dependencies\": { \"zod\": \"3.0.0\" } }\n")]);
+    assert!(plain.fz(&["setup", "init"]).ok);
+    let config = std::fs::read_to_string(plain.path("fearlezz.toml")).unwrap();
+    assert!(config.contains(r#"use = ["typescript", "safety"]"#), "{config}");
+}
+
+#[test]
 fn init_without_a_known_language_writes_a_check_to_fill_in() {
     let repo = project(&[("Makefile", "test:\n\ttrue\n")]);
     let out = repo.fz(&["setup", "init"]);

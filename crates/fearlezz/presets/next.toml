@@ -1,0 +1,14 @@
+# Next.js: the rules of Biome's next domain (images, scripts, the document head), at the levels
+# decided on the Lint Desk. With `typescript` and `react`; `setup init` adds it when package.json
+# depends on next.
+
+[lints.biome]
+"correctness/noBeforeInteractiveScriptOutsideDocument" = "off"
+"correctness/noNextAsyncClientComponent" = "off"
+"correctness/useInlineScriptId" = "gate"
+"performance/noImgElement" = "flag"
+"performance/noUnwantedPolyfillio" = "flag"
+"performance/useGoogleFontPreconnect" = "flag"
+"style/noHeadElement" = "flag"
+"suspicious/noDocumentImportInPage" = "gate"
+"suspicious/noHeadImportInDocument" = "gate"

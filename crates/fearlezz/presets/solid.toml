@@ -1,0 +1,7 @@
+# Solid: the rules of Biome's solid domain, at the levels decided on the Lint Desk. With
+# `typescript`; `setup init` adds it when package.json depends on solid-js.
+
+[lints.biome]
+"correctness/noSolidDestructuredProps" = "off"
+"performance/useSolidForComponent" = "off"
+"suspicious/noReactSpecificProps" = "gate"
