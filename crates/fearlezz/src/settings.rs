@@ -273,8 +273,19 @@ impl Settings {
                     vec![toml_file(root, &path, &tool)?]
                 }
                 Tool::Clippy | Tool::Ruff => vec![toml_file(root, &path, &table)?],
-                Tool::Claude => vec![json_file(root, &path, &table, false)?],
-                Tool::Biome | Tool::Tsconfig => vec![json_file(root, &path, &table, true)?],
+                Tool::Claude => vec![json_file(root, &path, &table, false, &[])?],
+                // Fearlezz decides every Biome rule ("preset": "none"), so a rule a piece
+                // dropped leaves biome.json instead of keeping the level Biome gives it.
+                Tool::Biome if table.get("linter").and_then(|l| l.get("rules")).is_some() => {
+                    vec![json_file(
+                        root,
+                        &path,
+                        &table,
+                        true,
+                        &[&["linter", "rules"]],
+                    )?]
+                }
+                Tool::Biome | Tool::Tsconfig => vec![json_file(root, &path, &table, true, &[])?],
                 Tool::Eslint => vec![(path, eslint_file(&table)?)],
                 Tool::Ktlint => vec![editorconfig(root, &table)?],
                 Tool::Golangci if ext == "toml" => {
@@ -312,7 +323,7 @@ impl Settings {
                         .filter_map(|agent| hooks_file(agent).map(|file| (agent, file)))
                         .map(|(agent, file)| {
                             let hooks: Table = serde_json::from_value(agent.settings())?;
-                            json_file(root, file, &hooks, false)
+                            json_file(root, file, &hooks, false, &[])
                         })
                         .collect::<Result<_>>()?
                 }
@@ -385,6 +396,25 @@ impl Settings {
                 "no Cargo.toml to write the [lints.clippy] and [lints.rustc] rules into".into(),
                 "add the Cargo.toml, or drop those tables (and the rust piece) from this project",
             ));
+        }
+        // Biome runs a framework's rules only when its piece gives them, so a project set up
+        // before the framework pieces existed would lose them without a word.
+        if let Some(biome) = self.lints.of(lints::Tool::Biome) {
+            for piece in crate::init::frameworks(root) {
+                if !crate::presets::biome_rules(piece)
+                    .iter()
+                    .any(|rule| biome.contains_key(rule))
+                {
+                    found.push(finding(
+                        "package.json".into(),
+                        format!(
+                            "package.json depends on {piece}, but no rule of the {piece} piece \
+                             has a level"
+                        ),
+                        &format!("add \"{piece}\" to use in fearlezz.toml"),
+                    ));
+                }
+            }
         }
         Ok(found)
     }
@@ -736,7 +766,15 @@ fn merge_toml(into: &mut toml_edit::Table, from: &toml_edit::Table) {
 
 /// A JSON file with the settings merged in; other keys stay. With `comments`, the file may
 /// hold comments and trailing commas (tsconfig.json does); they do not survive the rewrite.
-fn json_file(root: &Path, path: &str, table: &Table, comments: bool) -> Result<(String, String)> {
+/// Each of `owned`, a path of keys, is written whole from the settings, so a key there that
+/// they no longer name goes.
+fn json_file(
+    root: &Path,
+    path: &str,
+    table: &Table,
+    comments: bool,
+    owned: &[&[&str]],
+) -> Result<(String, String)> {
     let text = read(root, path)?;
     let mut doc: serde_json::Value = match &text {
         Some(text) if comments => {
@@ -745,6 +783,15 @@ fn json_file(root: &Path, path: &str, table: &Table, comments: bool) -> Result<(
         Some(text) => serde_json::from_str(text).with_context(|| path.to_string())?,
         None => serde_json::json!({}),
     };
+    for keys in owned {
+        if let Some((last, parents)) = keys.split_last() {
+            let parent = parents.iter().try_fold(&mut doc, |d, k| d.get_mut(*k));
+            // Emptied in place, so the file keeps its key order and the merge fills it.
+            if let Some(owned) = parent.and_then(|d| d.get_mut(*last)) {
+                *owned = serde_json::json!({});
+            }
+        }
+    }
     merge_json(&mut doc, serde_json::to_value(table)?);
     // Keep the file's indentation, so the project's formatter agrees with the rewrite.
     let indent = text.as_deref().map_or("  ", json_indent);

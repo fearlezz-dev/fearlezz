@@ -30,14 +30,30 @@ pub(crate) const BUILTIN: &[(&str, &str)] = &[
     ("flutter-look", include_str!("../presets/flutter-look.toml")),
     ("go", include_str!("../presets/go.toml")),
     ("kotlin", include_str!("../presets/kotlin.toml")),
+    ("next", include_str!("../presets/next.toml")),
     ("osv-scanner", include_str!("../presets/osv-scanner.toml")),
     ("playwright", include_str!("../presets/playwright.toml")),
     ("python", include_str!("../presets/python.toml")),
+    ("qwik", include_str!("../presets/qwik.toml")),
+    ("react", include_str!("../presets/react.toml")),
     ("rust", include_str!("../presets/rust.toml")),
     ("safety", include_str!("../presets/safety.toml")),
+    ("solid", include_str!("../presets/solid.toml")),
     ("trufflehog", include_str!("../presets/trufflehog.toml")),
     ("typescript", include_str!("../presets/typescript.toml")),
+    ("vue", include_str!("../presets/vue.toml")),
 ];
+
+/// The Biome rules the built in piece `piece` gives a level.
+pub(crate) fn biome_rules(piece: &str) -> Vec<String> {
+    BUILTIN
+        .iter()
+        .find(|(name, _)| *name == piece)
+        .and_then(|(_, text)| toml::from_str::<Table>(text).ok())
+        .and_then(|t| t.get("lints")?.get("biome")?.as_table().cloned())
+        .map(|rules| rules.keys().cloned().collect())
+        .unwrap_or_default()
+}
 
 /// The file next to `fearlezz.toml` that pins every piece from a repository, nested ones
 /// included, to a commit and the hash of its content. It is committed with the project, so a

@@ -1,5 +1,5 @@
 //! `fearlezz setup init`: the starter `fearlezz.toml` for a repository that has none, from the
-//! languages the files at its root show.
+//! languages the files at its root show, and the frameworks its package.json depends on.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -33,6 +33,39 @@ const MARKERS: &[(&str, &[&str])] = &[
     // A folder, not a file: zizmor audits the workflows GitHub runs.
     ("actions", &[".github/workflows"]),
 ];
+
+/// The framework pieces and the packages in package.json that show each, in the order the
+/// starter names them, after `typescript`: Biome runs every rule it is given, so a framework's
+/// rules come only with its piece. A Next app depends on react too, and gets both.
+const FRAMEWORKS: &[(&str, &[&str])] = &[
+    ("react", &["react"]),
+    ("next", &["next"]),
+    ("qwik", &["@builder.io/qwik", "@qwik.dev/core"]),
+    ("solid", &["solid-js"]),
+    ("vue", &["vue"]),
+];
+
+/// The framework pieces whose packages `package.json` in `root` depends on (its dependencies
+/// or devDependencies). A file that cannot be read as JSON shows none. The settings check names
+/// one whose rules a project lacks.
+pub(crate) fn frameworks(root: &Path) -> Vec<&'static str> {
+    let Ok(text) = std::fs::read_to_string(root.join("package.json")) else {
+        return Vec::new();
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let depends = |package: &str| {
+        ["dependencies", "devDependencies"]
+            .iter()
+            .any(|key| json.get(key).and_then(|d| d.get(package)).is_some())
+    };
+    FRAMEWORKS
+        .iter()
+        .filter(|(_, packages)| packages.iter().any(|p| depends(p)))
+        .map(|(piece, _)| *piece)
+        .collect()
+}
 
 /// The piece every project gets, whatever it is written in: a leaked credential is never
 /// acceptable. Last in the starter, after the pieces that give the others their toolchain.
@@ -72,10 +105,20 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
         .iter()
         .filter_map(|(piece, files)| {
             let file = files.iter().find(|f| root.join(f).exists())?;
-            Some(Found {
-                piece,
-                file: Some(file),
-            })
+            Some((*piece, *file))
+        })
+        .flat_map(|(piece, file)| {
+            let frameworks = if piece == "typescript" {
+                frameworks(root)
+            } else {
+                Vec::new()
+            };
+            std::iter::once(piece)
+                .chain(frameworks)
+                .map(move |piece| Found {
+                    piece,
+                    file: Some(file),
+                })
         })
         .chain([Found {
             piece: SAFETY,

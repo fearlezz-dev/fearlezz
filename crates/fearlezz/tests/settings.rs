@@ -544,6 +544,104 @@ fn the_typescript_piece_keeps_biome_off_the_files_fearlezz_writes() {
 }
 
 #[test]
+fn the_typescript_piece_has_biome_skip_what_git_ignores() {
+    // `biome lint .` otherwise walks into ignored folders such as .devenv, whose profile links
+    // lead into the nix store, and target folders full of generated code.
+    let repo = Repo::new("use = [\"typescript\"]\n", &[]);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.path("biome.json")).unwrap()).unwrap();
+    assert_eq!(
+        doc["vcs"],
+        serde_json::json!({ "enabled": true, "clientKind": "git", "useIgnoreFile": true }),
+        "{doc}"
+    );
+}
+
+#[test]
+fn framework_rules_run_only_with_their_framework_piece() {
+    // Biome runs every rule it is given, so a Solid or Qwik rule in the typescript piece would
+    // gate a React project (`noReactSpecificProps` flags its className).
+    let rules = |config: &str| {
+        let repo = Repo::new(config, &[]);
+        let out = repo.fz(&["setup", "sync"]);
+        assert!(out.ok, "{}", out.stderr);
+        std::fs::read_to_string(repo.path("biome.json")).unwrap()
+    };
+    let plain = rules("use = [\"typescript\"]\n");
+    for framework in [
+        "useHookAtTopLevel",
+        "noImgElement",
+        "useQwikValidLexicalScope",
+        "noReactSpecificProps",
+        "useVueVForKey",
+    ] {
+        assert!(!plain.contains(framework), "{framework}: {plain}");
+    }
+    // Rules of JSX itself stay.
+    assert!(plain.contains("\"noDuplicateJsxProps\""), "{plain}");
+
+    let react = rules("use = [\"typescript\", \"react\"]\n");
+    assert!(
+        react.contains("\"useHookAtTopLevel\": \"error\""),
+        "{react}"
+    );
+    assert!(!react.contains("noReactSpecificProps"), "{react}");
+    for (piece, rule) in [
+        ("next", "noImgElement"),
+        ("qwik", "useQwikValidLexicalScope"),
+        ("solid", "noReactSpecificProps"),
+        ("vue", "useVueVForKey"),
+    ] {
+        let with = rules(&format!("use = [\"typescript\", \"{piece}\"]\n"));
+        assert!(with.contains(&format!("\"{rule}\"")), "{piece}: {with}");
+    }
+}
+
+#[test]
+fn a_framework_package_json_depends_on_without_its_rules_is_a_finding() {
+    // A project set up before the framework pieces existed has `use = ["typescript"]` only, and
+    // would lose its React rules without a word; the settings check names the piece to add.
+    let package = r#"{"dependencies": {"react": "19.0.0", "vue": "3.5.0"}}"#;
+    let finding = |config: &str| {
+        let repo = Repo::new(config, &[("package.json", package)]);
+        let sync = repo.fz(&["setup", "sync"]);
+        assert!(sync.ok, "{}\n{}", sync.stdout, sync.stderr);
+        repo.branch("feat/x");
+        repo.fz(&["run", "--stage", "working", "--no-run"]);
+        repo.fz(&["run", "settings"])
+    };
+    let out = finding("use = [\"typescript\"]\n");
+    assert!(!out.ok, "{}", out.stdout);
+    for piece in ["react", "vue"] {
+        assert!(
+            out.stdout.contains(&format!(
+                "package.json depends on {piece}, but no rule of the {piece} piece has a level"
+            )),
+            "{piece}: {}",
+            out.stdout
+        );
+        assert!(
+            out.stdout
+                .contains(&format!("add \"{piece}\" to use in fearlezz.toml")),
+            "{piece}: {}",
+            out.stdout
+        );
+    }
+
+    let out = finding("use = [\"typescript\", \"react\", \"vue\"]\n");
+    assert!(out.ok, "{}", out.stdout);
+    // A project that does not lint with Biome through Fearlezz is told nothing.
+    let out = finding("[settings.claude.permissions]\nallow = []\n");
+    assert!(
+        !out.stdout.contains("package.json depends on"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn the_flutter_piece_excludes_the_folders_flutter_adds_to_the_analyzer() {
     let repo = Repo::new("use = [\"flutter\"]\n", &[]);
     let out = repo.fz(&["setup", "sync"]);
