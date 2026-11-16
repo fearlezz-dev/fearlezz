@@ -1,0 +1,14 @@
+# Tests run by Bun's own test runner, counted from its JUnit report. Bun finds the files
+# named below.
+#
+# Bun runs Playwright's spec files too, and they fail outside Playwright. A project with the
+# playwright piece names its own test folder:
+#
+#   [check.bun-test]
+#   run = "bun test src --reporter=junit --reporter-outfile=\"$FEARLEZZ_OUT/junit.xml\""
+
+[check.bun-test]
+run = "bun test --reporter=junit --reporter-outfile=\"$FEARLEZZ_OUT/junit.xml\""
+stage = "working"
+tests = "junit"
+test_files = ["**/*.test.*", "**/*_test.*", "**/*.spec.*", "**/*_spec.*"]

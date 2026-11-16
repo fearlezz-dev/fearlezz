@@ -1,0 +1,7 @@
+# Tests run by Vitest, counted from its JUnit report.
+
+[check.vitest]
+run = "vitest run --reporter=default --reporter=junit --outputFile.junit=\"$FEARLEZZ_OUT/junit.xml\""
+stage = "working"
+tests = "junit"
+test_files = ["**/*.test.*", "**/*.spec.*", "**/__tests__/**"]

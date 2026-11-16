@@ -87,7 +87,6 @@ fn init_uses_the_pieces_of_the_languages_it_finds() {
     for check in [
         "clippy",
         "tsc",
-        "vitest",
         "pytest",
         "go-test",
         "gradle-test",
@@ -128,6 +127,45 @@ fn init_adds_the_piece_of_each_framework_package_json_depends_on() {
         config.contains(r#"use = ["typescript", "safety"]"#),
         "{config}"
     );
+}
+
+#[test]
+fn init_adds_the_piece_of_the_test_runner_the_project_uses() {
+    // Vitest when package.json depends on it, even in a Bun project; Bun's own runner when
+    // bun.lock shows Bun and nothing else runs the tests; neither without a sign of one.
+    for (files, pieces) in [
+        (
+            &[(
+                "package.json",
+                r#"{ "devDependencies": { "vitest": "3.0.0" } }"#,
+            )][..],
+            r#"use = ["typescript", "vitest", "safety"]"#,
+        ),
+        (
+            &[("package.json", "{}\n"), ("bun.lock", "{}\n")][..],
+            r#"use = ["typescript", "bun", "safety"]"#,
+        ),
+        (
+            &[
+                (
+                    "package.json",
+                    r#"{ "devDependencies": { "vitest": "3.0.0" } }"#,
+                ),
+                ("bun.lock", "{}\n"),
+            ][..],
+            r#"use = ["typescript", "vitest", "safety"]"#,
+        ),
+        (
+            &[("package.json", "{}\n")][..],
+            r#"use = ["typescript", "safety"]"#,
+        ),
+    ] {
+        let repo = project(files);
+        let out = repo.fz(&["setup", "init"]);
+        assert!(out.ok, "{}{}", out.stdout, out.stderr);
+        let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+        assert!(config.contains(pieces), "{files:?}: {config}");
+    }
 }
 
 #[test]

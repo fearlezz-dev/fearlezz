@@ -572,14 +572,14 @@ fn the_go_piece_names_its_test_files() {
 }
 
 #[test]
-fn the_typescript_piece_names_its_test_files() {
-    piece_names_its_test_files(
-        "typescript",
-        "vitest",
-        &["biome-lint", "biome-format", "tsc"],
-        "src/sum.test.ts",
-        "src/sum.ts",
-    );
+fn the_vitest_piece_names_its_test_files() {
+    piece_names_its_test_files("vitest", "vitest", &[], "src/sum.test.ts", "src/sum.ts");
+}
+
+#[test]
+fn the_bun_piece_names_its_test_files() {
+    // Bun also finds `_test` files, which Vitest does not.
+    piece_names_its_test_files("bun", "bun-test", &[], "src/sum_test.ts", "src/sum.ts");
 }
 
 #[test]
