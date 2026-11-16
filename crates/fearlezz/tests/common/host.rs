@@ -50,6 +50,8 @@ pub(crate) struct State {
     pub pictures: BTreeMap<String, Vec<u8>>,
     /// Takes every protocol request and answers none, as a host that hangs.
     pub hangs: bool,
+    /// How long each call to a hanging host waited before the caller hung up (60s at most).
+    pub hung_up: Vec<std::time::Duration>,
     /// What `POST /api/v2/runs/r1/weakenings` answers as the admin's accept, whatever the run
     /// asks, so a test can show the CLI holds it to its own weakenings and head.
     pub accepted: Option<Value>,
@@ -179,7 +181,15 @@ fn serve(stream: TcpStream, state: &Mutex<State>, base: &str) {
         (s.pictures.get(&path).filter(|_| cli).cloned(), hangs)
     };
     if hangs {
-        std::thread::sleep(std::time::Duration::from_secs(60));
+        // Read until the caller hangs up, so the wait it gave the host is known.
+        let arrived = std::time::Instant::now();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(60)))
+            .unwrap();
+        if let Err(e) = std::io::copy(&mut reader, &mut std::io::sink()) {
+            eprintln!("fake host: the caller never hung up: {e}");
+        }
+        state.lock().unwrap().hung_up.push(arrived.elapsed());
         return;
     }
     let mut stream = stream;

@@ -46,9 +46,32 @@ struct World {
     oidc: RsaPrivateKey,
     /// A key GitHub never published, for forged tokens.
     stranger: RsaPrivateKey,
+    /// Held while a test ages a local run past an hour and runs the schedule (`Sweep`).
+    sweep: std::sync::Mutex<()>,
 }
 
 static WORLD: OnceLock<World> = OnceLock::new();
+
+/// The scheduled sweep, to run alone: it closes every quiet local run on the host, so a test
+/// that ages its runs and sweeps must not sweep another such test's runs midway. Only a held
+/// `Sweep` runs the schedule. A test that failed holding it leaves nothing to undo.
+struct Sweep(#[allow(dead_code, reason = "held, never read")] std::sync::MutexGuard<'static, ()>);
+
+impl Sweep {
+    fn hold() -> Sweep {
+        Sweep(
+            world()
+                .sweep
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// The host's scheduled event, as the every ten minutes cron fires it.
+    fn run(&self) -> Answer {
+        get("/__scheduled?cron=*/10+*+*+*+*", &[])
+    }
+}
 
 fn world() -> &'static World {
     WORLD.get_or_init(|| {
@@ -65,6 +88,7 @@ fn world() -> &'static World {
             github,
             oidc,
             stranger,
+            sweep: std::sync::Mutex::new(()),
         };
         // Fills the host's JWKS cache before any test runs, so the only fetches of GitHub's keys
         // after this are the refetches a test asks for.
