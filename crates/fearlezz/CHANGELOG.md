@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/fearlezz-dev/fearlezz/compare/v0.3.0...v0.4.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* a check runs in every project folder with each, and the rust piece covers every Cargo project
+* the tests of a TypeScript project come with a vitest or bun piece, which setup init picks ([#30](https://github.com/fearlezz-dev/fearlezz/issues/30))
+* a framework's Biome rules come with its own piece, and Biome skips what git ignores ([#27](https://github.com/fearlezz-dev/fearlezz/issues/27))
+
+### Features
+
+* a check runs in every project folder with each, and the rust piece covers every Cargo project ([15f01d6](https://github.com/fearlezz-dev/fearlezz/commit/15f01d6ec5959ba599ff4ac07d49ef6ed09bba00))
+* a framework's Biome rules come with its own piece, and Biome skips what git ignores ([#27](https://github.com/fearlezz-dev/fearlezz/issues/27)) ([c416483](https://github.com/fearlezz-dev/fearlezz/commit/c41648329fcb48f44084a0fdc91678204b7c4280))
+* the tests of a TypeScript project come with a vitest or bun piece, which setup init picks ([#30](https://github.com/fearlezz-dev/fearlezz/issues/30)) ([7e643b8](https://github.com/fearlezz-dev/fearlezz/commit/7e643b81838931eb1637732ec36800b5cda62f7b))
+
 ## [0.3.0](https://github.com/fearlezz-dev/fearlezz/compare/v0.2.0...v0.3.0) (2026-11-16)
 
 
