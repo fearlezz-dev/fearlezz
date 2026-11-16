@@ -25,7 +25,7 @@ stage = "working"
 inputs = ["ee/**", "crates/fearlezz-proof/**", "crates/**/*.rs"]
 
 [check.ee-clippy]
-run = "cargo clippy --manifest-path ee/Cargo.toml --all-targets --quiet --message-format=json"
+run = "cargo clippy --manifest-path ee/Cargo.toml --all-targets --all-features --quiet --message-format=json"
 stage = "working"
 findings = { read = "cargo", lints = ["clippy", "rustc"] }
 inputs = ["ee/**", "crates/fearlezz-proof/**"]

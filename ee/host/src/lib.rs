@@ -28,6 +28,8 @@ mod room;
 mod say;
 mod session;
 mod share;
+#[cfg(feature = "test-hooks")]
+mod test_hooks;
 mod webhook;
 mod work;
 
@@ -99,6 +101,8 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         ("POST", ["api", "v2", "shares", id, "revoke"]) => {
             share::revoke(req, env, config, id).await
         }
+        #[cfg(feature = "test-hooks")]
+        ("POST", ["__test", "sql"]) => test_hooks::sql(req, env).await,
         ("POST", ["api", "github", "webhook"]) => webhook::receive(req, env, config).await,
         ("GET", ["login"]) => session::login(&req, config).await,
         ("GET", ["callback"]) => session::callback(&req, env, config).await,

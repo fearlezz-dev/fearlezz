@@ -11,9 +11,10 @@ routes = [
   { pattern = "fearlezz.seamlezz.net", custom_domain = true },
 ]
 
-# The page (ee/app) is built first: the worker serves it as static assets.
+# The page (ee/app) is built first: the worker serves it as static assets. HOST_FEATURES names
+# cargo features of the worker: the tests set it to `test-hooks`, a deploy leaves it unset.
 [build]
-command = "bun install --frozen-lockfile --cwd ../app && bun run --cwd ../app build && worker-build --release"
+command = "bun install --frozen-lockfile --cwd ../app && bun run --cwd ../app build && worker-build --release ${HOST_FEATURES:+--features $HOST_FEATURES}"
 
 # The page: the worker answers every path itself (who may see a work comes first) and fetches
 # the page from here; only the hashed scripts and styles under /assets are served directly.
