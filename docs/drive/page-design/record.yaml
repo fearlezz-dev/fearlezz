@@ -54,7 +54,15 @@ decided:
     what: "there's a lot of subtext constantly ... just a lot of noise, text. And that's part of the biggest problem"
   - id: take-from-all
     what: "there are good parts in all of them ... you should take from all of them", including the runs on the side from C
-open: []
+  - id: per-part
+    what: a weakening is one per part, with every way it weakened (hows) and its config once; an accept matches part and ways only ("A, group per part")
+  - id: indigo
+    what: one indigo accent for what changed and the action that answers it; green only passed, red only failed ("B, Indigo"), after "this looks ugly as fuck ... the color stuff, the theme"
+  - id: clear-old-data
+    what: the host's runs, reviews and accepts stored in the old weakening shape are cleared once at deploy ("A, clear once")
+open:
+  - whether one fixed sentence is enough for why a weakening matters
+  - detail kept only in hover titles cannot be read on touch
 slices:
   - id: core-was-now
     what: Weakening gains was and now, filled in Floor::read; the job summary shows a diff
@@ -64,4 +72,17 @@ slices:
     what: the redesigned work and repository pages, a status pill, weakenings folded behind Show change with a word diff, runs aside, a contact sheet, one review row, no shadows
     commit: 12b876c
     evidence: [ee/app/src/diff.test.ts, ee/host-tests/tests/host.rs, ee/target/tmp/page-*.png]
-next: code health review, then a check-in with screenshots
+  - id: refactor
+    what: Part::path, the summary's docs on their functions, the roadmap names the diff
+    commit: 16684e5
+  - id: indigo
+    what: the indigo palette, a waiting weakening reads as a decision, a repository row that waits shows the accent
+    commit: cc4e86c
+    evidence: [ee/app/src/repository.test.ts, ee/target/tmp/page-*.png]
+  - id: per-part
+    what: Weakening { part, hows, was, now }, grouped in Floor::read; Accept::covers compares part and hows
+    commit: bd4d638
+    evidence: [crates/fearlezz/tests/proof.rs, crates/fearlezz/tests/ci.rs, crates/fearlezz-proof/tests/floor.rs]
+  - id: clear-old-data
+    what: migration 0005 clears runs, checks, files, notes, accepts and works.review
+next: check-in with the new palette; then the open questions, then PR after PR 24 merges
