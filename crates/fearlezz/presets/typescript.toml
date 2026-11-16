@@ -50,6 +50,13 @@ verbatimModuleSyntax = true
 [settings.biome.files]
 includes = ["**", "!.claude", "!.agents", "!.codex", "!.cursor"]
 
+# Biome skips what git ignores: dependencies, build output, and .devenv, whose profile links lead
+# into the nix store.
+[settings.biome.vcs]
+enabled = true
+clientKind = "git"
+useIgnoreFile = true
+
 # The rules are the ones Biome 2.6.6 knows; Biome rejects a rule it does not know, so a rule
 # joins this list only once a released Biome has it (the new ones start in nursery).
 # Every rule, decided once on the maintainer's Lint Desk: gate means it must never happen, flag

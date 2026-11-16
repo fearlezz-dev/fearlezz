@@ -544,6 +544,22 @@ fn the_typescript_piece_keeps_biome_off_the_files_fearlezz_writes() {
 }
 
 #[test]
+fn the_typescript_piece_has_biome_skip_what_git_ignores() {
+    // `biome lint .` otherwise walks into ignored folders such as .devenv, whose profile links
+    // lead into the nix store, and target folders full of generated code.
+    let repo = Repo::new("use = [\"typescript\"]\n", &[]);
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.path("biome.json")).unwrap()).unwrap();
+    assert_eq!(
+        doc["vcs"],
+        serde_json::json!({ "enabled": true, "clientKind": "git", "useIgnoreFile": true }),
+        "{doc}"
+    );
+}
+
+#[test]
 fn the_flutter_piece_excludes_the_folders_flutter_adds_to_the_analyzer() {
     let repo = Repo::new("use = [\"flutter\"]\n", &[]);
     let out = repo.fz(&["setup", "sync"]);
