@@ -600,6 +600,48 @@ fn framework_rules_run_only_with_their_framework_piece() {
 }
 
 #[test]
+fn a_framework_package_json_depends_on_without_its_rules_is_a_finding() {
+    // A project set up before the framework pieces existed has `use = ["typescript"]` only, and
+    // would lose its React rules without a word; the settings check names the piece to add.
+    let package = r#"{"dependencies": {"react": "19.0.0", "vue": "3.5.0"}}"#;
+    let finding = |config: &str| {
+        let repo = Repo::new(config, &[("package.json", package)]);
+        let sync = repo.fz(&["setup", "sync"]);
+        assert!(sync.ok, "{}\n{}", sync.stdout, sync.stderr);
+        repo.branch("feat/x");
+        repo.fz(&["run", "--stage", "working", "--no-run"]);
+        repo.fz(&["run", "settings"])
+    };
+    let out = finding("use = [\"typescript\"]\n");
+    assert!(!out.ok, "{}", out.stdout);
+    for piece in ["react", "vue"] {
+        assert!(
+            out.stdout.contains(&format!(
+                "package.json depends on {piece}, but no rule of the {piece} piece has a level"
+            )),
+            "{piece}: {}",
+            out.stdout
+        );
+        assert!(
+            out.stdout
+                .contains(&format!("add \"{piece}\" to use in fearlezz.toml")),
+            "{piece}: {}",
+            out.stdout
+        );
+    }
+
+    let out = finding("use = [\"typescript\", \"react\", \"vue\"]\n");
+    assert!(out.ok, "{}", out.stdout);
+    // A project that does not lint with Biome through Fearlezz is told nothing.
+    let out = finding("[settings.claude.permissions]\nallow = []\n");
+    assert!(
+        !out.stdout.contains("package.json depends on"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn the_flutter_piece_excludes_the_folders_flutter_adds_to_the_analyzer() {
     let repo = Repo::new("use = [\"flutter\"]\n", &[]);
     let out = repo.fz(&["setup", "sync"]);

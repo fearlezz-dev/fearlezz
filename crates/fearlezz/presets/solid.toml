@@ -4,4 +4,5 @@
 [lints.biome]
 "correctness/noSolidDestructuredProps" = "off"
 "performance/useSolidForComponent" = "off"
+"suspicious/noDuplicatedSpreadProps" = "gate"
 "suspicious/noReactSpecificProps" = "gate"

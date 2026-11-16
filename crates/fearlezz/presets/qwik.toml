@@ -4,6 +4,8 @@
 [lints.biome]
 "correctness/noQwikUseVisibleTask" = "gate"
 "correctness/useImageSize" = "gate"
+"correctness/useJsxKeyInIterable" = "gate"
 "correctness/useQwikClasslist" = "gate"
 "correctness/useQwikMethodUsage" = "gate"
 "correctness/useQwikValidLexicalScope" = "gate"
+"suspicious/noReactSpecificProps" = "gate"

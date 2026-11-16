@@ -46,8 +46,9 @@ const FRAMEWORKS: &[(&str, &[&str])] = &[
 ];
 
 /// The framework pieces whose packages `package.json` in `root` depends on (its dependencies
-/// or devDependencies). A file that cannot be read as JSON shows none.
-fn frameworks(root: &Path) -> Vec<&'static str> {
+/// or devDependencies). A file that cannot be read as JSON shows none. The settings check names
+/// one whose rules a project lacks.
+pub(crate) fn frameworks(root: &Path) -> Vec<&'static str> {
     let Ok(text) = std::fs::read_to_string(root.join("package.json")) else {
         return Vec::new();
     };

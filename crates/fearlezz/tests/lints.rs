@@ -212,10 +212,13 @@ fn a_biome_rule_no_table_names_leaves_biome_json() {
         "[lints.biome]\n\"suspicious/noDebugger\" = \"gate\"\n",
         &[(
             "biome.json",
-            r#"{ "linter": { "enabled": true, "rules": { "preset": "none", "suspicious": { "noDebugger": "error", "noReactSpecificProps": "error" } } } }"#,
+            r#"{ "linter": { "enabled": true, "rules": { "preset": "none", "suspicious": { "noDebugger": "error", "noReactSpecificProps": "error" } }, "domains": {} } }"#,
         )],
     );
-    let doc: serde_json::Value = serde_json::from_str(&read(&repo, "biome.json")).unwrap();
+    let text = read(&repo, "biome.json");
+    // In place, so the file keeps its key order.
+    assert!(text.find("\"rules\"") < text.find("\"domains\""), "{text}");
+    let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(doc["linter"]["enabled"], true, "{doc}");
     assert_eq!(
         doc["linter"]["rules"],

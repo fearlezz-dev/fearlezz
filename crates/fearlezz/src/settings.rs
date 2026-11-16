@@ -397,6 +397,25 @@ impl Settings {
                 "add the Cargo.toml, or drop those tables (and the rust piece) from this project",
             ));
         }
+        // Biome runs a framework's rules only when its piece gives them, so a project set up
+        // before the framework pieces existed would lose them without a word.
+        if let Some(biome) = self.lints.of(lints::Tool::Biome) {
+            for piece in crate::init::frameworks(root) {
+                if !crate::presets::biome_rules(piece)
+                    .iter()
+                    .any(|rule| biome.contains_key(rule))
+                {
+                    found.push(finding(
+                        "package.json".into(),
+                        format!(
+                            "package.json depends on {piece}, but no rule of the {piece} piece \
+                             has a level"
+                        ),
+                        &format!("add \"{piece}\" to use in fearlezz.toml"),
+                    ));
+                }
+            }
+        }
         Ok(found)
     }
 
@@ -767,8 +786,9 @@ fn json_file(
     for keys in owned {
         if let Some((last, parents)) = keys.split_last() {
             let parent = parents.iter().try_fold(&mut doc, |d, k| d.get_mut(*k));
-            if let Some(serde_json::Value::Object(o)) = parent {
-                o.remove(*last);
+            // Emptied in place, so the file keeps its key order and the merge fills it.
+            if let Some(owned) = parent.and_then(|d| d.get_mut(*last)) {
+                *owned = serde_json::json!({});
             }
         }
     }

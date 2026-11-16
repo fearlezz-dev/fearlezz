@@ -5,8 +5,11 @@
 [lints.biome]
 "correctness/noBeforeInteractiveScriptOutsideDocument" = "off"
 "correctness/noNextAsyncClientComponent" = "off"
+"correctness/useExhaustiveDependencies" = "gate"
+"correctness/useHookAtTopLevel" = "gate"
 "correctness/useInlineScriptId" = "gate"
 "performance/noImgElement" = "flag"
+"performance/noSyncScripts" = "flag"
 "performance/noUnwantedPolyfillio" = "flag"
 "performance/useGoogleFontPreconnect" = "flag"
 "style/noHeadElement" = "flag"
