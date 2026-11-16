@@ -181,6 +181,10 @@ impl Hasher {
         if let Some(shell) = shell.filter(|_| check.builtin.is_none()) {
             parts.insert("(shell)".into(), sha256(shell.as_bytes()));
         }
+        // Each folder's copy of a check runs the same command on other files.
+        if let Some(dir) = &check.dir {
+            parts.insert("(dir)".into(), sha256(dir.as_bytes()));
+        }
         if let Some(services) = &check.services {
             parts.insert("(services)".into(), sha256(services.as_bytes()));
         }

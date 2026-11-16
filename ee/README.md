@@ -150,7 +150,7 @@ closes with `1008`, as does a share link's page when the link is revoked and a p
 viewer lost access (Who sees a page).
 
 **Types.** The page's TypeScript types (`ee/app/src/proof.ts`) are generated from
-`fearlezz-proof` with ts-rs; a test of `ee-tests` fails when they drift, and
+`fearlezz-proof` with ts-rs; a test of `tests/ee` fails when they drift, and
 `FEARLEZZ_WRITE_TYPES=1 cargo test --manifest-path ee/Cargo.toml --test types` writes them.
 
 ### Review
@@ -375,8 +375,8 @@ assets), and `host-tests` drives the worker over HTTP under `wrangler dev --loca
 fake GitHub, and its pages in headless Chrome (Google Chrome or Chromium, from `/Applications`
 or `PATH`) over the DevTools protocol on a pipe. Inside `devenv shell`,
 `cargo test --manifest-path ee/Cargo.toml` builds the worker and runs them, and
-`bun test ee/app` runs the page's own tests. Fearlezz proves it with the `ee-fmt`,
-`ee-clippy`, `ee-tests`, `ee-page-types` and `ee-page-tests` checks.
+`bun test ee/app` runs the page's own tests. Fearlezz proves it with the `fmt/ee`,
+`clippy/ee`, `tests/ee`, `ee-page-types` and `ee-page-tests` checks.
 
 The worker is built for size: `opt-level = "z"` with fat LTO and one codegen unit
 (`ee/Cargo.toml`), and wasm-opt `-Oz` (`ee/host/Cargo.toml`). Its wasm is about 410 KB gzip

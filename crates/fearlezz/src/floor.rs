@@ -100,6 +100,27 @@ impl Floor {
     }
 }
 
+/// Whether `check` is the copy `each` made for a project folder that, in the change, is no
+/// longer a project of that check (renamed, removed, or now a member of a workspace above it):
+/// the check goes with its folder. Removing `each` itself, or one folder's check while its
+/// folder stays, is gone.
+fn gone_with_its_folder(base: &Config, head: &Config, check: &config::Check) -> bool {
+    let folder = check.dir.as_deref().unwrap_or(".");
+    base.fanned.iter().any(|(id, folders)| {
+        let named = if folder == "." {
+            check.id == *id
+        } else {
+            check.id == format!("{id}/{folder}")
+        };
+        named
+            && folders.iter().any(|f| f == folder)
+            && head
+                .fanned
+                .get(id)
+                .is_some_and(|now| !now.iter().any(|f| f == folder))
+    })
+}
+
 /// How `head` proves less than `base`: a check gone, running another command, at a later
 /// stage, reporting or reading findings otherwise, taking fewer pictures (see
 /// [`config::Pictures::weakenings`]), rules covering fewer of `files`, and new `no_proof` globs
@@ -110,11 +131,21 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
     for b in &base.checks {
         let mut say = |how: String| found.push((Part::Check(b.id.clone()), how));
         let Some(h) = head.checks.iter().find(|h| h.id == b.id) else {
-            say("it is gone".into());
+            if !gone_with_its_folder(base, head, b) {
+                say("it is gone".into());
+            }
             continue;
         };
         if h.run != b.run {
             say("it runs another command".into());
+        }
+        if h.dir != b.dir {
+            let at = |dir: &Option<String>| dir.clone().unwrap_or_else(|| "the root".into());
+            say(format!(
+                "it runs in another folder ({}, now {})",
+                at(&b.dir),
+                at(&h.dir)
+            ));
         }
         let base_stage = base.stages.name(b.stage);
         if head.stages.find(base_stage).is_none_or(|s| h.stage > s) {

@@ -901,3 +901,138 @@ fn checks_see_the_toolchain_rustup_was_told_to_use() {
     let out = repo.fz_env(&["run", "rust"], &[("RUSTUP_TOOLCHAIN", "stable")]);
     assert!(out.ok, "{}{}", out.stdout, out.stderr);
 }
+
+#[test]
+fn a_check_with_each_runs_once_in_every_project_folder() {
+    // `each` names the file that marks a project; the check runs in every folder holding one
+    // that is not inside another such folder. Each run is its own check, `<id>/<folder>`,
+    // which a project tunes like any check.
+    let config = r#"
+[check.build]
+run = "test -f here"
+stage = "working"
+each = "project.txt"
+
+[check."build/b"]
+run = "test -f other"
+"#;
+    for shell in ["", "\n[env]\nshell = \"env\"\n"] {
+        let repo = Repo::new(
+            &format!("{config}{shell}"),
+            &[
+                ("a/project.txt", ""),
+                ("a/here", ""),
+                ("a/inner/project.txt", ""),
+                ("b/project.txt", ""),
+                ("b/other", ""),
+            ],
+        );
+        repo.branch("feat/x");
+        repo.write("a/x", "\n");
+        let plan = repo.fz(&["--plan"]);
+        assert!(plan.ok, "{}{}", plan.stdout, plan.stderr);
+        for id in ["build/a", "build/b"] {
+            assert!(plan.stdout.contains(id), "{id}: {}", plan.stdout);
+        }
+        assert!(!plan.stdout.contains("build/a/inner"), "{}", plan.stdout);
+        assert!(!plan.stdout.contains("build "), "{}", plan.stdout);
+        let out = repo.fz(&["run", "--stage", "working"]);
+        assert!(out.ok, "{shell}: {}{}", out.stdout, out.stderr);
+    }
+}
+
+#[test]
+fn a_check_with_each_in_a_project_at_the_root_keeps_its_name() {
+    let repo = Repo::new(
+        "[check.build]\nrun = \"test -f here\"\nstage = \"working\"\neach = \"project.txt\"\n",
+        &[("project.txt", ""), ("here", ""), ("tools/project.txt", "")],
+    );
+    repo.branch("feat/x");
+    repo.write("x", "\n");
+    let plan = repo.fz(&["--plan"]);
+    assert!(plan.stdout.contains("build"), "{}", plan.stdout);
+    assert!(!plan.stdout.contains("build/"), "{}", plan.stdout);
+    assert!(repo.fz(&["run", "--stage", "working"]).ok);
+}
+
+#[test]
+fn each_folder_keeps_its_own_result_when_the_command_is_the_same() {
+    // The copies differ only in their folder, so the folder is part of what a result is
+    // reused by: one folder passing never shows the other as passed.
+    let repo = Repo::new(
+        "[check.build]\nrun = \"test -f here\"\nstage = \"working\"\neach = \"project.txt\"\n",
+        &[("a/project.txt", ""), ("a/here", ""), ("b/project.txt", "")],
+    );
+    repo.branch("feat/x");
+    repo.write("a/x", "\n");
+    let out = repo.fz(&["run", "--stage", "working"]);
+    assert!(!out.ok, "{}", out.stdout);
+    let outcome = |id: &str| {
+        let check = repo.fz(&["--check", id]);
+        let json: serde_json::Value = serde_json::from_str(&check.stdout).unwrap();
+        json["outcome"].as_str().unwrap().to_string()
+    };
+    assert_eq!(outcome("build/a"), "passed");
+    assert_eq!(outcome("build/b"), "failed");
+}
+
+#[test]
+fn each_cargo_project_is_a_manifest_no_workspace_above_names() {
+    // The root workspace's members are its business; a workspace of its own below the root is
+    // a project, as is a crate the root workspace excludes.
+    let repo = Repo::new(
+        "[check.build]\nrun = \"true\"\nstage = \"working\"\neach = \"Cargo.toml\"\n",
+        &[
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"crates/old\"]\n",
+            ),
+            ("crates/app/Cargo.toml", "[package]\nname = \"app\"\n"),
+            ("crates/old/Cargo.toml", "[package]\nname = \"old\"\n"),
+            ("ee/Cargo.toml", "[workspace]\nmembers = [\"host\"]\n"),
+            ("ee/host/Cargo.toml", "[package]\nname = \"host\"\n"),
+        ],
+    );
+    repo.branch("feat/x");
+    repo.write("x", "\n");
+    let plan = repo.fz(&["--plan"]);
+    assert!(plan.ok, "{}{}", plan.stdout, plan.stderr);
+    for id in ["build/ee", "build/crates/old"] {
+        assert!(plan.stdout.contains(id), "{id}: {}", plan.stdout);
+    }
+    for id in ["build/crates/app", "build/ee/host"] {
+        assert!(!plan.stdout.contains(id), "{id}: {}", plan.stdout);
+    }
+}
+
+#[test]
+fn a_check_runs_in_the_folder_its_dir_names() {
+    let repo = Repo::new(
+        "[check.inner]\nrun = \"test -f here\"\nstage = \"working\"\ndir = \"sub\"\n",
+        &[("sub/here", "")],
+    );
+    repo.branch("feat/x");
+    repo.write("x", "\n");
+    let out = repo.fz(&["run", "--stage", "working"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+
+    for (config, said) in [
+        (
+            "[check.inner]\nrun = \"true\"\nstage = \"working\"\ndir = \"../up\"\n",
+            "name a folder inside the repository",
+        ),
+        (
+            "[check.inner]\nrun = \"true\"\nstage = \"working\"\neach = 1\n",
+            "each names the file that marks a project folder",
+        ),
+        (
+            "[check.build]\nrun = \"true\"\nstage = \"working\"\neach = \"project.txt\"\n\n[check.\"build/gone\"]\nstage = \"look\"\n",
+            "[check.\"build/gone\"] tunes the build check of gone, which has no project.txt",
+        ),
+    ] {
+        repo.write("fearlezz.toml", config);
+        let out = repo.fz(&["--plan"]);
+        assert!(!out.ok, "{config}: {}", out.stdout);
+        assert!(out.stderr.contains(said), "{config}: {}", out.stderr);
+    }
+}

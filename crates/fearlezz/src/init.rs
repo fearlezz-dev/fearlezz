@@ -1,5 +1,6 @@
 //! `fearlezz setup init`: the starter `fearlezz.toml` for a repository that has none, from the
-//! languages the files at its root show, and the frameworks its package.json depends on.
+//! languages the files at its root show (Rust also from Cargo projects in folders), and the
+//! frameworks its package.json depends on.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -95,16 +96,16 @@ const SAFETY: &str = "safety";
 /// when the first change to docs alone comes.
 const NO_PROOF: &str = r#"no_proof = ["*.md", "docs/**"]"#;
 
-/// A piece `init` used and the file at the root that showed it, none for a piece every
-/// project gets.
+/// A piece `init` used and the file that showed it (at the root, or a Cargo project's in a
+/// folder), none for a piece every project gets.
 pub(crate) struct Found {
     pub piece: &'static str,
-    pub file: Option<&'static str>,
+    pub file: Option<String>,
 }
 
 impl std::fmt::Display for Found {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.file {
+        match &self.file {
             Some(file) => write!(f, "{} ({file})", self.piece),
             None => write!(f, "{} (every project)", self.piece),
         }
@@ -121,11 +122,30 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
             root.display()
         );
     }
+    // The rust piece's checks run in every Cargo project (`each`), so one below the root
+    // shows Rust too, as an app with a native shell and a sandbox in their own folders has.
+    let files = crate::git::Git::discover(root)
+        .and_then(|git| git.files())
+        .unwrap_or_default();
+    let below = |piece: &str| -> Option<String> {
+        if piece != "rust" {
+            return None;
+        }
+        let none = crate::config::Globs::none();
+        let folder = crate::config::projects(root, &files, "Cargo.toml", &none)
+            .into_iter()
+            .next()?;
+        Some(format!("{folder}/Cargo.toml"))
+    };
     let found: Vec<Found> = MARKERS
         .iter()
         .filter_map(|(piece, files)| {
-            let file = files.iter().find(|f| root.join(f).exists())?;
-            Some((*piece, *file))
+            let file = files
+                .iter()
+                .find(|f| root.join(f).exists())
+                .map(|f| (*f).to_string())
+                .or_else(|| below(piece))?;
+            Some((*piece, file))
         })
         .flat_map(|(piece, file)| {
             // A TypeScript project also gets its frameworks' pieces and its test runner's.
@@ -136,7 +156,7 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
             };
             std::iter::once(piece).chain(more).map(move |piece| Found {
                 piece,
-                file: Some(file),
+                file: Some(file.clone()),
             })
         })
         .chain([Found {

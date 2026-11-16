@@ -278,3 +278,21 @@ fn a_finding_without_a_line_counts_when_the_change_touched_its_file() {
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(out.stdout.contains("flag a.lock  CVE-1"), "{}", out.stdout);
 }
+
+#[test]
+fn a_finding_of_a_check_run_in_a_folder_names_the_file_there() {
+    // The tool runs in sub/ and names `a.txt`; the root has an a.txt of its own, untouched.
+    let config = r#"
+[check.lint]
+run = """printf '{"file":"a.txt","line":1,"level":"gate","rule":"r","message":"bad"}\n' > "$FEARLEZZ_OUT/findings.jsonl\""""
+stage = "working"
+dir = "sub"
+findings = "jsonl"
+"#;
+    let repo = Repo::new(config, &[("a.txt", "root\n"), ("sub/a.txt", "old\n")]);
+    repo.branch("feat/x");
+    repo.write("sub/a.txt", "new\n");
+    let out = repo.fz(&["run", "lint"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stdout.contains("gate sub/a.txt:1"), "{}", out.stdout);
+}

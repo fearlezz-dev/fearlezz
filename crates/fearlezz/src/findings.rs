@@ -60,12 +60,14 @@ impl Reader {
     }
 
     /// Reads the findings a run left. `stdout` is the run's captured stdout, `out` its proof
-    /// folder. Returns the findings and what could not be read.
+    /// folder, `folder` the one the check ran in, if not the root. Returns the findings and
+    /// what could not be read.
     pub(crate) fn read(
         self,
         stdout: &Path,
         out: &Path,
         root: &Path,
+        folder: Option<&str>,
     ) -> (Vec<Finding>, Vec<String>) {
         let text = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();
         let mut found = match self {
@@ -84,7 +86,17 @@ impl Reader {
             Reader::Eslint => eslint(&text(stdout)),
         };
         for f in &mut found.0 {
+            // A tool run in the check's folder names files from there, so a relative path is
+            // looked for there first: the root may hold a file of the same name.
+            let from_tool =
+                !f.file.is_empty() && !f.file.starts_with('/') && !f.file.starts_with("file://");
             f.file = relative(&f.file, root);
+            if let Some(folder) = folder
+                && from_tool
+                && root.join(folder).join(&f.file).is_file()
+            {
+                f.file = format!("{folder}/{}", f.file);
+            }
         }
         // A relative path that names no file here was written from another folder (a tool
         // run in a subfolder). Judging it would hide it as "elsewhere", so it blocks instead.

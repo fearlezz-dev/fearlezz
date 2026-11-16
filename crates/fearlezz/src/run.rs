@@ -72,7 +72,9 @@ pub(crate) fn execute(
     let mut passed = exit_ok;
     let (mut findings, mut findings_elsewhere) = (Vec::new(), 0);
     if let Some(spec) = &check.findings {
-        let (found, errors) = spec.read.read(&stdout_path, &dir, at.root);
+        let (found, errors) = spec
+            .read
+            .read(&stdout_path, &dir, at.root, check.dir.as_deref());
         proof_errors.extend(errors);
         let found = spec.levels.apply(&spec.tools, spec.defaults(found));
         let verdict = crate::findings::judge(found, spec.on, at.changed, passed);
@@ -134,15 +136,24 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
         Some(f) if f.read.reads_stdout() => File::create(&stdout_path)?,
         _ => out.try_clone()?,
     };
-    // Inside a shell the command travels in a variable, so no quoting can break it.
-    let script = match at.shell {
-        Some(shell) => format!("{shell} sh -c \"$FEARLEZZ_RUN\""),
-        None => check.run.clone(),
+    // Inside a shell the command travels in a variable, so no quoting can break it. A check
+    // with a folder starts there; the shell itself starts at the root, where it finds its own
+    // files, and moves into the folder before the command.
+    let folder = check.dir.as_ref().map(|d| at.root.join(d));
+    let script = match (at.shell, &folder) {
+        (Some(shell), None) => format!("{shell} sh -c \"$FEARLEZZ_RUN\""),
+        (Some(shell), Some(_)) => {
+            format!("{shell} sh -c 'cd \"$FEARLEZZ_DIR\" && eval \"$FEARLEZZ_RUN\"'")
+        }
+        (None, _) => check.run.clone(),
     };
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(&script)
-        .current_dir(at.root)
+        .current_dir(match (at.shell, &folder) {
+            (None, Some(folder)) => folder,
+            _ => at.root,
+        })
         .env_clear()
         .stdin(Stdio::null())
         .stdout(stdout)
@@ -161,6 +172,9 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
     }
     cmd.env("FEARLEZZ_PORT", free_port()?.to_string());
     cmd.envs(at.vars);
+    if let Some(folder) = &folder {
+        cmd.env("FEARLEZZ_DIR", folder);
+    }
     cmd.env("FEARLEZZ_RUN", &check.run)
         .env("FEARLEZZ_OUT", dir)
         .env("FEARLEZZ_CHECK", &check.id)

@@ -404,6 +404,45 @@ fn a_pyproject_without_a_ruff_table_gets_a_ruff_toml() {
 }
 
 #[test]
+fn every_cargo_project_gets_the_lints_and_the_settings_check_judges_each() {
+    // Two separate Cargo projects and no Cargo.toml at the root, as an app with a native shell
+    // and a sandbox has; one under no_proof is reference and left alone. A crate inside a
+    // package that is no workspace is a project of its own, as Cargo builds it.
+    let repo = Repo::new(
+        "no_proof = [\"spikes/**\"]\n\n[settings.cargo-lints.clippy]\nunwrap_used = \"warn\"\n",
+        &[
+            ("shell/Cargo.toml", MEMBER),
+            ("sandbox/Cargo.toml", MEMBER),
+            ("sandbox/vendor/dep/Cargo.toml", MEMBER),
+            ("spikes/old/Cargo.toml", MEMBER),
+        ],
+    );
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    for project in ["shell", "sandbox", "sandbox/vendor/dep"] {
+        let text = std::fs::read_to_string(repo.path(&format!("{project}/Cargo.toml"))).unwrap();
+        assert!(
+            text.starts_with(MEMBER) && text.ends_with("[lints.clippy]\nunwrap_used = \"warn\"\n"),
+            "{project}: {text}"
+        );
+    }
+    let text = std::fs::read_to_string(repo.path("spikes/old/Cargo.toml")).unwrap();
+    assert_eq!(text, MEMBER, "spikes/old");
+    repo.commit("synced");
+    assert!(repo.fz(&["run", "settings"]).ok);
+
+    repo.write("sandbox/Cargo.toml", MEMBER);
+    let out = repo.fz(&["run", "settings"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("gate sandbox/Cargo.toml:1  settings  differs"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn workspace_members_are_found_the_way_cargo_finds_them() {
     let root = "[package]\nname = \"root\"\nversion = \"0.1.0\"\n\n[workspace]\nmembers = [\".\", \"crates/*\", \"tools/xtask-*\"]\nexclude = [\"crates/old\"]\n";
     let repo = Repo::new(
@@ -425,9 +464,11 @@ fn workspace_members_are_found_the_way_cargo_finds_them() {
         let text = std::fs::read_to_string(repo.path(&format!("{member}/Cargo.toml"))).unwrap();
         assert_eq!(text, inherits, "{member}");
     }
-    assert_eq!(
-        std::fs::read_to_string(repo.path("crates/old/Cargo.toml")).unwrap(),
-        MEMBER
+    // Excluded from the workspace, it is a project of its own with its own lints.
+    let old = std::fs::read_to_string(repo.path("crates/old/Cargo.toml")).unwrap();
+    assert!(
+        old.starts_with(MEMBER) && old.ends_with("[lints.clippy]\nunwrap_used = \"warn\"\n"),
+        "{old}"
     );
     // Writing again changes nothing.
     assert!(
