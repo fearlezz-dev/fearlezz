@@ -24,6 +24,7 @@ pub(crate) const BUILTIN: &[(&str, &str)] = &[
     ("actions", include_str!("../presets/actions.toml")),
     ("agents", include_str!("../presets/agents.toml")),
     ("betterleaks", include_str!("../presets/betterleaks.toml")),
+    ("bun", include_str!("../presets/bun.toml")),
     ("devenv", include_str!("../presets/devenv.toml")),
     ("eslint", include_str!("../presets/eslint.toml")),
     ("flutter", include_str!("../presets/flutter.toml")),
@@ -41,6 +42,7 @@ pub(crate) const BUILTIN: &[(&str, &str)] = &[
     ("solid", include_str!("../presets/solid.toml")),
     ("trufflehog", include_str!("../presets/trufflehog.toml")),
     ("typescript", include_str!("../presets/typescript.toml")),
+    ("vitest", include_str!("../presets/vitest.toml")),
     ("vue", include_str!("../presets/vue.toml")),
 ];
 
@@ -742,7 +744,7 @@ mod tests {
 
     #[test]
     fn every_language_piece_runs_and_counts_its_tests() {
-        for name in ["python", "kotlin", "typescript", "go", "flutter", "rust"] {
+        for name in ["python", "kotlin", "vitest", "bun", "go", "flutter", "rust"] {
             let text = BUILTIN.iter().find(|(n, _)| *n == name).unwrap().1;
             let piece = table(text);
             // Checks are named for their tools; the one that runs tests counts them.

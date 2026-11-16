@@ -45,26 +45,46 @@ const FRAMEWORKS: &[(&str, &[&str])] = &[
     ("vue", &["vue"]),
 ];
 
-/// The framework pieces whose packages `package.json` in `root` depends on (its dependencies
-/// or devDependencies). A file that cannot be read as JSON shows none. The settings check names
-/// one whose rules a project lacks.
+/// The framework pieces whose packages `package.json` in `root` depends on. The settings check
+/// names one whose rules a project lacks.
 pub(crate) fn frameworks(root: &Path) -> Vec<&'static str> {
-    let Ok(text) = std::fs::read_to_string(root.join("package.json")) else {
-        return Vec::new();
-    };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Vec::new();
-    };
-    let depends = |package: &str| {
-        ["dependencies", "devDependencies"]
-            .iter()
-            .any(|key| json.get(key).and_then(|d| d.get(package)).is_some())
-    };
+    let depends = depends(root);
     FRAMEWORKS
         .iter()
         .filter(|(_, packages)| packages.iter().any(|p| depends(p)))
         .map(|(piece, _)| *piece)
         .collect()
+}
+
+/// The piece of the test runner a TypeScript project in `root` uses: Vitest when package.json
+/// depends on it, as a Bun project running Vitest does; otherwise Bun's own runner when a Bun
+/// lockfile shows Bun; none without a sign of either.
+fn runner(root: &Path) -> Option<&'static str> {
+    if depends(root)("vitest") {
+        Some("vitest")
+    } else if ["bun.lock", "bun.lockb"]
+        .iter()
+        .any(|f| root.join(f).exists())
+    {
+        Some("bun")
+    } else {
+        None
+    }
+}
+
+/// Whether `package.json` in `root` depends on a package (its dependencies or
+/// devDependencies). A file that cannot be read as JSON depends on none.
+fn depends(root: &Path) -> impl Fn(&str) -> bool {
+    let json = std::fs::read_to_string(root.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    move |package| {
+        json.as_ref().is_some_and(|json| {
+            ["dependencies", "devDependencies"]
+                .iter()
+                .any(|key| json.get(key).and_then(|d| d.get(package)).is_some())
+        })
+    }
 }
 
 /// The piece every project gets, whatever it is written in: a leaked credential is never
@@ -108,17 +128,16 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
             Some((*piece, *file))
         })
         .flat_map(|(piece, file)| {
-            let frameworks = if piece == "typescript" {
-                frameworks(root)
+            // A TypeScript project also gets its frameworks' pieces and its test runner's.
+            let more = if piece == "typescript" {
+                frameworks(root).into_iter().chain(runner(root)).collect()
             } else {
                 Vec::new()
             };
-            std::iter::once(piece)
-                .chain(frameworks)
-                .map(move |piece| Found {
-                    piece,
-                    file: Some(file),
-                })
+            std::iter::once(piece).chain(more).map(move |piece| Found {
+                piece,
+                file: Some(file),
+            })
         })
         .chain([Found {
             piece: SAFETY,

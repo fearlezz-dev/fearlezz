@@ -1,5 +1,5 @@
-# TypeScript and JavaScript with Biome (lint and formatting), the type checker, and Vitest.
-# A project on another test runner overrides the vitest check's run and its JUnit path.
+# TypeScript and JavaScript with Biome (lint and formatting) and the type checker. The tests
+# come with the piece of their runner: vitest or bun.
 
 # Lint findings get the level [lints.biome] gives them. Only lines the change touched count.
 [check.biome-lint]
@@ -14,12 +14,6 @@ stage = "working"
 [check.tsc]
 run = "tsc --noEmit"
 stage = "working"
-
-[check.vitest]
-run = "vitest run --reporter=default --reporter=junit --outputFile.junit=\"$FEARLEZZ_OUT/junit.xml\""
-stage = "working"
-tests = "junit"
-test_files = ["**/*.test.*", "**/*.spec.*", "**/__tests__/**"]
 
 # Strictness switches, decided on the Lint Desk.
 [settings.tsconfig.compilerOptions]
