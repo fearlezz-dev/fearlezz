@@ -10,7 +10,6 @@
 mod common;
 
 use std::path::Path;
-use std::time::Instant;
 
 use common::host::{FakeHost, HOST_TOKEN, OIDC};
 use common::{Output, Repo};
@@ -232,17 +231,16 @@ fn a_host_that_hangs_costs_the_run_one_short_wait() {
     host.state.lock().unwrap().hangs = true;
     let repo = repo(&host.url);
     let config = signed_in(&host.url);
-    let started = Instant::now();
     let out = run(&repo, config.path());
-    let took = started.elapsed();
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(out.stdout.contains("2 checks: 2 passed"), "{}", out.stdout);
-    let api: Vec<String> = host
-        .calls()
-        .into_iter()
-        .filter(|c| c.contains("/api/"))
-        .collect();
+    let api = host.api();
     assert_eq!(api.len(), 1, "given up after the first call: {api:#?}");
-    assert!(took.as_secs() < 10, "{took:?}");
+    // The fake never answers, so only the run's own limit (5s without a byte) ends the wait.
+    let waited = host.state.lock().unwrap().hung_up.clone();
+    assert!(
+        waited.len() == 1 && waited[0].as_secs() < 8,
+        "one call, hung up within the run's limit: {waited:?}"
+    );
     assert!(out.stdout.contains("proof page not sent"), "{}", out.stdout);
 }
