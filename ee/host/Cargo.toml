@@ -27,6 +27,9 @@ hex = "0.4"
 percent-encoding = "2"
 url = "2"
 
+[lints]
+workspace = true
+
 # worker-build runs wasm-opt on the worker; -Oz trades a little speed for size (482 KB gzip
 # before, 410 KB with opt-level "z" beside it).
 [package.metadata.wasm-pack.profile.release]

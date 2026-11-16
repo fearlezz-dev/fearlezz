@@ -35,6 +35,9 @@ pub(crate) struct Config {
     /// The table it was read from, pieces merged in and checks turned off left out, so a part
     /// of it can be shown as written.
     table: toml::Table,
+    /// The project folders of each check with `each`, by its id (`.` the root): a check of a
+    /// folder that is no longer a project goes with it, which never weakens the proof.
+    pub fanned: BTreeMap<String, Vec<String>>,
 }
 
 /// What makes a checkout usable and runs its services. Every part is optional; a project
@@ -98,6 +101,8 @@ pub(crate) struct Stage(usize);
 pub(crate) struct Check {
     pub id: String,
     pub run: String,
+    /// The folder of the repository it runs in, from `each` or written; the root without one.
+    pub dir: Option<String>,
     pub stage: Stage,
     /// What it reads, the key its results are reused by: the files `inputs` names, or
     /// without them every file outside `no_proof`. Only a speed hint; it never decides
@@ -382,6 +387,7 @@ struct RawStages {
 struct RawCheck {
     run: String,
     stage: String,
+    dir: Option<String>,
     #[serde(default)]
     inputs: Vec<String>,
     #[serde(default)]
@@ -454,11 +460,32 @@ impl Config {
     /// Reads `fearlezz.toml` in `root`, with the pieces it uses merged in (cached under
     /// `common`, the git folder every worktree shares).
     pub(crate) fn load(root: &Path, common: &Path) -> Result<Config> {
-        let table = presets::resolve(root, common)?;
-        Config::from_table(table).with_context(|| format!("in {}", root.join(FILE).display()))
+        let mut table = presets::resolve(root, common)?;
+        let at = || format!("in {}", root.join(FILE).display());
+        let no_proof: Vec<String> = table
+            .get("no_proof")
+            .and_then(toml::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let no_proof = globs(&no_proof).with_context(at)?;
+        let files = crate::git::Git {
+            root: root.to_path_buf(),
+            common: common.to_path_buf(),
+        }
+        .files()?;
+        let found = |marker: &str| projects(root, &files, marker, &no_proof);
+        let fanned = expand_each(&mut table, &found).with_context(at)?;
+        let mut config = Config::from_table(table, found("Cargo.toml")).with_context(at)?;
+        config.fanned = fanned;
+        Ok(config)
     }
 
-    fn from_table(mut table: toml::Table) -> Result<Config> {
+    /// The config `table` says, with `cargo` the folders of the repository's Cargo projects.
+    fn from_table(mut table: toml::Table, cargo: Vec<String>) -> Result<Config> {
         // The settings check is added below, so turning it off is read before the others go.
         let settings_off = table
             .get("check")
@@ -551,6 +578,10 @@ impl Config {
                         .with_context(|| format!("check {id}"))?,
                     flaky: globs(&c.flaky).with_context(|| format!("check {id}: flaky"))?,
                 },
+                dir: match c.dir {
+                    Some(dir) => Some(folder(&dir).with_context(|| format!("check {id}: dir"))?),
+                    None => None,
+                },
                 id: id.clone(),
                 run: c.run,
                 stage,
@@ -595,7 +626,8 @@ impl Config {
                 },
             });
         }
-        let settings = Settings::parse(raw.settings.unwrap_or_default(), all_lints)?;
+        let mut settings = Settings::parse(raw.settings.unwrap_or_default(), all_lints)?;
+        settings.cargo = cargo;
         let own_settings_check = checks.iter().any(|c| c.id == SETTINGS_CHECK);
         if !settings.is_empty() && !own_settings_check && !settings_off {
             checks.push(builtin_check(
@@ -634,6 +666,7 @@ impl Config {
             env,
             host: raw.host.map(|h| h.url),
             table,
+            fanned: BTreeMap::new(),
         })
     }
 
@@ -687,6 +720,7 @@ fn builtin_check(id: &str, stages: &Stages, inputs: Globs, on: Scope, builtin: B
     Check {
         id: id.into(),
         run: format!("(fearlezz {id})"),
+        dir: None,
         stage: stages.find("working").unwrap_or(stages.first()),
         inputs,
         env: Vec::new(),
@@ -728,6 +762,14 @@ pub(crate) enum Widening {
 }
 
 impl Globs {
+    /// Globs that match nothing.
+    pub(crate) fn none() -> Globs {
+        Globs {
+            patterns: Vec::new(),
+            set: GlobSet::empty(),
+        }
+    }
+
     pub(crate) fn is_match(&self, path: &str) -> bool {
         self.set
             .matches(path)
@@ -840,6 +882,120 @@ impl Narrowing<'_> {
     }
 }
 
+/// A folder of the repository as a check names it: relative, without `.` segments, never
+/// leaving the repository; `.` alone is the root, which needs no folder.
+fn folder(dir: &str) -> Result<String> {
+    let parts: Vec<&str> = dir
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    if dir.starts_with('/') || parts.contains(&"..") || parts.is_empty() {
+        bail!("\"{dir}\": name a folder inside the repository, relative to its root");
+    }
+    Ok(parts.join("/"))
+}
+
+/// The project folders `files` show: each folder holding a file named `marker`, outside
+/// `no_proof`, and not inside another such folder (a project's own crates or packages are its
+/// business). A Cargo.toml is a project unless a workspace above it names it a member, as
+/// Cargo decides, so a workspace of its own below the root is one. `.` is the root.
+pub(crate) fn projects(
+    root: &Path,
+    files: &[String],
+    marker: &str,
+    no_proof: &Globs,
+) -> Vec<String> {
+    let suffix = format!("/{marker}");
+    let mut found: Vec<String> = files
+        .iter()
+        .filter(|f| !no_proof.is_match(f))
+        .filter_map(|f| {
+            if f == marker {
+                Some(".".to_string())
+            } else {
+                f.strip_suffix(&suffix).map(String::from)
+            }
+        })
+        .collect();
+    found.sort();
+    found.dedup();
+    let all = found.clone();
+    let above = |o: &String, f: &String| o != f && (o == "." || f.starts_with(&format!("{o}/")));
+    if marker == "Cargo.toml" {
+        found.retain(|f| {
+            !all.iter()
+                .any(|o| above(o, f) && crate::settings::workspace_has(root, o, f))
+        });
+    } else {
+        found.retain(|f| !all.iter().any(|o| above(o, f)));
+    }
+    found
+}
+
+/// Each check with `each` made one check per project folder `found` names for its marker
+/// file: `<id>` for the root, `<id>/<folder>` running in that folder otherwise. A check the
+/// project writes under that name tunes the one folder. Without a project folder, the check
+/// stays at the root, where its tool says what is missing. Its `inputs` stay with the root:
+/// they name the root project's files, so a folder's check reads every file until its own
+/// table names them. Returns the folders of each, by id.
+fn expand_each(
+    table: &mut toml::Table,
+    found: &dyn Fn(&str) -> Vec<String>,
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut fanned = BTreeMap::new();
+    let Some(toml::Value::Table(checks)) = table.get_mut("check") else {
+        return Ok(fanned);
+    };
+    let templates: Vec<String> = checks
+        .iter()
+        .filter(|(_, c)| c.get("each").is_some())
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in templates {
+        let Some(toml::Value::Table(mut check)) = checks.remove(&id) else {
+            continue;
+        };
+        let Some(toml::Value::String(marker)) = check.remove("each") else {
+            bail!(
+                "check {id}: each names the file that marks a project folder, such as \"Cargo.toml\""
+            );
+        };
+        let mut folders = found(&marker);
+        if folders.is_empty() {
+            folders.push(".".into());
+        }
+        for dir in &folders {
+            let mut one = check.clone();
+            let name = if dir == "." {
+                id.clone()
+            } else {
+                one.insert("dir".into(), toml::Value::String(dir.clone()));
+                one.remove("inputs");
+                format!("{id}/{dir}")
+            };
+            if let Some(toml::Value::Table(own)) = checks.remove(&name) {
+                presets::merge(&mut one, own);
+            }
+            checks.insert(name, toml::Value::Table(one));
+        }
+        // A table left for a folder that is no longer a project tunes nothing.
+        let prefix = format!("{id}/");
+        let stale = checks.iter().find(|(name, c)| {
+            name.strip_prefix(&prefix)
+                .is_some_and(|dir| !folders.iter().any(|f| f == dir))
+                && c.get("run").is_none()
+        });
+        if let Some((name, _)) = stale {
+            bail!(
+                "[check.\"{name}\"] tunes the {id} check of {}, which has no {marker}: remove the table, or put the project back",
+                name.strip_prefix(&prefix).unwrap_or(name)
+            );
+        }
+        fanned.insert(id, folders);
+    }
+    Ok(fanned)
+}
+
 fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<Globs> {
     let mut set = GlobSetBuilder::new();
     let mut written = Vec::new();
@@ -908,7 +1064,7 @@ mod tests {
     #[test]
     fn the_devenv_piece_runs_services_and_reads_their_ports() {
         let table = toml::from_str(include_str!("../presets/devenv.toml")).unwrap();
-        let env = Config::from_table(table).unwrap().env;
+        let env = Config::from_table(table, Vec::new()).unwrap().env;
         assert_eq!(env.up.as_deref(), Some("devenv up -d"));
         assert_eq!(env.ports, Some(Ports::Devenv));
         assert_eq!(env.inputs, ["devenv.nix", "devenv.yaml", "devenv.lock"]);
@@ -918,8 +1074,11 @@ mod tests {
     #[test]
     fn every_built_in_piece_is_a_valid_config() {
         for (name, piece) in presets::BUILTIN {
-            let table = toml::from_str(piece).unwrap_or_else(|e| panic!("{name}: {e}"));
-            if let Err(e) = Config::from_table(table) {
+            let mut table = toml::from_str(piece).unwrap_or_else(|e| panic!("{name}: {e}"));
+            // As in a project with a nested project of each marker, so `each` is read too.
+            let found = |_: &str| vec![".".to_string(), "sub".to_string()];
+            expand_each(&mut table, &found).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            if let Err(e) = Config::from_table(table, Vec::new()) {
                 panic!("{name}: {e:#}");
             }
         }
@@ -945,7 +1104,7 @@ mod tests {
     #[test]
     fn a_check_turned_off_is_gone() {
         let table = toml::from_str("[check.tests]\noff = true\n").unwrap();
-        let checks = Config::from_table(table).unwrap().checks;
+        let checks = Config::from_table(table, Vec::new()).unwrap().checks;
         assert!(!checks.iter().any(|c| c.id == "tests"));
     }
 }

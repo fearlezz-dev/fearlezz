@@ -27,3 +27,6 @@ sha2 = "0.10"
 tempfile = "3"
 # Plain HTTP to local ports, and bodies as sent: no TLS, no gzip.
 ureq = { version = "3", default-features = false }
+
+[lints]
+workspace = true

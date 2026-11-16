@@ -15,31 +15,24 @@ no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
 [check.tests]
 inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**", "README.md", ".github/workflows/proof.yml"]
 
-# The proof host in ee/ is a Cargo workspace of its own, built to wasm, so the rust piece's
-# checks at the root do not reach it. These read ee/ and the proof bundle crate it shares with
-# the core, so other core edits never rerun them; ee-fmt reads the core's sources too, since
-# `--all` checks them through the path dependency on the proof bundle crate.
-[check.ee-fmt]
-run = "cargo fmt --manifest-path ee/Cargo.toml --all --check"
-stage = "working"
+# The proof host in ee/ is a Cargo workspace of its own, built to wasm, so the rust piece runs
+# its checks there too (`fmt/ee`, `clippy/ee`, `tests/ee`). These read ee/ and the proof bundle
+# crate it shares with the core, so other core edits never rerun them; `fmt/ee` reads the core's
+# sources too, since `--all` checks them through the path dependency on the proof bundle crate.
+[check."fmt/ee"]
 inputs = ["ee/**", "crates/fearlezz-proof/**", "crates/**/*.rs"]
 
-[check.ee-clippy]
-run = "cargo clippy --manifest-path ee/Cargo.toml --all-targets --all-features --quiet --message-format=json"
-stage = "working"
-findings = { read = "cargo", lints = ["clippy", "rustc"] }
+# All features, so the routes only the tests build in are linted too.
+[check."clippy/ee"]
+run = "cargo clippy --all-targets --all-features --quiet --message-format=json"
 inputs = ["ee/**", "crates/fearlezz-proof/**"]
 
 # Builds the worker and drives it under wrangler dev against a fake GitHub.
-[check.ee-tests]
-run = "cargo test --manifest-path ee/Cargo.toml --quiet"
-stage = "working"
-tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }
-test_files = ["ee/host-tests/tests/**"]
+[check."tests/ee"]
 inputs = ["ee/**", "crates/fearlezz-proof/**"]
 
 # The proof host's page: its types, and its tests of how a live connection becomes what the
-# page shows. That its types match the proof model is a test of ee-tests. devenv installs
+# page shows. That its types match the proof model is a test of tests/ee. devenv installs
 # the page's packages as it enters the shell.
 [check.ee-page-types]
 run = "tsc -p ee/app"

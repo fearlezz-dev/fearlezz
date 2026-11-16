@@ -169,6 +169,37 @@ fn init_adds_the_piece_of_the_test_runner_the_project_uses() {
 }
 
 #[test]
+fn init_finds_cargo_projects_below_the_root_and_the_rust_checks_run_in_each() {
+    let manifest = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n";
+    let repo = project(&[
+        ("shell/Cargo.toml", manifest),
+        ("sandbox/Cargo.toml", manifest),
+    ]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(config.contains(r#"use = ["rust", "safety"]"#), "{config}");
+    assert!(
+        out.stdout.contains("rust (sandbox/Cargo.toml)"),
+        "{}",
+        out.stdout
+    );
+
+    repo.commit("starter");
+    repo.branch("feat/x");
+    repo.write("shell/src/main.rs", "fn main() {}\n");
+    let plan = repo.fz(&["--plan"]);
+    for check in [
+        "fmt/shell",
+        "clippy/sandbox",
+        "tests/shell",
+        "tests/sandbox",
+    ] {
+        assert!(plan.stdout.contains(check), "{check}: {}", plan.stdout);
+    }
+}
+
+#[test]
 fn init_without_a_known_language_writes_a_check_to_fill_in() {
     let repo = project(&[("Makefile", "test:\n\ttrue\n")]);
     let out = repo.fz(&["setup", "init"]);

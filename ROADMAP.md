@@ -2,7 +2,7 @@
 
 What Fearlezz is for, where it stands and where it is going. Read this first when picking up the work, and update it in the same change that moves something.
 
-Last updated: 2026-11-15.
+Last updated: 2026-11-16.
 
 ## Purpose
 
@@ -25,11 +25,11 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 
 | Capability | Notes |
 | --- | --- |
-| Checks, stages | Proof is about behaviour, never files: any change needs every check, and a pass counts only for the inputs it ran on (every file outside `no_proof`, or the check's own `inputs`, a speed hint), so an edit to prose reruns nothing; the final stage runs everything fresh. Glob lists take `!` globs back out, the last match deciding |
+| Checks, stages | Proof is about behaviour, never files: any change needs every check, and a pass counts only for the inputs it ran on (every file outside `no_proof`, or the check's own `inputs`, a speed hint), so an edit to prose reruns nothing; the final stage runs everything fresh. Glob lists take `!` globs back out, the last match deciding. A check runs at the root, in the folder its `dir` names, or with `each` once in every project folder (`<check>/<folder>`; a Cargo project is a manifest no workspace above names a member); a folder that goes takes its checks with it |
 | Results by input hash | Shared across worktrees, pruned after 30 days |
 | Journals | One per piece of work, append only; `fearlezz --all` prints every journal as text |
 | Command line | See, run, say, setup. A tool a check cannot find is named with how to install it; tools in `node_modules/.bin` and `.venv/bin` are found |
-| Starting out | Without `fearlezz.toml`, every command leads to `fearlezz setup init`, which writes a starter from the languages at the root and `no_proof` for prose |
+| Starting out | Without `fearlezz.toml`, every command leads to `fearlezz setup init`, which writes a starter from the languages at the root (Rust also from Cargo projects in folders) and `no_proof` for prose |
 | Findings | Only lines the change touched can block |
 | Test counts | A check's `tests` reader (JUnit reports, or a pattern in the output) counts what ran; zero tests fails it. Every language piece runs and counts its tests |
 | Rules | Paths, naming, companion files, ast-grep code rules |
@@ -76,7 +76,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 ## Known problems
 
 - **Self hosted runners that run several jobs of one attempt.** The host ties a GitHub job to its run by run id, attempt and runner; when one runner ran several jobs of an attempt and only one of them is known, a job that ends can cancel the other's run. GitHub's hosted runners run one job each, so it does not happen there. A queued job named with `name:` does not show as waiting for a runner.
-- **Monorepos.** `setup init` and the language pieces look only at the repository root.
+- **Monorepos beyond Rust.** A check runs in every project folder with `each`, and the rust piece and `setup init` use it for Cargo projects; the other language pieces and `setup init` still look only at the repository root.
 - **Films stop working until replayd restarts.** On the developer's machine, after a few dozen films (27 in one series, during a load spike), every film fails with "failure to process first sample buffer" while stills still work, with the 0.2.0 build as well; killing `replayd` (launchd restarts it) brings films back. Its cause is unknown. Every film is noted in the machine's film log (`films.jsonl` in Fearlezz's cache folder: repository, check, how it went, the `replayd` pid and the load), so how often it happens can be counted; failures in a row under one `replayd` pid are this problem.
 - **Recording app windows is proven only on the developer's machine.** CI runs the proof on macOS too, but hosted runners cannot grant Screen Recording.
 - **Linux only code is not proven locally.** The local proof runs on macOS, so code behind `cfg(not(target_os = "macos"))` is first linted in CI.

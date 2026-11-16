@@ -315,6 +315,33 @@ fn turning_a_check_off_is_red_and_named() {
 }
 
 #[test]
+fn a_project_folder_that_goes_takes_its_checks_with_it_but_a_moved_check_weakens() {
+    let each = "[check.build]\nrun = \"true\"\nstage = \"working\"\neach = \"project.txt\"\n";
+    let repo = Repo::new(each, &[("a/project.txt", ""), ("b/project.txt", "")]);
+    repo.branch("feat/x");
+    repo.git(&["rm", "-q", "b/project.txt"]);
+    repo.commit("b is no project now");
+    let out = ci(&repo);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("weakens"), "{}", out.stdout);
+
+    repo.write(
+        "fearlezz.toml",
+        &full(&format!("{each}\n[check.\"build/a\"]\ndir = \"c\"\n")),
+    );
+    repo.write("c/keep", "");
+    repo.commit("build/a runs elsewhere");
+    let out = ci(&repo);
+    assert!(!out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("weakens build/a: it runs in another folder (a, now c)"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn narrowing_or_dropping_the_inputs_weakens_nothing() {
     for inputs in ["inputs = [\"src/other/**\"]\n", ""] {
         let repo = branch_with_change();

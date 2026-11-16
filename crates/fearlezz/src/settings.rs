@@ -97,6 +97,9 @@ const LINT_FILES: [(lints::Tool, Tool); 9] = [
 pub(crate) struct Settings {
     tools: BTreeMap<Tool, Table>,
     lints: Lints,
+    /// The folders of the repository's Cargo projects (`.` for the root), which the Rust lint
+    /// tables are written into.
+    pub cargo: Vec<String>,
 }
 
 impl Settings {
@@ -133,7 +136,12 @@ impl Settings {
                 tools.entry(file).or_default();
             }
         }
-        Ok(Settings { tools, lints })
+        Ok(Settings {
+            tools,
+            lints,
+            // Config::load finds them in the repository.
+            cargo: Vec::new(),
+        })
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -253,7 +261,7 @@ impl Settings {
         let mut out = Vec::new();
         for tool in self.tools.keys() {
             // Nothing to write the Rust lints into; the settings check says so.
-            if *tool == Tool::CargoLints && self.cargo_lints_without_manifest(root) {
+            if *tool == Tool::CargoLints && self.cargo_lints_without_manifest() {
                 continue;
             }
             let table = self.table(*tool);
@@ -266,7 +274,13 @@ impl Settings {
                 .map(|e| e.to_string_lossy().to_lowercase())
                 .unwrap_or_default();
             let files = match tool {
-                Tool::CargoLints => cargo_lints(root, &table)?,
+                Tool::CargoLints => {
+                    let mut files = Vec::new();
+                    for dir in &self.cargo {
+                        files.extend(cargo_lints(root, dir, &table)?);
+                    }
+                    files
+                }
                 Tool::Ruff if path == "pyproject.toml" => {
                     let ruff = Table::from_iter([("ruff".to_string(), Value::Table(table))]);
                     let tool = Table::from_iter([("tool".to_string(), Value::Table(ruff))]);
@@ -390,7 +404,7 @@ impl Settings {
                 }
             })
             .collect();
-        if self.cargo_lints_without_manifest(root) {
+        if self.cargo_lints_without_manifest() {
             found.push(finding(
                 String::new(),
                 "no Cargo.toml to write the [lints.clippy] and [lints.rustc] rules into".into(),
@@ -420,8 +434,8 @@ impl Settings {
     }
 
     /// Rust lint settings in a project without a `Cargo.toml` to hold them.
-    fn cargo_lints_without_manifest(&self, root: &Path) -> bool {
-        self.tools.contains_key(&Tool::CargoLints) && !root.join("Cargo.toml").exists()
+    fn cargo_lints_without_manifest(&self) -> bool {
+        self.tools.contains_key(&Tool::CargoLints) && self.cargo.is_empty()
     }
 }
 
@@ -583,9 +597,22 @@ fn dart_lint_table(lints: &Lints) -> Table {
 }
 
 /// Cargo.toml with the lints table set, and each workspace member inheriting it.
-fn cargo_lints(root: &Path, lints: &Table) -> Result<Vec<(String, String)>> {
-    let text = std::fs::read_to_string(root.join("Cargo.toml"))
-        .context("[settings.cargo-lints]: reading Cargo.toml")?;
+fn cargo_lints(repo: &Path, dir: &str, lints: &Table) -> Result<Vec<(String, String)>> {
+    // Paths below are from the project's folder; the files returned are from the repository.
+    let root = &repo.join(dir);
+    let from_repo = |path: String| {
+        if dir == "." {
+            path
+        } else {
+            format!("{dir}/{path}")
+        }
+    };
+    let text = std::fs::read_to_string(root.join("Cargo.toml")).with_context(|| {
+        format!(
+            "[settings.cargo-lints]: reading {}",
+            from_repo("Cargo.toml".into())
+        )
+    })?;
     let mut doc: toml_edit::DocumentMut = text.parse().context("Cargo.toml")?;
     let rendered: toml_edit::DocumentMut = toml::to_string(lints)?.parse()?;
     let mut table = rendered.as_table().clone();
@@ -657,7 +684,47 @@ fn cargo_lints(root: &Path, lints: &Table) -> Result<Vec<(String, String)>> {
         doc["lints"] = toml_edit::Item::Table(table);
     }
     out.insert(0, ("Cargo.toml".to_string(), doc.to_string()));
-    Ok(out)
+    Ok(out
+        .into_iter()
+        .map(|(path, text)| (from_repo(path), text))
+        .collect())
+}
+
+/// Whether the Cargo.toml in folder `workspace` (`.` the root) is a workspace that names the
+/// project in folder `project` (below it) a member.
+pub(crate) fn workspace_has(root: &Path, workspace: &str, project: &str) -> bool {
+    let at = if workspace == "." {
+        root.to_path_buf()
+    } else {
+        root.join(workspace)
+    };
+    let Ok(text) = std::fs::read_to_string(at.join("Cargo.toml")) else {
+        return false;
+    };
+    let Ok(doc) = text.parse::<Table>() else {
+        return false;
+    };
+    let Some(ws) = doc.get("workspace").and_then(Value::as_table) else {
+        return false;
+    };
+    let list = |key: &str| -> Vec<String> {
+        ws.get(key)
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let below = format!("{workspace}/");
+    let inside = if workspace == "." {
+        project
+    } else {
+        project.strip_prefix(&below).unwrap_or(project)
+    };
+    member_dirs(&at, &list("members"), &list("exclude"))
+        .is_ok_and(|dirs| dirs.iter().any(|d| d == inside))
 }
 
 /// The folders of a workspace's members below the root, as Cargo finds them: each pattern
