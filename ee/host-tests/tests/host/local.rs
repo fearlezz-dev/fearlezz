@@ -204,6 +204,7 @@ pub fn a_silent_local_run_is_cancelled_after_an_hour() {
     );
     // Time passes: the first said nothing for two hours, the second for half an hour. A CI
     // run is closed by its job's end, never by the clock.
+    let _clock = clock();
     world().worker.sql(&format!(
         "UPDATE runs SET touched = touched - 7200 WHERE id IN ('{}', '{}')",
         silent_run.id, ci_run.id
@@ -243,6 +244,7 @@ pub fn a_local_run_uploading_its_files_is_not_silent() {
     );
     assert_eq!(answer.status, 200, "{}", answer.text());
     // The check ended two hours ago; the run has been sending its films since.
+    let _clock = clock();
     world().worker.sql(&format!(
         "UPDATE runs SET touched = touched - 7200 WHERE id = '{}'",
         run.id

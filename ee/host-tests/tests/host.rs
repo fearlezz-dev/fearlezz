@@ -46,9 +46,20 @@ struct World {
     oidc: RsaPrivateKey,
     /// A key GitHub never published, for forged tokens.
     stranger: RsaPrivateKey,
+    /// Held by a test that moves a run's clock back and runs the schedule: the schedule sweeps
+    /// every run on the host, so it must not sweep another such test's runs midway.
+    clock: std::sync::Mutex<()>,
 }
 
 static WORLD: OnceLock<World> = OnceLock::new();
+
+/// The host's clock to move, alone; a test that failed holding it leaves nothing to undo.
+fn clock() -> std::sync::MutexGuard<'static, ()> {
+    world()
+        .clock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 fn world() -> &'static World {
     WORLD.get_or_init(|| {
@@ -65,6 +76,7 @@ fn world() -> &'static World {
             github,
             oidc,
             stranger,
+            clock: std::sync::Mutex::new(()),
         };
         // Fills the host's JWKS cache before any test runs, so the only fetches of GitHub's keys
         // after this are the refetches a test asks for.
