@@ -467,7 +467,16 @@ run_attempt: number,
 /**
  * The runner that took the job (`RUNNER_NAME`).
  */
-runner_name: string, } | { "kind": "local", 
+runner_name: string, 
+/**
+ * The leg it runs, for a run Fearlezz split over several jobs (`linux`, `macos/ui`):
+ * the leg it counts as in review, without waiting for GitHub to name its job.
+ */
+leg?: string | null, 
+/**
+ * Every leg the run's plan made, this one among them: the review waits for each.
+ */
+planned?: Array<string>, } | { "kind": "local", 
 /**
  * Who ran it: the login of the CLI's sign in, which the host sets from its token.
  */
@@ -668,6 +677,20 @@ export type Check = {
  * Its id.
  */
 id: string, 
+/**
+ * The platform it ran on, in a project that names platforms; the same check can run on
+ * several.
+ */
+platform?: string | null, 
+/**
+ * The hash of what it read, so CI on a later commit can tell a pass still holds.
+ */
+key?: string | null, 
+/**
+ * Where its pass was seen, when it did not run here: the base commit's CI, which ran it
+ * on the same inputs (that run's page, or the commit without one).
+ */
+reused?: string | null, 
 /**
  * The whole command.
  */

@@ -368,6 +368,10 @@ fn main() {
             a_partial_rerun_replaces_only_the_legs_it_ran,
         ),
         (
+            "accepting_a_split_proof_runs_its_failed_jobs_again",
+            accepting_a_split_proof_runs_its_failed_jobs_again,
+        ),
+        (
             "a_run_whose_leg_is_not_known_keeps_its_pictures",
             a_run_whose_leg_is_not_known_keeps_its_pictures,
         ),
@@ -2343,6 +2347,58 @@ fn accept_needs_an_admin_and_runs_the_failed_proof_job_again() {
     assert_eq!(answer.status, 409, "{}", answer.text());
 }
 
+/// A proof Fearlezz split over legs fails in its gate, a job that streams nothing: the legs
+/// report what the change weakens and pass. Accepting it runs the failed jobs of the workflow
+/// run again, the gate among them, which asks the host through a leg's run.
+fn accepting_a_split_proof_runs_its_failed_jobs_again() {
+    let head = commit("a147");
+    let job = Job::pull("owner/review", 147, "review/split")
+        .at(&head, 1147)
+        .on("runner-linux")
+        .leg("linux", &["linux"]);
+    let github = &world().github;
+    github.job_ended(
+        "owner/review",
+        1147,
+        11471,
+        "leg linux",
+        "runner-linux",
+        "success",
+    );
+    github.job_ended(
+        "owner/review",
+        1147,
+        11472,
+        "proof",
+        "runner-gate",
+        "failure",
+    );
+    let (look, files) = one_still(b"split before", b"split before");
+    let mut look = look;
+    look["items"][0]["change"] = json!("same");
+    let run = proven(&job, &look, &files, &weakened());
+    let review = review_of(147);
+    assert_eq!(review["state"], "failed", "{review:#}");
+    let admin = sign_in("admin-code", "/");
+    let answer = say(&run, "accept", Some(&admin), &[], &json!({}));
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    assert_eq!(
+        github.reruns("owner/review", 1147),
+        [],
+        "no leg's own job runs again: the legs passed"
+    );
+    assert_eq!(
+        github.failed_reruns("owner/review"),
+        [(1147, "installation-6".to_owned())],
+        "the workflow run's failed jobs run again, as the app"
+    );
+    // The gate asks through the leg's run, and gets the accept.
+    let answer = job.weakenings(&run, &weakenings());
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let accepted = answer.json();
+    assert_eq!(accepted["accepted"]["by"], "admin", "{accepted:#}");
+}
+
 fn a_run_asks_whether_exactly_its_weakenings_of_its_head_are_accepted() {
     let head = commit("a114");
     let job = Job::pull("owner/review", 114, "review/asks").at(&head, 1114);
@@ -3403,6 +3459,8 @@ struct Job {
     runner: String,
     /// A developer's CLI token instead of CI's: the run is a local one.
     cli: Option<String>,
+    /// The leg of a split proof it runs, and every leg of its plan.
+    leg: Option<(String, Vec<String>)>,
 }
 
 /// The runner a job runs on unless a test names another.
@@ -3425,6 +3483,7 @@ impl Job {
             attempt: 1,
             runner: RUNNER.to_owned(),
             cli: None,
+            leg: None,
         }
     }
 
@@ -3438,6 +3497,7 @@ impl Job {
             attempt: 1,
             runner: RUNNER.to_owned(),
             cli: None,
+            leg: None,
         }
     }
 
@@ -3509,6 +3569,17 @@ impl Job {
         assert_eq!(answer.status, 202, "{}", answer.text());
     }
 
+    /// The job as leg `leg` of a proof Fearlezz split over the legs `planned`.
+    fn leg(&self, leg: &str, planned: &[&str]) -> Job {
+        Job {
+            leg: Some((
+                leg.to_owned(),
+                planned.iter().map(|l| (*l).to_owned()).collect(),
+            )),
+            ..self.clone()
+        }
+    }
+
     /// Another leg of the same matrix job, which `runner` took.
     fn on(&self, runner: &str) -> Job {
         Job {
@@ -3569,6 +3640,10 @@ impl Job {
         });
         if let Some(n) = self.pull {
             body["pull"] = json!({"number": n, "title": format!("Pull request {n}")});
+        }
+        if let Some((leg, planned)) = &self.leg {
+            body["source"]["leg"] = json!(leg);
+            body["source"]["planned"] = json!(planned);
         }
         if self.cli.is_some() {
             body["source"] = json!({"kind": "local"});

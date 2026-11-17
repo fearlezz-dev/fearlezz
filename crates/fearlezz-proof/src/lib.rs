@@ -51,6 +51,10 @@ pub struct Proof {
     /// The CI run's page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_url: Option<String>,
+    /// The leg of a run split over several jobs that wrote it (`linux`, `macos/ui`); none for
+    /// a run in one job and for the gate's proof, which combines every leg.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leg: Option<String>,
     /// Every check the run took up, in the order it ran them.
     pub checks: Vec<Check>,
     /// What the change weakens about the proof, against the base branch's config.
@@ -106,6 +110,17 @@ impl Ran {
 pub struct Check {
     /// Its id.
     pub id: String,
+    /// The platform it ran on, in a project that names platforms; the same check can run on
+    /// several.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    /// The hash of what it read, so CI on a later commit can tell a pass still holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Where its pass was seen, when it did not run here: the base commit's CI, which ran it
+    /// on the same inputs (that run's page, or the commit without one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reused: Option<String>,
     /// The whole command.
     pub run: String,
     /// The stage it belongs to.
@@ -147,6 +162,25 @@ pub struct Check {
     /// The output on this machine, until the bundle copies it.
     #[serde(skip)]
     pub log: Option<PathBuf>,
+}
+
+impl Check {
+    /// The check as people read it: its id, with the platform it ran on when it names one.
+    pub fn name(&self) -> String {
+        match &self.platform {
+            Some(platform) => format!("{} on {platform}", self.id),
+            None => self.id.clone(),
+        }
+    }
+
+    /// How it came out as people read it: `reused` for a pass the base commit's CI saw.
+    pub fn word(&self) -> &'static str {
+        if self.reused.is_some() {
+            "reused"
+        } else {
+            self.outcome.word()
+        }
+    }
 }
 
 /// One test case a test report says ran.
@@ -260,6 +294,7 @@ impl Proof {
             head,
             base,
             run_url: None,
+            leg: None,
             checks: Vec::new(),
             weakened: Vec::new(),
             accepted: None,

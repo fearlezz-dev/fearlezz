@@ -15,17 +15,40 @@ inputs:
   devenv:
     description: Install Nix and devenv first, for projects whose checks run in a devenv shell.
     default: "false"
+  plan:
+    description: >-
+      For a proof split over several jobs: print the legs (one per platform and job in
+      fearlezz.toml) as the `legs` output, for `matrix.include` of the leg job. A pull request
+      leaves out the checks whose pass its base commit's proof shows for the same inputs, which
+      needs `actions: read`.
+    default: "false"
+  leg:
+    description: >-
+      For a proof split over several jobs: the leg this job runs, as its matrix entry
+      (`toJSON(matrix)` in an expression). Its bundle is kept for the gate.
+    default: ""
+  gate:
+    description: >-
+      For a proof split over several jobs: combine every leg's bundle into one proof, the
+      required check, and keep it for the next pull request to reuse (needs `actions: read`).
+    default: "false"
+
+outputs:
+  legs:
+    description: With plan, the legs as JSON for `matrix.include`; `[]` when nothing is left to run.
+    value: ${{ steps.plan.outputs.legs }}
 
 runs:
   using: composite
   steps:
-    - if: inputs.devenv == 'true'
+    # Only a job that runs checks needs their environment; the plan and the gate read git.
+    - if: inputs.devenv == 'true' && inputs.plan != 'true' && inputs.gate != 'true'
       uses: cachix/install-nix-action@v31
-    - if: inputs.devenv == 'true'
+    - if: inputs.devenv == 'true' && inputs.plan != 'true' && inputs.gate != 'true'
       uses: cachix/cachix-action@v16
       with:
         name: devenv
-    - if: inputs.devenv == 'true'
+    - if: inputs.devenv == 'true' && inputs.plan != 'true' && inputs.gate != 'true'
       shell: bash
       run: nix profile install nixpkgs#devenv
     - name: Install Fearlezz
@@ -49,26 +72,85 @@ runs:
           echo "::error::$(fearlezz --version) is too old for this action. Set version: to a newer release, or take the action at the tag of the release you install (fearlezz-dev/fearlezz@vX.Y.Z)."
           exit 1
         fi
+    # A pull request reuses passes from the proof its base commit's push kept: the gate's
+    # bundle of the newest successful run of this workflow on that commit. None is fine.
+    - name: The base commit's proof
+      if: (inputs.plan == 'true' || inputs.gate == 'true') && github.event.pull_request.base.sha != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+      run: |
+        workflow=${WORKFLOW_REF%@*}
+        workflow=${workflow##*/}
+        run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --commit "$BASE_SHA" \
+          --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty' || true)
+        if [ -n "$run" ]; then
+          gh run download "$run" --repo "$GITHUB_REPOSITORY" --name fearlezz-proof \
+            --dir "$RUNNER_TEMP/fearlezz-base" || echo "The base commit's proof could not be read, so every check runs."
+        fi
+    - name: Plan
+      id: plan
+      if: inputs.plan == 'true'
+      shell: bash
+      run: |
+        legs=$(fearlezz run --ci --plan --reuse "$RUNNER_TEMP/fearlezz-base")
+        echo "legs=$legs" >> "$GITHUB_OUTPUT"
+        echo "$legs"
+    - name: The legs' proofs
+      if: inputs.gate == 'true'
+      uses: actions/download-artifact@v4
+      with:
+        pattern: fearlezz-leg-*
+        path: ${{ runner.temp }}/fearlezz-legs
+    - name: Gate
+      if: inputs.gate == 'true'
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/fearlezz-legs"
+        fearlezz run --ci --gate "$RUNNER_TEMP/fearlezz-legs" --proof "$RUNNER_TEMP/fearlezz-proof" \
+          --reuse "$RUNNER_TEMP/fearlezz-base"
     # The ffmpeg Fearlezz installs when a check records pictures.
-    - uses: actions/cache@v4
+    - if: inputs.plan != 'true' && inputs.gate != 'true'
+      uses: actions/cache@v4
       with:
         path: ${{ runner.tool_cache }}/fearlezz-ffmpeg
         key: fearlezz-ffmpeg-b6.1.1-${{ runner.os }}-${{ runner.arch }}
     - name: Fearlezz
+      id: run
+      if: inputs.plan != 'true' && inputs.gate != 'true'
       shell: bash
-      run: fearlezz run --ci --proof "$RUNNER_TEMP/fearlezz-proof"
+      env:
+        LEG: ${{ inputs.leg }}
+      run: |
+        if [ -z "$LEG" ]; then
+          echo "bundle=fearlezz-proof-${GITHUB_JOB}" >> "$GITHUB_OUTPUT"
+          echo "logs=proof-logs-${GITHUB_JOB}" >> "$GITHUB_OUTPUT"
+          fearlezz run --ci --proof "$RUNNER_TEMP/fearlezz-proof"
+        else
+          # An artifact's name has no slash.
+          name=$(jq -r '.leg' <<< "$LEG" | tr '/' '-')
+          echo "bundle=fearlezz-leg-${name}" >> "$GITHUB_OUTPUT"
+          echo "logs=proof-logs-leg-${name}" >> "$GITHUB_OUTPUT"
+          fearlezz run --ci --leg "$LEG" --proof "$RUNNER_TEMP/fearlezz-proof"
+        fi
     - name: Keep the proof bundle
-      if: always()
+      if: always() && inputs.plan != 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: fearlezz-proof-${{ github.job }}
+        # The gate's is the one a later pull request reuses.
+        name: ${{ inputs.gate == 'true' && 'fearlezz-proof' || steps.run.outputs.bundle }}
         path: ${{ runner.temp }}/fearlezz-proof
         if-no-files-found: ignore
+        # A job run again keeps its newest bundle under the same name.
+        overwrite: true
     - name: Keep the output of every check
-      if: always()
+      if: always() && inputs.plan != 'true' && inputs.gate != 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: proof-logs-${{ github.job }}
+        name: ${{ steps.run.outputs.logs }}
         path: .git/fearlezz/results/**/output.log
         include-hidden-files: true
         if-no-files-found: ignore
+        overwrite: true

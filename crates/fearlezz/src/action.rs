@@ -207,8 +207,8 @@ pub(crate) fn summary(
         writeln!(
             text,
             "| {} | {} | {tests} | {:.1} s | `{}` |",
-            cell(&check.id),
-            check.outcome.word(),
+            cell(&check.name()),
+            check.word(),
             check.seconds,
             code(&run)
         )?;
@@ -222,7 +222,7 @@ pub(crate) fn summary(
         writeln!(
             text,
             "\n<details><summary>The end of what {} printed</summary>\n\n```",
-            cell(&check.id)
+            cell(&check.name())
         )?;
         for line in crate::run::tail(log, 40) {
             writeln!(text, "{}", line.replace("```", "'''"))?;

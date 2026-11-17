@@ -12,13 +12,84 @@ on:
 
 permissions:
   contents: read
+  # A pull request reuses passes from the proof its base commit's push kept.
+  actions: read
   # Lets the run prove itself to the proof host and send it the proof.
   id-token: write
 
+# Fearlezz proves itself through its own action, built from this commit, so the action and
+# `fearlezz run --ci` on GitHub Actions run on every pull request: the plan prints the legs of
+# fearlezz.toml (Linux, and macOS for the code only macOS builds), each leg runs its checks,
+# and the gate combines their proofs into the one required check.
 jobs:
-  # Fearlezz proves itself through its own action, built from this commit, so the action and
-  # `fearlezz run --ci` on GitHub Actions run on every pull request.
+  plan:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: proof-plan-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    outputs:
+      legs: ${{ steps.plan.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - run: nix profile install nixpkgs#devenv
+      - name: Build Fearlezz from this commit
+        run: |
+          devenv shell -- cargo build --quiet
+          echo "$PWD/target/debug" >> "$GITHUB_PATH"
+      # The gate runs the same build, without a toolchain of its own.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fearlezz-bin
+          path: target/debug/fearlezz
+      - id: plan
+        uses: ./
+        with:
+          version: installed
+          plan: true
+
+  leg:
+    needs: plan
+    if: needs.plan.outputs.legs != '[]'
+    name: leg ${{ matrix.leg }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.legs) }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout-minutes }}
+    concurrency:
+      group: proof-${{ matrix.leg }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - run: nix profile install nixpkgs#devenv
+      - name: Build Fearlezz from this commit
+        run: |
+          devenv shell -- cargo build --quiet
+          echo "$PWD/target/debug" >> "$GITHUB_PATH"
+      - uses: ./
+        with:
+          version: installed
+          leg: ${{ toJSON(matrix) }}
+
+  # The required check.
   proof:
+    needs: [plan, leg]
+    if: always()
     runs-on: ubuntu-latest
     concurrency:
       group: proof-${{ github.event.pull_request.number || github.ref }}
@@ -28,39 +99,21 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # The plan's build is linked against the devenv's glibc in the Nix store; entering the
+      # shell once (from the cache, with no build) puts it there.
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:
           name: devenv
-      - run: nix profile install nixpkgs#devenv
-      - name: Build Fearlezz from this commit
-        run: |
-          devenv shell -- cargo build --quiet
-          echo "$PWD/target/debug" >> "$GITHUB_PATH"
+      - run: nix profile install nixpkgs#devenv && devenv shell -- true
+      - uses: actions/download-artifact@v4
+        with:
+          name: fearlezz-bin
+          path: ${{ runner.temp }}/fearlezz-bin
+      - run: |
+          chmod +x "$RUNNER_TEMP/fearlezz-bin/fearlezz"
+          echo "$RUNNER_TEMP/fearlezz-bin" >> "$GITHUB_PATH"
       - uses: ./
         with:
           version: installed
-
-  # The code for macOS (recording, copy on write clones) is built, linted and tested here.
-  proof-macos:
-    runs-on: macos-latest
-    concurrency:
-      group: proof-macos-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
-        with:
-          name: devenv
-      - run: nix profile install nixpkgs#devenv
-      - name: Build Fearlezz from this commit
-        run: |
-          devenv shell -- cargo build --quiet
-          echo "$PWD/target/debug" >> "$GITHUB_PATH"
-      - uses: ./
-        with:
-          version: installed
+          gate: true

@@ -139,6 +139,9 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
         if h.steps != b.steps {
             say("it runs another command".into());
         }
+        for platform in b.on.iter().filter(|p| !h.on.contains(p)) {
+            say(format!("it no longer runs on {platform}"));
+        }
         if h.dir != b.dir {
             let at = |dir: &Option<String>| dir.clone().unwrap_or_else(|| "the root".into());
             say(format!(
@@ -219,6 +222,17 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
     found.retain(|w: &(Part, String)| seen.insert(w.clone()));
     found.extend(settings(base.settings.weakenings(&head.settings)));
     found.extend(settings(env_weakenings(&base.env, &head.env)));
+    for b in &base.platforms {
+        match head.platforms.iter().find(|h| h.name == b.name) {
+            Some(h) if h.runs_on != b.runs_on || h.os != b.os || h.matrix != b.matrix => {
+                found.push((
+                    Part::Setting(format!("platform.{}", b.name)),
+                    "it runs on another machine".into(),
+                ));
+            }
+            _ => {}
+        }
+    }
     for w in head.no_proof.widenings(&base.no_proof) {
         let how = match w {
             Widening::Added(glob) => format!("it newly says {glob} needs no proof"),

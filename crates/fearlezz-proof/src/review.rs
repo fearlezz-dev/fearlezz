@@ -257,6 +257,16 @@ pub fn review(
             None => seen.push((leg, counts)),
         }
     }
+    // A leg the plan made that has not opened a run yet is still to come.
+    let to_come = runs
+        .iter()
+        .filter(|(run, _)| run.head == head)
+        .filter_map(|(run, _)| match &run.source {
+            Source::Ci { planned, .. } => Some(planned),
+            Source::Local { .. } => None,
+        })
+        .flatten()
+        .any(|leg| !seen.iter().any(|(l, _)| *l == Leg::Planned(leg)));
     let unproven = seen.iter().any(|(_, chosen)| chosen.is_none());
     let live: Vec<&ProvenRun> = seen.iter().filter_map(|(_, chosen)| *chosen).collect();
 
@@ -321,7 +331,7 @@ pub fn review(
     });
     let state = if seen.is_empty() {
         State::Ci
-    } else if live.iter().any(|(run, _)| run.state == RunState::Running) {
+    } else if to_come || live.iter().any(|(run, _)| run.state == RunState::Running) {
         State::Running
     } else if failed {
         State::Failed
@@ -354,22 +364,30 @@ type ProvenRun = (Run, Option<Proof>);
 /// is a leg of its own, so no newer run replaces it and its pictures never drop out of review.
 #[derive(PartialEq)]
 enum Leg<'a> {
-    Named { job: &'a str, name: &'a str },
-    Unknown { run: &'a str },
+    /// A leg of a proof Fearlezz split over several jobs, as the run names it.
+    Planned(&'a str),
+    Named {
+        job: &'a str,
+        name: &'a str,
+    },
+    Unknown {
+        run: &'a str,
+    },
 }
 
 impl<'a> Leg<'a> {
     /// The leg of `run` when it is a CI run of `head`.
     fn of(run: &'a Run, head: &str, legs: &'a BTreeMap<String, String>) -> Option<Leg<'a>> {
-        let Source::Ci { job, .. } = &run.source else {
+        let Source::Ci { job, leg, .. } = &run.source else {
             return None;
         };
         if run.head != head {
             return None;
         }
-        Some(match legs.get(&run.id) {
-            Some(name) => Leg::Named { job, name },
-            None => Leg::Unknown { run: &run.id },
+        Some(match (leg, legs.get(&run.id)) {
+            (Some(leg), _) => Leg::Planned(leg),
+            (None, Some(name)) => Leg::Named { job, name },
+            (None, None) => Leg::Unknown { run: &run.id },
         })
     }
 }

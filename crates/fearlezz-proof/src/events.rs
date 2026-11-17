@@ -53,6 +53,13 @@ pub enum Source {
         run_attempt: u32,
         /// The runner that took the job (`RUNNER_NAME`).
         runner_name: String,
+        /// The leg it runs, for a run Fearlezz split over several jobs (`linux`, `macos/ui`):
+        /// the leg it counts as in review, without waiting for GitHub to name its job.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        leg: Option<String>,
+        /// Every leg the run's plan made, this one among them: the review waits for each.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        planned: Vec<String>,
     },
     /// A developer's machine, signed in to the host: unproven, and never reviewed, though a
     /// person may leave notes on its pictures.

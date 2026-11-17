@@ -1,0 +1,84 @@
+name: Fearlezz proof
+
+# A proof split over several jobs, for a project to call in three lines:
+#
+#   jobs:
+#     proof:
+#       uses: fearlezz-dev/fearlezz/.github/workflows/prove.yml@v0
+#
+# The plan job prints the legs `fearlezz.toml` makes (one per platform and job), each leg runs
+# its own checks on its platform's runner, and the gate combines their proofs into one: the
+# job to require. Its caller grants `contents: read` and `actions: read` (a pull request reuses
+# passes from its base commit's proof), and `id-token: write` to send the proof to the proof
+# host. A leg that needs its own setup steps (a toolchain action, a display server) uses the
+# action in the project's own three jobs instead; the README shows them.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The Fearlezz release to install, as the action's `version`.
+        type: string
+        default: latest
+      devenv:
+        description: Install Nix and devenv in each leg, for checks that run in a devenv shell.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      legs: ${{ steps.plan.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: plan
+        uses: fearlezz-dev/fearlezz@v0
+        with:
+          version: ${{ inputs.version }}
+          plan: true
+
+  leg:
+    needs: plan
+    # Every check reused from the base commit's proof leaves no leg to run.
+    if: needs.plan.outputs.legs != '[]'
+    name: leg ${{ matrix.leg }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.legs) }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: fearlezz-dev/fearlezz@v0
+        with:
+          version: ${{ inputs.version }}
+          devenv: ${{ inputs.devenv }}
+          leg: ${{ toJSON(matrix) }}
+
+  # The required check: a leg that failed, was cancelled or never ran leaves it not proven.
+  gate:
+    needs: [plan, leg]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: fearlezz-dev/fearlezz@v0
+        with:
+          version: ${{ inputs.version }}
+          gate: true

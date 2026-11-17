@@ -1,0 +1,60 @@
+# docs/drive/multi-job-ci/record.yaml: the working state of multi job CI.
+goal: >-
+  Checks bound to a platform (OS, architecture, toolchain version), run in a matrix, with one
+  proof combined from several jobs (one required check, one host page, one job summary); and CI
+  split by affected area, one job per area with a time budget, one gate job as the required check.
+
+evidence:
+  - GrammarGuard .github/workflows/build_and_test.yml:34-78, one integration job per OS (xvfb on Linux)
+  - jar.yazi .github/workflows/ci.yml:9-24, 3 OS x 2 Python
+  - skir-dart-client ci.yml:11-58, Dart 3.5 and stable, Chrome and dart2wasm once
+  - wasmCloud-host publish-runtime.yml:59-68, amd64 and arm64 runners
+  - TypewriterV1 .github/workflows/ci.yml:32-78 and xtask/src/graph.rs, plan, area jobs with budgets, gate
+  - today each Fearlezz job is its own proof; matrix legs collide on artifact names (action.yml:64,71); only the host folds legs per head (crates/fearlezz-proof/src/review.rs:240-368)
+
+pieces:
+  - id: platforms
+    status: done
+  - id: combined-proof
+    status: done
+  - id: affected
+    status: done
+
+decided:
+  - id: platform-in-config
+    what: a check's platforms are declared in fearlezz.toml; Fearlezz plans the matrix
+    why: the gate knows what is expected, so a missing leg is not proven, and the floor catches a dropped platform
+
+  - id: wiring-both
+    what: both now; plan, leg and gate actions for a project's own jobs, and a reusable workflow built on them
+  - id: host-legs-stream
+    what: legs stream live; the open names its leg and the planned legs; the host folds by leg; the gate streams nothing and a weakening fails the gate
+  - id: reuse-base-pass
+    what: a pull request reuses a check's pass from the base commit's CI proof when its inputs hash on that platform is the same; pushes to main run everything fresh
+  - id: job-and-timeout
+    what: a check names its job (legs are platform x job) and may set timeout in minutes, enforced by Fearlezz
+  - id: local-once
+    what: locally a check runs once, unless every platform it is on names another os; then it is left to CI and does not block local ready
+  - id: default-platform
+    what: with several platforms one is marked default = true; a check without on runs there (TOML tables keep no order, so first declared cannot be read)
+  - id: record-screen
+    what: agreed with the recording thread; a check with record.screen and no on defaults to the platforms whose os fits (record::Spec::needs_os); an explicit on without one is a config error
+
+open: []
+
+  - id: one-action
+    what: the action takes plan, leg and gate inputs instead of three action folders, so the install step lives once
+  - id: split-accept
+    what: legs report what the change weakens and pass; the gate asks the host through a leg's host run (host-run in its bundle); accepting a leg run reruns the workflow run's failed jobs
+  - id: plain-ci-with-platforms
+    what: fearlezz run --ci without a leg fails each check this machine cannot stand in for (found by review)
+
+slices:
+  - id: config-plan-leg-gate
+    tests: [crates/fearlezz/tests/legs.rs]
+    status: done
+  - id: host
+    tests: [crates/fearlezz-proof/tests/review.rs a_split_proof_waits_for_every_planned_leg, ee/host-tests accepting_a_split_proof_runs_its_failed_jobs_again, crates/fearlezz/tests/host.rs a_leg_names_itself_and_its_plan_and_leaves_what_it_weakens_to_the_gate]
+    status: done
+
+next: prove with fearlezz, then open the pull request; recording thread wires record.screen defaulting when it lands second

@@ -34,6 +34,8 @@ pub(crate) struct Config {
     pub host: Option<String>,
     /// The places a release goes to, `fearlezz run --release`.
     pub releases: Vec<crate::release::Place>,
+    /// The machines CI proves the checks on, by name; empty for a project proven in one job.
+    pub platforms: Vec<crate::legs::Platform>,
     /// The table it was read from, pieces merged in and checks turned off left out, so a part
     /// of it can be shown as written.
     table: toml::Table,
@@ -137,6 +139,14 @@ pub(crate) struct Check {
     pub flaky_tests: Globs,
     /// Work Fearlezz does itself instead of running a command.
     pub builtin: Option<Builtin>,
+    /// The platforms it must pass on, by name: as written, or the default one. Empty in a
+    /// project without platforms.
+    pub on: Vec<String>,
+    /// The CI job it runs in on each platform, with the other checks of that job; without one,
+    /// the platform's shared job.
+    pub job: Option<String>,
+    /// How long it may run before Fearlezz stops it and it fails.
+    pub timeout: Option<crate::legs::Budget>,
 }
 
 /// What pictures a check takes, in one place: the check's inputs, the floor and whether a run
@@ -370,6 +380,8 @@ struct RawConfig {
     no_proof: Vec<String>,
     host: Option<RawHost>,
     release: Option<toml::Value>,
+    #[serde(default)]
+    platform: BTreeMap<String, crate::legs::RawPlatform>,
 }
 
 #[derive(Deserialize)]
@@ -407,6 +419,10 @@ struct RawCheck {
     #[serde(default)]
     flaky_tests: Vec<String>,
     record: Option<toml::Value>,
+    #[serde(default)]
+    on: Vec<String>,
+    job: Option<String>,
+    timeout: Option<String>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
     #[expect(
@@ -538,6 +554,7 @@ impl Config {
                 None => format!("!{p}"),
             }))
             .collect();
+        let platforms = crate::legs::Platform::parse(raw.platform)?;
         let mut checks = Vec::new();
         for (id, c) in raw.check {
             let stage = stages.find(&c.stage).with_context(|| {
@@ -568,6 +585,15 @@ impl Config {
             let inputs = globs(own.iter().chain(shell_inputs()))
                 .with_context(|| format!("check {id}: inputs"))?;
             checks.push(Check {
+                on: crate::legs::Platform::on(&platforms, c.on)
+                    .with_context(|| format!("check {id}"))?,
+                job: crate::legs::job(c.job).with_context(|| format!("check {id}"))?,
+                timeout: c
+                    .timeout
+                    .as_deref()
+                    .map(crate::legs::Budget::parse)
+                    .transpose()
+                    .with_context(|| format!("check {id}: timeout"))?,
                 inputs,
                 builtin: None,
                 tests: c
@@ -662,6 +688,7 @@ impl Config {
             checks.push(builtin_check(
                 SETTINGS_CHECK,
                 &stages,
+                &platforms,
                 globs(&settings.globs())?,
                 Scope::Everywhere,
                 Builtin::Settings(settings.clone()),
@@ -680,6 +707,7 @@ impl Config {
             checks.push(builtin_check(
                 rules::CHECK,
                 &stages,
+                &platforms,
                 inputs,
                 Scope::Changed,
                 Builtin::Rules(rules),
@@ -697,6 +725,7 @@ impl Config {
             checks.push(builtin_check(
                 crate::commits::CHECK,
                 &stages,
+                &platforms,
                 globs(&[])?,
                 Scope::Everywhere,
                 Builtin::Commits(crate::commits::Commits::parse(commits, &base)),
@@ -712,6 +741,7 @@ impl Config {
             env,
             host: raw.host.map(|h| h.url),
             releases: crate::release::parse(raw.release.as_ref())?,
+            platforms,
             table,
             fanned: BTreeMap::new(),
         })
@@ -763,8 +793,22 @@ impl Config {
 }
 
 /// A check Fearlezz runs itself at the working stage, its findings judged in `on`.
-fn builtin_check(id: &str, stages: &Stages, inputs: Globs, on: Scope, builtin: Builtin) -> Check {
+fn builtin_check(
+    id: &str,
+    stages: &Stages,
+    platforms: &[crate::legs::Platform],
+    inputs: Globs,
+    on: Scope,
+    builtin: Builtin,
+) -> Check {
     Check {
+        on: platforms
+            .iter()
+            .filter(|p| p.default)
+            .map(|p| p.name.clone())
+            .collect(),
+        job: None,
+        timeout: None,
         id: id.into(),
         run: format!("(fearlezz {id})"),
         steps: Vec::new(),

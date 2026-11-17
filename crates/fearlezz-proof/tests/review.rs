@@ -76,6 +76,9 @@ fn keys(items: &[Item], sha: &str) -> BTreeMap<String, String> {
 fn entry(id: &str, outcome: Ran) -> Check {
     Check {
         id: id.into(),
+        platform: None,
+        key: None,
+        reused: None,
         run: "true".into(),
         stage: "working".into(),
         outcome,
@@ -126,6 +129,8 @@ fn run(id: &str, head: &str, state: RunState, items: &[Item]) -> (Run, Option<Pr
             run_id: 1,
             run_attempt: 1,
             runner_name: "runner".into(),
+            leg: None,
+            planned: Vec::new(),
         },
         state,
         opened: 1.0,
@@ -565,5 +570,64 @@ fn a_leg_whose_every_run_ended_without_its_proof_keeps_the_review_from_approving
     assert_eq!(
         review.title(),
         "A CI job of aaa ended without its proof: run it again"
+    );
+}
+
+/// A run of a split proof: leg `leg` of a plan of `planned`.
+fn leg_run(id: &str, state: RunState, leg: &str, planned: &[&str]) -> (Run, Option<Proof>) {
+    let (mut r, proof) = run(id, "aaa", state, &[]);
+    if let Source::Ci {
+        leg: l, planned: p, ..
+    } = &mut r.source
+    {
+        *l = Some(leg.into());
+        *p = planned.iter().map(|s| (*s).into()).collect();
+    }
+    (r, proof)
+}
+
+#[test]
+fn a_split_proof_waits_for_every_planned_leg() {
+    let plan = ["linux", "mac"];
+    let one = [leg_run("r1", RunState::Done, "linux", &plan)];
+    assert_eq!(
+        review::review("aaa", &one, &BTreeMap::new(), &[], &[], None).state,
+        State::Running
+    );
+    let both = [
+        leg_run("r2", RunState::Done, "mac", &plan),
+        leg_run("r1", RunState::Done, "linux", &plan),
+    ];
+    assert_eq!(
+        review::review("aaa", &both, &BTreeMap::new(), &[], &[], None).state,
+        State::Approved
+    );
+}
+
+#[test]
+fn a_leg_the_run_names_replaces_its_older_run_without_a_job_name() {
+    // The newer run of leg linux failed; GitHub has named neither job yet.
+    let (newer, proof) = leg_run("r2", RunState::Done, "linux", &["linux"]);
+    let mut proof = proof.unwrap();
+    proof.checks.push(entry("tests", Ran::Failed));
+    let runs = [
+        (newer, Some(proof)),
+        leg_run("r1", RunState::Done, "linux", &["linux"]),
+    ];
+    assert_eq!(
+        review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None).state,
+        State::Failed
+    );
+    let (newer, proof) = leg_run("r3", RunState::Done, "linux", &["linux"]);
+    let (older, mut failed) = leg_run("r1", RunState::Done, "linux", &["linux"]);
+    failed
+        .as_mut()
+        .unwrap()
+        .checks
+        .push(entry("tests", Ran::Failed));
+    let runs = [(newer, proof), (older, failed)];
+    assert_eq!(
+        review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None).state,
+        State::Approved
     );
 }

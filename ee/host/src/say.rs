@@ -336,13 +336,16 @@ pub async fn accept(req: Request, env: &Env, config: &Config, id: &str) -> Answe
 }
 
 /// Runs the failed proof job of a CI run again, as the app: the one job of its workflow run's
-/// attempt that is the run's own (`jobs::own`), when it failed.
+/// attempt that is the run's own (`jobs::own`), when it failed. A leg of a split proof passes
+/// and leaves what its change weakens to the gate, a job of its own that streams nothing, so
+/// for one the workflow run's failed jobs run again, the gate among them.
 async fn rerun(config: &Config, run: &RunRow) -> worker::Result<()> {
     let Source::Ci {
         job,
         run_id,
         run_attempt,
         runner_name,
+        leg,
         ..
     } = read::<Source>(&run.source)?
     else {
@@ -351,6 +354,9 @@ async fn rerun(config: &Config, run: &RunRow) -> worker::Result<()> {
     let Some(token) = github::installation_token(config, &run.repository).await? else {
         return Err(worker::Error::RustError("the app is not installed".into()));
     };
+    if leg.is_some() {
+        return github::rerun_failed_jobs(&token, config, &run.repository, run_id).await;
+    }
     let all = github::jobs(&token, config, &run.repository, run_id, run_attempt).await?;
     let on_runner: Vec<&github::ActionsJob> = all
         .iter()

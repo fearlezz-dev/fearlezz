@@ -588,3 +588,66 @@ fn a_finished_check_sends_its_look_with_the_pictures() {
         "{done:#}"
     );
 }
+
+/// `fearlezz run --ci` with `args` on a push of `feat/x`, as `ci` runs it.
+fn ci_with(repo: &Repo, args: &[&str], env: &[(String, String)]) -> common::Output {
+    let mut all: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    all.push(("GITHUB_REPOSITORY", "owner/repo"));
+    all.push(("GITHUB_REF", "refs/heads/feat/x"));
+    all.push(("GITHUB_JOB", "proof"));
+    all.push(("GITHUB_RUN_ID", "4242"));
+    all.push(("GITHUB_RUN_ATTEMPT", "1"));
+    all.push(("RUNNER_NAME", "GitHub Actions 7"));
+    let mut full = vec!["run", "--ci"];
+    full.extend_from_slice(args);
+    repo.fz_env(&full, &all)
+}
+
+#[test]
+fn a_leg_names_itself_and_its_plan_and_leaves_what_it_weakens_to_the_gate() {
+    let host = FakeHost::start();
+    let repo = weakening(&host);
+    let dir = repo.path(".runs/legs/proof");
+    let entry = r#"{"leg":"proof","checks":"lint tests","planned":"proof"}"#;
+    let out = ci_with(
+        &repo,
+        &["--leg", entry, "--proof", dir.to_str().unwrap()],
+        &host.token_env(),
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("the gate judges what the change weakens"),
+        "{}",
+        out.stdout
+    );
+    let open = host.sent("POST", "/api/v2/runs");
+    assert_eq!(open["source"]["leg"], "proof", "{open:#}");
+    assert_eq!(open["source"]["planned"], json!(["proof"]), "{open:#}");
+    // The host shows what it weakens.
+    let done = host.sent("POST", "/api/v2/runs/r1/done");
+    assert_eq!(done["proof"]["weakened"][0]["check"], "lint", "{done:#}");
+    assert_eq!(done["proof"]["leg"], "proof", "{done:#}");
+    assert_eq!(std::fs::read_to_string(dir.join("host-run")).unwrap(), "r1");
+
+    // The gate asks the host through the leg's run: not accepted fails, accepted passes.
+    let legs = repo.path(".runs/legs");
+    let gate = ["--gate", legs.to_str().unwrap()];
+    let out = ci_with(&repo, &gate, &host.token_env());
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("an admin accepts it on the proof page, which runs this job again"),
+        "{}",
+        out.stdout
+    );
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    host.state.lock().unwrap().accepted = Some(accept(&head, &lint_weakened(&host)));
+    let out = ci_with(&repo, &gate, &host.token_env());
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("accepted by admin on the proof page"),
+        "{}",
+        out.stdout
+    );
+}
