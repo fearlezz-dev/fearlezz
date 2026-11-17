@@ -37,7 +37,8 @@ impl Setup {
     /// branch `branch`.
     fn new(env: &str, checks: &str, branch: &str) -> Setup {
         let repo = Repo::new(
-            &format!("[env]\n{env}\n{checks}"),
+            // The deploy runs in a clean env, so it sees the log of deploys only as declared.
+            &format!("[env]\nenv = [\"DEPLOYS\"]\n{env}\n{checks}"),
             &[
                 (".gitignore", ".runs/\n"),
                 ("src/lib.txt", "a"),
@@ -358,7 +359,7 @@ fn changing_the_preview_or_its_secrets_weakens_the_proof() {
 }
 
 #[test]
-fn a_look_deploys_the_base_too_named_for_its_commit() {
+fn a_look_deploys_the_base_too_named_for_its_tree() {
     let s = Setup::new(
         PREVIEW,
         r#"
@@ -370,7 +371,9 @@ needs = ["preview"]
 "#,
         "feat/x",
     );
-    let base = s.repo.git(&["rev-parse", "--short", "main"]);
+    // Named by the base's tree, so a red before green checkout of the same commit, whose tree
+    // holds the change's tests, deploys to a name of its own.
+    let base = s.repo.git(&["rev-parse", "main^{tree}"]);
     let out = s.fz(&["run", "--stage", "working"]);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let mut deploys = s.deploys();
@@ -378,7 +381,7 @@ needs = ["preview"]
     assert_eq!(
         deploys,
         [
-            format!("deploy base-{}", base.trim()),
+            format!("deploy base-{}", &base.trim()[..7]),
             "deploy feat-x".to_string()
         ],
         "{}",
@@ -387,7 +390,7 @@ needs = ["preview"]
 }
 
 #[test]
-fn a_pull_request_in_ci_names_its_preview_for_its_head_branch() {
+fn a_pull_request_in_ci_names_its_preview_for_its_number() {
     let s = Setup::new(PREVIEW, CHECKS, "feat/site");
     // GitHub checks out the merge commit with no branch.
     s.repo.git(&["switch", "-q", "--detach"]);
@@ -402,5 +405,35 @@ fn a_pull_request_in_ci_names_its_preview_for_its_head_branch() {
         &[("GITHUB_EVENT_PATH", event.to_str().unwrap())],
     );
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    assert_eq!(s.deploys(), ["deploy feat-site"]);
+    assert_eq!(s.deploys(), ["deploy pr-7"]);
+}
+
+#[test]
+fn the_preview_sees_only_the_base_variables_its_env_and_its_secrets() {
+    let s = Setup::new(
+        "preview = 'echo \"token [$OP_SERVICE_ACCOUNT_TOKEN]\"; echo https://x.example.dev/'",
+        CHECKS,
+        "feat/x",
+    );
+    let out = s.fz_env(
+        &["run", "--stage", "working"],
+        &[("OP_SERVICE_ACCOUNT_TOKEN", "ops-test-0123456789")],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let mut kept = vec![s.repo.path(".git/fearlezz"), s.repo.cache.clone()];
+    let mut seen = 0;
+    while let Some(path) = kept.pop() {
+        if path.is_dir() {
+            kept.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+            continue;
+        }
+        let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).to_string();
+        assert!(
+            !text.contains("ops-test"),
+            "{} holds the token",
+            path.display()
+        );
+        seen += usize::from(text.contains("token []"));
+    }
+    assert_eq!(seen, 1, "the preview ran without the provider's token");
 }

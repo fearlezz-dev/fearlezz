@@ -257,9 +257,9 @@ impl EnvState {
 
     /// The URL of the preview of `tree` in `root`, deploying it with `[env] preview` first
     /// when this tree has none yet. The deploy runs at the root, inside the environment's
-    /// shell, with Fearlezz's own variables (a deploy tool reads its account and settings
-    /// from them), the `[env] secrets` and `FEARLEZZ_PREVIEW_NAME` set to `name`. Its URL is
-    /// the last one it printed; the secrets are masked in its log before anything reads it.
+    /// shell, in a clean env: the base variables, `[env] env`, the `[env] secrets` and
+    /// `FEARLEZZ_PREVIEW_NAME` set to `name`. Its URL is the last one it printed; the secrets
+    /// are masked in its log before anything reads it.
     pub(crate) fn preview(
         &self,
         env: &Env,
@@ -305,17 +305,17 @@ impl EnvState {
                 }));
             }
         };
+        // Only what the deploy prints holds its URL, not what SecretSpec said before it.
+        let asked_len = out.metadata()?.len();
         // The command travels in a variable, so no quoting inside the shell can break it.
         let script = match &env.shell {
             Some(shell) => format!("{shell} sh -c \"$FEARLEZZ_RUN\""),
             None => cmd.clone(),
         };
-        let mut command = Command::new("sh");
+        // A clean env like the services' commands, so a deploy from the change's config never
+        // sees the provider's token or CI's own; it gets its settings from `[env] env`.
+        let (mut command, _) = self.command(env, root, "preview", &script)?;
         command
-            .arg("-c")
-            .arg(&script)
-            .current_dir(root)
-            .stdin(Stdio::null())
             .stdout(out.try_clone()?)
             .stderr(out)
             .env("FEARLEZZ_RUN", cmd)
@@ -334,7 +334,11 @@ impl EnvState {
                 log,
             }));
         }
-        let Some(url) = last_url(&fs::read_to_string(&log).unwrap_or_default()) else {
+        let text = fs::read(&log).unwrap_or_default();
+        let printed = text
+            .get(usize::try_from(asked_len).unwrap_or(usize::MAX)..)
+            .unwrap_or_default();
+        let Some(url) = last_url(&String::from_utf8_lossy(printed)) else {
             return Ok(Err(Undeployed {
                 why: NoPreview::NoUrl,
                 log,
@@ -349,7 +353,10 @@ impl EnvState {
         if let Some(dir) = file.parent() {
             fs::create_dir_all(dir)?;
         }
-        fs::write(file, serde_json::to_string_pretty(&preview)?)?;
+        // Written whole and then moved, so a reader never sees half of it.
+        let partial = file.with_extension("json.partial");
+        fs::write(&partial, serde_json::to_string_pretty(&preview)?)?;
+        fs::rename(&partial, &file)?;
         let line = format!(
             "preview deployed: {url} ({:.1} s)",
             clock.elapsed().as_secs_f64()

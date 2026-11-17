@@ -319,7 +319,11 @@ pub(crate) fn run_on_base(
     // compare with pictures of the change's.
     let mut undeployed = None;
     if check.needs_preview() {
-        let name = format!("base-{}", base.wt.git.head_short()?);
+        // Named by its tree: a red before green checkout of the same commit holds the change's
+        // tests, so it is another deploy. Base checkouts are shared by worktrees, so the deploy
+        // holds the checkout.
+        let name = format!("base-{}", base.wt.tree.get(..7).unwrap_or(&base.wt.tree));
+        let _held = env.state.hold(&root)?;
         match env.state.preview(&base.env, &root, &base.wt.tree, &name)? {
             Ok(deployed) => {
                 if let Some(line) = deployed.line {

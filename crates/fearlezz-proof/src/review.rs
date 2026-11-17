@@ -318,9 +318,12 @@ pub fn review(
             }
         }
     }
+    // A proof is a CI run's word, and the preview becomes a link on the page and in the
+    // pull request's comment, so only a plain web address is taken.
     let preview = live
         .iter()
-        .find_map(|(_, proof)| proof.as_ref()?.preview.clone());
+        .find_map(|(_, proof)| proof.as_ref()?.preview.clone())
+        .filter(|url| web_address(url));
     let accept = accept
         .filter(|a| !weakened.is_empty() && a.covers(head, &weakened))
         .cloned();
@@ -359,6 +362,22 @@ pub fn review(
         notes: open.into_iter().cloned().collect(),
         preview,
     }
+}
+
+/// Whether `url` is a plain `http://` or `https://` address with a host: nothing that runs
+/// script, breaks a line or reads as Markdown.
+fn web_address(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    !rest.is_empty()
+        && !rest.starts_with('/')
+        && !rest
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "\"'<>()[]{}`\\".contains(c))
 }
 
 /// A run with its proof once done.

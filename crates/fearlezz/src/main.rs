@@ -1574,11 +1574,12 @@ fn run_checks(
         }
         Ok(floor.holds_at(&gate))
     };
-    // A pull request's CI checks out a merge commit with no branch; its head branch names
-    // the preview, so each push updates one preview instead of making another.
+    // A pull request's CI checks out a merge commit with no branch; its number names the
+    // preview, so each push updates one preview, and two forks' branches never share one.
     let branch = out
         .as_ref()
-        .and_then(|o| o.workflow.branch().map(str::to_string))
+        .and_then(|o| o.workflow.pull())
+        .map(|pull| format!("pr-{}", pull.number))
         .or_else(|| wt.git.branch().ok());
     let mut report = match out {
         Some(out) => Some(Report::start(ctx, &wt, &targets, out, leg.as_ref())?),
