@@ -1217,6 +1217,9 @@ mod tests {
         /// Parking waits until this many seconds after the screen was made, as AeroSpace
         /// does until it picks up a new window.
         park_from: f64,
+        /// Whether parking waits until the window is filmed, as a window manager that picks a
+        /// window up late does, without racing the recorder's clock.
+        park_once_filmed: bool,
         /// Whether parking makes the window wider, as AeroSpace's tiling and floating can.
         park_resizes: bool,
         /// Whether the window was parked.
@@ -1293,7 +1296,10 @@ mod tests {
             if let Some(why) = self.park_fails {
                 bail!(why);
             }
-            if self.start.elapsed().as_secs_f64() < self.park_from {
+            let filmed = self.events.iter().any(|e| e.starts_with("film "));
+            if self.start.elapsed().as_secs_f64() < self.park_from
+                || (self.park_once_filmed && !filmed)
+            {
                 return Ok(Parking::NotYet("the script has not picked it up".into()));
             }
             self.events.push(format!("park {window}"));
@@ -1402,6 +1408,7 @@ mod tests {
         place: Place,
         park_fails: Option<&'static str>,
         park_from: f64,
+        park_once_filmed: bool,
         park_resizes: bool,
         front_fails: Option<&'static str>,
         put_back_fails: Option<&'static str>,
@@ -1415,6 +1422,7 @@ mod tests {
                 place: Place::Stay,
                 park_fails: None,
                 park_from: 0.0,
+                park_once_filmed: false,
                 park_resizes: false,
                 front_fails: None,
                 put_back_fails: None,
@@ -1451,6 +1459,7 @@ mod tests {
             failures,
             park_fails: desk.park_fails,
             park_from: desk.park_from,
+            park_once_filmed: desk.park_once_filmed,
             park_resizes: desk.park_resizes,
             parked: false,
             front_fails: desk.front_fails,
@@ -1612,7 +1621,7 @@ mod tests {
             "sleep 3",
             Desk {
                 place: Place::OffScreen,
-                park_from: 1.9,
+                park_once_filmed: true,
                 fronts: vec![(0.0, EDITOR), (0.5, CHILD)],
                 ..Desk::default()
             },
@@ -1650,7 +1659,7 @@ mod tests {
             "sleep 3",
             Desk {
                 place: Place::OffScreen,
-                park_from: 1.9,
+                park_once_filmed: true,
                 park_resizes: true,
                 ..Desk::default()
             },
