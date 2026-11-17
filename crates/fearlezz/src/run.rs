@@ -110,7 +110,13 @@ pub(crate) fn execute(
             folder: check.dir.as_deref(),
             since: started,
         };
-        match coverage.findings(&report, at.changed, |p| check.is_test(p)) {
+        // The project's code: files git keeps that the check reads, tests aside.
+        let files: std::collections::BTreeSet<String> = crate::git::Git::discover(at.root)
+            .and_then(|git| git.files())
+            .map(|f| f.into_iter().collect())
+            .unwrap_or_default();
+        let code = |p: &str| files.contains(p) && check.reads(p) && !check.is_test(p);
+        match coverage.findings(&report, at.changed, code) {
             Ok((found, m)) => {
                 measured = Some(m);
                 passed &= !found

@@ -426,7 +426,7 @@ fn at_the_target_untested_lines_are_only_hints() {
     );
     assert!(
         out.stdout
-            .contains("why: the project is at 86%; above 80% more tests add little"),
+            .contains("why: the project is at 86%; at or above 80% more tests add little"),
         "{}",
         out.stdout
     );
@@ -498,4 +498,113 @@ fn ci_shows_what_was_measured() {
         "{}",
         out.stdout
     );
+}
+
+#[test]
+fn naming_test_files_for_the_first_time_weakens_coverage() {
+    let repo = Repo::new(LCOV, &[("src/a.txt", OLD)]);
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace(
+            "coverage = \"lcov\"",
+            "coverage = \"lcov\"\ntest_files = [\"src/**\"]",
+        ),
+    );
+    repo.commit("name test files");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("weakens tests: it names other test files"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn naming_other_test_files_runs_the_check_again() {
+    let repo = feature(LCOV, &[("src/a.txt", OLD)]);
+    repo.write("src/a.txt", &format!("{OLD}four\n"));
+    assert!(repo.fz(&["run", "tests"]).ok);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace(
+            "coverage = \"lcov\"",
+            "coverage = \"lcov\"\ntest_files = [\"src/*_test.txt\"]",
+        ),
+    );
+    let out = repo.fz(&["run", "tests"]);
+    assert!(!out.stdout.contains("1 reused"), "{}", out.stdout);
+}
+
+#[test]
+fn a_target_without_a_reader_says_to_name_one() {
+    let config = LCOV.replace("coverage = \"lcov\"", "coverage = { target = 70 }");
+    let repo = Repo::new(&config, &[("src/a.txt", OLD)]);
+    let out = repo.fz(&["run", "tests"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stderr
+            .contains("names no reader; write read = \"lcov\""),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Go marks every line of a block, comments and blank lines too.
+#[test]
+fn a_go_block_does_not_flag_its_comments_or_blank_lines() {
+    let config = r#"
+[check.go-test]
+run = '''
+printf 'mode: set\nexample.com/m/a.go:3.11,8.2 2 0\n' > "$FEARLEZZ_OUT/cover.out"
+echo "--- PASS: TestA"
+'''
+stage = "working"
+tests = { count = '(?m)^\s*--- (?:PASS|FAIL):' }
+coverage = "go"
+
+[lints.coverage]
+uncovered = "flag"
+"#;
+    let repo = feature(
+        config,
+        &[
+            ("go.mod", "module example.com/m\n"),
+            ("a.go", "package a\n"),
+        ],
+    );
+    repo.write(
+        "a.go",
+        "package a\n\nfunc A() {\n\t// why\n\n\ta()\n\tb()\n}\n",
+    );
+    let out = repo.fz(&["run", "go-test"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("flag a.go:3  uncovered  changed lines 3 to 8 ran in no test"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("tests 0 of its 4 lines"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_jacoco_file_is_not_matched_by_name_to_another_package() {
+    let file = "app/src/main/kotlin/util/Foo.kt";
+    let repo = feature(JACOCO, &[(file, "package util\n\n")]);
+    repo.write(
+        file,
+        "package util\n\nfun a() = 1\nfun b() = 2\nfun c() = 3\n",
+    );
+    let out = repo.fz(&["run", "gradle-test"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("uncovered"), "{}", out.stdout);
 }

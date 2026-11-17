@@ -210,6 +210,8 @@ impl Hasher {
         }
         if let Some(coverage) = &check.coverage {
             parts.insert("(coverage)".into(), definition(coverage));
+            // Coverage never counts a test file, so which files are tests changes its verdict.
+            parts.insert("(test files)".into(), definition(&check.test_files));
         }
         if let Some(pictures) = check.pictures.taken() {
             parts.insert("(pictures)".into(), definition(&pictures));

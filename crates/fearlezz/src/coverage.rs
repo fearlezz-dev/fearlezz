@@ -72,8 +72,8 @@ impl Measured {
             (
                 Level::Hint,
                 format!(
-                    "the project is at {project}%; above {target}% more tests add little, so test \
-                     this only when it matters"
+                    "the project is at {project}%; at or above {target}% more tests add little, \
+                     so test this only when it matters"
                 ),
             )
         } else if meets(covered, lines) {
@@ -116,8 +116,19 @@ impl Coverage {
                 let read = match t.remove("read") {
                     Some(read) if t.is_empty() => read,
                     Some(_) => {
-                        bail!("coverage: name the reader with read or with its glob, not both")
+                        let keys: Vec<&str> = t.keys().map(String::as_str).collect();
+                        bail!(
+                            "coverage: {} beside read; it takes read (or a reader's glob, such \
+                             as lcov = \"<glob>\") and target",
+                            keys.join(", ")
+                        )
                     }
+                    // A project that sets only the target of a piece's reader replaces it.
+                    None if t.is_empty() => bail!(
+                        "coverage = {raw}: names no reader; write read = \"lcov\" (or jacoco, \
+                         go) beside the target",
+                        raw = toml::Value::Table(t)
+                    ),
                     None => toml::Value::Table(t),
                 };
                 (read, target)
@@ -132,16 +143,19 @@ impl Coverage {
     }
 
     /// The changed lines no test ran, at the level the project's coverage gives them (or
-    /// `[lints.coverage]` does), and what was measured. `tests` says which files are tests.
+    /// `[lints.coverage]` does), and what was measured. `counts` says which files are the
+    /// project's code: not tests, not generated or ignored files.
     pub(crate) fn findings(
         &self,
         at: &At<'_>,
         changed: &Changed,
-        tests: impl Fn(&str) -> bool,
+        counts: impl Fn(&str) -> bool,
     ) -> Result<(Vec<Finding>, Measured), String> {
-        let mut hits = self.read.hits(at, changed)?;
-        hits.retain(|file, _| !tests(file));
-        let measured = measure(&hits, changed);
+        let (mut hits, unplaced) = self.read.hits(at, changed)?;
+        hits.retain(|file, _| counts(file));
+        let mut measured = measure(&hits, changed);
+        measured.lines += unplaced.lines;
+        measured.covered += unplaced.covered;
         let (level, why) = measured.level(self.target);
         let mut found = findings(&hits, changed);
         for f in &mut found {
@@ -195,9 +209,7 @@ impl std::fmt::Debug for Reader {
     }
 }
 
-/// Covered lines per repository path: how often each measured line ran. A JaCoCo source file
-/// the change did not touch is kept under its package path after a NUL, so it counts toward
-/// the project but never names a file.
+/// Covered lines per repository path: how often each measured line ran.
 type Hits = BTreeMap<String, BTreeMap<u32, u64>>;
 
 impl Reader {
@@ -241,8 +253,9 @@ impl Reader {
             .map_or("", |(n, ..)| n)
     }
 
-    /// How often each measured line ran, or why there is no coverage.
-    fn hits(&self, at: &At<'_>, changed: &Changed) -> Result<Hits, String> {
+    /// How often each measured line ran, and the lines of JaCoCo source files no changed file
+    /// is, or why there is no coverage.
+    fn hits(&self, at: &At<'_>, changed: &Changed) -> Result<(Hits, Measured), String> {
         let At {
             out,
             root,
@@ -268,6 +281,7 @@ impl Reader {
         }
         let places = Places { root, folder };
         let mut hits = Hits::new();
+        let mut unplaced = Measured::default();
         let mut named = 0;
         for (path, text) in &reports {
             named += match self.format {
@@ -275,7 +289,7 @@ impl Reader {
                 Format::Go => go(text, &places, &mut hits),
                 // It looks up only changed files, so a miss says nothing about its paths.
                 Format::Jacoco => {
-                    jacoco(text, path, root, changed, &mut hits);
+                    jacoco(text, path, root, changed, &mut hits, &mut unplaced);
                     0
                 }
             };
@@ -288,7 +302,7 @@ impl Reader {
                 self.name()
             ));
         }
-        Ok(hits)
+        Ok((hits, unplaced))
     }
 }
 
@@ -356,7 +370,7 @@ fn lcov(text: &str, places: &Places<'_>, hits: &mut Hits) -> usize {
 
 /// Go's coverprofile: `<import path>/<file>:<line>.<col>,<line>.<col> <statements> <count>`.
 /// Files are named by import path, from the module the nearest `go.mod` names. A line is
-/// covered when any block on it ran.
+/// covered when any block on it ran; blank and comment lines inside a block are not code.
 fn go(text: &str, places: &Places<'_>, hits: &mut Hits) -> usize {
     let modules: Vec<(String, String)> = places
         .folder
@@ -375,6 +389,7 @@ fn go(text: &str, places: &Places<'_>, hits: &mut Hits) -> usize {
         })
         .collect();
     let mut named = 0;
+    let mut sources: BTreeMap<String, Vec<bool>> = BTreeMap::new();
     for line in text.lines().filter(|l| !l.starts_with("mode:")) {
         let Some((file, block)) = line.rsplit_once(':') else {
             continue;
@@ -406,8 +421,21 @@ fn go(text: &str, places: &Places<'_>, hits: &mut Hits) -> usize {
         let Some(path) = places.resolve(local.as_deref().unwrap_or(file)) else {
             continue;
         };
+        let code = sources.entry(path.clone()).or_insert_with(|| {
+            let text = std::fs::read_to_string(places.root.join(&path)).unwrap_or_default();
+            text.lines()
+                .map(|l| {
+                    let l = l.trim();
+                    !l.is_empty() && !l.starts_with("//")
+                })
+                .collect()
+        });
+        // A block spans lines that are not code: blank lines and comments.
         for n in start..=end {
-            mark(hits, path.clone(), n, count);
+            let index = usize::try_from(n).unwrap_or(usize::MAX).saturating_sub(1);
+            if code.get(index).copied().unwrap_or(true) {
+                mark(hits, path.clone(), n, count);
+            }
         }
     }
     named
@@ -417,7 +445,14 @@ fn go(text: &str, places: &Places<'_>, hits: &mut Hits) -> usize {
 /// counts missed (`mi`) and covered (`ci`) instructions. A package names no source folder, so
 /// the file is the changed one whose path ends in `<package>/<name>`; of several, the one in
 /// the module the report sits in.
-fn jacoco(text: &str, report: &Path, root: &Path, changed: &Changed, hits: &mut Hits) {
+fn jacoco(
+    text: &str,
+    report: &Path,
+    root: &Path,
+    changed: &Changed,
+    hits: &mut Hits,
+    unplaced: &mut Measured,
+) {
     let mut package = String::new();
     let mut file: Option<String> = None;
     let mut rest = text;
@@ -436,26 +471,41 @@ fn jacoco(text: &str, report: &Path, root: &Path, changed: &Changed, hits: &mut 
             } else {
                 format!("{package}/{name}")
             };
-            file = Some(source(&suffix, report, root, changed).unwrap_or(format!("\0{suffix}")));
+            file = source(&suffix, &package, report, root, changed);
         } else if tag == "/sourcefile" {
             file = None;
-        } else if let (Some(f), true) = (&file, tag.starts_with("line ")) {
+        } else if tag.starts_with("line ") {
             let number = |name: &str| attr(name)?.parse::<u64>().ok();
             let (Some(nr), Some(mi), Some(ci)) = (number("nr"), number("mi"), number("ci")) else {
                 continue;
             };
-            if mi + ci > 0
-                && let Ok(nr) = u32::try_from(nr)
-            {
+            let Ok(nr) = u32::try_from(nr) else {
+                continue;
+            };
+            if mi + ci == 0 {
+                continue;
+            }
+            // A file the change did not touch counts toward the project only.
+            if let Some(f) = &file {
                 mark(hits, f.clone(), nr, ci);
+            } else {
+                unplaced.lines += 1;
+                unplaced.covered += u64::from(ci > 0);
             }
         }
     }
 }
 
 /// The changed file a JaCoCo source file is, by its package path, or by its name alone when
-/// one changed file has it (Kotlin may leave the common root package out of its folders).
-fn source(suffix: &str, report: &Path, root: &Path, changed: &Changed) -> Option<String> {
+/// one changed file has it and declares that package (Kotlin may leave the common root
+/// package out of its folders).
+fn source(
+    suffix: &str,
+    package: &str,
+    report: &Path,
+    root: &Path,
+    changed: &Changed,
+) -> Option<String> {
     let ending = |end: &str| -> Vec<&str> {
         changed
             .paths()
@@ -466,7 +516,14 @@ fn source(suffix: &str, report: &Path, root: &Path, changed: &Changed) -> Option
     let mut matches = ending(suffix);
     if matches.is_empty() {
         let name = suffix.rsplit('/').next().unwrap_or(suffix);
+        let declared = format!("package {}", package.replace('/', "."));
         matches = ending(name);
+        matches.retain(|p| {
+            std::fs::read_to_string(root.join(p)).is_ok_and(|text| {
+                text.lines()
+                    .any(|l| l.trim().trim_end_matches(';') == declared)
+            })
+        });
         if matches.len() > 1 {
             return None;
         }

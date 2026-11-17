@@ -3,6 +3,8 @@ name: fearlezz
 description: Use when working in a repository that has a fearlezz.toml, to plan, run and show the proof a change needs before calling it done.
 ---
 
+<!-- Written by `fearlezz setup sync` from the Fearlezz binary; edits are overwritten. -->
+
 # Fearlezz
 
 Fearlezz keeps a journal per piece of work and proves the work with the checks the project declares in `fearlezz.toml`. There are three things to run:
