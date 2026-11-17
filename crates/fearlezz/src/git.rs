@@ -4,8 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context as _, Result, bail};
-use sha2::{Digest as _, Sha256};
+use anyhow::{Context as _, Result};
 
 #[derive(Clone)]
 pub(crate) struct Git {
@@ -283,8 +282,9 @@ impl Git {
                 }
             })
             .collect();
-        let hash = hex::encode(Sha256::digest(self.common.to_string_lossy().as_bytes()));
-        Ok(cache_dir()?
+        let hash = crate::files::sha256_hex(self.common.to_string_lossy().as_bytes());
+        Ok(crate::files::UserDir::Cache
+            .path()?
             .join("bases")
             .join(format!("{label}-{}", hash.get(..12).unwrap_or(&hash))))
     }
@@ -393,46 +393,6 @@ fn github_slug(url: &str) -> Option<String> {
         .then(|| format!("{owner}/{name}"))
 }
 
-/// The per user config folder of Fearlezz: below `$XDG_CONFIG_HOME` when set, else the
-/// platform's (`~/Library/Application Support` on macOS, `~/.config` elsewhere).
-pub(crate) fn config_dir() -> Result<PathBuf> {
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute());
-    if let Some(dir) = xdg {
-        return Ok(dir.join("fearlezz"));
-    }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is not set, so there is no config folder for the proof host's sign in")?;
-    let config = if cfg!(target_os = "macos") {
-        home.join("Library").join("Application Support")
-    } else {
-        home.join(".config")
-    };
-    Ok(config.join("fearlezz"))
-}
-
-/// The per user cache folder of Fearlezz: below `$XDG_CACHE_HOME` when set, else the
-/// platform's (`~/Library/Caches` on macOS, `~/.cache` elsewhere).
-pub(crate) fn cache_dir() -> Result<PathBuf> {
-    let xdg = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute());
-    if let Some(dir) = xdg {
-        return Ok(dir.join("fearlezz"));
-    }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is not set, so there is no cache folder for base checkouts")?;
-    let caches = if cfg!(target_os = "macos") {
-        home.join("Library").join("Caches")
-    } else {
-        home.join(".cache")
-    };
-    Ok(caches.join("fearlezz"))
-}
-
 /// The file whose shared lock holds the base checkout `id`.
 fn hold_file(bases: &Path, id: &std::ffi::OsStr) -> std::io::Result<std::fs::File> {
     let holds = bases.join("holds");
@@ -457,17 +417,6 @@ fn checkouts(dir: &Path) -> Vec<(std::time::SystemTime, PathBuf)> {
 
 fn run_git(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
     let mut cmd = Command::new("git");
-    cmd.args(args).current_dir(dir);
-    for (k, v) in env {
-        cmd.env(k, v);
-    }
-    let out = cmd.output().context("running git")?;
-    if !out.status.success() {
-        bail!(
-            "git {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8(out.stdout)?)
+    cmd.args(args).current_dir(dir).envs(env.iter().copied());
+    Ok(String::from_utf8(crate::process::read(&mut cmd, None)?)?)
 }

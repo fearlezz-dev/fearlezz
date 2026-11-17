@@ -87,7 +87,7 @@ pub(crate) fn turn<T>(what: &str, done: impl Fn() -> Option<T>) -> Result<Turn<T
     let Some(slots) = slots() else {
         return Ok(Turn::Go(None));
     };
-    let dir = crate::git::cache_dir()?.join("queue");
+    let dir = crate::files::UserDir::Cache.path()?.join("queue");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let mut files = (0..slots)
         .map(|i| {

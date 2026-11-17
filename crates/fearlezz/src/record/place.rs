@@ -12,9 +12,9 @@
 )]
 
 use std::ffi::c_void;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::ptr::NonNull;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
@@ -146,54 +146,10 @@ fn aerospace(args: &[&str]) -> Result<String> {
 }
 
 /// Runs `program` and returns what it printed, or fails with what it said, or when it gives
-/// no answer in [`TOOL_TIMEOUT`]. Its output is read while it runs, so a long answer never
-/// blocks it.
+/// no answer in [`TOOL_TIMEOUT`].
 pub(super) fn tool(program: &str, args: &[&str]) -> Result<String> {
-    use std::io::Read as _;
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("running {program}"))?;
-    let mut out = child.stdout.take().context("no output pipe")?;
-    let mut err = child.stderr.take().context("no error pipe")?;
-    let stdout = std::thread::spawn(move || {
-        let mut text = Vec::new();
-        drop(out.read_to_end(&mut text));
-        text
-    });
-    let stderr = std::thread::spawn(move || {
-        let mut text = Vec::new();
-        drop(err.read_to_end(&mut text));
-        text
-    });
-    let since = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if since.elapsed() >= TOOL_TIMEOUT {
-            drop(child.kill());
-            drop(child.wait());
-            bail!(
-                "{program} {} gave no answer in {TOOL_TIMEOUT:?}",
-                args.join(" ")
-            );
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    };
-    let stdout = stdout.join().unwrap_or_default();
-    let stderr = stderr.join().unwrap_or_default();
-    if !status.success() {
-        bail!(
-            "{program} {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&stdout).into_owned())
+    let out = crate::process::read(Command::new(program).args(args), Some(TOOL_TIMEOUT))?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 /// Where to move the window: past the bottom corner of a display that leaves the least of

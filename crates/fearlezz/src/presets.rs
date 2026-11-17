@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context as _, Result, bail};
-use sha2::{Digest as _, Sha256};
 use toml::{Table, Value};
 
 use crate::config::FILE;
@@ -304,10 +303,10 @@ type Lock = BTreeMap<String, Pin>;
 
 fn read_lock(root: &Path) -> Result<Lock> {
     let path = root.join(LOCK);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Lock::new()),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    let Some(text) = crate::files::read_if_exists(&path)
+        .with_context(|| format!("reading {}", path.display()))?
+    else {
+        return Ok(Lock::new());
     };
     let file: LockFile = toml::from_str(&text).with_context(|| format!("in {}", path.display()))?;
     Ok(file.pieces.into_iter().map(|e| (e.source, e.pin)).collect())
@@ -316,10 +315,7 @@ fn read_lock(root: &Path) -> Result<Lock> {
 fn write_lock(root: &Path, lock: &Lock) -> Result<()> {
     let path = root.join(LOCK);
     if lock.is_empty() {
-        return match std::fs::remove_file(&path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
-            Ok(()) | Err(_) => Ok(()),
-        };
+        return crate::files::remove_if_exists(&path);
     }
     let file = LockFile {
         pieces: lock
@@ -335,7 +331,7 @@ fn write_lock(root: &Path, lock: &Lock) -> Result<()> {
          # Commit it. Run `fearlezz setup update` to move pieces to newer tags.\n\n{}",
         toml::to_string(&file)?
     );
-    std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+    crate::files::write_atomic(&path, text)
 }
 
 /// Every setting that differs between two merged configs, by dotted path.
@@ -556,7 +552,7 @@ impl Loader {
         };
         let text = git(Some(&dir), &["show", &format!("{commit}:{path}")])
             .with_context(|| format!("{path} at {rev}"))?;
-        let sha256 = hex::encode(Sha256::digest(text.as_bytes()));
+        let sha256 = crate::files::sha256_hex(&text);
         if let Some(pin) = pin
             && pin.sha256 != sha256
         {
@@ -741,23 +737,18 @@ fn normalize(path: &str) -> Result<String> {
 }
 
 fn short_hash(text: &str) -> String {
-    hex::encode(&Sha256::digest(text.as_bytes())[..8])
+    let mut hash = crate::files::sha256_hex(text);
+    hash.truncate(16);
+    hash
 }
 
 fn git(dir: Option<&Path>, args: &[&str]) -> Result<String> {
     let mut cmd = Command::new("git");
     if let Some(dir) = dir {
-        cmd.arg("-C").arg(dir);
+        cmd.current_dir(dir);
     }
-    let out = cmd.args(args).output().context("running git")?;
-    if !out.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    let out = crate::process::read(cmd.args(args), None)?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 #[cfg(test)]

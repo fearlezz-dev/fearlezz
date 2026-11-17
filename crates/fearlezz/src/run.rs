@@ -482,7 +482,7 @@ impl Run<'_> {
         let noted = if films.is_empty() || place == crate::record::Place::Own {
             Ok(())
         } else {
-            crate::git::cache_dir().and_then(|dir| {
+            crate::files::UserDir::Cache.path().and_then(|dir| {
                 crate::record::note_films(
                     &dir.join("films.jsonl"),
                     at.root,
@@ -792,7 +792,7 @@ fn envtest_assets(
         )?;
         return Ok(Err(None));
     };
-    let bin = crate::git::cache_dir()?.join("envtest");
+    let bin = crate::files::UserDir::Cache.path()?.join("envtest");
     let command = "setup-envtest use \"$FEARLEZZ_K8S\" --bin-dir \"$FEARLEZZ_ENVTEST\" -p path";
     let script = match at.shell {
         Some(shell) => format!("{shell} sh -c '{command}'"),
