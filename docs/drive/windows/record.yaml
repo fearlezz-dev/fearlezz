@@ -1,0 +1,34 @@
+# docs/drive/windows/record.yaml: the working state of Windows support.
+goal: Make Fearlezz build, run its checks and pass its own tests on Windows, prove it in CI on a Windows runner, and add a Windows binary to the release workflow.
+
+pieces:
+  - id: native-windows
+    status: done
+    tries:
+      - id: git-sh-and-os-key
+        what: Run checks through the sh of Git for Windows, and let `[env]` and checks name the systems they run on, so a devenv repository runs without devenv on Windows.
+        taught: devenv needs Nix, which runs on Windows only inside WSL, so Fearlezz and GrammarGuard cannot prove themselves natively as configured.
+        state: dropped
+        why: "Then we leave out windows support for now. They should use wsl instead."
+  - id: record-it
+    status: done
+    tries:
+      - id: docs
+        what: README and ROADMAP say Windows means WSL; GrammarGuard's native Windows jobs stay outside the proof as a known problem.
+        state: picked
+        evidence: [README.md, ROADMAP.md]
+
+decided:
+  - id: shell
+    what: "Git's sh, should native Windows ever come back: every piece works unchanged."
+  - id: wsl
+    what: "We leave out windows support for now. They should use wsl instead."
+    why: devenv cannot run on native Windows.
+  - id: record
+    what: Record it in a small docs only pull request.
+  - id: recording-out-of-scope
+    what: Recording windows on Windows belongs to the recording beyond macOS thread, not this one.
+
+open: []
+slices: []
+next: Done once the docs pull request merges.

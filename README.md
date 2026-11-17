@@ -33,6 +33,8 @@ active     fix/crash        working  in working: 2 of 2 checks ok
 curl -fsSL https://raw.githubusercontent.com/fearlezz-dev/fearlezz/main/install.sh | sh
 ```
 
+It runs on Linux and macOS. On Windows, run it inside WSL, where the same command installs the Linux build.
+
 Or pick what fits the project:
 
 | Where | How |
