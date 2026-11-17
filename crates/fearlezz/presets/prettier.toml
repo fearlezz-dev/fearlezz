@@ -1,0 +1,7 @@
+# Prettier formats TypeScript, JavaScript and every other file it knows (Svelte with
+# prettier-plugin-svelte). It skips what .gitignore and .prettierignore list, and the files
+# Fearlezz writes (agent settings, hooks, skill copies), which keep the layout Fearlezz gives them.
+
+[check.prettier]
+run = "prettier --check . '!**/.claude/**' '!**/.agents/**' '!**/.codex/**' '!**/.cursor/**'"
+stage = "working"

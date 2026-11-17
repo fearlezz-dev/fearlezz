@@ -139,6 +139,18 @@ impl Git {
             .collect())
     }
 
+    /// The commits since `commit` up to HEAD, oldest first, without merge commits: each one's
+    /// short id and subject.
+    pub(crate) fn commits_since(&self, commit: &str) -> Result<Vec<(String, String)>> {
+        let range = format!("{commit}..HEAD");
+        Ok(self
+            .git(&["log", "--reverse", "--no-merges", "--format=%h %s", &range])?
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .map(|(id, subject)| (id.to_string(), subject.to_string()))
+            .collect())
+    }
+
     /// The short name of a commit.
     pub(crate) fn short(&self, rev: &str) -> Result<String> {
         Ok(self.git(&["rev-parse", "--short", rev])?.trim().to_string())

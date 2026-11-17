@@ -1,0 +1,872 @@
+rule	category	level	from
+eslint/accessor-pairs	pedantic	hint	eslint:accessor-pairs
+eslint/array-callback-return	pedantic	flag	eslint:array-callback-return
+eslint/arrow-body-style	style	flag	eslint:arrow-body-style
+eslint/block-scoped-var	suspicious	off	eslint:block-scoped-var
+eslint/capitalized-comments	style	off	eslint:capitalized-comments
+eslint/class-methods-use-this	restriction	off	eslint:class-methods-use-this
+eslint/complexity	restriction	hint	eslint:complexity
+eslint/constructor-super	correctness	off	eslint:constructor-super
+eslint/curly	style	flag	eslint:curly
+eslint/default-case	restriction	off	eslint:default-case
+eslint/default-case-last	style	flag	eslint:default-case-last
+eslint/default-param-last	style	off	eslint:default-param-last
+eslint/eqeqeq	pedantic	gate	eslint:eqeqeq
+eslint/for-direction	correctness	gate	eslint:for-direction
+eslint/func-name-matching	style	flag	eslint:func-name-matching
+eslint/func-names	style	off	eslint:func-names
+eslint/func-style	style	flag	eslint:func-style
+eslint/getter-return	correctness	off	eslint:getter-return
+eslint/grouped-accessor-pairs	style	hint	eslint:grouped-accessor-pairs
+eslint/guard-for-in	style	flag	eslint:guard-for-in
+eslint/id-denylist	style	off	eslint:id-denylist
+eslint/id-length	style	hint	eslint:id-length
+eslint/id-match	style	off	eslint:id-match
+eslint/init-declarations	style	off	eslint:init-declarations
+eslint/logical-assignment-operators	style	flag	eslint:logical-assignment-operators
+eslint/max-classes-per-file	pedantic	hint	eslint:max-classes-per-file
+eslint/max-depth	pedantic	hint	eslint:max-depth
+eslint/max-lines	pedantic	hint	eslint:max-lines
+eslint/max-lines-per-function	pedantic	hint	eslint:max-lines-per-function
+eslint/max-nested-callbacks	pedantic	hint	eslint:max-nested-callbacks
+eslint/max-params	style	off	eslint:max-params
+eslint/max-statements	style	hint	eslint:max-statements
+eslint/new-cap	style	flag	eslint:new-cap
+eslint/no-alert	restriction	flag	eslint:no-alert
+eslint/no-array-constructor	pedantic	off	eslint:no-array-constructor
+eslint/no-async-promise-executor	correctness	gate	eslint:no-async-promise-executor
+eslint/no-await-in-loop	perf	flag	eslint:no-await-in-loop
+eslint/no-bitwise	restriction	hint	eslint:no-bitwise
+eslint/no-caller	correctness	gate	eslint:no-caller
+eslint/no-case-declarations	pedantic	gate	eslint:no-case-declarations
+eslint/no-class-assign	correctness	off	eslint:no-class-assign
+eslint/no-compare-neg-zero	correctness	gate	eslint:no-compare-neg-zero
+eslint/no-cond-assign	correctness	gate	eslint:no-cond-assign
+eslint/no-console	restriction	flag	eslint:no-console
+eslint/no-const-assign	correctness	off	eslint:no-const-assign
+eslint/no-constant-binary-expression	correctness	gate	eslint:no-constant-binary-expression
+eslint/no-constant-condition	correctness	gate	eslint:no-constant-condition
+eslint/no-constructor-return	pedantic	gate	eslint:no-constructor-return
+eslint/no-continue	style	off	eslint:no-continue
+eslint/no-control-regex	correctness	gate	eslint:no-control-regex
+eslint/no-debugger	correctness	gate	eslint:no-debugger
+eslint/no-delete-var	correctness	gate	eslint:no-delete-var
+eslint/no-div-regex	restriction	off	eslint:no-div-regex
+eslint/no-dupe-class-members	correctness	off	eslint:no-dupe-class-members
+eslint/no-dupe-else-if	correctness	gate	eslint:no-dupe-else-if
+eslint/no-dupe-keys	correctness	off	eslint:no-dupe-keys
+eslint/no-duplicate-case	correctness	gate	eslint:no-duplicate-case
+eslint/no-duplicate-imports	style	flag	eslint:no-duplicate-imports
+eslint/no-else-return	pedantic	gate	eslint:no-else-return
+eslint/no-empty	restriction	flag	eslint:no-empty
+eslint/no-empty-character-class	correctness	gate	eslint:no-empty-character-class
+eslint/no-empty-function	restriction	off	eslint:no-empty-function
+eslint/no-empty-pattern	correctness	gate	eslint:no-empty-pattern
+eslint/no-empty-static-block	correctness	gate	eslint:no-empty-static-block
+eslint/no-eq-null	restriction	off	eslint:no-eq-null
+eslint/no-eval	correctness	gate	eslint:no-eval
+eslint/no-ex-assign	correctness	gate	eslint:no-ex-assign
+eslint/no-extend-native	suspicious	gate	eslint:no-extend-native
+eslint/no-extra-bind	suspicious	flag	eslint:no-extra-bind
+eslint/no-extra-boolean-cast	correctness	gate	eslint:no-extra-boolean-cast
+eslint/no-extra-label	style	flag	eslint:no-extra-label
+eslint/no-fallthrough	pedantic	gate	eslint:no-fallthrough
+eslint/no-func-assign	correctness	off	eslint:no-func-assign
+eslint/no-global-assign	correctness	gate	eslint:no-global-assign
+eslint/no-implicit-coercion	style	flag	eslint:no-implicit-coercion
+eslint/no-implicit-globals	restriction	off	eslint:no-implicit-globals
+eslint/no-implied-eval	suspicious	off	eslint:no-implied-eval
+eslint/no-import-assign	correctness	off	eslint:no-import-assign
+eslint/no-inline-comments	pedantic	off	eslint:no-inline-comments
+eslint/no-inner-declarations	pedantic	flag	eslint:no-inner-declarations
+eslint/no-invalid-regexp	correctness	gate	eslint:no-invalid-regexp
+eslint/no-irregular-whitespace	correctness	gate	eslint:no-irregular-whitespace
+eslint/no-iterator	correctness	gate	eslint:no-iterator
+eslint/no-label-var	style	flag	eslint:no-label-var
+eslint/no-labels	style	flag	eslint:no-labels
+eslint/no-lone-blocks	style	flag	eslint:no-lone-blocks
+eslint/no-lonely-if	pedantic	flag	eslint:no-lonely-if
+eslint/no-loop-func	pedantic	flag	eslint:no-loop-func
+eslint/no-loss-of-precision	correctness	gate	eslint:no-loss-of-precision
+eslint/no-magic-numbers	style	off	eslint:no-magic-numbers
+eslint/no-misleading-character-class	correctness	gate	eslint:no-misleading-character-class
+eslint/no-multi-assign	style	flag	eslint:no-multi-assign
+eslint/no-multi-str	style	flag	eslint:no-multi-str
+eslint/no-negated-condition	pedantic	hint	eslint:no-negated-condition
+eslint/no-nested-ternary	style	flag	eslint:no-nested-ternary
+eslint/no-new	suspicious	flag	eslint:no-new
+eslint/no-new-func	style	gate	eslint:no-new-func
+eslint/no-new-native-nonconstructor	correctness	off	eslint:no-new-native-nonconstructor
+eslint/no-new-wrappers	pedantic	gate	eslint:no-new-wrappers
+eslint/no-nonoctal-decimal-escape	correctness	gate	eslint:no-nonoctal-decimal-escape
+eslint/no-obj-calls	correctness	off	eslint:no-obj-calls
+eslint/no-object-constructor	pedantic	flag	eslint:no-object-constructor
+eslint/no-param-reassign	restriction	hint	eslint:no-param-reassign
+eslint/no-plusplus	restriction	off	eslint:no-plusplus
+eslint/no-promise-executor-return	pedantic	flag	eslint:no-promise-executor-return
+eslint/no-proto	restriction	gate	eslint:no-proto
+eslint/no-prototype-builtins	pedantic	gate	eslint:no-prototype-builtins
+eslint/no-redeclare	pedantic	off	eslint:no-redeclare
+eslint/no-regex-spaces	restriction	gate	eslint:no-regex-spaces
+eslint/no-restricted-exports	nursery	off	eslint:no-restricted-exports
+eslint/no-restricted-globals	restriction	off	eslint:no-restricted-globals
+eslint/no-restricted-imports	restriction	off	eslint:no-restricted-imports
+eslint/no-restricted-properties	restriction	off	eslint:no-restricted-properties
+eslint/no-return-assign	style	flag	eslint:no-return-assign
+eslint/no-script-url	style	gate	eslint:no-script-url
+eslint/no-self-assign	correctness	gate	eslint:no-self-assign
+eslint/no-self-compare	pedantic	gate	eslint:no-self-compare
+eslint/no-sequences	restriction	flag	eslint:no-sequences
+eslint/no-setter-return	correctness	off	eslint:no-setter-return
+eslint/no-shadow	suspicious	off	eslint:no-shadow
+eslint/no-shadow-restricted-names	correctness	gate	eslint:no-shadow-restricted-names
+eslint/no-sparse-arrays	correctness	gate	eslint:no-sparse-arrays
+eslint/no-template-curly-in-string	style	flag	eslint:no-template-curly-in-string
+eslint/no-ternary	style	off	eslint:no-ternary
+eslint/no-this-before-super	correctness	off	eslint:no-this-before-super
+eslint/no-throw-literal	pedantic	off	eslint:no-throw-literal
+eslint/no-unassigned-vars	correctness	gate	eslint:no-unassigned-vars
+eslint/no-undef	nursery	off	eslint:no-undef
+eslint/no-undefined	restriction	off	eslint:no-undefined
+eslint/no-underscore-dangle	suspicious	hint	eslint:no-underscore-dangle
+eslint/no-unexpected-multiline	suspicious	gate	eslint:no-unexpected-multiline
+eslint/no-unmodified-loop-condition	suspicious	gate	eslint:no-unmodified-loop-condition
+eslint/no-unneeded-ternary	suspicious	flag	eslint:no-unneeded-ternary
+eslint/no-unreachable	correctness	off	eslint:no-unreachable
+eslint/no-unreachable-loop	nursery	gate	eslint:no-unreachable-loop
+eslint/no-unsafe-finally	correctness	gate	eslint:no-unsafe-finally
+eslint/no-unsafe-negation	correctness	off	eslint:no-unsafe-negation
+eslint/no-unsafe-optional-chaining	correctness	gate	eslint:no-unsafe-optional-chaining
+eslint/no-unused-expressions	correctness	off	eslint:no-unused-expressions
+eslint/no-unused-labels	correctness	gate	eslint:no-unused-labels
+eslint/no-unused-private-class-members	correctness	off	eslint:no-unused-private-class-members
+eslint/no-unused-vars	correctness	off	eslint:no-unused-vars
+eslint/no-use-before-define	restriction	off	eslint:no-use-before-define
+eslint/no-useless-assignment	nursery	flag	eslint:no-useless-assignment
+eslint/no-useless-backreference	correctness	gate	eslint:no-useless-backreference
+eslint/no-useless-call	perf	flag	eslint:no-useless-call
+eslint/no-useless-catch	correctness	gate	eslint:no-useless-catch
+eslint/no-useless-computed-key	style	flag	eslint:no-useless-computed-key
+eslint/no-useless-concat	suspicious	flag	eslint:no-useless-concat
+eslint/no-useless-constructor	suspicious	off	eslint:no-useless-constructor
+eslint/no-useless-escape	correctness	gate	eslint:no-useless-escape
+eslint/no-useless-rename	correctness	flag	eslint:no-useless-rename
+eslint/no-useless-return	pedantic	flag	eslint:no-useless-return
+eslint/no-var	restriction	gate	eslint:no-var
+eslint/no-void	restriction	gate	eslint:no-void
+eslint/no-warning-comments	pedantic	hint	eslint:no-warning-comments
+eslint/no-with	correctness	off	eslint:no-with
+eslint/object-shorthand	style	flag	eslint:object-shorthand
+eslint/one-var	style	off	eslint:one-var
+eslint/operator-assignment	style	flag	eslint:operator-assignment
+eslint/prefer-arrow-callback	style	flag	eslint:prefer-arrow-callback
+eslint/prefer-const	style	gate	eslint:prefer-const
+eslint/prefer-destructuring	style	off	eslint:prefer-destructuring
+eslint/prefer-exponentiation-operator	style	flag	eslint:prefer-exponentiation-operator
+eslint/prefer-named-capture-group	style	hint	eslint:prefer-named-capture-group
+eslint/prefer-numeric-literals	style	flag	eslint:prefer-numeric-literals
+eslint/prefer-object-has-own	style	flag	eslint:prefer-object-has-own
+eslint/prefer-object-spread	style	flag	eslint:prefer-object-spread
+eslint/prefer-promise-reject-errors	pedantic	off	eslint:prefer-promise-reject-errors
+eslint/prefer-regex-literals	style	flag	eslint:prefer-regex-literals
+eslint/prefer-rest-params	style	flag	eslint:prefer-rest-params
+eslint/prefer-spread	style	flag	eslint:prefer-spread
+eslint/prefer-template	style	flag	eslint:prefer-template
+eslint/preserve-caught-error	suspicious	flag	eslint:preserve-caught-error
+eslint/radix	pedantic	flag	eslint:radix
+eslint/require-await	pedantic	off	eslint:require-await
+eslint/require-unicode-regexp	pedantic	flag	eslint:require-unicode-regexp
+eslint/require-yield	correctness	gate	eslint:require-yield
+eslint/sort-imports	style	off	eslint:sort-imports
+eslint/sort-keys	style	off	eslint:sort-keys
+eslint/sort-vars	pedantic	off	eslint:sort-vars
+eslint/symbol-description	pedantic	flag	eslint:symbol-description
+eslint/unicode-bom	restriction	off	eslint:unicode-bom
+eslint/use-isnan	correctness	gate	eslint:use-isnan
+eslint/valid-typeof	correctness	gate	eslint:valid-typeof
+eslint/vars-on-top	style	flag	eslint:vars-on-top
+eslint/yoda	style	flag	eslint:yoda
+import/consistent-type-specifier-style	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/default	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+import/export	nursery	off	nursery: unstable
+import/exports-last	style	flag	biome:style/useExportsLast(biome)
+import/extensions	restriction	flag	biome:correctness/useImportExtensions(biome)
+import/first	style	flag	majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/group-exports	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/max-dependencies	pedantic	off	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+import/named	nursery	off	biome:correctness/noUnresolvedImports(biome)
+import/namespace	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+import/newline-after-import	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/no-absolute-path	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+import/no-amd	restriction	flag	majority of decided import restriction {'flag': 3, 'hint': 1}
+import/no-anonymous-default-export	style	flag	majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/no-commonjs	restriction	flag	biome:style/noCommonJs(biome)
+import/no-cycle	restriction	flag	biome:suspicious/noImportCycles(biome)
+import/no-default-export	restriction	hint	biome:style/noDefaultExport(biome)
+import/no-duplicates	style	flag	majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/no-dynamic-require	restriction	flag	majority of decided import restriction {'flag': 3, 'hint': 1}
+import/no-empty-named-blocks	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+import/no-mutable-exports	style	flag	majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/no-named-as-default	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+import/no-named-as-default-member	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+import/no-named-default	style	flag	majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/no-named-export	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/no-namespace	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/no-nodejs-modules	style	off	biome:correctness/noNodejsModules(biome)
+import/no-relative-parent-imports	restriction	off	hand, after majority of decided import restriction {'flag': 3, 'hint': 1}
+import/no-self-import	suspicious	off	biome:nursery/noSelfImport(biome)
+import/no-unassigned-import	suspicious	off	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+import/no-webpack-loader-syntax	restriction	flag	majority of decided import restriction {'flag': 3, 'hint': 1}
+import/prefer-default-export	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+import/unambiguous	restriction	off	hand, after majority of decided import restriction {'flag': 3, 'hint': 1}
+jest/consistent-test-it	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/expect-expect	correctness	flag	hand, after majority of decided jest correctness {'flag': 2, 'gate': 2, 'off': 1}
+jest/max-expects	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/max-nested-describe	style	hint	biome:complexity/noExcessiveNestedTestSuites(biome)
+jest/no-alias-methods	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-commented-out-tests	suspicious	flag	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+jest/no-conditional-expect	correctness	flag	hand, after majority of decided jest correctness {'flag': 2, 'gate': 2, 'off': 1}
+jest/no-conditional-in-test	pedantic	flag	majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+jest/no-confusing-set-timeout	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-deprecated-functions	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-disabled-tests	correctness	flag	biome:suspicious/noSkippedTests(biome)
+jest/no-done-callback	style	flag	biome:style/noDoneCallback(biome)
+jest/no-duplicate-hooks	style	gate	biome:suspicious/noDuplicateTestHooks(biome)
+jest/no-export	correctness	gate	biome:suspicious/noExportsInTest(biome)
+jest/no-focused-tests	correctness	gate	biome:suspicious/noFocusedTests(biome)
+jest/no-hooks	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-identical-title	style	flag	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-interpolation-in-snapshots	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-jasmine-globals	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-large-snapshots	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-mocks-import	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-restricted-jest-methods	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-restricted-matchers	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-standalone-expect	correctness	flag	biome:suspicious/noMisplacedAssertion(biome)
+jest/no-test-prefixes	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-test-return-statement	style	flag	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-unneeded-async-expect-function	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/no-untyped-mock-factory	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/padding-around-after-all-blocks	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/padding-around-test-blocks	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-called-with	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-comparison-matcher	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-each	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-ending-with-an-expect	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-equality-matcher	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-expect-assertions	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-expect-resolves	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-hooks-in-order	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-hooks-on-top	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-importing-jest-globals	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-jest-mocked	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-lowercase-title	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-mock-promise-shorthand	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-mock-return-shorthand	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-snapshot-hint	correctness	off	hand, after majority of decided jest correctness {'flag': 2, 'gate': 2, 'off': 1}
+jest/prefer-spy-on	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-strict-equal	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-to-be	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-to-contain	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-to-have-been-called	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-to-have-been-called-times	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-to-have-length	style	hint	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/prefer-todo	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/require-hook	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/require-to-throw-message	correctness	hint	hand, after majority of decided jest correctness {'flag': 2, 'gate': 2, 'off': 1}
+jest/require-top-level-describe	style	off	hand, after majority of decided jest style {'hint': 1, 'flag': 1, 'gate': 1}
+jest/valid-describe-callback	correctness	flag	hand, after majority of decided jest correctness {'flag': 2, 'gate': 2, 'off': 1}
+jest/valid-expect	correctness	flag	hand, after majority of decided jest correctness {'flag': 2, 'gate': 2, 'off': 1}
+jest/valid-expect-in-promise	correctness	flag	hand, after majority of decided jest correctness {'flag': 2, 'gate': 2, 'off': 1}
+jest/valid-title	correctness	off	biome:nursery/useValidTestTitle(biome)
+jsdoc/check-access	restriction	flag	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+jsdoc/check-property-names	correctness	flag	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+jsdoc/check-tag-names	correctness	off	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+jsdoc/empty-tags	restriction	flag	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+jsdoc/implements-on-classes	correctness	flag	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+jsdoc/no-blank-blocks	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+jsdoc/no-defaults	correctness	hint	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+jsdoc/require-param	pedantic	off	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+jsdoc/require-param-description	pedantic	off	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+jsdoc/require-param-name	pedantic	off	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+jsdoc/require-param-type	pedantic	off	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+jsdoc/require-property	correctness	off	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+jsdoc/require-property-description	correctness	off	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+jsdoc/require-property-name	correctness	off	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+jsdoc/require-property-type	correctness	off	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+jsdoc/require-returns	pedantic	off	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+jsdoc/require-returns-description	pedantic	off	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+jsdoc/require-returns-type	pedantic	off	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+jsdoc/require-throws-description	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+jsdoc/require-throws-type	pedantic	off	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+jsdoc/require-yields	correctness	off	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+jsdoc/require-yields-description	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+jsdoc/require-yields-type	pedantic	off	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+jsx-a11y/alt-text	correctness	gate	biome:a11y/useAltText(biome)
+jsx-a11y/anchor-ambiguous-text	restriction	flag	biome:a11y/noAmbiguousAnchorText(biome)
+jsx-a11y/anchor-has-content	correctness	gate	biome:a11y/useAnchorContent(biome)
+jsx-a11y/anchor-is-valid	correctness	gate	biome:a11y/useValidAnchor(biome)
+jsx-a11y/aria-activedescendant-has-tabindex	correctness	flag	biome:a11y/useAriaActivedescendantWithTabindex(biome)
+jsx-a11y/aria-props	correctness	gate	biome:a11y/useValidAriaProps(biome)
+jsx-a11y/aria-proptypes	correctness	gate	biome:a11y/useValidAriaValues(biome)
+jsx-a11y/aria-role	correctness	gate	biome:a11y/useValidAriaRole(biome)
+jsx-a11y/aria-unsupported-elements	correctness	flag	biome:a11y/noAriaUnsupportedElements(biome)
+jsx-a11y/autocomplete-valid	correctness	flag	biome:a11y/useValidAutocomplete(biome)
+jsx-a11y/click-events-have-key-events	correctness	flag	biome:a11y/useKeyWithClickEvents(biome)
+jsx-a11y/control-has-associated-label	correctness	off	biome:nursery/useControlLabel(biome)
+jsx-a11y/heading-has-content	correctness	gate	biome:a11y/useHeadingContent(biome)
+jsx-a11y/html-has-lang	correctness	gate	biome:a11y/useHtmlLang(biome)
+jsx-a11y/iframe-has-title	correctness	gate	biome:a11y/useIframeTitle(biome)
+jsx-a11y/img-redundant-alt	correctness	flag	biome:a11y/noRedundantAlt(biome)
+jsx-a11y/interactive-supports-focus	correctness	flag	biome:a11y/useFocusableInteractive(biome)
+jsx-a11y/label-has-associated-control	correctness	flag	biome:a11y/noLabelWithoutControl(biome)
+jsx-a11y/lang	correctness	flag	biome:a11y/useValidLang(biome)
+jsx-a11y/media-has-caption	correctness	flag	biome:a11y/useMediaCaption(biome)
+jsx-a11y/mouse-events-have-key-events	correctness	flag	biome:a11y/useKeyWithMouseEvents(biome)
+jsx-a11y/no-access-key	correctness	gate	biome:a11y/noAccessKey(biome)
+jsx-a11y/no-aria-hidden-on-focusable	correctness	gate	biome:a11y/noAriaHiddenOnFocusable(biome)
+jsx-a11y/no-autofocus	correctness	gate	biome:a11y/noAutofocus(biome)
+jsx-a11y/no-distracting-elements	correctness	gate	biome:a11y/noDistractingElements(biome)
+jsx-a11y/no-interactive-element-to-noninteractive-role	correctness	flag	biome:a11y/noInteractiveElementToNoninteractiveRole(biome)
+jsx-a11y/no-noninteractive-element-interactions	correctness	flag	biome:a11y/noNoninteractiveElementInteractions(biome)
+jsx-a11y/no-noninteractive-element-to-interactive-role	correctness	flag	biome:a11y/noNoninteractiveElementToInteractiveRole(biome)
+jsx-a11y/no-noninteractive-tabindex	correctness	flag	biome:a11y/noNoninteractiveTabindex(biome)
+jsx-a11y/no-redundant-roles	correctness	flag	biome:a11y/noRedundantRoles(biome)
+jsx-a11y/no-static-element-interactions	correctness	flag	biome:a11y/noStaticElementInteractions(biome)
+jsx-a11y/prefer-tag-over-role	correctness	flag	biome:a11y/useSemanticElements(biome)
+jsx-a11y/role-has-required-aria-props	correctness	flag	biome:a11y/useAriaPropsForRole(biome)
+jsx-a11y/role-supports-aria-props	correctness	flag	biome:a11y/useAriaPropsSupportedByRole(biome)
+jsx-a11y/scope	correctness	gate	biome:a11y/noHeaderScope(biome)
+jsx-a11y/tabindex-no-positive	correctness	gate	biome:a11y/noPositiveTabindex(biome)
+nextjs/google-font-display	correctness	gate	biome:suspicious/useGoogleFontDisplay(biome)
+nextjs/google-font-preconnect	correctness	flag	biome:performance/useGoogleFontPreconnect(next)
+nextjs/inline-script-id	correctness	gate	biome:correctness/useInlineScriptId(next)
+nextjs/next-script-for-ga	correctness	flag	majority of decided nextjs correctness {'gate': 4, 'flag': 5, 'off': 2}
+nextjs/no-assign-module-variable	correctness	flag	majority of decided nextjs correctness {'gate': 4, 'flag': 5, 'off': 2}
+nextjs/no-async-client-component	correctness	off	biome:correctness/noNextAsyncClientComponent(next)
+nextjs/no-before-interactive-script-outside-document	correctness	off	biome:correctness/noBeforeInteractiveScriptOutsideDocument(next)
+nextjs/no-css-tags	correctness	flag	majority of decided nextjs correctness {'gate': 4, 'flag': 5, 'off': 2}
+nextjs/no-document-import-in-page	correctness	gate	biome:suspicious/noDocumentImportInPage(next)
+nextjs/no-duplicate-head	correctness	flag	majority of decided nextjs correctness {'gate': 4, 'flag': 5, 'off': 2}
+nextjs/no-head-element	correctness	flag	biome:style/noHeadElement(next)
+nextjs/no-head-import-in-document	correctness	gate	biome:suspicious/noHeadImportInDocument(next)
+nextjs/no-html-link-for-pages	correctness	flag	majority of decided nextjs correctness {'gate': 4, 'flag': 5, 'off': 2}
+nextjs/no-img-element	correctness	flag	biome:performance/noImgElement(next)
+nextjs/no-page-custom-font	correctness	flag	majority of decided nextjs correctness {'gate': 4, 'flag': 5, 'off': 2}
+nextjs/no-script-component-in-head	correctness	flag	majority of decided nextjs correctness {'gate': 4, 'flag': 5, 'off': 2}
+nextjs/no-styled-jsx-in-document	correctness	flag	majority of decided nextjs correctness {'gate': 4, 'flag': 5, 'off': 2}
+nextjs/no-sync-scripts	correctness	flag	biome:performance/noSyncScripts(next)
+nextjs/no-title-in-document-head	correctness	flag	majority of decided nextjs correctness {'gate': 4, 'flag': 5, 'off': 2}
+nextjs/no-typos	correctness	flag	majority of decided nextjs correctness {'gate': 4, 'flag': 5, 'off': 2}
+nextjs/no-unwanted-polyfillio	correctness	flag	biome:performance/noUnwantedPolyfillio(next)
+node/callback-return	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+node/exports-style	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+node/global-require	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+node/handle-callback-err	restriction	flag	majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+node/no-exports-assign	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+node/no-mixed-requires	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+node/no-new-require	restriction	flag	majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+node/no-path-concat	restriction	flag	majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+node/no-process-env	restriction	hint	biome:style/noProcessEnv(biome)
+node/no-sync	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+node/no-top-level-await	restriction	off	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+oxc/approx-constant	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+oxc/bad-array-method-on-arguments	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/bad-bitwise-operator	restriction	flag	majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+oxc/bad-char-at-comparison	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/bad-comparison-sequence	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/bad-match-all-arg	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/bad-min-max-func	correctness	gate	biome:correctness/noConstantMathMinMaxClamp(biome)
+oxc/bad-object-literal-comparison	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/bad-replace-all-arg	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/branches-sharing-code	pedantic	hint	hand, after majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+oxc/const-comparisons	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/double-comparisons	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/erasing-op	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/misrefactored-assign-op	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+oxc/missing-throw	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/no-accumulating-spread	perf	flag	majority of decided perf {'flag': 3, 'gate': 1, 'off': 1}
+oxc/no-async-await	restriction	off	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+oxc/no-async-endpoint-handlers	suspicious	hint	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+oxc/no-barrel-file	restriction	hint	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+oxc/no-const-enum	restriction	off	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+oxc/no-map-spread	perf	hint	hand, after majority of decided perf {'flag': 3, 'gate': 1, 'off': 1}
+oxc/no-optional-chaining	restriction	off	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+oxc/no-rest-spread-properties	restriction	off	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+oxc/no-this-in-exported-function	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+oxc/number-arg-out-of-range	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+oxc/only-used-in-recursion	correctness	gate	biome:suspicious/noParametersOnlyUsedInRecursion(biome)
+oxc/uninvoked-array-callback	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+promise/always-return	suspicious	off	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+promise/avoid-new	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+promise/catch-or-return	restriction	hint	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+promise/no-callback-in-promise	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+promise/no-multiple-resolved	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+promise/no-nesting	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+promise/no-new-statics	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+promise/no-promise-in-callback	suspicious	hint	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+promise/no-return-in-finally	nursery	off	nursery: unstable
+promise/no-return-wrap	style	flag	majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+promise/param-names	style	flag	majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+promise/prefer-await-to-callbacks	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+promise/prefer-await-to-then	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+promise/prefer-catch	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+promise/spec-only	restriction	off	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+promise/valid-params	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+react/button-has-type	restriction	gate	biome:a11y/useButtonType(biome)
+react/capitalized-calls	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+react/checked-requires-onchange-or-readonly	pedantic	flag	hand, after majority of decided react pedantic {'gate': 2, 'flag': 1}
+react/display-name	pedantic	flag	hand, after majority of decided react pedantic {'gate': 2, 'flag': 1}
+react/error-boundaries	correctness	flag	hand, after majority of decided react correctness {'gate': 8}
+react/exhaustive-deps	correctness	gate	biome:correctness/useExhaustiveDependencies(next)
+react/exhaustive-effect-dependencies	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+react/forbid-component-props	restriction	off	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/forbid-dom-props	restriction	off	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/forbid-elements	restriction	off	biome:correctness/noRestrictedElements(biome)
+react/forward-ref-uses-ref	correctness	gate	majority of decided react correctness {'gate': 8}
+react/function-component-definition	style	off	biome:nursery/useReactFunctionComponentDefinition(react)
+react/globals	correctness	gate	majority of decided react correctness {'gate': 8}
+react/hook-use-state	style	hint	hand, after majority of decided react style {'off': 2, 'flag': 3}
+react/hooks	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+react/iframe-missing-sandbox	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+react/immutability	correctness	gate	majority of decided react correctness {'gate': 8}
+react/incompatible-library	correctness	flag	hand, after majority of decided react correctness {'gate': 8}
+react/invariant	restriction	off	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/jsx-boolean-value	style	flag	biome:style/noImplicitBoolean(biome)
+react/jsx-curly-brace-presence	style	off	biome:style/useConsistentCurlyBraces(biome)
+react/jsx-filename-extension	restriction	off	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/jsx-fragments	style	flag	biome:style/useFragmentSyntax(biome)
+react/jsx-handler-names	style	off	hand, after majority of decided react style {'off': 2, 'flag': 3}
+react/jsx-key	correctness	gate	biome:correctness/useJsxKeyInIterable(qwik)
+react/jsx-max-depth	style	off	hand, after majority of decided react style {'off': 2, 'flag': 3}
+react/jsx-no-comment-textnodes	suspicious	gate	biome:suspicious/noCommentText(biome)
+react/jsx-no-constructed-context-values	perf	flag	majority of decided perf {'flag': 3, 'gate': 1, 'off': 1}
+react/jsx-no-duplicate-props	correctness	gate	biome:suspicious/noDuplicateJsxProps(biome)
+react/jsx-no-literals	restriction	off	biome:style/noJsxLiterals(biome)
+react/jsx-no-script-url	suspicious	gate	biome:security/noScriptUrl(biome)
+react/jsx-no-target-blank	pedantic	gate	biome:security/noBlankTarget(biome)
+react/jsx-no-undef	correctness	gate	majority of decided react correctness {'gate': 8}
+react/jsx-no-useless-fragment	pedantic	flag	biome:complexity/noUselessFragments(biome)
+react/jsx-pascal-case	style	flag	majority of decided react style {'off': 2, 'flag': 3}
+react/jsx-props-no-spread-multi	correctness	gate	biome:suspicious/noDuplicatedSpreadProps(solid)
+react/jsx-props-no-spreading	style	off	hand, after majority of decided react style {'off': 2, 'flag': 3}
+react/memo-dependencies	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+react/no-array-index-key	perf	gate	biome:suspicious/noArrayIndexKey(react)
+react/no-children-prop	correctness	gate	biome:correctness/noChildrenProp(react)
+react/no-clone-element	restriction	hint	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/no-danger	restriction	gate	biome:security/noDangerouslySetInnerHtml(react)
+react/no-danger-with-children	correctness	gate	biome:security/noDangerouslySetInnerHtmlWithChildren(react)
+react/no-deriving-state-in-effects	perf	hint	hand, after majority of decided perf {'flag': 3, 'gate': 1, 'off': 1}
+react/no-did-mount-set-state	correctness	gate	majority of decided react correctness {'gate': 8}
+react/no-did-update-set-state	correctness	gate	majority of decided react correctness {'gate': 8}
+react/no-direct-mutation-state	correctness	gate	majority of decided react correctness {'gate': 8}
+react/no-find-dom-node	correctness	gate	majority of decided react correctness {'gate': 8}
+react/no-is-mounted	correctness	gate	majority of decided react correctness {'gate': 8}
+react/no-multi-comp	restriction	off	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/no-namespace	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+react/no-object-type-as-default-prop	perf	off	biome:nursery/noReactObjectTypeAsDefaultProp(react)
+react/no-react-children	restriction	hint	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/no-redundant-should-component-update	style	flag	majority of decided react style {'off': 2, 'flag': 3}
+react/no-render-return-value	correctness	gate	biome:correctness/noRenderReturnValue(react)
+react/no-set-state	style	off	hand, after majority of decided react style {'off': 2, 'flag': 3}
+react/no-string-refs	correctness	gate	majority of decided react correctness {'gate': 8}
+react/no-this-in-sfc	correctness	gate	majority of decided react correctness {'gate': 8}
+react/no-unescaped-entities	pedantic	flag	hand, after majority of decided react pedantic {'gate': 2, 'flag': 1}
+react/no-unknown-property	restriction	flag	biome:suspicious/noUnknownAttribute(react)
+react/no-unsafe	correctness	gate	majority of decided react correctness {'gate': 8}
+react/no-unstable-nested-components	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+react/no-will-update-set-state	correctness	gate	majority of decided react correctness {'gate': 8}
+react/only-export-components	restriction	flag	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/prefer-es6-class	style	off	hand, after majority of decided react style {'off': 2, 'flag': 3}
+react/prefer-function-component	restriction	hint	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/preserve-manual-memoization	correctness	flag	hand, after majority of decided react correctness {'gate': 8}
+react/purity	correctness	gate	majority of decided react correctness {'gate': 8}
+react/react-in-jsx-scope	suspicious	off	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+react/refs	correctness	gate	majority of decided react correctness {'gate': 8}
+react/require-render-return	nursery	off	nursery: unstable
+react/rule-suppression	restriction	off	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/rules-of-hooks	pedantic	gate	biome:correctness/useHookAtTopLevel(next)
+react/self-closing-comp	style	flag	biome:style/useSelfClosingElements(biome)
+react/set-state-in-effect	correctness	flag	hand, after majority of decided react correctness {'gate': 8}
+react/set-state-in-render	correctness	gate	majority of decided react correctness {'gate': 8}
+react/state-in-constructor	style	off	hand, after majority of decided react style {'off': 2, 'flag': 3}
+react/static-components	correctness	gate	majority of decided react correctness {'gate': 8}
+react/style-prop-object	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+react/syntax	restriction	flag	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/todo	restriction	off	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/unsupported-syntax	restriction	off	hand, after majority of decided react restriction {'gate': 2, 'off': 2, 'flag': 1}
+react/use-memo	correctness	gate	majority of decided react correctness {'gate': 8}
+react/void-dom-elements-no-children	correctness	gate	biome:correctness/noVoidElementsWithChildren(biome)
+react/void-use-memo	correctness	gate	majority of decided react correctness {'gate': 8}
+react-perf/jsx-no-jsx-as-prop	perf	off	hand, after majority of decided perf {'flag': 3, 'gate': 1, 'off': 1}
+react-perf/jsx-no-new-array-as-prop	perf	off	hand, after majority of decided perf {'flag': 3, 'gate': 1, 'off': 1}
+react-perf/jsx-no-new-function-as-prop	perf	off	hand, after majority of decided perf {'flag': 3, 'gate': 1, 'off': 1}
+react-perf/jsx-no-new-object-as-prop	perf	off	hand, after majority of decided perf {'flag': 3, 'gate': 1, 'off': 1}
+typescript/adjacent-overload-signatures	style	flag	eslint:@typescript-eslint/adjacent-overload-signatures
+typescript/array-type	style	flag	eslint:@typescript-eslint/array-type
+typescript/await-thenable	correctness	gate	eslint:@typescript-eslint/await-thenable
+typescript/ban-ts-comment	pedantic	gate	eslint:@typescript-eslint/ban-ts-comment
+typescript/ban-tslint-comment	style	flag	eslint:@typescript-eslint/ban-tslint-comment
+typescript/ban-types	pedantic	flag	biome:complexity/noBannedTypes(biome)
+typescript/class-literal-property-style	style	flag	eslint:@typescript-eslint/class-literal-property-style
+typescript/consistent-generic-constructors	style	flag	eslint:@typescript-eslint/consistent-generic-constructors
+typescript/consistent-indexed-object-style	style	flag	eslint:@typescript-eslint/consistent-indexed-object-style
+typescript/consistent-return	suspicious	flag	eslint:@typescript-eslint/consistent-return
+typescript/consistent-type-assertions	style	flag	eslint:@typescript-eslint/consistent-type-assertions
+typescript/consistent-type-definitions	style	flag	eslint:@typescript-eslint/consistent-type-definitions
+typescript/consistent-type-exports	style	flag	eslint:@typescript-eslint/consistent-type-exports
+typescript/consistent-type-imports	style	flag	eslint:@typescript-eslint/consistent-type-imports
+typescript/dot-notation	style	flag	eslint:@typescript-eslint/dot-notation
+typescript/explicit-function-return-type	restriction	gate	eslint:@typescript-eslint/explicit-function-return-type
+typescript/explicit-member-accessibility	restriction	flag	eslint:@typescript-eslint/explicit-member-accessibility
+typescript/explicit-module-boundary-types	restriction	gate	eslint:@typescript-eslint/explicit-module-boundary-types
+typescript/method-signature-style	style	flag	eslint:@typescript-eslint/method-signature-style
+typescript/no-array-delete	correctness	gate	eslint:@typescript-eslint/no-array-delete
+typescript/no-base-to-string	correctness	gate	eslint:@typescript-eslint/no-base-to-string
+typescript/no-confusing-non-null-assertion	suspicious	flag	eslint:@typescript-eslint/no-confusing-non-null-assertion
+typescript/no-confusing-void-expression	pedantic	flag	eslint:@typescript-eslint/no-confusing-void-expression
+typescript/no-deprecated	pedantic	flag	eslint:@typescript-eslint/no-deprecated
+typescript/no-duplicate-enum-values	correctness	gate	eslint:@typescript-eslint/no-duplicate-enum-values
+typescript/no-duplicate-type-constituents	correctness	flag	eslint:@typescript-eslint/no-duplicate-type-constituents
+typescript/no-dynamic-delete	restriction	flag	eslint:@typescript-eslint/no-dynamic-delete
+typescript/no-empty-interface	style	gate	biome:suspicious/noEmptyInterface(biome)
+typescript/no-empty-object-type	restriction	gate	eslint:@typescript-eslint/no-empty-object-type
+typescript/no-explicit-any	restriction	gate	eslint:@typescript-eslint/no-explicit-any
+typescript/no-extra-non-null-assertion	correctness	gate	eslint:@typescript-eslint/no-extra-non-null-assertion
+typescript/no-extraneous-class	suspicious	flag	eslint:@typescript-eslint/no-extraneous-class
+typescript/no-floating-promises	correctness	gate	eslint:@typescript-eslint/no-floating-promises
+typescript/no-for-in-array	correctness	gate	eslint:@typescript-eslint/no-for-in-array
+typescript/no-generated-empty-object-type	suspicious	flag	eslint:@typescript-eslint/no-generated-empty-object-type
+typescript/no-implied-eval	correctness	gate	eslint:@typescript-eslint/no-implied-eval
+typescript/no-import-type-side-effects	restriction	flag	eslint:@typescript-eslint/no-import-type-side-effects
+typescript/no-inferrable-types	style	flag	eslint:@typescript-eslint/no-inferrable-types
+typescript/no-invalid-void-type	restriction	flag	eslint:@typescript-eslint/no-invalid-void-type
+typescript/no-meaningless-void-operator	correctness	flag	eslint:@typescript-eslint/no-meaningless-void-operator
+typescript/no-misused-new	correctness	gate	eslint:@typescript-eslint/no-misused-new
+typescript/no-misused-promises	pedantic	gate	eslint:@typescript-eslint/no-misused-promises
+typescript/no-misused-spread	correctness	flag	eslint:@typescript-eslint/no-misused-spread
+typescript/no-mixed-enums	pedantic	gate	eslint:@typescript-eslint/no-mixed-enums
+typescript/no-namespace	restriction	flag	eslint:@typescript-eslint/no-namespace
+typescript/no-non-null-asserted-nullish-coalescing	suspicious	gate	eslint:@typescript-eslint/no-non-null-asserted-nullish-coalescing
+typescript/no-non-null-asserted-optional-chain	correctness	gate	eslint:@typescript-eslint/no-non-null-asserted-optional-chain
+typescript/no-non-null-assertion	restriction	flag	eslint:@typescript-eslint/no-non-null-assertion
+typescript/no-redundant-type-constituents	correctness	flag	eslint:@typescript-eslint/no-redundant-type-constituents
+typescript/no-require-imports	restriction	gate	eslint:@typescript-eslint/no-require-imports
+typescript/no-restricted-types	restriction	off	eslint:@typescript-eslint/no-restricted-types
+typescript/no-this-alias	correctness	flag	eslint:@typescript-eslint/no-this-alias
+typescript/no-unnecessary-boolean-literal-compare	suspicious	flag	eslint:@typescript-eslint/no-unnecessary-boolean-literal-compare
+typescript/no-unnecessary-condition	nursery	flag	eslint:@typescript-eslint/no-unnecessary-condition
+typescript/no-unnecessary-parameter-property-assignment	correctness	flag	eslint:@typescript-eslint/no-unnecessary-parameter-property-assignment
+typescript/no-unnecessary-qualifier	style	flag	eslint:@typescript-eslint/no-unnecessary-qualifier
+typescript/no-unnecessary-template-expression	suspicious	flag	eslint:@typescript-eslint/no-unnecessary-template-expression
+typescript/no-unnecessary-type-arguments	suspicious	flag	eslint:@typescript-eslint/no-unnecessary-type-arguments
+typescript/no-unnecessary-type-assertion	suspicious	gate	eslint:@typescript-eslint/no-unnecessary-type-assertion
+typescript/no-unnecessary-type-constraint	suspicious	flag	eslint:@typescript-eslint/no-unnecessary-type-constraint
+typescript/no-unnecessary-type-conversion	suspicious	flag	eslint:@typescript-eslint/no-unnecessary-type-conversion
+typescript/no-unnecessary-type-parameters	suspicious	flag	eslint:@typescript-eslint/no-unnecessary-type-parameters
+typescript/no-unsafe-argument	pedantic	gate	eslint:@typescript-eslint/no-unsafe-argument
+typescript/no-unsafe-assignment	pedantic	gate	eslint:@typescript-eslint/no-unsafe-assignment
+typescript/no-unsafe-call	pedantic	gate	eslint:@typescript-eslint/no-unsafe-call
+typescript/no-unsafe-declaration-merging	correctness	gate	eslint:@typescript-eslint/no-unsafe-declaration-merging
+typescript/no-unsafe-enum-comparison	suspicious	gate	eslint:@typescript-eslint/no-unsafe-enum-comparison
+typescript/no-unsafe-function-type	pedantic	gate	eslint:@typescript-eslint/no-unsafe-function-type
+typescript/no-unsafe-member-access	pedantic	gate	eslint:@typescript-eslint/no-unsafe-member-access
+typescript/no-unsafe-return	pedantic	gate	eslint:@typescript-eslint/no-unsafe-return
+typescript/no-unsafe-type-assertion	suspicious	flag	eslint:@typescript-eslint/no-unsafe-type-assertion
+typescript/no-unsafe-unary-minus	correctness	gate	eslint:@typescript-eslint/no-unsafe-unary-minus
+typescript/no-useless-default-assignment	correctness	flag	eslint:@typescript-eslint/no-useless-default-assignment
+typescript/no-useless-empty-export	correctness	flag	eslint:@typescript-eslint/no-useless-empty-export
+typescript/no-var-requires	restriction	flag	biome:style/noCommonJs(biome)
+typescript/no-wrapper-object-types	correctness	gate	eslint:@typescript-eslint/no-wrapper-object-types
+typescript/non-nullable-type-assertion-style	restriction	flag	eslint:@typescript-eslint/non-nullable-type-assertion-style
+typescript/only-throw-error	pedantic	gate	eslint:@typescript-eslint/only-throw-error
+typescript/parameter-properties	style	off	eslint:@typescript-eslint/parameter-properties
+typescript/prefer-as-const	correctness	flag	eslint:@typescript-eslint/prefer-as-const
+typescript/prefer-enum-initializers	pedantic	flag	eslint:@typescript-eslint/prefer-enum-initializers
+typescript/prefer-find	style	flag	eslint:@typescript-eslint/prefer-find
+typescript/prefer-for-of	style	flag	eslint:@typescript-eslint/prefer-for-of
+typescript/prefer-function-type	style	flag	eslint:@typescript-eslint/prefer-function-type
+typescript/prefer-includes	pedantic	flag	eslint:@typescript-eslint/prefer-includes
+typescript/prefer-literal-enum-member	restriction	flag	eslint:@typescript-eslint/prefer-literal-enum-member
+typescript/prefer-namespace-keyword	correctness	flag	eslint:@typescript-eslint/prefer-namespace-keyword
+typescript/prefer-nullish-coalescing	pedantic	flag	eslint:@typescript-eslint/prefer-nullish-coalescing
+typescript/prefer-optional-chain	nursery	flag	eslint:@typescript-eslint/prefer-optional-chain
+typescript/prefer-promise-reject-errors	pedantic	gate	eslint:@typescript-eslint/prefer-promise-reject-errors
+typescript/prefer-readonly	style	flag	eslint:@typescript-eslint/prefer-readonly
+typescript/prefer-readonly-parameter-types	pedantic	off	eslint:@typescript-eslint/prefer-readonly-parameter-types
+typescript/prefer-reduce-type-parameter	style	flag	eslint:@typescript-eslint/prefer-reduce-type-parameter
+typescript/prefer-regexp-exec	style	flag	eslint:@typescript-eslint/prefer-regexp-exec
+typescript/prefer-return-this-type	style	flag	eslint:@typescript-eslint/prefer-return-this-type
+typescript/prefer-string-starts-ends-with	style	flag	eslint:@typescript-eslint/prefer-string-starts-ends-with
+typescript/prefer-ts-expect-error	pedantic	flag	hand, after majority of decided typescript pedantic {'gate': 13, 'flag': 11, 'off': 1}
+typescript/promise-function-async	restriction	flag	eslint:@typescript-eslint/promise-function-async
+typescript/related-getter-setter-pairs	pedantic	flag	eslint:@typescript-eslint/related-getter-setter-pairs
+typescript/require-array-sort-compare	correctness	flag	eslint:@typescript-eslint/require-array-sort-compare
+typescript/require-await	pedantic	flag	eslint:@typescript-eslint/require-await
+typescript/restrict-plus-operands	pedantic	gate	eslint:@typescript-eslint/restrict-plus-operands
+typescript/restrict-template-expressions	correctness	flag	eslint:@typescript-eslint/restrict-template-expressions
+typescript/return-await	pedantic	flag	eslint:@typescript-eslint/return-await
+typescript/strict-boolean-expressions	pedantic	flag	eslint:@typescript-eslint/strict-boolean-expressions
+typescript/strict-void-return	pedantic	flag	eslint:@typescript-eslint/strict-void-return
+typescript/switch-exhaustiveness-check	pedantic	gate	eslint:@typescript-eslint/switch-exhaustiveness-check
+typescript/triple-slash-reference	correctness	flag	eslint:@typescript-eslint/triple-slash-reference
+typescript/unbound-method	correctness	gate	eslint:@typescript-eslint/unbound-method
+typescript/unified-signatures	style	flag	eslint:@typescript-eslint/unified-signatures
+typescript/use-unknown-in-catch-callback-variable	restriction	flag	eslint:@typescript-eslint/use-unknown-in-catch-callback-variable
+unicorn/catch-error-name	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/consistent-assert	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/consistent-date-clone	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/consistent-empty-array-spread	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/consistent-existence-index-check	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/consistent-function-scoping	suspicious	hint	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/consistent-template-literal-escape	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/custom-error-definition	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/empty-brace-spaces	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/error-message	style	gate	biome:suspicious/useErrorMessage(biome)
+unicorn/escape-case	pedantic	off	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/explicit-length-check	pedantic	hint	biome:style/useExplicitLengthCheck(biome)
+unicorn/explicit-timer-delay	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/filename-case	style	flag	biome:style/useFilenamingConvention(biome)
+unicorn/import-style	restriction	off	hand, after majority of decided unicorn restriction {'hint': 1, 'off': 1, 'flag': 3}
+unicorn/max-nested-calls	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/new-for-builtins	pedantic	gate	biome:correctness/noInvalidBuiltinInstantiation(biome)
+unicorn/no-abusive-eslint-disable	restriction	flag	majority of decided unicorn restriction {'hint': 1, 'off': 1, 'flag': 3}
+unicorn/no-accessor-recursion	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/no-anonymous-default-export	restriction	flag	majority of decided unicorn restriction {'hint': 1, 'off': 1, 'flag': 3}
+unicorn/no-array-callback-reference	pedantic	off	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-array-fill-with-reference-type	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/no-array-for-each	restriction	hint	biome:complexity/noForEach(biome)
+unicorn/no-array-method-this-argument	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/no-array-reduce	restriction	hint	hand, after majority of decided unicorn restriction {'hint': 1, 'off': 1, 'flag': 3}
+unicorn/no-array-reverse	suspicious	hint	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/no-array-sort	suspicious	hint	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/no-await-expression-member	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/no-await-in-promise-methods	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/no-confusing-array-with	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/no-console-spaces	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/no-document-cookie	restriction	hint	hand, after majority of decided unicorn restriction {'hint': 1, 'off': 1, 'flag': 3}
+unicorn/no-empty-file	correctness	flag	biome:suspicious/noEmptySource(biome)
+unicorn/no-hex-escape	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-immediate-mutation	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-instanceof-array	pedantic	gate	biome:suspicious/useIsArray(biome)
+unicorn/no-instanceof-builtins	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/no-invalid-fetch-options	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/no-invalid-remove-event-listener	correctness	gate	majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/no-length-as-slice-end	restriction	flag	majority of decided unicorn restriction {'hint': 1, 'off': 1, 'flag': 3}
+unicorn/no-lonely-if	pedantic	flag	biome:style/useCollapsedIf(biome)
+unicorn/no-magic-array-flat-depth	restriction	hint	hand, after majority of decided unicorn restriction {'hint': 1, 'off': 1, 'flag': 3}
+unicorn/no-negated-condition	pedantic	hint	biome:style/noNegationElse(biome)
+unicorn/no-negation-in-equality-check	pedantic	off	biome:nursery/noNegationInEqualityCheck(biome)
+unicorn/no-nested-ternary	style	flag	biome:style/noNestedTernary(biome)
+unicorn/no-new-array	correctness	flag	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/no-new-buffer	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-null	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/no-object-as-default-parameter	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-process-exit	restriction	hint	hand, after majority of decided unicorn restriction {'hint': 1, 'off': 1, 'flag': 3}
+unicorn/no-single-promise-in-promise-methods	correctness	flag	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/no-static-only-class	pedantic	flag	biome:complexity/noStaticOnlyClass(biome)
+unicorn/no-thenable	correctness	gate	biome:suspicious/noThenProperty(biome)
+unicorn/no-this-assignment	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-typeof-undefined	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-unnecessary-array-flat-depth	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-unnecessary-array-splice-count	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-unnecessary-await	correctness	flag	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/no-unnecessary-slice-end	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-unreadable-array-destructuring	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/no-unreadable-iife	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-useless-collection-argument	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/no-useless-error-capture-stack-trace	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/no-useless-fallback-in-spread	correctness	flag	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/no-useless-iterator-to-array	nursery	off	nursery: unstable
+unicorn/no-useless-length-check	correctness	flag	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/no-useless-promise-resolve-reject	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/no-useless-spread	correctness	flag	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/no-useless-switch-case	pedantic	flag	biome:complexity/noUselessSwitchCase(biome)
+unicorn/no-useless-undefined	pedantic	flag	biome:complexity/noUselessUndefined(biome)
+unicorn/no-zero-fractions	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/number-literal-case	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/numeric-separators-style	style	hint	biome:style/useNumericSeparators(biome)
+unicorn/prefer-add-event-listener	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/prefer-array-find	perf	flag	majority of decided perf {'flag': 3, 'gate': 1, 'off': 1}
+unicorn/prefer-array-flat	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-array-flat-map	perf	flag	biome:complexity/useFlatMap(biome)
+unicorn/prefer-array-index-of	style	flag	biome:complexity/useIndexOf(biome)
+unicorn/prefer-array-some	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-at	pedantic	flag	biome:style/useAtIndex(biome)
+unicorn/prefer-bigint-literals	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-blob-reading-methods	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-class-fields	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-classlist-toggle	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-code-point	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-date-now	pedantic	flag	biome:complexity/useDateNow(biome)
+unicorn/prefer-default-parameters	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-dom-node-append	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-dom-node-dataset	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-dom-node-remove	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-dom-node-text-content	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-event-target	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-export-from	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-global-this	style	flag	biome:style/useGlobalThis(biome)
+unicorn/prefer-import-meta-properties	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-includes	style	off	biome:nursery/useIncludes(biome)
+unicorn/prefer-keyboard-event-key	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-logical-operator-over-ternary	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-math-min-max	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-math-trunc	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-modern-dom-apis	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-modern-math-apis	restriction	off	biome:nursery/useModernMathApis(biome)
+unicorn/prefer-module	restriction	flag	biome:correctness/noGlobalDirnameFilename(biome)
+unicorn/prefer-native-coercion-functions	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-negative-index	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-node-protocol	restriction	flag	biome:style/useNodejsImportProtocol(biome)
+unicorn/prefer-number-coercion	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-number-properties	restriction	flag	biome:style/useNumberNamespace(biome)
+unicorn/prefer-object-from-entries	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-optional-catch-binding	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-prototype-methods	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-query-selector	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-reflect-apply	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-regexp-test	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-response-static-json	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-set-has	perf	flag	majority of decided perf {'flag': 3, 'gate': 1, 'off': 1}
+unicorn/prefer-set-size	correctness	flag	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/prefer-single-call	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-spread	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-string-raw	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-string-replace-all	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-string-slice	pedantic	flag	biome:style/noSubstr(biome)
+unicorn/prefer-string-starts-ends-with	correctness	flag	hand, after majority of decided correctness {'off': 24, 'gate': 91, 'flag': 43}
+unicorn/prefer-string-trim-start-end	style	flag	biome:style/useTrimStartEnd(biome)
+unicorn/prefer-structured-clone	style	flag	majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-ternary	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/prefer-top-level-await	pedantic	hint	hand, after majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/prefer-type-error	pedantic	flag	majority of decided unicorn pedantic {'hint': 2, 'gate': 2, 'flag': 8, 'off': 1}
+unicorn/relative-url-style	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/require-array-join-separator	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/require-module-attributes	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/require-module-specifiers	suspicious	off	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/require-number-to-fixed-digits-argument	pedantic	flag	biome:suspicious/useNumberToFixedDigitsArgument(biome)
+unicorn/require-post-message-target-origin	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+unicorn/switch-case-braces	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/switch-case-break-position	style	hint	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/text-encoding-identifier-case	style	off	hand, after majority of decided unicorn style {'gate': 2, 'flag': 5, 'hint': 1, 'off': 1}
+unicorn/throw-new-error	style	gate	biome:style/useThrowNewError(biome)
+vitest/consistent-each-for	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/consistent-test-filename	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/consistent-test-it	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/consistent-vitest-vi	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/expect-expect	correctness	flag	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/hoisted-apis-on-top	correctness	flag	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/max-expects	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/max-nested-describe	style	hint	biome:complexity/noExcessiveNestedTestSuites(biome)
+vitest/no-alias-methods	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-commented-out-tests	suspicious	flag	hand, after majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+vitest/no-conditional-expect	correctness	flag	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/no-conditional-in-test	pedantic	flag	majority of decided pedantic {'hint': 10, 'flag': 30, 'gate': 25, 'off': 9}
+vitest/no-conditional-tests	correctness	flag	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/no-disabled-tests	correctness	flag	biome:suspicious/noSkippedTests(biome)
+vitest/no-duplicate-hooks	style	gate	biome:suspicious/noDuplicateTestHooks(biome)
+vitest/no-focused-tests	correctness	gate	biome:suspicious/noFocusedTests(biome)
+vitest/no-hooks	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-identical-title	style	flag	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-import-node-test	style	flag	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-importing-vitest-globals	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-interpolation-in-snapshots	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-large-snapshots	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-mocks-import	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-restricted-matchers	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-restricted-vi-methods	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-standalone-expect	correctness	flag	biome:suspicious/noMisplacedAssertion(biome)
+vitest/no-test-prefixes	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-test-return-statement	style	flag	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/no-unneeded-async-expect-function	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/padding-around-after-all-blocks	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/padding-around-test-blocks	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-called-exactly-once-with	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-called-once	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-called-times	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-called-with	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-comparison-matcher	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-describe-function-title	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-each	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-equality-matcher	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-expect-assertions	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-expect-resolves	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-expect-type-of	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-hooks-in-order	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-hooks-on-top	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-import-in-mock	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-importing-vitest-globals	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-lowercase-title	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-mock-promise-shorthand	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-mock-return-shorthand	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-snapshot-hint	correctness	off	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/prefer-spy-on	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-strict-boolean-matchers	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-strict-equal	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-to-be	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-to-be-falsy	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-to-be-object	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-to-be-truthy	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-to-contain	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-to-have-been-called-times	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-to-have-length	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/prefer-todo	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/require-awaited-expect-poll	correctness	flag	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/require-hook	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/require-local-test-context-for-concurrent-snapshots	correctness	flag	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/require-mock-type-parameters	correctness	off	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/require-test-timeout	restriction	off	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+vitest/require-to-throw-message	correctness	hint	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/require-top-level-describe	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vitest/valid-describe-callback	correctness	flag	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/valid-expect	correctness	flag	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/valid-expect-in-promise	correctness	flag	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vitest/valid-title	correctness	off	biome:nursery/useValidTestTitle(biome)
+vitest/warn-todo	correctness	off	hand, after majority of decided vitest correctness {'flag': 2, 'gate': 1, 'off': 1}
+vue/component-definition-name-casing	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vue/define-emits-declaration	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vue/define-props-declaration	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vue/define-props-destructuring	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vue/max-props	restriction	off	hand, after majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+vue/next-tick-style	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vue/no-arrow-functions-in-watch	correctness	gate	biome:suspicious/noVueArrowFuncInWatch(vue)
+vue/no-async-in-computed-properties	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-computed-properties-in-data	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-deprecated-data-object-declaration	correctness	gate	biome:correctness/noVueDataObjectDeclaration(vue)
+vue/no-deprecated-delete-set	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-deprecated-destroyed-lifecycle	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-deprecated-events-api	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-deprecated-model-definition	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-deprecated-props-default-this	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-deprecated-vue-config-keycodes	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-dupe-keys	correctness	gate	biome:correctness/noVueDuplicateKeys(vue)
+vue/no-export-in-script-setup	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-expose-after-await	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-import-compiler-macros	restriction	flag	majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+vue/no-lifecycle-after-await	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-multiple-slot-args	restriction	flag	majority of decided restriction {'off': 17, 'hint': 6, 'flag': 23, 'gate': 11}
+vue/no-required-prop-with-default	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+vue/no-reserved-component-names	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-reserved-keys	correctness	gate	biome:correctness/noVueReservedKeys(vue)
+vue/no-reserved-props	correctness	gate	biome:correctness/noVueReservedProps(vue)
+vue/no-shared-component-data	correctness	gate	biome:correctness/noVueDataObjectDeclaration(vue)
+vue/no-side-effects-in-computed-properties	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-this-in-before-route-enter	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/no-watch-after-await	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/prefer-import-from-vue	correctness	off	biome:nursery/useVueBaseImport(vue)
+vue/prop-name-casing	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vue/require-default-export	suspicious	flag	majority of decided suspicious {'off': 5, 'gate': 9, 'flag': 16, 'hint': 1}
+vue/require-default-prop	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vue/require-direct-export	style	off	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vue/require-prop-type-constructor	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/require-prop-types	style	hint	hand, after majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vue/require-render-return	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/require-slots-as-functions	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/require-typed-ref	style	flag	majority of decided style {'flag': 66, 'off': 19, 'hint': 7, 'gate': 8}
+vue/return-in-computed-property	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/return-in-emits-validator	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/valid-define-emits	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/valid-define-options	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/valid-define-props	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}
+vue/valid-next-tick	correctness	gate	majority of decided vue correctness {'gate': 6, 'off': 1}

@@ -61,6 +61,15 @@ pub(crate) fn execute(
     let (exit_ok, exit_code) = if let Some(builtin) = &check.builtin {
         run_builtin(builtin, at, &dir, out)?;
         (true, Some(0))
+    } else if check.needs_envtest() {
+        match envtest_assets(check, at, &out)? {
+            Ok(assets) => {
+                let mut vars = at.vars.clone();
+                vars.insert("KUBEBUILDER_ASSETS".into(), assets);
+                spawn(check, &dir, out, &Where { vars: &vars, ..*at })?
+            }
+            Err(code) => (false, code),
+        }
     } else {
         spawn(check, &dir, out, at)?
     };
@@ -286,9 +295,107 @@ fn project_path(root: &Path) -> Option<std::ffi::OsString> {
     std::env::join_paths(dirs.into_iter().chain(std::env::split_paths(&rest))).ok()
 }
 
+/// The Kubernetes version whose envtest binaries a module needs: `k8s.io/api v0.31.2` in its
+/// go.mod (a replacement's version when it has one) is Kubernetes 1.31.
+fn kubernetes_version(go_mod: &str) -> Option<String> {
+    let minor = |version: &str| -> Option<String> {
+        let minor = version.strip_prefix("v0.")?.split('.').next()?;
+        minor.parse::<u32>().ok().map(|m| format!("1.{m}"))
+    };
+    let (mut required, mut replaced) = (None, None);
+    for line in go_mod.lines() {
+        let line = line.trim();
+        let line = line
+            .strip_prefix("require")
+            .or_else(|| line.strip_prefix("replace"))
+            .unwrap_or(line)
+            .trim();
+        let mut words = line.split_whitespace();
+        if words.next() != Some("k8s.io/api") {
+            continue;
+        }
+        let words: Vec<&str> = words.collect();
+        // `k8s.io/api [v0.31.2] => k8s.io/api v0.30.1` replaces the required version; a
+        // replacement by a local folder has none, and the required one stands.
+        match words.iter().position(|w| *w == "=>") {
+            Some(arrow) => replaced = words.get(arrow + 2).and_then(|v| minor(v)).or(replaced),
+            None => required = words.first().and_then(|v| minor(v)).or(required),
+        }
+    }
+    replaced.or(required)
+}
+
+/// Fetches, once into the user cache, the envtest binaries of the Kubernetes version the
+/// check's go.mod requires, with setup-envtest run like the check (clean env, the project's
+/// shell), and returns their folder. Its output goes to the check's log; when it fails, the
+/// error is the exit code the check fails with.
+fn envtest_assets(
+    check: &Check,
+    at: &Where<'_>,
+    log: &File,
+) -> Result<Result<String, Option<i32>>> {
+    use std::io::Write as _;
+    let folder = check
+        .dir
+        .as_ref()
+        .map_or(at.root.to_path_buf(), |d| at.root.join(d));
+    let go_mod = fs::read_to_string(folder.join("go.mod")).unwrap_or_default();
+    let Some(version) = kubernetes_version(&go_mod) else {
+        writeln!(
+            &*log,
+            "envtest: go.mod in {} requires no k8s.io/api, so the Kubernetes version is unknown",
+            folder.display()
+        )?;
+        return Ok(Err(None));
+    };
+    let bin = crate::git::cache_dir()?.join("envtest");
+    let command = "setup-envtest use \"$FEARLEZZ_K8S\" --bin-dir \"$FEARLEZZ_ENVTEST\" -p path";
+    let script = match at.shell {
+        Some(shell) => format!("{shell} sh -c '{command}'"),
+        None => command.to_string(),
+    };
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(&script)
+        .current_dir(at.root)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stderr(log.try_clone()?);
+    // The check's own variables too, such as a proxy the download needs.
+    for name in BASE_ENV
+        .iter()
+        .copied()
+        .chain(check.env.iter().map(String::as_str))
+    {
+        if let Ok(value) = std::env::var(name) {
+            cmd.env(name, value);
+        }
+    }
+    if let Some(path) = project_path(at.root) {
+        cmd.env("PATH", path);
+    }
+    cmd.env("FEARLEZZ_K8S", &version)
+        .env("FEARLEZZ_ENVTEST", &bin);
+    let output = cmd.output().context("starting setup-envtest")?;
+    let assets = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() || assets.is_empty() {
+        writeln!(
+            &*log,
+            "envtest: setup-envtest found no binaries for Kubernetes {version}"
+        )?;
+        return Ok(Err(output.status.code()));
+    }
+    Ok(Ok(assets))
+}
+
 /// Tools the built in pieces run that nixpkgs packages under the same name, so a missing one
 /// can be answered with the line that adds it to a project's devenv.
-pub(crate) const NIX_TOOLS: [&str; 5] = [
+pub(crate) const NIX_TOOLS: [&str; 10] = [
+    "oxlint",
+    "prettier",
+    "stylua",
+    "svelte-check",
+    "setup-envtest",
     "gitleaks",
     "trufflehog",
     "betterleaks",
@@ -326,6 +433,16 @@ fn run_builtin(
             }
             if found.is_empty() {
                 writeln!(out, "every managed file matches the shared settings")?;
+            }
+            found
+        }
+        crate::config::Builtin::Commits(commits) => {
+            let found = commits.check(at.root)?;
+            for f in &found {
+                writeln!(out, "{}", f.message)?;
+            }
+            if found.is_empty() {
+                writeln!(out, "every message is a conventional commit")?;
             }
             found
         }
@@ -374,4 +491,27 @@ pub(crate) fn tail(log: &Path, lines: usize) -> Vec<String> {
         .iter()
         .map(ToString::to_string)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kubernetes_version;
+
+    #[test]
+    fn the_kubernetes_version_follows_k8s_io_api_and_its_replacement() {
+        let required =
+            "module op\n\nrequire (\n\tk8s.io/api v0.31.2\n\tk8s.io/apimachinery v0.31.2\n)\n";
+        assert_eq!(kubernetes_version(required).as_deref(), Some("1.31"));
+        let one_line = "module op\nrequire k8s.io/api v0.29.0 // indirect\n";
+        assert_eq!(kubernetes_version(one_line).as_deref(), Some("1.29"));
+        let replaced = format!("{required}\nreplace k8s.io/api => k8s.io/api v0.30.1\n");
+        assert_eq!(kubernetes_version(&replaced).as_deref(), Some("1.30"));
+        // A replace before the require, naming the version it replaces, still wins.
+        let first = "module op\nreplace k8s.io/api v0.31.2 => k8s.io/api v0.30.1\nrequire k8s.io/api v0.31.2\n";
+        assert_eq!(kubernetes_version(first).as_deref(), Some("1.30"));
+        // A local replacement has no version; the required one stands.
+        let local = format!("{required}\nreplace k8s.io/api => ../api\n");
+        assert_eq!(kubernetes_version(&local).as_deref(), Some("1.31"));
+        assert_eq!(kubernetes_version("module op\n"), None);
+    }
 }

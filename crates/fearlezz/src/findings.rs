@@ -27,6 +27,8 @@ pub(crate) enum Reader {
     Dart,
     /// `eslint --format json` on stdout.
     Eslint,
+    /// `svelte-check --output machine-verbose` on stdout.
+    Svelte,
 }
 
 /// Which findings count.
@@ -48,6 +50,7 @@ impl Reader {
             Reader::Jsonl => "jsonl",
             Reader::Dart => "dart",
             Reader::Eslint => "eslint",
+            Reader::Svelte => "svelte",
         }
     }
 
@@ -55,7 +58,7 @@ impl Reader {
     pub(crate) fn reads_stdout(self) -> bool {
         matches!(
             self,
-            Reader::Cargo | Reader::Sarif | Reader::Dart | Reader::Eslint
+            Reader::Cargo | Reader::Sarif | Reader::Dart | Reader::Eslint | Reader::Svelte
         )
     }
 
@@ -84,6 +87,7 @@ impl Reader {
             Reader::Jsonl => jsonl(&text(&out.join("findings.jsonl"))),
             Reader::Dart => (dart(&text(stdout)), Vec::new()),
             Reader::Eslint => eslint(&text(stdout)),
+            Reader::Svelte => svelte(&text(stdout)),
         };
         for f in &mut found.0 {
             // A tool run in the check's folder names files from there, so a relative path is
@@ -454,6 +458,54 @@ fn eslint(text: &str) -> (Vec<Finding>, Vec<String>) {
     (found, Vec::new())
 }
 
+/// svelte-check's machine-verbose lines: a timestamp, then one diagnostic as JSON, its lines
+/// counted from 0. An error (types, compile) blocks wherever it is, as tsc fails on any; a
+/// warning (a11y, state, css) is a flag.
+fn svelte(text: &str) -> (Vec<Finding>, Vec<String>) {
+    let mut found = Vec::new();
+    let mut errors = Vec::new();
+    for line in text.lines() {
+        let Some((_, json)) = line.split_once(' ') else {
+            continue;
+        };
+        if !json.starts_with('{') {
+            continue;
+        }
+        let d: Value = match serde_json::from_str(json) {
+            Ok(v) => v,
+            Err(e) => {
+                errors.push(format!("svelte-check line: {e}"));
+                continue;
+            }
+        };
+        let error = d["type"] == "ERROR";
+        let line_of = |at: &Value| u32::try_from(at["line"].as_u64()? + 1).ok();
+        // A TypeScript error's code is a number, a Svelte warning's a name.
+        let code = match &d["code"] {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => format!("ts{n}"),
+            Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => String::new(),
+        };
+        found.push(Finding {
+            file: d["filename"].as_str().unwrap_or("").to_string(),
+            line: line_of(&d["start"]).unwrap_or(0),
+            end_line: line_of(&d["end"]),
+            level: if error { Level::Gate } else { Level::Flag },
+            rule: code,
+            // The first line; Svelte adds a link to its docs on the next.
+            message: d["message"]
+                .as_str()
+                .and_then(|m| m.lines().next())
+                .unwrap_or("")
+                .to_string(),
+            fix: None,
+            why: None,
+            anywhere: error,
+        });
+    }
+    (found, errors)
+}
+
 /// A result's file. Some tools (ktlint) name it relative to a base folder the run declares.
 fn sarif_file(run: &Value, location: &Value) -> String {
     let uri = location["uri"].as_str().unwrap_or("");
@@ -729,6 +781,45 @@ mod tests {
         assert_eq!(
             relative(&found[0].file, Path::new("/Users/me/code/app")),
             "src/A.kt"
+        );
+    }
+
+    #[test]
+    fn svelte_check_errors_block_anywhere_and_warnings_flag() {
+        let out = r#"1794884543133 START "/repo"
+1794884543135 {"type":"WARNING","filename":"src/App.svelte","start":{"line":5,"character":0},"end":{"line":5,"character":17},"message":"`<img>` element should have an alt attribute\nhttps://svelte.dev/e/a11y_missing_attribute","code":"a11y_missing_attribute","source":"svelte"}
+1794884543135 {"type":"ERROR","filename":"src/b.ts","start":{"line":0,"character":13},"end":{"line":0,"character":14},"message":"Type 'string' is not assignable to type 'number'.","code":2322}
+1794884543135 COMPLETED 105 FILES 1 ERRORS 1 WARNINGS 2 FILES_WITH_PROBLEMS"#;
+        let (found, errors) = svelte(out);
+        assert!(errors.is_empty(), "{errors:?}");
+        let got: Vec<_> = found
+            .iter()
+            .map(|f| {
+                (
+                    f.file.as_str(),
+                    f.rule.as_str(),
+                    f.line,
+                    f.level,
+                    f.anywhere,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "src/App.svelte",
+                    "a11y_missing_attribute",
+                    6,
+                    Level::Flag,
+                    false
+                ),
+                ("src/b.ts", "ts2322", 1, Level::Gate, true),
+            ]
+        );
+        assert_eq!(
+            found[0].message,
+            "`<img>` element should have an alt attribute"
         );
     }
 

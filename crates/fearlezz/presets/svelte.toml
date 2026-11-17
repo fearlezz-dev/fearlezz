@@ -1,0 +1,16 @@
+# Svelte and SvelteKit: the typescript piece's strictness, with svelte-check in place of tsc, as
+# it checks .svelte files and the TypeScript beside them. Linting and formatting come with the
+# piece of their tool (eslint with eslint-plugin-svelte, prettier with prettier-plugin-svelte).
+use = ["typescript"]
+
+[check.tsc]
+off = true
+
+# svelte-kit sync writes the types of the routes first, which the tsconfig extends. A Svelte app
+# without SvelteKit runs `svelte-check --tsconfig ./tsconfig.json --output machine-verbose`.
+# Errors (types, compile) block wherever they are; warnings are flags on the lines the change
+# touched.
+[check.svelte-check]
+run = "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --output machine-verbose"
+stage = "working"
+findings = { read = "svelte" }

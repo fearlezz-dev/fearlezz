@@ -156,6 +156,11 @@ impl Hasher {
         }
         if let Some(builtin) = &check.builtin {
             parts.insert("(builtin)".into(), sha256(builtin.fingerprint().as_bytes()));
+            // Rewording a commit keeps its tree, so the messages are inputs of their own.
+            if let crate::config::Builtin::Commits(commits) = builtin {
+                let messages = commits.messages_text(root)?;
+                parts.insert("(messages)".into(), sha256(messages.as_bytes()));
+            }
             for path in builtin.files() {
                 let hash = match fs::read(root.join(&path)) {
                     Ok(bytes) => sha256(&bytes),

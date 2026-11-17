@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::Repo;
+use common::{Repo, reading};
 
 /// A dart-shaped linter: reports every line with a marker as a finding of that rule, at
 /// the tool's own level (warning), on every line of src.
@@ -128,7 +128,7 @@ missing_docs_in_private_items = "gate"
 missing_docs = "flag"
 "#;
     let repo = Repo::new(
-        config,
+        &reading(config),
         &[(
             "Cargo.toml",
             "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
@@ -174,7 +174,7 @@ strict-casts = "gate"
 }
 
 fn synced(config: &str, files: &[(&str, &str)]) -> Repo {
-    let repo = Repo::new(config, files);
+    let repo = Repo::new(&reading(config), files);
     let out = repo.fz(&["setup", "sync"]);
     assert!(out.ok, "{}", out.stderr);
     repo
@@ -225,6 +225,15 @@ fn a_biome_rule_no_table_names_leaves_biome_json() {
         serde_json::json!({ "preset": "none", "suspicious": { "noDebugger": "error" } }),
         "{doc}"
     );
+}
+
+#[test]
+fn a_lint_table_no_check_reads_leaves_no_file() {
+    // A framework piece holds the rules of more than one linter; only the one that runs gets
+    // its file.
+    let repo = Repo::new("[lints.biome]\n\"suspicious/noDebugger\" = \"gate\"\n", &[]);
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    assert!(!repo.path("biome.json").exists());
 }
 
 #[test]

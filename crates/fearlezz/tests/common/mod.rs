@@ -303,3 +303,17 @@ pub(crate) fn box_at(x: u32, from: f64) -> String {
 pub(crate) fn fz_at(dir: &Path, args: &[&str]) -> Output {
     fz_in(dir, None, args, &[])
 }
+
+/// `config` with a check that reads the findings of every tool it has a lint table for: only
+/// the tables of a tool that runs are written into its file.
+pub(crate) fn reading(config: &str) -> String {
+    let tools: Vec<String> = config
+        .lines()
+        .filter_map(|l| l.strip_prefix("[lints.")?.strip_suffix(']'))
+        .map(|tool| format!("\"{tool}\""))
+        .collect();
+    format!(
+        "{config}\n[check.lint]\nrun = \"true\"\nstage = \"working\"\nfindings = {{ read = \"sarif\", lints = [{}] }}\n",
+        tools.join(", ")
+    )
+}

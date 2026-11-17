@@ -88,6 +88,9 @@ enum RawPorts {
 pub(crate) enum Need {
     /// The services `[env] up` starts; their ports reach the check as env vars.
     Services,
+    /// The envtest binaries (etcd, kube-apiserver) of the Kubernetes version its go.mod
+    /// requires, fetched by setup-envtest; their folder reaches it as `KUBEBUILDER_ASSETS`.
+    Envtest,
 }
 
 /// The ordered stages of a change. The last one is the merge gate, where every check runs
@@ -263,6 +266,8 @@ pub(crate) enum Builtin {
     Settings(Settings),
     /// The project's `[rule]` table.
     Rules(Rules),
+    /// `[commits]`: the change's commit messages.
+    Commits(crate::commits::Commits),
 }
 
 impl Builtin {
@@ -273,6 +278,7 @@ impl Builtin {
         match self {
             Builtin::Settings(s) => format!("{version} settings {}", s.fingerprint()),
             Builtin::Rules(r) => format!("{version} rules {}", r.fingerprint()),
+            Builtin::Commits(c) => format!("{version} commits {}", c.fingerprint()),
         }
     }
 
@@ -280,7 +286,7 @@ impl Builtin {
     pub(crate) fn files(&self) -> Vec<String> {
         match self {
             Builtin::Settings(s) => s.files(),
-            Builtin::Rules(_) => Vec::new(),
+            Builtin::Rules(_) | Builtin::Commits(_) => Vec::new(),
         }
     }
 }
@@ -353,6 +359,7 @@ struct RawConfig {
     settings: Option<toml::Table>,
     lints: Option<BTreeMap<String, BTreeMap<String, lints::Level>>>,
     rule: Option<BTreeMap<String, toml::Table>>,
+    commits: Option<crate::commits::RawCommits>,
     #[serde(default)]
     no_proof: Vec<String>,
     host: Option<RawHost>,
@@ -618,7 +625,12 @@ impl Config {
                 },
             });
         }
-        let mut settings = Settings::parse(raw.settings.unwrap_or_default(), all_lints)?;
+        let read: std::collections::BTreeSet<lints::Tool> = checks
+            .iter()
+            .filter_map(|c| c.findings.as_ref())
+            .flat_map(|f| f.tools.iter().copied())
+            .collect();
+        let mut settings = Settings::parse(raw.settings.unwrap_or_default(), all_lints, &read)?;
         settings.cargo = cargo;
         let own_settings_check = checks.iter().any(|c| c.id == SETTINGS_CHECK);
         if !settings.is_empty() && !own_settings_check && !settings_off {
@@ -648,13 +660,30 @@ impl Config {
                 Builtin::Rules(rules),
             ));
         }
+        let base = raw.base.unwrap_or_else(|| "main".into());
+        if let Some(commits) = raw.commits.filter(|c| !c.off()) {
+            if checks.iter().any(|c| c.id == crate::commits::CHECK) {
+                bail!(
+                    "check {} is the name of the check [commits] forms; rename it",
+                    crate::commits::CHECK
+                );
+            }
+            // What it reads is the messages, which its inputs hold; no file.
+            checks.push(builtin_check(
+                crate::commits::CHECK,
+                &stages,
+                globs(&[])?,
+                Scope::Everywhere,
+                Builtin::Commits(crate::commits::Commits::parse(commits, &base)),
+            ));
+        }
         checks.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(Config {
             no_proof: globs(&raw.no_proof).context("no_proof")?,
             settings,
             stages,
             checks,
-            base: raw.base.unwrap_or_else(|| "main".into()),
+            base,
             env,
             host: raw.host.map(|h| h.url),
             table,
@@ -1031,6 +1060,10 @@ impl Check {
     pub(crate) fn needs_services(&self) -> bool {
         self.needs.contains(&Need::Services)
     }
+
+    pub(crate) fn needs_envtest(&self) -> bool {
+        self.needs.contains(&Need::Envtest)
+    }
 }
 
 impl Stages {
@@ -1082,7 +1115,28 @@ mod tests {
     #[test]
     fn every_built_in_piece_is_a_valid_config() {
         for (name, piece) in presets::BUILTIN {
-            let mut table = toml::from_str(piece).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let parse = |name: &str, text: &str| -> toml::Table {
+                toml::from_str(text).unwrap_or_else(|e| panic!("{name}: {e}"))
+            };
+            let mut own = parse(name, piece);
+            // Merged over the built in pieces it builds on, as `use` does.
+            let mut table = toml::Table::new();
+            if let Some(toml::Value::Array(used)) = own.remove("use") {
+                for used in used.iter().filter_map(toml::Value::as_str) {
+                    let (_, text) = presets::BUILTIN
+                        .iter()
+                        .find(|(n, _)| *n == used)
+                        .unwrap_or_else(|| panic!("{name} uses {used}"));
+                    let mut base = parse(used, text);
+                    base.remove("use");
+                    presets::merge(&mut table, base);
+                }
+            }
+            presets::merge(&mut table, own);
+            // Checks turned off are dropped when pieces merge.
+            if let Some(toml::Value::Table(checks)) = table.get_mut("check") {
+                checks.retain(|_, c| c.get("off").and_then(toml::Value::as_bool) != Some(true));
+            }
             // As in a project with a nested project of each marker, so `each` is read too.
             let found = |_: &str| vec![".".to_string(), "sub".to_string()];
             expand_each(&mut table, &found).unwrap_or_else(|e| panic!("{name}: {e:#}"));

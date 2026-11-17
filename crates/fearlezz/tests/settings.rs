@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::Repo;
+use common::{Repo, reading};
 
 const WORKSPACE: &str = "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n";
 const MEMBER: &str = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n";
@@ -151,8 +151,8 @@ fn a_missing_settings_file_is_named_as_missing() {
 
 #[test]
 fn rust_lints_without_a_cargo_manifest_are_a_finding_not_an_error() {
-    let config = "[lints.clippy]\nunwrap_used = \"gate\"\n";
-    let repo = Repo::new(config, &[("src/a.txt", "a\n")]);
+    let config = reading("[lints.clippy]\nunwrap_used = \"gate\"\n");
+    let repo = Repo::new(&config, &[("src/a.txt", "a\n")]);
     let sync = repo.fz(&["setup", "sync"]);
     assert!(sync.ok, "{}\n{}", sync.stdout, sync.stderr);
     repo.branch("feat/x");
@@ -360,7 +360,7 @@ errcheck = "gate"
 "#;
     let pyproject = "[project]\nname = \"app\"\n\n[tool.ruff]\nline-length = 100\n";
     let repo = Repo::new(
-        config,
+        &reading(config),
         &[
             ("pyproject.toml", pyproject),
             (".golangci.yaml", "run:\n  timeout: 5m\n"),
@@ -392,7 +392,7 @@ errcheck = "gate"
 #[test]
 fn a_pyproject_without_a_ruff_table_gets_a_ruff_toml() {
     let repo = Repo::new(
-        "[lints.ruff]\nE501 = \"gate\"\n",
+        &reading("[lints.ruff]\nE501 = \"gate\"\n"),
         &[("pyproject.toml", "[project]\nname = \"app\"\n")],
     );
     assert!(repo.fz(&["setup", "sync"]).ok);
@@ -493,7 +493,7 @@ fn a_file_that_cannot_be_read_is_never_written_over() {
 fn an_editorconfig_block_without_its_end_is_not_doubled() {
     let text = "root = true\n\n# Fearlezz: begin\n[*.kt]\nindent_size = 4\n\n[*.md]\ntrim_trailing_whitespace = false\n";
     let repo = Repo::new(
-        "[lints.ktlint]\nno-wildcard-imports = \"gate\"\n",
+        &reading("[lints.ktlint]\nno-wildcard-imports = \"gate\"\n"),
         &[(".editorconfig", text)],
     );
     let out = repo.fz(&["setup", "sync"]);
@@ -571,8 +571,8 @@ fn json_arrays_wrap_where_the_projects_formatter_wraps_them() {
 }
 
 #[test]
-fn the_typescript_piece_keeps_biome_off_the_files_fearlezz_writes() {
-    let repo = Repo::new("use = [\"typescript\"]\n", &[]);
+fn the_biome_piece_keeps_biome_off_the_files_fearlezz_writes() {
+    let repo = Repo::new("use = [\"biome\"]\n", &[]);
     let out = repo.fz(&["setup", "sync"]);
     assert!(out.ok, "{}", out.stderr);
     let biome = std::fs::read_to_string(repo.path("biome.json")).unwrap();
@@ -585,10 +585,10 @@ fn the_typescript_piece_keeps_biome_off_the_files_fearlezz_writes() {
 }
 
 #[test]
-fn the_typescript_piece_has_biome_skip_what_git_ignores() {
+fn the_biome_piece_has_biome_skip_what_git_ignores() {
     // `biome lint .` otherwise walks into ignored folders such as .devenv, whose profile links
     // lead into the nix store, and target folders full of generated code.
-    let repo = Repo::new("use = [\"typescript\"]\n", &[]);
+    let repo = Repo::new("use = [\"biome\"]\n", &[]);
     let out = repo.fz(&["setup", "sync"]);
     assert!(out.ok, "{}", out.stderr);
     let doc: serde_json::Value =
@@ -602,7 +602,7 @@ fn the_typescript_piece_has_biome_skip_what_git_ignores() {
 
 #[test]
 fn framework_rules_run_only_with_their_framework_piece() {
-    // Biome runs every rule it is given, so a Solid or Qwik rule in the typescript piece would
+    // Biome runs every rule it is given, so a Solid or Qwik rule in the biome piece would
     // gate a React project (`noReactSpecificProps` flags its className).
     let rules = |config: &str| {
         let repo = Repo::new(config, &[]);
@@ -610,7 +610,7 @@ fn framework_rules_run_only_with_their_framework_piece() {
         assert!(out.ok, "{}", out.stderr);
         std::fs::read_to_string(repo.path("biome.json")).unwrap()
     };
-    let plain = rules("use = [\"typescript\"]\n");
+    let plain = rules("use = [\"biome\"]\n");
     for framework in [
         "useHookAtTopLevel",
         "noImgElement",
@@ -623,7 +623,7 @@ fn framework_rules_run_only_with_their_framework_piece() {
     // Rules of JSX itself stay.
     assert!(plain.contains("\"noDuplicateJsxProps\""), "{plain}");
 
-    let react = rules("use = [\"typescript\", \"react\"]\n");
+    let react = rules("use = [\"biome\", \"react\"]\n");
     assert!(
         react.contains("\"useHookAtTopLevel\": \"error\""),
         "{react}"
@@ -635,14 +635,14 @@ fn framework_rules_run_only_with_their_framework_piece() {
         ("solid", "noReactSpecificProps"),
         ("vue", "useVueVForKey"),
     ] {
-        let with = rules(&format!("use = [\"typescript\", \"{piece}\"]\n"));
+        let with = rules(&format!("use = [\"biome\", \"{piece}\"]\n"));
         assert!(with.contains(&format!("\"{rule}\"")), "{piece}: {with}");
     }
 }
 
 #[test]
 fn a_framework_package_json_depends_on_without_its_rules_is_a_finding() {
-    // A project set up before the framework pieces existed has `use = ["typescript"]` only, and
+    // A project set up before the framework pieces existed has `use = ["biome"]` only, and
     // would lose its React rules without a word; the settings check names the piece to add.
     let package = r#"{"dependencies": {"react": "19.0.0", "vue": "3.5.0"}}"#;
     let finding = |config: &str| {
@@ -653,7 +653,7 @@ fn a_framework_package_json_depends_on_without_its_rules_is_a_finding() {
         repo.fz(&["run", "--stage", "working", "--no-run"]);
         repo.fz(&["run", "settings"])
     };
-    let out = finding("use = [\"typescript\"]\n");
+    let out = finding("use = [\"biome\"]\n");
     assert!(!out.ok, "{}", out.stdout);
     for piece in ["react", "vue"] {
         assert!(
@@ -671,7 +671,16 @@ fn a_framework_package_json_depends_on_without_its_rules_is_a_finding() {
         );
     }
 
-    let out = finding("use = [\"typescript\", \"react\", \"vue\"]\n");
+    // oxlint runs a framework's rules only from its piece too.
+    let out = finding("use = [\"oxlint\"]\n");
+    assert!(
+        out.stdout
+            .contains("package.json depends on react, but no rule of the react piece has a level"),
+        "{}",
+        out.stdout
+    );
+
+    let out = finding("use = [\"biome\", \"react\", \"vue\"]\n");
     assert!(out.ok, "{}", out.stdout);
     // A project that does not lint with Biome through Fearlezz is told nothing.
     let out = finding("[settings.claude.permissions]\nallow = []\n");
@@ -680,6 +689,60 @@ fn a_framework_package_json_depends_on_without_its_rules_is_a_finding() {
         "{}",
         out.stdout
     );
+}
+
+#[test]
+fn a_project_whose_typescript_piece_still_lints_with_biome_is_led_to_the_biome_piece() {
+    // Biome left the typescript piece. A project set up before has a biome.json Fearlezz wrote
+    // and `use = ["typescript"]` only, so it would stop linting with Biome without a word.
+    let repo = Repo::new(
+        "use = [\"typescript\"]\n",
+        &[(
+            "biome.json",
+            "{ \"linter\": { \"rules\": { \"preset\": \"none\" } } }\n",
+        )],
+    );
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    let out = repo.fz(&["run", "settings"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("biome.json is here, but no piece gives Biome its rules"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("add \"biome\" to use in fearlezz.toml"),
+        "{}",
+        out.stdout
+    );
+
+    // With the biome piece, without a biome.json, or with one the project wrote itself (to
+    // format with Biome, say), nothing is said.
+    for (config, files) in [
+        (
+            "use = [\"typescript\", \"biome\"]\n",
+            &[("biome.json", "{}\n")][..],
+        ),
+        ("use = [\"typescript\"]\n", &[][..]),
+        (
+            "use = [\"typescript\"]\n",
+            &[("biome.json", "{ \"formatter\": {} }\n")][..],
+        ),
+    ] {
+        let repo = Repo::new(config, files);
+        assert!(repo.fz(&["setup", "sync"]).ok);
+        repo.branch("feat/x");
+        repo.fz(&["run", "--stage", "working", "--no-run"]);
+        let out = repo.fz(&["run", "settings"]);
+        assert!(
+            !out.stdout.contains("no piece gives Biome"),
+            "{config}: {}",
+            out.stdout
+        );
+    }
 }
 
 #[test]

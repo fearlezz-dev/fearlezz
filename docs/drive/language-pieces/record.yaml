@@ -1,0 +1,64 @@
+# docs/drive/language-pieces/record.yaml: the working state of one piece of work.
+goal: language pieces for the tools the developer's other projects prove their work with, detected by setup init, read natively without shell glue
+
+pieces:
+  - id: js-tools
+    status: done
+    tries:
+      - id: split-biome
+        what: typescript = tsc; biome, eslint, oxlint, prettier pieces; setup init picks from package.json
+        state: picked
+        evidence: [tests/init.rs init_picks_the_linter_and_formatter_package_json_depends_on_and_biome_otherwise, tests/presets.rs biome_is_a_piece_of_its_own_beside_the_type_checker, tests/settings.rs a_project_whose_typescript_piece_still_lints_with_biome_is_led_to_the_biome_piece]
+  - id: prettier
+    status: done
+    evidence: [tests/presets.rs the_prettier_piece_fails_on_an_unformatted_file_and_leaves_fearlezz_files_alone (real prettier 3.9.10)]
+  - id: svelte
+    status: done
+    evidence: [tests/presets.rs the_svelte_piece_reads_svelte_check_and_its_type_errors_block_anywhere (output of real svelte-check 4.7 captured), findings.rs svelte_check_errors_block_anywhere_and_warnings_flag]
+  - id: node-test
+    status: done
+    evidence: [tests/presets.rs the_node_test_piece_counts_the_tests_node_ran (real node 26)]
+  - id: stylua
+    status: done
+    evidence: [tests/presets.rs the_lua_piece_fails_on_a_file_stylua_would_change (real stylua 2.6)]
+  - id: go-race
+    status: done
+  - id: envtest
+    status: done
+    evidence: [tests/presets.rs the_envtest_piece_gives_go_test_the_binaries_of_the_kubernetes_version_in_go_mod, run.rs the_kubernetes_version_follows_k8s_io_api_and_its_replacement]
+  - id: dart-package
+    status: done
+    evidence: [tests/presets.rs a_dart_package_gets_the_flutter_apps_analyzer_and_runs_dart_test, tests/init.rs init_tells_a_dart_package_from_a_flutter_app_by_its_sdk]
+  - id: oxlint
+    status: done
+    evidence: [tests/presets.rs the_oxlint_piece_writes_every_rule_and_gates_a_finding_on_a_changed_line (real oxlint 1.91), docs/drive/language-pieces/oxlint-levels.tsv]
+  - id: commit-convention
+    status: done
+    evidence: [tests/commits.rs]
+  - id: wasm-tests
+    status: figuring-out
+    open: 'unverified. By reading: cargo test under a wasmtime runner prints the same "test result:" lines the rust piece counts, so it should cope; zellij-harpoon and zellij-theme-sync have no tests, so their tests check fails on zero tests, as intended. A probe on a copy of zellij-harpoon hung in its devenv shell for an hour, and a probe with a scratch toolchain was not allowed.'
+
+
+decided:
+  - id: scope
+    what: every item in this PR (small ones, Prettier, Svelte, Dart, envtest, oxlint, commit convention)
+  - id: split-biome
+    what: 'A. Split Biome out: typescript = tsc + tsconfig strictness; biome its own piece (lint, format, rules); setup init picks prettier, eslint, oxlint when package.json depends on them, else biome; framework pieces only with biome. Breaking.'
+  - id: commits-builtin
+    what: 'A. Built in check, read natively: the PR title in CI, each commit since the base locally; keyed by the messages so a reword reruns it; a piece turns it on.'
+  - id: envtest-fetch
+    what: 'A. Fearlezz fetches: reads the Kubernetes version from go.mod, runs setup-envtest, gives go-test KUBEBUILDER_ASSETS; setup init adds it when go.mod requires controller-runtime.'
+  - id: svelte
+    what: 'Svelte warnings all flag (A); the check runs svelte-kit sync first (A). Errors block anywhere.'
+  - id: oxlint-levels
+    what: '"I think you can look at all the rules we decided and infer from that what they should be." 432 of 872 map onto decided ESLint and Biome rules (Biome rule sources); the rest follow the decided levels of the same plugin and category, hand corrected for clashes and rules that ban modern syntax.'
+  - id: oxlint-version
+    what: 'A. The rules target oxlint 1.89, the version devenv pins (CI failed: 1.89 rejects the whole config over typescript/no-unsafe-enum-assignment, new in 1.91); that one rule is dropped until the pin moves.'
+  - id: oxlint-frameworks
+    what: 'A. Framework pieces hold both tools rules; a tool file is written only when a check reads that tool; setup init adds a framework piece with biome or oxlint.'
+
+evidence:
+  survey: Svelte sites (aarnoudse/website, guia/guia-website) use ESLint, Prettier and svelte-check, no Biome; Agora runs bare oxlint per package with one root oxlint.json; Winston runs node --test on .ts with type stripping, HomeLabbing with --import tsx; arcleaf runs go test -race; surrealdb-credential-operator runs envtest through setup-envtest and KUBEBUILDER_ASSETS; jar.yazi runs stylua --check; skir-dart-client runs dart analyze --fatal-infos and dart test (vm, plus chrome and dart2wasm for one file); GrammarGuard runs convco on the commit message; TypewriterV1 checks base..head in CI.
+
+next: PR 34 open; CI proves it (local self-proof stalled at devenv prepare while other threads built their shells); waiting on the developer for the oxlint levels and the merge

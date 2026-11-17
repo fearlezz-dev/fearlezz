@@ -70,9 +70,11 @@ pub(crate) enum Tool {
     Detekt,
     /// One row per linter, such as `errcheck`.
     Golangci,
+    /// Rules named `plugin/rule` as .oxlintrc.json names them, such as `eslint/no-debugger`.
+    Oxlint,
 }
 
-const TOOLS: [(&str, Tool); 9] = [
+const TOOLS: [(&str, Tool); 10] = [
     ("clippy", Tool::Clippy),
     ("rustc", Tool::Rustc),
     ("dart", Tool::Dart),
@@ -82,6 +84,7 @@ const TOOLS: [(&str, Tool); 9] = [
     ("ktlint", Tool::Ktlint),
     ("detekt", Tool::Detekt),
     ("golangci", Tool::Golangci),
+    ("oxlint", Tool::Oxlint),
 ];
 
 impl Tool {
@@ -116,6 +119,13 @@ impl Tool {
                 .strip_prefix("detekt.")
                 .unwrap_or(reported)
                 .replacen('.', "/", 1),
+            // oxlint reports `eslint(no-debugger)`, `jsx_a11y(alt-text)` and, for its nextjs
+            // plugin, `next(no-img-element)`.
+            Tool::Oxlint => {
+                let (plugin, rule) = reported.strip_suffix(')')?.split_once('(')?;
+                let plugin = if plugin == "next" { "nextjs" } else { plugin };
+                format!("{}/{rule}", plugin.replace('_', "-"))
+            }
             Tool::Rustc
             | Tool::Dart
             | Tool::Eslint
@@ -140,6 +150,7 @@ impl Lints {
             let example = match tool {
                 Tool::Biome => Some("style/useConst"),
                 Tool::Detekt => Some("style/MagicNumber"),
+                Tool::Oxlint => Some("eslint/no-debugger"),
                 Tool::Clippy
                 | Tool::Rustc
                 | Tool::Dart
@@ -296,5 +307,20 @@ mod tests {
         );
         assert_eq!(Tool::Rustc.rule("clippy::x"), None);
         assert_eq!(Tool::Clippy.rule("dead_code"), None);
+    }
+
+    #[test]
+    fn oxlint_rules_are_named_as_its_config_names_them() {
+        for (reported, name) in [
+            ("eslint(no-debugger)", "eslint/no-debugger"),
+            ("jsx_a11y(alt-text)", "jsx-a11y/alt-text"),
+            (
+                "react_perf(jsx-no-new-object-as-prop)",
+                "react-perf/jsx-no-new-object-as-prop",
+            ),
+            ("next(no-img-element)", "nextjs/no-img-element"),
+        ] {
+            assert_eq!(Tool::Oxlint.rule(reported).as_deref(), Some(name));
+        }
     }
 }

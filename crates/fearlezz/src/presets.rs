@@ -24,35 +24,45 @@ pub(crate) const BUILTIN: &[(&str, &str)] = &[
     ("actions", include_str!("../presets/actions.toml")),
     ("agents", include_str!("../presets/agents.toml")),
     ("betterleaks", include_str!("../presets/betterleaks.toml")),
+    ("biome", include_str!("../presets/biome.toml")),
     ("bun", include_str!("../presets/bun.toml")),
+    ("commits", include_str!("../presets/commits.toml")),
+    ("dart", include_str!("../presets/dart.toml")),
     ("devenv", include_str!("../presets/devenv.toml")),
+    ("envtest", include_str!("../presets/envtest.toml")),
     ("eslint", include_str!("../presets/eslint.toml")),
     ("flutter", include_str!("../presets/flutter.toml")),
     ("flutter-look", include_str!("../presets/flutter-look.toml")),
     ("go", include_str!("../presets/go.toml")),
+    ("go-race", include_str!("../presets/go-race.toml")),
     ("kotlin", include_str!("../presets/kotlin.toml")),
+    ("lua", include_str!("../presets/lua.toml")),
     ("next", include_str!("../presets/next.toml")),
+    ("node-test", include_str!("../presets/node-test.toml")),
     ("osv-scanner", include_str!("../presets/osv-scanner.toml")),
+    ("oxlint", include_str!("../presets/oxlint.toml")),
     ("playwright", include_str!("../presets/playwright.toml")),
+    ("prettier", include_str!("../presets/prettier.toml")),
     ("python", include_str!("../presets/python.toml")),
     ("qwik", include_str!("../presets/qwik.toml")),
     ("react", include_str!("../presets/react.toml")),
     ("rust", include_str!("../presets/rust.toml")),
     ("safety", include_str!("../presets/safety.toml")),
     ("solid", include_str!("../presets/solid.toml")),
+    ("svelte", include_str!("../presets/svelte.toml")),
     ("trufflehog", include_str!("../presets/trufflehog.toml")),
     ("typescript", include_str!("../presets/typescript.toml")),
     ("vitest", include_str!("../presets/vitest.toml")),
     ("vue", include_str!("../presets/vue.toml")),
 ];
 
-/// The Biome rules the built in piece `piece` gives a level.
-pub(crate) fn biome_rules(piece: &str) -> Vec<String> {
+/// The rules of the lint tool `tool` the built in piece `piece` gives a level.
+pub(crate) fn lint_rules(piece: &str, tool: &str) -> Vec<String> {
     BUILTIN
         .iter()
         .find(|(name, _)| *name == piece)
         .and_then(|(_, text)| toml::from_str::<Table>(text).ok())
-        .and_then(|t| t.get("lints")?.get("biome")?.as_table().cloned())
+        .and_then(|t| t.get("lints")?.get(tool)?.as_table().cloned())
         .map(|rules| rules.keys().cloned().collect())
         .unwrap_or_default()
 }
