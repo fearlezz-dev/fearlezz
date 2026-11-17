@@ -55,6 +55,9 @@ pub(crate) struct RunResult {
     /// For a check with a JUnit reader: each test case that ran, and whether it failed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cases: Vec<crate::counts::Case>,
+    /// A secret SecretSpec could not give the check, so its command never ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_secret: Option<String>,
     pub dir: PathBuf,
     pub log: PathBuf,
 }
@@ -63,6 +66,12 @@ impl RunResult {
     /// The shell could not find the check's command, so the run proves nothing either way.
     pub(crate) fn not_found(&self) -> bool {
         self.exit_code == Some(crate::run::NOT_FOUND)
+    }
+
+    /// It never got to say anything about its inputs: the shell could not find its command,
+    /// or SecretSpec could not give it a secret.
+    pub(crate) fn proves_nothing(&self) -> bool {
+        self.not_found() || self.missing_secret.is_some()
     }
 
     /// Whether `journal` made this run at its final stage `final_stage`: the only kind of
@@ -153,6 +162,12 @@ impl Hasher {
         for name in &check.env {
             let value = std::env::var(name).unwrap_or_default();
             parts.insert(format!("${name}"), sha256(value.as_bytes()));
+        }
+        // Only the names: even a digest of a secret's value is not kept on disk.
+        if !check.secrets.is_empty() {
+            let mut names = check.secrets.clone();
+            names.sort();
+            parts.insert("(secrets)".into(), sha256(names.join("\n").as_bytes()));
         }
         if let Some(builtin) = &check.builtin {
             parts.insert("(builtin)".into(), sha256(builtin.fingerprint().as_bytes()));
@@ -270,6 +285,15 @@ impl Store {
     }
 
     /// Every result for these inputs, oldest first.
+    /// The latest run for `key` that got going, for reusing a run on the base commit: one
+    /// that could not find its command or get a secret may go another way the next time.
+    pub(crate) fn latest_that_ran(&self, key: &str) -> Option<RunResult> {
+        self.for_key(key)
+            .into_iter()
+            .rev()
+            .find(|r| !r.proves_nothing())
+    }
+
     pub(crate) fn for_key(&self, key: &str) -> Vec<RunResult> {
         let Ok(entries) = fs::read_dir(self.root.join(key)) else {
             return Vec::new();
@@ -372,10 +396,10 @@ impl Store {
     /// Same inputs gave both outcomes: a flaky check or an input nobody declared.
     pub(crate) fn unstable(&self, key: &str) -> bool {
         let results = self.for_key(key);
-        // A command the shell could not find says nothing about the inputs.
+        // A run that never got going says nothing about the inputs.
         results.iter().any(|r| r.outcome == Outcome::Passed)
             && results
                 .iter()
-                .any(|r| r.outcome == Outcome::Failed && !r.not_found())
+                .any(|r| r.outcome == Outcome::Failed && !r.proves_nothing())
     }
 }

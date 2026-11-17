@@ -22,7 +22,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `legs.rs`: a proof split over several CI jobs: `[platform.<name>]`, a check's `on`, `job` and `timeout`, the legs a plan prints, reusing a pass the base commit's CI proof shows for the same inputs, and the gate combining the legs' bundles.
 - `state.rs`: everything shown, derived from journal, store and worktree. Nothing derived is stored.
 - `presets.rs`: `use`, pulling pieces of config in by name, path or pinned repository and merging them; built in pieces live in `crates/fearlezz/presets/`.
-- `run.rs`: running one check in a clean env, or a built in check in process; for a check that `needs = ["envtest"]`, the Kubernetes binaries of its go.mod's version first.
+- `run.rs`: running one check in a clean env with only the secrets it names (from SecretSpec, masked in its files), or a built in check in process; for a check that `needs = ["envtest"]`, the Kubernetes binaries of its go.mod's version first.
 - `settings.rs`: shared tool settings from pieces, written into each tool's own file, and the agent skill every project gets; drift is a finding of the built in `settings` check. The skill's source is `skills/fearlezz/SKILL.md`, embedded in the binary; after changing it run `fearlezz setup sync`.
 - `lints.rs`: `[lints.<tool>]` tables, the level (gate, flag, hint, off) a finding of each rule gets, by rule name.
 - `rules.rs`: `[rule.<name>]` conventions (paths, naming, companion files, encrypted files, ast-grep code rules) that form the built in `rules` check.

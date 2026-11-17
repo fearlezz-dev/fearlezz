@@ -1,0 +1,51 @@
+# docs/drive/check-secrets/record.yaml: the working state of one piece of work.
+goal: Checks that need secrets; secrets come from SecretSpec backed by 1Password, never .env.
+
+pieces:
+  - id: naming
+    status: done
+  - id: missing-secret
+    status: done
+  - id: masking
+    status: done
+
+decided:
+  - id: order
+    what: Secrets first, then scheduled proof, then previews; one PR each.
+    why: Scheduled real-infra runs and preview deploys both need secrets.
+  - id: name-them
+    what: "A check names its secrets: secrets = [\"EVAL_API_KEY\"], fetched from SecretSpec."
+  - id: missing-fails
+    what: A secret that cannot be fetched fails the check, with the fix.
+  - id: one-get-per-name
+    what: Fearlezz runs `secretspec get <name>` per named secret, outside the check's clean env, through the [env] shell, in the check's folder.
+    why: "`secretspec export` fails when any required secret of the profile is missing, even one the check never named (arcleaf declares three required). The provider token never reaches the check."
+    evidence: ["scratchpad experiment with SECRETSPEC_PROVIDER=env, secretspec 0.21"]
+  - id: reason
+    what: Fearlezz passes --reason and --caller fearlezz.
+    why: SecretSpec 0.21 refuses an agent without a reason (require_reason defaults to agents).
+  - id: mask-forms
+    what: Mask the raw value, its JSON escaped form and each line of a multi line value; skip pictures and values under 4 characters.
+    why: Fresh review found escaped forms in findings and SARIF slip through, and short values garble reports.
+  - id: mirror-env
+    what: Secret names are part of the reuse key (values never are), and a change to them weakens the proof like env does.
+
+open: []
+
+slices:
+  - id: secrets
+    tests:
+      - secrets::a_check_gets_only_the_secrets_it_names
+      - secrets::a_secret_never_shows_in_what_fearlezz_keeps_or_prints
+      - secrets::a_secret_that_cannot_be_fetched_fails_the_check_with_the_fix
+      - ci::giving_a_check_other_secrets_is_red
+    status: done
+  - id: review-fixes
+    tests:
+      - secrets::a_secret_that_could_not_be_fetched_never_makes_the_check_unstable
+      - secrets::without_secretspec_the_check_names_it_with_how_to_install_it
+      - secrets::a_secret_may_not_replace_a_variable_every_check_gets
+      - run::tests::a_secret_is_masked_as_it_is_as_json_escapes_it_and_line_by_line
+    status: done
+
+next: Prove with Fearlezz, commit, PR. Then scheduled proof (ask the developer about its shape).

@@ -190,23 +190,15 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
         if !b.test_files.is_empty() && h.test_files != b.test_files {
             say("it names other test files".into());
         }
-        let env: Vec<String> = h
-            .env
-            .iter()
-            .filter(|v| !b.env.contains(v))
-            .map(|v| format!("+{v}"))
-            .chain(
-                b.env
-                    .iter()
-                    .filter(|v| !h.env.contains(v))
-                    .map(|v| format!("-{v}")),
-            )
-            .collect();
+        // What a check sees can change what it proves (a variable that skips the slow tests,
+        // a key without which they skip themselves), so either list changing weakens it.
+        let env = names_diff(&b.env, &h.env);
         if !env.is_empty() {
-            say(format!(
-                "it sees other environment variables ({})",
-                env.join(", ")
-            ));
+            say(format!("it sees other environment variables ({env})"));
+        }
+        let secrets = names_diff(&b.secrets, &h.secrets);
+        if !secrets.is_empty() {
+            say(format!("it gets other secrets ({secrets})"));
         }
         if let (Some(bf), Some(hf)) = (&b.findings, &h.findings) {
             for tool in bf.tools.iter().filter(|t| hf.tools.contains(t)) {
@@ -245,6 +237,19 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
         found.push((Part::Setting("no_proof".into()), how));
     }
     found
+}
+
+/// The names `head` adds (`+NAME`) and drops (`-NAME`) from `base`, joined, or empty.
+fn names_diff(base: &[String], head: &[String]) -> String {
+    let added = head
+        .iter()
+        .filter(|v| !base.contains(v))
+        .map(|v| format!("+{v}"));
+    let dropped = base
+        .iter()
+        .filter(|v| !head.contains(v))
+        .map(|v| format!("-{v}"));
+    added.chain(dropped).collect::<Vec<_>>().join(", ")
 }
 
 /// Weakenings of parts of the config other than a check, each as its path and how.

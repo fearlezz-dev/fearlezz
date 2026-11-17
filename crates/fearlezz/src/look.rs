@@ -224,7 +224,7 @@ pub(crate) fn look(
             LookOutcome::NoMedia
         });
     }
-    let before = match store.for_key(&inputs.key).pop() {
+    let before = match store.latest_that_ran(&inputs.key) {
         Some(r) => r,
         None => run_on_base(store, check, &inputs, base, stage, env)?,
     };

@@ -121,6 +121,9 @@ pub(crate) struct Check {
     inputs: Globs,
     /// Environment variables the check may see. Their values are part of its inputs.
     pub env: Vec<String>,
+    /// Secrets it gets from SecretSpec, by name. Their names are part of its inputs, never
+    /// their values.
+    pub secrets: Vec<String>,
     pub needs: Vec<Need>,
     /// For a check that needs services: the commands that make them, part of its inputs.
     pub services: Option<String>,
@@ -407,6 +410,8 @@ struct RawCheck {
     #[serde(default)]
     env: Vec<String>,
     #[serde(default)]
+    secrets: Vec<String>,
+    #[serde(default)]
     needs: Vec<Need>,
     findings: Option<RawFindings>,
     tests: Option<toml::Value>,
@@ -575,6 +580,16 @@ impl Config {
             if needs_services && services.is_none() {
                 bail!("check {id} needs services, but [env] has no up command to start them");
             }
+            if let Some(name) = c
+                .secrets
+                .iter()
+                .find(|n| n.starts_with("FEARLEZZ_") || crate::run::BASE_ENV.contains(&n.as_str()))
+            {
+                bail!(
+                    "check {id}: the secret {name} would replace a variable every check gets; \
+                     give it another name in secretspec.toml"
+                );
+            }
             // Inside a shell, the environment's own files shape every result.
             let shell_inputs = || env.shell.iter().flat_map(|_| &env.inputs);
             let own = if c.inputs.is_empty() {
@@ -636,6 +651,7 @@ impl Config {
                 steps,
                 stage,
                 env: c.env,
+                secrets: c.secrets,
                 needs: c.needs,
                 services: if needs_services {
                     services.clone()
@@ -816,6 +832,7 @@ fn builtin_check(
         stage: stages.find("working").unwrap_or(stages.first()),
         inputs,
         env: Vec::new(),
+        secrets: Vec::new(),
         needs: Vec::new(),
         services: None,
         findings: Some(FindingsSpec {
