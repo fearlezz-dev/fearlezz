@@ -90,6 +90,8 @@ env = ["DATABASE_URL"]
 # inputs = ["src/**", "Cargo.toml", "Cargo.lock"]   only to rerun less often
 ```
 
+A check that needs two commands lists them as steps, each a plain command, never joined with `&&` or a pipe: `run = ["terraform init -backend=false", "terraform validate -json"]` runs them in order, the first that fails ends the check, and a reader of stdout reads only the last one's.
+
 A check runs at the repository root. `dir = "shell"` runs it in that folder; `each = "Cargo.toml"` makes it one check per project folder holding that file (outside `no_proof`, and not inside another such folder; for Cargo.toml, any manifest no workspace above names a member, as Cargo decides): the root's keeps the check's name, one in a folder is `<check>/<folder>`, and `[check."clippy/shell"]` tunes that one alone. A folder's check reads every file until its own table names `inputs`, since the check's own `inputs` name the root project's files. The rust piece's checks have `each = "Cargo.toml"`, so a repository with several separate Cargo projects gets fmt, clippy and tests for each, and `setup sync` writes the lint tables into each project's Cargo.toml. A project folder that goes takes its checks with it; moving a check to another `dir` weakens the proof.
 
 Files that need no proof, such as prose, are declared once at the top of `fearlezz.toml`; an edit to them alone reruns no check. CI reads this list from the base branch, so add to it in a change of its own first:
@@ -141,6 +143,10 @@ level = "hint"
 files = "lib/widgets/*.dart"
 needs = "test/widgets/{stem}_test.dart"  # also {name} and {dir}
 
+[rule.sops]
+level = "gate"
+encrypted = "sops"                       # every file a .sops.yaml path_regex names is encrypted
+
 [rule.silent-fallback]
 level = "gate"
 message = "A failure becomes a default value."
@@ -185,7 +191,7 @@ A check with `findings` reports problems at file and line. Only findings on line
 [check.clippy]
 run = "cargo clippy --all-targets --quiet --message-format=json"
 stage = "working"
-findings = "cargo"     # or "dart" (dart analyze --format=machine), "eslint" (eslint --format json), "sarif" (stdout or $FEARLEZZ_OUT/findings.sarif), or "jsonl"
+findings = "cargo"     # or "dart" (dart analyze --format=machine), "eslint" (eslint --format json), "terraform" (terraform or tofu validate -json), "yamllint" (yamllint -f parsable), "sarif" (stdout or $FEARLEZZ_OUT/findings.sarif), or "jsonl"
 # findings = { read = "sarif", on = "everywhere" }   to count old findings too
 # findings = { read = "sarif", level = "gate", fix = "..." }   for a tool whose results carry no level or fix
 ```

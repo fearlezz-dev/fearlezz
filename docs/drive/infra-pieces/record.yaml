@@ -5,16 +5,20 @@ pieces:
   - id: split
     status: done
   - id: steps
-    status: building
+    status: done
+    evidence: [tests/core.rs a_check_runs_its_steps_in_order_and_stops_at_the_first_that_fails, tests/findings.rs findings_on_stdout_come_from_the_last_step_alone, tests/hooks.rs any_step_of_a_check_run_by_hand_is_not_proof]
   - id: sops
-    status: figuring-out
-    open: how the sops piece knows which files must be encrypted, without reading secrets
+    status: done
+    evidence: [tests/infra.rs sops tests]
   - id: readers
-    status: figuring-out
-    open: native readers for terraform validate -json and yamllint parsable
+    status: done
+    evidence: [findings.rs terraform and yamllint readers, tests/infra.rs opentofu and yamllint tests]
   - id: init
+    status: building
+    evidence: [tests/init.rs init_adds_the_infra_pieces_from_the_files_each_tool_reads]
+  - id: real-repos
     status: figuring-out
-    open: markers per piece
+    open: do the pieces pass on clones of HomeLabbing and Infrastructure/v3
 
 decided:
   - id: split
@@ -23,9 +27,21 @@ decided:
   - id: steps
     what: "Steps list: run takes a list of plain commands run in order; the last one's output is read."
     why: "terraform init then validate, and render then kubeconform, without shell glue or a pipe that hides a failed build."
+  - id: sops
+    what: ".sops.yaml decides: a rule kind (encrypted = \"sops\") gates a file its path_regex names that has no sops metadata; never decrypts."
+  - id: yamllint
+    what: "Be consistent with the other pieces: Fearlezz writes .yamllint.yaml from [settings.yamllint] (whole, like golangci), skipping what git ignores."
 
-open: []
+open:
+  - id: flux-over-kustomize
+    ask: "Should init give a Flux repository flux instead of kustomize?"
 
-slices: []
+slices:
+  - id: steps
+    status: done
+  - id: pieces
+    status: done
+  - id: init
+    status: building
 
-next: Ask how the sops piece decides which files must be encrypted.
+next: Check in on init's Flux choice, then try the pieces on clones of HomeLabbing and Infrastructure/v3.

@@ -24,8 +24,9 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `run.rs`: running one check in a clean env, or a built in check in process; for a check that `needs = ["envtest"]`, the Kubernetes binaries of its go.mod's version first.
 - `settings.rs`: shared tool settings from pieces, written into each tool's own file, and the agent skill every project gets; drift is a finding of the built in `settings` check. The skill's source is `skills/fearlezz/SKILL.md`, embedded in the binary; after changing it run `fearlezz setup sync`.
 - `lints.rs`: `[lints.<tool>]` tables, the level (gate, flag, hint, off) a finding of each rule gets, by rule name.
-- `rules.rs`: `[rule.<name>]` conventions (paths, naming, companion files, ast-grep code rules) that form the built in `rules` check.
+- `rules.rs`: `[rule.<name>]` conventions (paths, naming, companion files, encrypted files, ast-grep code rules) that form the built in `rules` check.
 - `commits.rs`: `[commits]`, the built in `commits` check: Conventional Commits for the pull request title in CI, or every commit since the base locally; the messages are part of its inputs.
+- `sops.rs`: what `.sops.yaml` says must be encrypted and whether a file is, from the metadata sops writes; it never decrypts. The `encrypted = "sops"` rule kind reads it.
 - `floor.rs`: the base branch's config as the floor of a change's proof: what the change weakens about its checks, as typed weakenings, one per part with every way it weakened and the part as it was and is now, rendered from the merged config table `Config` keeps. Proof is about behaviour, so it never judges files.
 - `findings.rs`: findings a check reports at file and line (cargo JSON, SARIF, jsonl), the lines a change touched, and the verdict.
 - `counts.rs`: how many tests a check ran (JUnit reports, or a pattern in its output) and which failed or passed only on a rerun; zero fails the check.

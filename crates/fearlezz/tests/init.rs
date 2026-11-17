@@ -363,3 +363,63 @@ fn init_brings_safety_without_workflows_or_a_language() {
     assert!(config.contains(r#"use = ["safety"]"#), "{config}");
     assert!(!config.contains("actions"), "{config}");
 }
+
+/// The `use` line `setup init` writes for a repository with `files`.
+fn used(files: &[(&str, &str)]) -> String {
+    let repo = project(files);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    config
+        .lines()
+        .find(|l| l.starts_with("use = "))
+        .unwrap_or_else(|| panic!("{config}"))
+        .to_string()
+}
+
+#[test]
+fn init_adds_the_infra_pieces_from_the_files_each_tool_reads() {
+    let use_line = used(&[
+        ("flake.nix", "{ outputs = _: { }; }\n"),
+        ("deploy/kustomization.yaml", "resources: []\n"),
+        (
+            "charts/web/Chart.yaml",
+            "apiVersion: v2\nname: web\nversion: 0.1.0\n",
+        ),
+        (
+            "infra/.terraform.lock.hcl",
+            "provider \"registry.terraform.io/hashicorp/random\" {\n  version = \"3.6.0\"\n}\n",
+        ),
+        (".yamllint.yaml", "extends: default\n"),
+        (
+            ".sops.yaml",
+            "creation_rules:\n  - path_regex: secrets/.*\n",
+        ),
+    ]);
+    assert_eq!(
+        use_line,
+        r#"use = ["nix", "kustomize", "helm", "terraform", "yamllint", "sops", "safety"]"#
+    );
+}
+
+#[test]
+fn init_picks_opentofu_when_the_lockfile_names_its_registry() {
+    let use_line = used(&[(
+        "infra/.terraform.lock.hcl",
+        "provider \"registry.opentofu.org/hashicorp/random\" {\n  version = \"3.6.0\"\n}\n",
+    )]);
+    assert_eq!(use_line, r#"use = ["opentofu", "safety"]"#);
+}
+
+#[test]
+fn a_flux_repository_gets_flux_instead_of_kustomize() {
+    // flate renders every Kustomization of every cluster, so kustomize would build them twice.
+    let use_line = used(&[
+        (
+            "clusters/home/flux-system/gotk-sync.yaml",
+            "apiVersion: v1\nkind: List\n",
+        ),
+        ("clusters/home/kustomization.yaml", "resources: []\n"),
+    ]);
+    assert_eq!(use_line, r#"use = ["flux", "safety"]"#);
+}
