@@ -1,0 +1,11 @@
+# crates.io: a release of the crate in Cargo.toml (set dir for one in a folder). Its dry run,
+# a check before merge, packages and builds the crate as crates.io will; on a release pull
+# request it proves the bumped version publishes. `fearlezz run --release` publishes when
+# crates.io's index does not list the version yet. Publishing needs CARGO_REGISTRY_TOKEN
+# (crates.io's trusted publishing hands a workflow one).
+
+[release.crates]
+dry = "cargo publish --dry-run"
+publish = "cargo publish"
+landed = { read = "crates" }
+env = ["CARGO_REGISTRY_TOKEN"]

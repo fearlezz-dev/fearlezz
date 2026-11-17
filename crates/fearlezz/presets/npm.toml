@@ -1,0 +1,10 @@
+# npm: a release of the package in package.json (set dir for one in a folder). Its dry run, a
+# check before merge, packs the package as npm will. `fearlezz run --release` publishes when
+# the registry does not have the version yet. Publishing takes NODE_AUTH_TOKEN with the npmrc
+# actions/setup-node writes.
+
+[release.npm]
+dry = "npm publish --dry-run"
+publish = "npm publish"
+landed = { read = "npm" }
+env = ["NODE_AUTH_TOKEN", "NPM_CONFIG_USERCONFIG"]

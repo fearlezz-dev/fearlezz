@@ -6,6 +6,7 @@
 
 pub(crate) mod github;
 pub(crate) mod host;
+pub(crate) mod registry;
 
 use std::fs;
 use std::path::{Path, PathBuf};

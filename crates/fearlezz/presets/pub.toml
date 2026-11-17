@@ -1,0 +1,10 @@
+# pub.dev: a release of the Dart or Flutter package in pubspec.yaml (set dir for one in a
+# folder). Its dry run, a check before merge, validates the package as pub.dev will.
+# `fearlezz run --release` publishes when pub.dev does not have the version yet. Publishing
+# takes the token dart-lang/setup-dart sets up from the workflow's OIDC token (PUB_TOKEN).
+
+[release.pub]
+dry = "dart pub publish --dry-run"
+publish = "dart pub publish --force"
+landed = { read = "pub" }
+env = ["PUB_TOKEN"]

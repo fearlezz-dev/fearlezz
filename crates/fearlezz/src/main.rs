@@ -20,6 +20,7 @@ mod presets;
 mod proof;
 mod record;
 mod red;
+mod release;
 mod rules;
 mod run;
 mod settings;
@@ -111,6 +112,11 @@ enum Cmd {
         /// with each check's output and every picture beside it, before and after.
         #[arg(long, value_name = "DIR", requires = "ci")]
         proof: Option<PathBuf>,
+        /// Publish to every place in `[release]` that does not have its version yet, and wait
+        /// until each shows it. Places that have it are skipped, so running it again finishes
+        /// a half done release.
+        #[arg(long, conflicts_with_all = ["checks", "stage", "ci", "fresh"])]
+        release: bool,
     },
     /// Tell: record what only you know, such as a note or a question.
     Say {
@@ -322,6 +328,25 @@ fn ci_run(proof: Option<PathBuf>) -> Result<bool> {
     run_checks(&ctx, journal, &[], true, Some(CiOut { proof, workflow }))
 }
 
+/// Publishes the release to every place that does not have it yet, inside the checkout's
+/// environment.
+fn release_run() -> Result<bool> {
+    let ctx = prepared()?;
+    let env = ctx.env();
+    if !ctx.config.releases.is_empty()
+        && let Some(line) = env.state.prepare(env.cfg, &env.main, &ctx.git.root)?
+    {
+        println!("{line}");
+    }
+    Ok(release::run(
+        &ctx.config.releases,
+        &release::At {
+            root: &ctx.git.root,
+            shell: ctx.config.env.shell.as_deref(),
+        },
+    ))
+}
+
 /// Whether a check takes pictures, which needs ffmpeg.
 fn needs_ffmpeg(config: &Config) -> bool {
     config.checks.iter().any(|c| config.takes_pictures(c))
@@ -337,9 +362,13 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
             no_run,
             ci,
             proof,
+            release,
         } => {
             if ci {
                 return ci_run(proof);
+            }
+            if release {
+                return release_run();
             }
             let ctx = prepared()?;
             if let Some(name) = stage {

@@ -1,0 +1,16 @@
+# GitHub Releases: built files added to the release of the tag, which release-please makes
+# when its pull request merges. The project names the files and where the version comes
+# from:
+#
+#   [release.github]
+#   version = "Cargo.toml"
+#   files = ["dist/*.tar.gz", "dist/*.sha256"]
+#
+# The tag is v{version}; set tag = "name-v{version}" when release-please puts the component in
+# it. The release has landed when every file is there with the same SHA-256 digest. gh needs
+# GH_TOKEN with contents: write.
+
+[release.github]
+publish = "gh release upload \"$FEARLEZZ_TAG\" $FEARLEZZ_FILES --clobber"
+landed = { read = "github" }
+env = ["GH_TOKEN", "GITHUB_TOKEN", "GH_REPO"]
