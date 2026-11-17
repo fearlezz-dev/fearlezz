@@ -1,0 +1,39 @@
+# docs/drive/language-pieces/record.yaml: the working state of one piece of work.
+goal: language pieces for the tools the developer's other projects prove their work with, detected by setup init, read natively without shell glue
+
+pieces:
+  - id: js-tools
+    status: figuring-out
+    open: how Prettier, ESLint, oxlint and svelte-check sit beside the typescript piece, which bundles Biome and tsc
+  - id: node-test
+    status: figuring-out
+  - id: stylua
+    status: figuring-out
+  - id: go-race
+    status: figuring-out
+  - id: envtest
+    status: figuring-out
+  - id: dart-package
+    status: figuring-out
+  - id: oxlint
+    status: figuring-out
+  - id: commit-convention
+    status: figuring-out
+  - id: wasm-tests
+    status: figuring-out
+    open: whether the rust piece copes with a wasm32-wasip1 target run by wasmtime (evidence says zellij-harpoon has zero tests, so it would fail on zero tests)
+
+decided:
+  - id: scope
+    what: every item in this PR (small ones, Prettier, Svelte, Dart, envtest, oxlint, commit convention)
+  - id: split-biome
+    what: 'A. Split Biome out: typescript = tsc + tsconfig strictness; biome its own piece (lint, format, rules); setup init picks prettier, eslint, oxlint when package.json depends on them, else biome; framework pieces only with biome. Breaking.'
+  - id: commits-builtin
+    what: 'A. Built in check, read natively: the PR title in CI, each commit since the base locally; keyed by the messages so a reword reruns it; a piece turns it on.'
+  - id: envtest-fetch
+    what: 'A. Fearlezz fetches: reads the Kubernetes version from go.mod, runs setup-envtest, gives go-test KUBEBUILDER_ASSETS; setup init adds it when go.mod requires controller-runtime.'
+
+evidence:
+  survey: Svelte sites (aarnoudse/website, guia/guia-website) use ESLint, Prettier and svelte-check, no Biome; Agora runs bare oxlint per package with one root oxlint.json; Winston runs node --test on .ts with type stripping, HomeLabbing with --import tsx; arcleaf runs go test -race; surrealdb-credential-operator runs envtest through setup-envtest and KUBEBUILDER_ASSETS; jar.yazi runs stylua --check; skir-dart-client runs dart analyze --fatal-infos and dart test (vm, plus chrome and dart2wasm for one file); GrammarGuard runs convco on the commit message; TypewriterV1 checks base..head in CI.
+
+next: ask how the JavaScript tools sit beside the typescript piece, since Prettier, Svelte and oxlint all depend on it
