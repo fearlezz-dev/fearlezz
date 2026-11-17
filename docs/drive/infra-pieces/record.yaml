@@ -50,4 +50,4 @@ slices:
   - id: init
     status: building
 
-next: Prove the branch with fearlezz, open the pull request.
+next: Pull request 33 waits for review and the developer's OK to merge.
