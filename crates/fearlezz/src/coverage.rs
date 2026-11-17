@@ -13,7 +13,7 @@
 //! Vitest, Bun, Flutter, coverage.py), JaCoCo XML (Kotlin through Kover) and Go's
 //! coverprofile.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -143,19 +143,17 @@ impl Coverage {
     }
 
     /// The changed lines no test ran, at the level the project's coverage gives them (or
-    /// `[lints.coverage]` does), and what was measured. `counts` says which files are the
-    /// project's code: not tests, not generated or ignored files.
+    /// `[lints.coverage]` does), and what was measured. `code` is the project's code, the
+    /// only files that count: not tests, not generated or ignored files.
     pub(crate) fn findings(
         &self,
         at: &At<'_>,
         changed: &Changed,
-        counts: impl Fn(&str) -> bool,
+        code: &BTreeSet<String>,
     ) -> Result<(Vec<Finding>, Measured), String> {
-        let (mut hits, unplaced) = self.read.hits(at, changed)?;
-        hits.retain(|file, _| counts(file));
-        let mut measured = measure(&hits, changed);
-        measured.lines += unplaced.lines;
-        measured.covered += unplaced.covered;
+        let mut hits = self.read.hits(at, code)?;
+        hits.retain(|file, _| code.contains(file));
+        let measured = measure(&hits, changed);
         let (level, why) = measured.level(self.target);
         let mut found = findings(&hits, changed);
         for f in &mut found {
@@ -253,9 +251,9 @@ impl Reader {
             .map_or("", |(n, ..)| n)
     }
 
-    /// How often each measured line ran, and the lines of JaCoCo source files no changed file
-    /// is, or why there is no coverage.
-    fn hits(&self, at: &At<'_>, changed: &Changed) -> Result<(Hits, Measured), String> {
+    /// How often each measured line ran, or why there is no coverage. JaCoCo's files are
+    /// looked up among `code`, the project's code.
+    fn hits(&self, at: &At<'_>, code: &BTreeSet<String>) -> Result<Hits, String> {
         let At {
             out,
             root,
@@ -281,17 +279,12 @@ impl Reader {
         }
         let places = Places { root, folder };
         let mut hits = Hits::new();
-        let mut unplaced = Measured::default();
         let mut named = 0;
         for (path, text) in &reports {
             named += match self.format {
                 Format::Lcov => lcov(text, &places, &mut hits),
                 Format::Go => go(text, &places, &mut hits),
-                // It looks up only changed files, so a miss says nothing about its paths.
-                Format::Jacoco => {
-                    jacoco(text, path, root, changed, &mut hits, &mut unplaced);
-                    0
-                }
+                Format::Jacoco => jacoco(text, path, root, code, &mut hits),
             };
         }
         // A report whose every path misses the repository would hide all untested code.
@@ -302,7 +295,7 @@ impl Reader {
                 self.name()
             ));
         }
-        Ok((hits, unplaced))
+        Ok(hits)
     }
 }
 
@@ -449,10 +442,15 @@ fn jacoco(
     text: &str,
     report: &Path,
     root: &Path,
-    changed: &Changed,
+    code: &BTreeSet<String>,
     hits: &mut Hits,
-    unplaced: &mut Measured,
-) {
+) -> usize {
+    let mut by_name: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for path in code {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        by_name.entry(name).or_default().push(path);
+    }
+    let mut named = 0;
     let mut package = String::new();
     let mut file: Option<String> = None;
     let mut rest = text;
@@ -471,7 +469,8 @@ fn jacoco(
             } else {
                 format!("{package}/{name}")
             };
-            file = source(&suffix, &package, report, root, changed);
+            named += 1;
+            file = source(&suffix, &package, report, root, &by_name);
         } else if tag == "/sourcefile" {
             file = None;
         } else if tag.starts_with("line ") {
@@ -485,32 +484,32 @@ fn jacoco(
             if mi + ci == 0 {
                 continue;
             }
-            // A file the change did not touch counts toward the project only.
             if let Some(f) = &file {
                 mark(hits, f.clone(), nr, ci);
-            } else {
-                unplaced.lines += 1;
-                unplaced.covered += u64::from(ci > 0);
             }
         }
     }
+    named
 }
 
-/// The changed file a JaCoCo source file is, by its package path, or by its name alone when
-/// one changed file has it and declares that package (Kotlin may leave the common root
+/// The file of the project's code a JaCoCo source file is, by its package path, or by its name
+/// alone when one such file has it and declares that package (Kotlin may leave the common root
 /// package out of its folders).
 fn source(
     suffix: &str,
     package: &str,
     report: &Path,
     root: &Path,
-    changed: &Changed,
+    by_name: &BTreeMap<&str, Vec<&str>>,
 ) -> Option<String> {
     let ending = |end: &str| -> Vec<&str> {
-        changed
-            .paths()
+        let name = end.rsplit('/').next().unwrap_or(end);
+        by_name
+            .get(name)
+            .into_iter()
+            .flatten()
+            .copied()
             .filter(|p| *p == end || p.ends_with(&format!("/{end}")))
-            .filter(|p| root.join(p).is_file())
             .collect()
     };
     let mut matches = ending(suffix);

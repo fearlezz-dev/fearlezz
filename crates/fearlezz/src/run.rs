@@ -111,12 +111,18 @@ pub(crate) fn execute(
             since: started,
         };
         // The project's code: files git keeps that the check reads, tests aside.
-        let files: std::collections::BTreeSet<String> = crate::git::Git::discover(at.root)
+        let code = crate::git::Git::discover(at.root)
             .and_then(|git| git.files())
-            .map(|f| f.into_iter().collect())
-            .unwrap_or_default();
-        let code = |p: &str| files.contains(p) && check.reads(p) && !check.is_test(p);
-        match coverage.findings(&report, at.changed, code) {
+            .map(|files| {
+                files
+                    .into_iter()
+                    .filter(|p| check.reads(p) && !check.is_test(p))
+                    .collect()
+            })
+            .map_err(|e| {
+                format!("could not list the repository's files to measure coverage: {e:#}")
+            });
+        match code.and_then(|code| coverage.findings(&report, at.changed, &code)) {
             Ok((found, m)) => {
                 measured = Some(m);
                 passed &= !found

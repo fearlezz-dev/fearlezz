@@ -598,8 +598,21 @@ uncovered = "flag"
 
 #[test]
 fn a_jacoco_file_is_not_matched_by_name_to_another_package() {
+    // The report also names a file the repository has, so it is read at all.
+    let config = JACOCO.replace(
+        "  </package>\n</report>",
+        "  </package>\n  <package name=\"util\">\n    <sourcefile name=\"Bar.kt\">\n      \
+         <line nr=\"1\" mi=\"0\" ci=\"1\" mb=\"0\" cb=\"0\"/>\n    </sourcefile>\n  \
+         </package>\n</report>",
+    );
     let file = "app/src/main/kotlin/util/Foo.kt";
-    let repo = feature(JACOCO, &[(file, "package util\n\n")]);
+    let repo = feature(
+        &config,
+        &[
+            (file, "package util\n\n"),
+            ("app/src/main/kotlin/util/Bar.kt", "package util\n"),
+        ],
+    );
     repo.write(
         file,
         "package util\n\nfun a() = 1\nfun b() = 2\nfun c() = 3\n",
@@ -607,4 +620,53 @@ fn a_jacoco_file_is_not_matched_by_name_to_another_package() {
     let out = repo.fz(&["run", "gradle-test"]);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(!out.stdout.contains("uncovered"), "{}", out.stdout);
+}
+
+/// A JaCoCo file the repository does not keep (generated code) counts toward nothing, as it
+/// does in an lcov report.
+#[test]
+fn a_jacoco_file_the_repository_does_not_keep_counts_toward_nothing() {
+    let config = JACOCO.replace(
+        "  </package>\n</report>",
+        "  </package>\n  <package name=\"com/x/gen\">\n    <sourcefile name=\"Gen.kt\">\n      \
+         <line nr=\"1\" mi=\"5\" ci=\"0\" mb=\"0\" cb=\"0\"/>\n      \
+         <line nr=\"2\" mi=\"5\" ci=\"0\" mb=\"0\" cb=\"0\"/>\n      \
+         <line nr=\"3\" mi=\"5\" ci=\"0\" mb=\"0\" cb=\"0\"/>\n    </sourcefile>\n  \
+         </package>\n</report>",
+    );
+    let file = "app/src/main/kotlin/com/x/Foo.kt";
+    let repo = Repo::new(&config, &[(file, "package com.x\n\n")]);
+    repo.branch("feat/x");
+    repo.write(
+        file,
+        "package com.x\n\nfun a() = 1\nfun b() = 2\nfun c() = 3\n",
+    );
+    repo.commit("feat: foo");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(
+        out.stdout.contains("coverage 66%, 2 of 3 changed lines"),
+        "{}",
+        out.stdout
+    );
+}
+
+/// When git cannot list the project's files, nothing would count, so coverage would pass
+/// unmeasured; the check fails instead.
+#[test]
+fn coverage_fails_when_git_cannot_list_the_files() {
+    let config = flagged().replace(
+        "test ! -e src/fail\n",
+        "test ! -e src/fail\n[ -e src/break ] && echo broken > \"$(git rev-parse --git-dir)/index\"\ntrue\n",
+    );
+    let repo = feature(&config, &[("src/a.txt", OLD)]);
+    repo.write("src/a.txt", &format!("{OLD}miss one\n"));
+    repo.write("src/break", "");
+    let out = repo.fz(&["run", "tests"]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        format!("{}{}", out.stdout, out.stderr).contains("could not list the repository's files"),
+        "{}\n{}",
+        out.stdout,
+        out.stderr
+    );
 }
