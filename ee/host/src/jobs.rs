@@ -95,13 +95,17 @@ struct Row {
     since: f64,
 }
 
-/// The statement that reads the jobs waiting for a runner on work `work`'s page.
+/// The statement that reads the jobs waiting for a runner on work `work`'s page: those whose job
+/// id some run of the repository streamed as its own. A matrix job is named `<id> (<leg>)`, and
+/// a job id holds no spaces, so the id is the name up to its first ` (`; matching on the id
+/// lets `runs_by_job` find the runs instead of reading every run of the repository.
 pub fn statement(db: &D1Database, work: &str) -> worker::Result<D1PreparedStatement> {
     db.prepare(
         "SELECT j.name, j.head, j.url, j.since FROM jobs j JOIN works w ON w.repo = j.repo AND w.branch = j.branch \
          WHERE w.id = ?1 AND j.state IN ('queued', 'waiting') AND EXISTS ( \
-           SELECT 1 FROM runs r JOIN works o ON o.id = r.work, json_each(r.source) s \
-           WHERE o.repo = j.repo AND s.key = 'job' AND (j.name = s.value OR substr(j.name, 1, length(s.value) + 2) = s.value || ' (')) \
+           SELECT 1 FROM runs r JOIN works o ON o.id = r.work \
+           WHERE json_extract(r.source, '$.job') IN (j.name, substr(j.name, 1, instr(j.name, ' (') - 1)) \
+             AND o.repo = j.repo) \
          ORDER BY j.since, j.id",
     )
     .bind(&[work.into()])
