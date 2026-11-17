@@ -3209,6 +3209,8 @@ fn a_verdict_given_in_one_tab_shows_in_another() {
     );
 
     browser.on(&first);
+    // Each tab learns who is looking on its own, so the button shows here in its own time.
+    browser.wait_for(r#"!!document.querySelector('button[data-say="looks_right"]')"#);
     browser.eval(r#"document.querySelector('button[data-say="looks_right"]').click()"#);
     browser.wait_for(&verdict_shows("looks_right"));
     browser.on(&second);
