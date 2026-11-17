@@ -10,8 +10,8 @@ mod common;
 
 use common::Repo;
 
-/// `tests` passes; `unit` starts with a command an agent would run by hand, and passes here
-/// without a Cargo project.
+/// `tests` passes; `unit` and each step of `validate` start with a command an agent would run
+/// by hand, and pass here without a Cargo project or terraform.
 const CONFIG: &str = r#"
 [check.tests]
 run = "true"
@@ -22,7 +22,7 @@ run = "cargo test --quiet || true"
 stage = "working"
 
 [check.validate]
-run = ["terraform init -backend=false", "terraform validate -json"]
+run = ["terraform init -backend=false || true", "terraform validate -json || true"]
 stage = "working"
 
 [settings.skill]
