@@ -233,6 +233,10 @@ fn command(
     cmd.env("FEARLEZZ_PORT", free_port()?.to_string());
     cmd.envs(at.vars);
     cmd.envs(secrets.iter().map(|(name, value)| (name, value)));
+    // A Fearlezz the check starts runs under this slot instead of waiting for it.
+    if crate::queue::holding() {
+        cmd.env(crate::queue::HELD, "1");
+    }
     cmd.env("FEARLEZZ_OUT", dir)
         .env("FEARLEZZ_CHECK", &check.id)
         .env("FEARLEZZ_STAGE", at.stage);

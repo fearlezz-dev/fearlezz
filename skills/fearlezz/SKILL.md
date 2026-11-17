@@ -92,6 +92,13 @@ needs = ["linux"]                # display = "1280x720" (the default); no xvfb-r
 
 Never set `FEARLEZZ_OFF_SCREEN` yourself: parking recorded windows off screen is the developer's choice for their machine. Drive the app from its own test; Fearlezz sends a recorded app no input.
 
+## The machine's heavy queue
+
+On a developer's machine that sets `FEARLEZZ_QUEUE=<slots>` (the developer's choice for their machine; never set it yourself), heavy work of every worktree and repository waits for one of that many slots instead of all running at once: each check's command, a run on the base commit, picture comparisons. A waiting step prints `wait <check>: the heavy queue is full (...); behind <what> in <worktree> (pid, time)`. Let it wait: run `fearlezz run` in the background and wait for it to end. Never stop the holder. A waiting check that another worktree proves meanwhile for the same inputs reuses that result. CI never queues.
+
+- A heavy tool you run by hand for quick feedback (`cargo test`, `flutter test`, a build) goes through `fearlezz run -- <command>`: it waits its turn, then runs with the terminal and exits with the command's code. Without the queue it just runs. It proves nothing.
+- A check quick enough never to wait (a formatter's check) says `light = true`, and none of its steps waits; Fearlezz's built in checks (`settings`, `rules` and the like) never wait.
+
 ## Seeing the work
 
 - `fearlezz`: this journal in 12 lines or fewer.

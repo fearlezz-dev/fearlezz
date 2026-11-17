@@ -21,6 +21,7 @@ mod look;
 mod media;
 mod presets;
 mod proof;
+mod queue;
 mod record;
 mod red;
 mod release;
@@ -143,6 +144,10 @@ enum Cmd {
         /// workflow, in one job.
         #[arg(long, requires = "ci", conflicts_with_all = ["plan", "leg", "gate"])]
         scheduled: bool,
+        /// After --: run this tool by hand, waiting its turn in the machine's heavy queue
+        /// when `FEARLEZZ_QUEUE` is set, and exit with its code. It proves nothing.
+        #[arg(last = true, value_name = "COMMAND", conflicts_with_all = ["checks", "fresh", "stage", "ci", "release"])]
+        command: Vec<String>,
     },
     /// Tell: record what only you know, such as a note or a question.
     Say {
@@ -220,6 +225,17 @@ fn main() -> ExitCode {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
     let cli = Cli::parse();
+    if let Some(Cmd::Run { command, .. }) = &cli.command
+        && !command.is_empty()
+    {
+        return match queue::by_hand(command) {
+            Ok(code) => ExitCode::from(code),
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                ExitCode::from(2)
+            }
+        };
+    }
     let done = match cli.command {
         Some(cmd) => dispatch(cmd),
         None => match &cli.see.still {
@@ -575,6 +591,7 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
             gate,
             reuse,
             scheduled,
+            ..
         } => {
             if plan {
                 return ci_plan(reuse.as_deref());
@@ -1695,18 +1712,21 @@ fn run_checks(
     // Opened once, on the first check with pictures.
     let mut base = None;
     let (mut not_run, mut cannot_record) = (0, 0);
+    let journal_name = j.name.clone();
+    // Reuse only a pass, never across an unstable key, and at the final stage only a run
+    // this journal made at that stage.
+    let reusable = |key: &str| {
+        if fresh || ctx.store.unstable(key) {
+            return None;
+        }
+        ctx.store.for_key(key).pop().filter(|r| {
+            r.outcome == Outcome::Passed
+                && (stage != final_stage || r.made_at_final(&journal_name, &final_stage))
+        })
+    };
     for check in &targets {
         let inputs = wt.inputs(check)?;
-        // Reuse only a pass, never across an unstable key, and at the final stage only a run
-        // this journal made at that stage.
-        let reuse = if fresh || ctx.store.unstable(&inputs.key) {
-            None
-        } else {
-            ctx.store.for_key(&inputs.key).pop().filter(|r| {
-                r.outcome == Outcome::Passed
-                    && (stage != final_stage || r.made_at_final(&j.name, &final_stage))
-            })
-        };
+        let reuse = reusable(&inputs.key);
         // A screen this machine can never have, in a leg: its `on` names the wrong platform.
         if let Some(why) = check.screen.never_here() {
             let os = check.screen.describe_os();
@@ -1751,64 +1771,81 @@ fn run_checks(
         if let Some(r) = report.as_mut() {
             r.starts(check);
         }
-        let (result, was_reused) = if let Some(r) = reuse {
-            (r, true)
-        } else {
-            if !prepared {
-                if let Some(line) = env.state.prepare(env.cfg, &env.main, &wt.git.root)? {
-                    println!("{line}");
-                }
-                prepared = true;
-            }
-            let mut vars = std::collections::BTreeMap::new();
-            if check.needs_services() {
-                if held.is_none() {
-                    held = Some(env.state.hold(&wt.git.root)?);
-                }
-                let fresh = stage == final_stage;
-                let (services, line) =
-                    env.state
-                        .ensure_up(env.cfg, &wt.git.root, &j.name, fresh, ctx.now)?;
-                if let Some(line) = line {
-                    println!("{line}");
-                }
-                vars = services.ports;
-            }
-            let mut undeployed = None;
-            if check.needs_preview() {
-                if held.is_none() {
-                    held = Some(env.state.hold(&wt.git.root)?);
-                }
-                let name = env::preview_name(branch.as_deref(), &wt.git.head_short()?);
-                match env.state.preview(env.cfg, &wt.git.root, &wt.tree, &name)? {
-                    Ok(deployed) => {
-                        if let Some(line) = deployed.line {
-                            println!("{line}");
-                        }
-                        vars.insert("FEARLEZZ_PREVIEW_URL".to_string(), deployed.url);
+        // The worktree's services (which its preview deploy shares) before a slot, always: a
+        // run waiting for them holds no slot, so the run holding them can always get one.
+        if reuse.is_none() && (check.needs_services() || check.needs_preview()) && held.is_none() {
+            held = Some(if let Some(hold) = env.state.try_hold(&wt.git.root)? {
+                hold
+            } else {
+                eprintln!(
+                    "wait {}: another run in this worktree holds its services; it goes on once \
+                     that run ends",
+                    check.id
+                );
+                env.state.hold(&wt.git.root)?
+            });
+        }
+        // Heavy work waits its turn on this machine, and another worktree may prove the same
+        // inputs meanwhile.
+        let turn = match reuse {
+            Some(r) => queue::Turn::Done(r),
+            None if check.light => queue::Turn::Go(None),
+            None => queue::turn(&check.id, || reusable(&inputs.key))?,
+        };
+        let (result, was_reused) = match turn {
+            queue::Turn::Done(r) => (r, true),
+            // The slot is freed once the check's command ends.
+            queue::Turn::Go(_slot) => {
+                if !prepared {
+                    if let Some(line) = env.state.prepare(env.cfg, &env.main, &wt.git.root)? {
+                        println!("{line}");
                     }
-                    Err(u) => undeployed = Some(u),
+                    prepared = true;
                 }
+                let mut vars = std::collections::BTreeMap::new();
+                if check.needs_services() {
+                    let fresh = stage == final_stage;
+                    let (services, line) =
+                        env.state
+                            .ensure_up(env.cfg, &wt.git.root, &j.name, fresh, ctx.now)?;
+                    if let Some(line) = line {
+                        println!("{line}");
+                    }
+                    vars = services.ports;
+                }
+                let mut undeployed = None;
+                if check.needs_preview() {
+                    let name = env::preview_name(branch.as_deref(), &wt.git.head_short()?);
+                    match env.state.preview(env.cfg, &wt.git.root, &wt.tree, &name)? {
+                        Ok(deployed) => {
+                            if let Some(line) = deployed.line {
+                                println!("{line}");
+                            }
+                            vars.insert("FEARLEZZ_PREVIEW_URL".to_string(), deployed.url);
+                        }
+                        Err(u) => undeployed = Some(u),
+                    }
+                }
+                let at = run::Where {
+                    root: &wt.git.root,
+                    shell: wt.shell.as_deref(),
+                    tree: &wt.tree,
+                    journal: &j.name,
+                    stage: &stage,
+                    vars: &vars,
+                    changed: &wt.lines,
+                    no_preview: undeployed.as_ref(),
+                };
+                let result = run::execute(&ctx.store, check, &inputs, &at)?;
+                if check.needs_services() {
+                    // Idle time counts from when the check stopped using them.
+                    let used = ctx
+                        .now
+                        .checked_add(jiff::SignedDuration::try_from(clock.elapsed())?)?;
+                    env.state.touch(&wt.git.root, used)?;
+                }
+                (result, false)
             }
-            let at = run::Where {
-                root: &wt.git.root,
-                shell: wt.shell.as_deref(),
-                tree: &wt.tree,
-                journal: &j.name,
-                stage: &stage,
-                vars: &vars,
-                changed: &wt.lines,
-                no_preview: undeployed.as_ref(),
-            };
-            let result = run::execute(&ctx.store, check, &inputs, &at)?;
-            if check.needs_services() {
-                // Idle time counts from when the check stopped using them.
-                let used = ctx
-                    .now
-                    .checked_add(jiff::SignedDuration::try_from(clock.elapsed())?)?;
-                env.state.touch(&wt.git.root, used)?;
-            }
-            (result, false)
         };
         // A generator that rewrote files changed the worktree: later checks are keyed on the
         // files as they are now.
