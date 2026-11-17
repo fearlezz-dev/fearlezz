@@ -4,6 +4,7 @@ mod action;
 mod commits;
 mod config;
 mod counts;
+mod coverage;
 mod env;
 mod feedback;
 mod findings;
@@ -1006,6 +1007,9 @@ fn print_failure(f: &store::RunResult) {
             for why in &f.proof_errors {
                 println!("  {why}");
             }
+        } else if let (Some(0), Some(why)) = (f.exit_code, f.proof_errors.first()) {
+            // Its command passed, but what it had to leave (a coverage report) is missing.
+            println!("fail {}: {why}", f.check);
         } else {
             println!("fail {} (exit {code})", f.check);
         }
@@ -1462,6 +1466,13 @@ fn failure_item(f: &store::RunResult) -> proof::Item {
             what,
             why: format!("it ran no tests, so it proves nothing{detail}"),
             fix: "make it run its tests, or give it the tests reader its runner needs".into(),
+        };
+    }
+    if let (Some(0), Some(why)) = (f.exit_code, f.proof_errors.first()) {
+        return proof::Item {
+            what,
+            why: why.clone(),
+            fix: "make its command leave what the check reads".into(),
         };
     }
     let code = f

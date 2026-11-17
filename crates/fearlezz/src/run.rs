@@ -101,6 +101,24 @@ pub(crate) fn execute(
         findings = verdict.counted;
         findings_elsewhere = verdict.elsewhere;
     }
+    // Coverage adds findings but never excuses a failed run: only a gate of its own fails it.
+    if let Some(coverage) = &check.coverage {
+        match coverage.findings(&dir, at.root, check.dir.as_deref(), started, at.changed) {
+            Ok(found) => {
+                passed &= !found
+                    .iter()
+                    .any(|f| f.level == crate::findings::Level::Gate);
+                findings.extend(found);
+                findings
+                    .sort_by(|a, b| (b.level, &a.file, a.line).cmp(&(a.level, &b.file, b.line)));
+            }
+            // First, as it is why the run failed.
+            Err(why) => {
+                proof_errors.insert(0, why);
+                passed = false;
+            }
+        }
+    }
     let mut cases = Vec::new();
     let tests = check.tests.as_ref().map(|reader| {
         match reader.count(&[&log, &stdout_path], &dir, at.root, started) {

@@ -10,11 +10,13 @@ findings = { read = "sarif", lints = ["golangci"] }
 run = "test -z \"$(gofmt -l .)\" || { gofmt -l .; exit 1; }"
 stage = "working"
 
-# -v prints one "--- PASS" or "--- FAIL" line per test and subtest, which are counted.
+# -v prints one "--- PASS" or "--- FAIL" line per test and subtest, which are counted. The
+# coverprofile flags each changed line no test ran.
 [check.go-test]
-run = "go test -v ./..."
+run = "go test -v -coverprofile=\"$FEARLEZZ_OUT/cover.out\" ./..."
 stage = "working"
 tests = { count = '(?m)^\s*--- (?:PASS|FAIL):', failed = '(?m)^\s*--- FAIL: (\S+)' }
+coverage = "go"
 test_files = ["**/*_test.go"]
 
 # Every rule, decided once on the maintainer's Lint Desk: gate means it must never happen, flag

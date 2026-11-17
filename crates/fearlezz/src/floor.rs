@@ -209,6 +209,7 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
                 found.extend(settings(bf.levels.weakenings(&hf.levels, *tool)));
             }
         }
+        found.extend(coverage(b, h));
         if let (Some(Builtin::Rules(br)), Some(Builtin::Rules(hr))) = (&b.builtin, &h.builtin) {
             found.extend(settings(br.weakenings(hr, files)));
         }
@@ -254,6 +255,29 @@ fn names_diff(base: &[String], head: &[String]) -> String {
         .filter(|v| !head.contains(v))
         .map(|v| format!("-{v}"));
     added.chain(dropped).collect::<Vec<_>>().join(", ")
+}
+
+/// What the head's check measures of coverage less than the base's: none at all, another
+/// report format, or a lower level for `[lints.coverage]`.
+fn coverage(b: &config::Check, h: &config::Check) -> Vec<(Part, String)> {
+    let part = || Part::Check(b.id.clone());
+    match (&b.coverage, &h.coverage) {
+        (Some(_), None) => vec![(part(), "it no longer measures coverage".into())],
+        (Some(bc), Some(hc)) if bc.read.name() != hc.read.name() => vec![(
+            part(),
+            format!(
+                "it reads its coverage as {} instead of {}",
+                hc.read.name(),
+                bc.read.name()
+            ),
+        )],
+        (Some(bc), Some(hc)) => settings(
+            bc.levels
+                .weakenings(&hc.levels, crate::lints::Tool::Coverage),
+        )
+        .collect(),
+        (None, _) => Vec::new(),
+    }
 }
 
 /// Weakenings of parts of the config other than a check, each as its path and how.

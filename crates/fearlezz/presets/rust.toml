@@ -14,6 +14,12 @@ stage = "working"
 each = "Cargo.toml"
 findings = { read = "cargo", lints = ["clippy", "rustc"] }
 
+# To flag each changed line no test ran, add cargo-llvm-cov (and the llvm-tools-preview
+# component) and write in fearlezz.toml:
+#
+#   [check.tests]
+#   run = "cargo llvm-cov --quiet --lcov --output-path \"$FEARLEZZ_OUT/lcov.info\""
+#   coverage = "lcov"
 [check.tests]
 run = "cargo test --quiet"
 stage = "working"

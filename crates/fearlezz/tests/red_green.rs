@@ -543,7 +543,11 @@ fn piece_names_its_test_files(piece: &str, check: &str, others: &[&str], test: &
             "",
         )
     } else {
-        ("echo ran 1", "tests = { count = 'ran (\\d+)' }\n")
+        // The stand in writes no coverage report, so it measures none.
+        (
+            "echo ran 1",
+            "tests = { count = 'ran (\\d+)' }\ncoverage = false\n",
+        )
     };
     let mut config = format!(
         "use = [\"{piece}\"]\n\n[check.settings]\noff = true\n\n[check.{check}]\nrun = \

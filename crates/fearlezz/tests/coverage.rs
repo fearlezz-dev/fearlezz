@@ -1,0 +1,360 @@
+//! Coverage: a test check that reads its coverage report flags each line the change touched
+//! that no test ran, judged like any finding. Old untested code never counts.
+
+// Clippy applies its test allowances (unwrap, expect, panic) only to cfg(test) code.
+#![cfg(test)]
+
+mod common;
+
+use common::Repo;
+
+/// A test runner that measures `src/*.txt` as lcov: a line holding `miss` ran in no test, a
+/// line holding `skip` is not code, every other line ran. It fails while `src/fail` exists.
+const LCOV: &str = r#"
+[check.tests]
+run = '''
+for f in src/*.txt; do
+  echo "SF:$f"
+  n=0
+  while IFS= read -r line; do
+    n=$((n + 1))
+    case "$line" in
+      *miss*) echo "DA:$n,0" ;;
+      *skip*) ;;
+      *) echo "DA:$n,3" ;;
+    esac
+  done < "$f"
+  echo "end_of_record"
+done > "$FEARLEZZ_OUT/lcov.info"
+echo "test result: ok. 1 passed; 0 failed"
+test ! -e src/fail
+'''
+stage = "working"
+inputs = ["src/**"]
+tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }
+coverage = "lcov"
+"#;
+
+const OLD: &str = "one\nmiss from long ago\nthree\n";
+
+fn feature(config: &str, files: &[(&str, &str)]) -> Repo {
+    let repo = Repo::new(config, files);
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo
+}
+
+#[test]
+fn changed_lines_no_test_ran_are_flagged() {
+    let repo = feature(LCOV, &[("src/a.txt", OLD)]);
+    repo.write(
+        "src/a.txt",
+        &format!("{OLD}four\nmiss one\nskip\nmiss two\nfive\nmiss three\n"),
+    );
+    let out = repo.fz(&["run", "tests"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("flag src/a.txt:5  uncovered  changed lines 5 to 7 ran in no test"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("flag src/a.txt:9  uncovered  this changed line ran in no test"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("src/a.txt:2"), "{}", out.stdout);
+}
+
+#[test]
+fn tested_changes_have_no_coverage_findings() {
+    let repo = feature(LCOV, &[("src/a.txt", OLD)]);
+    repo.write("src/a.txt", &format!("{OLD}four\n"));
+    let out = repo.fz(&["run", "tests"]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains("uncovered"), "{}", out.stdout);
+}
+
+#[test]
+fn a_project_can_make_uncovered_code_block() {
+    let config = format!("{LCOV}\n[lints.coverage]\nuncovered = \"gate\"\n");
+    let repo = feature(&config, &[("src/a.txt", OLD)]);
+    repo.write("src/a.txt", &format!("{OLD}miss new\n"));
+    let out = repo.fz(&["run", "tests"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("gate src/a.txt:4  uncovered"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn coverage_findings_never_excuse_a_failing_test_run() {
+    let repo = feature(LCOV, &[("src/a.txt", OLD)]);
+    repo.write("src/a.txt", &format!("{OLD}miss new\n"));
+    repo.write("src/fail", "");
+    let out = repo.fz(&["run", "tests"]);
+    assert!(!out.ok, "{}", out.stdout);
+}
+
+#[test]
+fn a_run_that_writes_no_report_fails() {
+    let config = LCOV.replace("$FEARLEZZ_OUT/lcov.info", "/dev/null");
+    let repo = feature(&config, &[("src/a.txt", OLD)]);
+    repo.write("src/a.txt", &format!("{OLD}four\n"));
+    let out = repo.fz(&["run", "tests"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("no lcov report matching $FEARLEZZ_OUT/lcov.info written by this run"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_report_left_by_an_earlier_run_is_not_read() {
+    let config = LCOV
+        .replace("$FEARLEZZ_OUT/lcov.info", "coverage/lcov.info")
+        .replace("done > \"coverage", "done > \"${COVER:-coverage}")
+        .replace(
+            "coverage = \"lcov\"",
+            "coverage = { lcov = \"coverage/lcov.info\" }",
+        )
+        .replace(
+            "stage = \"working\"",
+            "stage = \"working\"\nenv = [\"COVER\"]",
+        );
+    let repo = feature(&config, &[("src/a.txt", OLD), ("coverage/.keep", "")]);
+    repo.write("src/a.txt", &format!("{OLD}miss new\n"));
+    let first = repo.fz(&["run", "tests"]);
+    assert!(first.ok, "{}", first.stdout);
+    assert!(first.stdout.contains("uncovered"), "{}", first.stdout);
+    repo.write("src/a.txt", &format!("{OLD}miss newer\n"));
+    let out = repo.fz_env(&["run", "tests"], &[("COVER", "/dev/null#")]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("no lcov report matching coverage/lcov.info"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn reading_coverage_another_way_runs_the_check_again() {
+    let repo = feature(LCOV, &[("src/a.txt", OLD)]);
+    repo.write("src/a.txt", &format!("{OLD}four\n"));
+    assert!(repo.fz(&["run", "tests"]).ok);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace(
+            "coverage = \"lcov\"",
+            "coverage = { lcov = \"$FEARLEZZ_OUT/*.info\" }",
+        ),
+    );
+    let out = repo.fz(&["run", "tests"]);
+    assert!(!out.stdout.contains("1 reused"), "{}", out.stdout);
+}
+
+#[test]
+fn a_report_from_a_project_folder_names_files_from_there() {
+    let config = LCOV
+        .replace("for f in src/*.txt", "for f in lib/*.txt")
+        .replace("test ! -e src/fail", "true")
+        .replace(
+            "inputs = [\"src/**\"]",
+            "inputs = [\"app/**\"]\ndir = \"app\"",
+        );
+    let repo = feature(&config, &[("app/lib/a.txt", OLD)]);
+    repo.write("app/lib/a.txt", &format!("{OLD}miss new\n"));
+    let out = repo.fz(&["run", "tests"]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("flag app/lib/a.txt:4  uncovered"),
+        "{}",
+        out.stdout
+    );
+}
+
+/// `go test -coverprofile`: blocks by import path, from the module go.mod names.
+#[test]
+fn a_go_coverprofile_names_files_by_import_path() {
+    let config = r#"
+[check.go-test]
+run = '''
+cat > "$FEARLEZZ_OUT/cover.out" <<'EOF'
+mode: set
+example.com/m/pkg/a.go:1.1,4.2 2 1
+example.com/m/pkg/a.go:5.1,6.9 1 0
+example.com/m/pkg/a.go:6.9,7.2 1 1
+EOF
+echo "--- PASS: TestA"
+'''
+stage = "working"
+tests = { count = '(?m)^\s*--- (?:PASS|FAIL):' }
+coverage = "go"
+"#;
+    let old = "package pkg\n\nfunc A() {\n}\n";
+    let repo = feature(
+        config,
+        &[
+            ("go.mod", "module example.com/m\n\ngo 1.22\n"),
+            ("pkg/a.go", old),
+        ],
+    );
+    repo.write("pkg/a.go", &format!("{old}func B() {{\n  b()\n}}\n"));
+    let out = repo.fz(&["run", "go-test"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("flag pkg/a.go:5  uncovered  this changed line ran in no test"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("pkg/a.go:6"), "{}", out.stdout);
+}
+
+/// A runner that writes JaCoCo XML, as Kover does: `com/x/Foo.kt` with line 3 covered, line 4
+/// missed and line 5 partly covered.
+const JACOCO: &str = r#"
+[check.gradle-test]
+run = '''
+cat > "$FEARLEZZ_OUT/jacoco.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd">
+<report name="app">
+  <package name="com/x">
+    <sourcefile name="Foo.kt">
+      <line nr="3" mi="0" ci="4" mb="0" cb="0"/>
+      <line nr="4" mi="2" ci="0" mb="0" cb="0"/>
+      <line nr="5" mi="1" ci="1" mb="1" cb="1"/>
+    </sourcefile>
+  </package>
+</report>
+EOF
+echo "--- PASS: FooTest"
+'''
+stage = "working"
+tests = { count = '(?m)^\s*--- (?:PASS|FAIL):' }
+coverage = "jacoco"
+"#;
+
+/// JaCoCo names source files by package, found under any source folder.
+#[test]
+fn a_jacoco_report_finds_files_by_package() {
+    let config = JACOCO;
+    let file = "app/src/main/kotlin/com/x/Foo.kt";
+    let repo = feature(config, &[(file, "package com.x\n\n")]);
+    repo.write(
+        file,
+        "package com.x\n\nfun a() = 1\nfun b() = 2\nfun c() = 3\n",
+    );
+    let out = repo.fz(&["run", "gradle-test"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains(&format!(
+            "flag {file}:4  uncovered  this changed line ran in no test"
+        )),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains(&format!("{file}:5")), "{}", out.stdout);
+}
+
+#[test]
+fn removing_coverage_weakens_the_proof() {
+    let repo = Repo::new(LCOV, &[("src/a.txt", OLD)]);
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("coverage = \"lcov\"\n", ""),
+    );
+    repo.commit("drop coverage");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("weakens tests: it no longer measures coverage"),
+        "{}",
+        out.stdout
+    );
+}
+
+/// The JaCoCo runner above, for a change that touches only a test file.
+#[test]
+fn a_jacoco_report_of_files_the_change_did_not_touch_is_fine() {
+    let file = "app/src/main/kotlin/com/x/Foo.kt";
+    let repo = feature(
+        JACOCO,
+        &[(
+            file,
+            "package com.x\n\nfun a() = 1\nfun b() = 2\nfun c() = 3\n",
+        )],
+    );
+    repo.write("app/src/test/kotlin/com/x/FooTest.kt", "package com.x\n");
+    let out = repo.fz(&["run", "gradle-test"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("uncovered"), "{}", out.stdout);
+}
+
+/// Kotlin may leave the common root package out of its folders.
+#[test]
+fn a_jacoco_file_outside_its_package_folder_is_found_by_name() {
+    let file = "app/src/main/kotlin/Foo.kt";
+    let repo = feature(JACOCO, &[(file, "package com.x\n\n")]);
+    repo.write(
+        file,
+        "package com.x\n\nfun a() = 1\nfun b() = 2\nfun c() = 3\n",
+    );
+    let out = repo.fz(&["run", "gradle-test"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains(&format!("flag {file}:4  uncovered")),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn lowering_the_coverage_level_weakens_the_proof() {
+    let config = format!("{LCOV}\n[lints.coverage]\nuncovered = \"gate\"\n");
+    let repo = Repo::new(&config, &[("src/a.txt", OLD)]);
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("uncovered = \"gate\"", "uncovered = \"flag\""),
+    );
+    repo.commit("lower coverage");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stdout.contains("weakens"), "{}", out.stdout);
+    assert!(out.stdout.contains("uncovered"), "{}", out.stdout);
+}
+
+#[test]
+fn a_project_turns_off_the_coverage_a_piece_measures() {
+    let config = r#"
+use = ["go"]
+
+[check.go-test]
+run = "echo '--- PASS: TestA'"
+coverage = false
+
+[check.golangci-lint]
+off = true
+
+[check.gofmt]
+off = true
+"#;
+    let repo = feature(config, &[("a.go", "package a\n")]);
+    repo.write("a.go", "package a\n\nfunc A() {}\n");
+    let out = repo.fz(&["run", "go-test"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+}

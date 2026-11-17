@@ -205,6 +205,9 @@ impl Hasher {
                 );
             }
         }
+        if let Some(coverage) = &check.coverage {
+            parts.insert("(coverage)".into(), definition(coverage));
+        }
         if let Some(pictures) = check.pictures.taken() {
             parts.insert("(pictures)".into(), definition(&pictures));
         }

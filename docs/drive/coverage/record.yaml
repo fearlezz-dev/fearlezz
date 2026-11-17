@@ -1,0 +1,44 @@
+# docs/drive/coverage/record.yaml: the working state of the coverage proof.
+goal: Coverage of the lines a change touched, read natively from the reports test runners write, taught to the language pieces.
+
+pieces:
+  - id: coverage-findings
+    status: done
+    tries:
+      - id: changed-lines-as-findings
+        what: a test check's `coverage` reader turns each changed line no test ran into a finding of rule `uncovered`, judged like any finding
+        state: picked
+        why: findings already block only on changed lines; TypewriterV1's detector (xtask/src/review/coverage.rs) does the same and never gates
+        evidence: [crates/fearlezz/tests/coverage.rs, real go test, bun test and flutter test runs flag the untested lines]
+  - id: readers
+    status: done
+    tries:
+      - id: lcov-jacoco-go
+        what: lcov (Rust, Vitest, Bun, Flutter, Python), JaCoCo XML (Kotlin Kover), Go coverprofile
+        state: picked
+        why: covers every language piece; Cobertura and llvm-cov JSON add no piece
+  - id: pieces
+    status: done
+
+decided:
+  - id: flag-by-default
+    what: uncovered changed code is flagged, not gated; a project raises it with [lints.coverage] uncovered = "gate"
+  - id: on-where-free
+    what: go, bun and flutter measure coverage by default; rust, vitest, python and kotlin show the opt in line
+  - id: off-switch
+    what: coverage = false turns off what a piece measures (found when a stand in command wrote no report)
+  - id: own-key
+    what: a `coverage` key on the check, not a findings reader, so coverage findings never excuse a failing test run
+
+open: []
+
+slices:
+  - id: lcov-core
+    tests: [crates/fearlezz/tests/coverage.rs]
+    status: done
+  - id: go-and-jacoco
+    status: done
+  - id: pieces
+    status: done
+
+next: prove with fearlezz run --stage working, then the final stage, commit, push, open the PR

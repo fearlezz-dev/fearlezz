@@ -149,6 +149,9 @@ pub(crate) struct Check {
     pub findings: Option<FindingsSpec>,
     /// For a check that runs tests: where it says how many ran. Zero tests fails it.
     pub tests: Option<crate::counts::Reader>,
+    /// For a check that measures coverage while it tests: where the report is, and the
+    /// `[lints.coverage]` table that gives its findings their level.
+    pub coverage: Option<crate::coverage::Coverage>,
     /// Which of its inputs are tests, as written: CI runs the change's test files on the base
     /// commit to show they fail there (red before green).
     pub test_files: Vec<String>,
@@ -435,6 +438,7 @@ struct RawCheck {
     needs: Vec<Need>,
     findings: Option<RawFindings>,
     tests: Option<toml::Value>,
+    coverage: Option<toml::Value>,
     #[serde(default)]
     test_files: Vec<String>,
     stills: Option<String>,
@@ -654,6 +658,8 @@ impl Config {
                     .as_ref()
                     .map(crate::counts::Reader::parse)
                     .transpose()
+                    .with_context(|| format!("check {id}"))?,
+                coverage: crate::coverage::Coverage::parse(c.coverage.as_ref(), &all_lints)
                     .with_context(|| format!("check {id}"))?,
                 test_globs: globs(&c.test_files)
                     .with_context(|| format!("check {id}: test_files"))?,
@@ -905,6 +911,7 @@ fn builtin_check(
         }),
         builtin: Some(builtin),
         tests: None,
+        coverage: None,
         test_files: Vec::new(),
         test_globs: Globs::default(),
         pictures: Pictures::default(),

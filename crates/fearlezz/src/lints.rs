@@ -72,9 +72,11 @@ pub(crate) enum Tool {
     Golangci,
     /// Rules named `plugin/rule` as .oxlintrc.json names them, such as `eslint/no-debugger`.
     Oxlint,
+    /// Fearlezz's own reading of a coverage report: the rule `uncovered`.
+    Coverage,
 }
 
-const TOOLS: [(&str, Tool); 10] = [
+const TOOLS: [(&str, Tool); 11] = [
     ("clippy", Tool::Clippy),
     ("rustc", Tool::Rustc),
     ("dart", Tool::Dart),
@@ -85,6 +87,7 @@ const TOOLS: [(&str, Tool); 10] = [
     ("detekt", Tool::Detekt),
     ("golangci", Tool::Golangci),
     ("oxlint", Tool::Oxlint),
+    ("coverage", Tool::Coverage),
 ];
 
 impl Tool {
@@ -131,7 +134,8 @@ impl Tool {
             | Tool::Eslint
             | Tool::Ruff
             | Tool::Ktlint
-            | Tool::Golangci => reported.to_string(),
+            | Tool::Golangci
+            | Tool::Coverage => reported.to_string(),
         };
         Some(name)
     }
@@ -157,7 +161,8 @@ impl Lints {
                 | Tool::Eslint
                 | Tool::Ruff
                 | Tool::Ktlint
-                | Tool::Golangci => None,
+                | Tool::Golangci
+                | Tool::Coverage => None,
             };
             if let Some(example) = example
                 && let Some(bare) = rules.keys().find(|r| !r.contains('/'))
