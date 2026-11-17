@@ -7,7 +7,7 @@ import { type CheckState, Feed, type Status, type TestState, connect, namedTests
 import { PicturesPanel } from "./PicturesPanel";
 import { picturesOf } from "./pictures";
 import type { Job, Review, Run, RunCheck, Snapshot, Weakening } from "./proof";
-import { diff } from "./diff";
+import { DiffLines } from "./DiffLines";
 import { type Viewer, accept, canAccept, canSay, failedFor, localBy, maySignIn, signIn, standing, toLookAt, viewerOf, waitsFor } from "./review";
 import { ShareControl } from "./ShareControl";
 import { ago } from "./ago";
@@ -326,29 +326,11 @@ function WeakeningRow(props: { weakening: Weakening }) {
       </div>
       <Show when={open()}>
         <div class="change">
-          <Diff was={w().was} now={w().now} />
+          <DiffLines was={w().was} now={w().now} />
           <p class="why">Fearlezz can't tell whether this proves as much as before. Accept only if it does.</p>
         </div>
       </Show>
     </li>
-  );
-}
-
-/** A part of the config before and after, line by line, the words that differ marked. */
-function Diff(props: { was: string | null | undefined; now: string | null | undefined }) {
-  return (
-    <pre class="diff-lines" data-diff>
-      <For each={diff(props.was, props.now)}>
-        {(line) => (
-          <span class={`line ${line.kind}`} data-line={line.kind}>
-            <span class="sign" aria-hidden="true">
-              {line.kind === "same" ? " " : line.kind === "was" ? "-" : "+"}
-            </span>
-            <For each={line.pieces}>{(p) => (p.differs ? <mark>{p.text}</mark> : p.text)}</For>
-          </span>
-        )}
-      </For>
-    </pre>
   );
 }
 

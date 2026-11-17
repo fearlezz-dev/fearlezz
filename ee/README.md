@@ -90,8 +90,9 @@ request:
 
 The page is a Solid app (`ee/app`) the worker serves from its static assets: the same
 `index.html` for every page, which draws itself from its live connection. An unknown work, or a
-repository the host holds no work of, is `404`. It answers `no-store`, may not be framed, its `connect-src` is `'self'`, and its
-`img-src` and `media-src` name the files origin, the only place pictures load from.
+repository the host holds no work of, is `404`. It answers `no-store`, may not be framed, its `connect-src` is `'self'` and
+the files origin (the page reads a text there to diff it), and its `img-src` and `media-src`
+name the files origin, the only place pictures load from.
 
 **Live.** D1 is the one record; the Durable Object of a work (`WorkRoom`) holds the WebSockets
 of its open pages, which hibernate with it, and runs every write to the work, one at a time
@@ -134,8 +135,9 @@ start looking before the run ends: counts that filter, grouping by check or by t
 picture's name (screen, viewport, theme), changed pictures first, then new and gone, then
 timing, and the same ones folded. The picture on the stage compares its before and after in
 five ways (side by side, slider, onion skin, difference, blink) with outlines of where they
-differ; films play on one clock with a lane per film and a jump to each change. Flaky pictures
-show, marked. `j` and `k` step between pictures, `1` to `5` pick the way to compare. The page
+differ; films play on one clock with a lane per film and a jump to each change. A text shows as
+its diff, line by line with the words that differ marked, read from the files origin. Flaky
+pictures show, marked. `j` and `k` step between pictures, `1` to `5` pick the way to compare. The page
 gets a run's files with `GET /api/v2/runs/<run>/grant`, which answers
 `{"files": "<files origin>/<grant>/", "expires"}` to someone who may see the work (the page's
 rule: `401` without a session for a private repository, `404` otherwise), or with
@@ -173,7 +175,8 @@ ends with the newest review, and a GitHub that hangs or fails never fails or hol
   A picture to look at is changed, new, gone, timing or unreadable, and not flaky. A verdict is
   kept by check, picture and content: a still by the SHA-256 of its before and after, a changed
   film by which of its stable states changed (its bytes differ each time it is recorded), a new
-  or gone film by its bytes, so its verdict never carries over to another recording. So a picture
+  or gone film by its bytes, so its verdict never carries over to another recording, and a text by
+  the SHA-256 of its before and after like a still. So a picture
   that did not change keeps its verdict across runs and pushes; the page says "carried over".
   A verdict only says a picture looks right: what should change is a note.
 - **A picture needs change while an open note is on it**, whatever verdict its content has;
@@ -317,12 +320,12 @@ resolve or accept refuses any `Authorization` header.
 | `POST /api/v2/login/token` | Body `{"device_code"}`. `{"pending": true, "interval"}` until the person entered the code, then `{"token", "login"}`; `400` when the flow ended without them. |
 | `DELETE /api/v2/login` | Ends the bearer's token. `204`. |
 | `GET /api/v2/work/<owner>/<repo>/<branch>` | With the token: the work, its page URL, the review of its head and its open notes with the paths of their pictures (`notes::Feedback`). `401` without a token that holds, `404` for a work or repository the person may not read. |
-| `GET /api/v2/runs/<run>/files/<path>` | With the token: one picture or film of a run, as a download (`Content-Disposition: attachment`, a sandboxing CSP, `nosniff`); only picture and film types. |
+| `GET /api/v2/runs/<run>/files/<path>` | With the token: one picture, film or text of a run, as a download (`Content-Disposition: attachment`, a sandboxing CSP, `nosniff`); only the types the files origin serves. |
 
 `fearlezz` shows per picture its verdict or "not looked at yet" and its open notes when the
 CLI is signed in and the branch is on GitHub, waiting at most two seconds; `fearlezz --notes`
 prints each open note and saves its pictures with the region drawn (ffmpeg, in the CLI) into
-the user cache folder; the stop hook holds the agent once while notes are open.
+the user cache folder, and a noted text as it is (a note on a text is about the whole text); the stop hook holds the agent once while notes are open.
 
 ### Two origins
 
@@ -334,10 +337,13 @@ answers on two origins and tells them apart by the request's host:
 - the **files origin** (`FILES_ORIGIN`, `https://fearlezz.seamlezz.net` by default): the runs'
   files, and nothing else. It reads no cookies and sets none.
 
-Files origin: `/<grant>/<path>` is the run's picture or film at that path, with `Range`
-support (films need it). Only png, jpeg, webp, gif, avif, mp4 and webm are served, each with the
-content type its name pins and `X-Content-Type-Options: nosniff`; anything else (svg, html, a
-log) is `404`, so nothing a pull request wrote ever runs as a page. The grant is
+Files origin: `/<grant>/<path>` is the run's picture, film or text at that path, with `Range`
+support (films need it). Only png, jpeg, webp, gif, avif, mp4, webm and txt are served, each with
+the content type its name pins (a text of a look is kept as `.txt`, served as
+`text/plain; charset=utf-8`) and `X-Content-Type-Options: nosniff`; anything else (svg, html, a
+log) is `404`, so nothing a pull request wrote ever runs as a page. Each answer allows the app
+origin to read it (`Access-Control-Allow-Origin`), so the page can diff a text; the grant in the
+URL is what opens it. The grant is
 `base64url(json).base64url(mac)`: the JSON names the repository, the run and an expiry one hour
 out, and the mac is HMAC-SHA256 with `SIGNING_KEY`. A missing, expired or altered grant, or one
 for another run, gets `404`. Files answer with `Content-Security-Policy: frame-ancestors

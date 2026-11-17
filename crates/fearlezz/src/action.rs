@@ -120,7 +120,7 @@ impl Workflow {
 }
 
 /// The job summary of a proof: whether the commit is proven, what keeps it from being proven
-/// and what to do, what a reader should know, the changed pictures for a person to review on
+/// and what to do, what a reader should know, the changed pictures and texts for a person to review on
 /// the pull request, every check, and the end of each failing output. `page` is the proof
 /// host's page of the work, when the host opened the run, and `gate` where what the change
 /// weakens got past, or can.
@@ -198,7 +198,7 @@ pub(crate) fn summary(
     for note in proof.notes() {
         writeln!(text, "{note}\n")?;
     }
-    pictures(proof, &mut text)?;
+    looks(proof, &mut text)?;
     writeln!(text, "| check | result | tests | time | command |")?;
     writeln!(text, "| --- | --- | --- | --- | --- |")?;
     for check in proof.ran_here() {
@@ -273,15 +273,8 @@ fn diffs(proof: &Proof, text: &mut String) -> std::fmt::Result {
         }
         let was: Vec<&str> = w.was.as_deref().unwrap_or("").lines().collect();
         let now: Vec<&str> = w.now.as_deref().unwrap_or("").lines().collect();
-        let lines = diff(&was, &now);
-        // A fence longer than any run of backticks in the config keeps it closed.
-        let ticks = lines
-            .iter()
-            .flat_map(|l| l.split(|c| c != '`'))
-            .map(str::len)
-            .max()
-            .unwrap_or(0);
-        let fence = "`".repeat(ticks.max(2) + 1);
+        let lines = crate::text::lines(&was, &now);
+        let fence = fence(&lines);
         writeln!(text, "`{}`: {}\n", w.part.name(), cell(&w.why()))?;
         writeln!(text, "{fence}diff")?;
         for line in &lines {
@@ -292,66 +285,19 @@ fn diffs(proof: &Proof, text: &mut String) -> std::fmt::Result {
     Ok(())
 }
 
-/// The lines of `was` and `now` as a unified diff without headers: a line only in `was` gets
-/// `-`, only in `now` `+`, in both a space, kept in order along their longest common lines.
-fn diff(was: &[&str], now: &[&str]) -> Vec<String> {
-    // shared[i][j]: how many lines `was[i..]` and `now[j..]` share, in order. Past the end of
-    // either they share none.
-    let mut shared = vec![vec![0usize; now.len() + 1]; was.len() + 1];
-    let at = |s: &[Vec<usize>], i: usize, j: usize| s.get(i).and_then(|r| r.get(j)).copied();
-    for (i, w) in was.iter().enumerate().rev() {
-        for (j, n) in now.iter().enumerate().rev() {
-            let count = if w == n {
-                at(&shared, i + 1, j + 1).map_or(1, |c| c + 1)
-            } else {
-                at(&shared, i + 1, j)
-                    .max(at(&shared, i, j + 1))
-                    .unwrap_or(0)
-            };
-            if let Some(cell) = shared.get_mut(i).and_then(|r| r.get_mut(j)) {
-                *cell = count;
-            }
-        }
-    }
-    let (mut i, mut j) = (0, 0);
-    let mut lines = Vec::new();
-    loop {
-        match (was.get(i), now.get(j)) {
-            (None, None) => break,
-            (Some(w), Some(n)) if w == n => {
-                lines.push(format!(" {w}"));
-                i += 1;
-                j += 1;
-            }
-            (Some(w), None) => {
-                lines.push(format!("-{w}"));
-                i += 1;
-            }
-            (Some(w), Some(_)) if at(&shared, i + 1, j) >= at(&shared, i, j + 1) => {
-                lines.push(format!("-{w}"));
-                i += 1;
-            }
-            (_, Some(n)) => {
-                lines.push(format!("+{n}"));
-                j += 1;
-            }
-        }
-    }
-    lines
-}
-
-/// The pictures that differ from the base, each check with its counts and then each picture,
-/// for a person to review on the pull request. They never keep the commit from being proven.
-fn pictures(proof: &Proof, text: &mut String) -> std::fmt::Result {
+/// The pictures and texts that differ from the base, each check with its counts and then each
+/// one, a text with its diff, for a person to review on the pull request. They never keep the
+/// commit from being proven.
+fn looks(proof: &Proof, text: &mut String) -> std::fmt::Result {
     let looks: Vec<_> = proof.looks.iter().filter(|l| l.to_look_at() > 0).collect();
     if looks.is_empty() {
         return Ok(());
     }
     writeln!(
         text,
-        "#### Changed pictures\n\nA person reviews them on the pull request. `fearlezz run --ci \
-         --proof <dir>` writes every picture, before and after, into a folder; the Fearlezz \
-         action keeps it as an artifact of the run (`fearlezz-proof-<job>`).\n"
+        "#### Changed looks\n\nA person reviews these pictures and texts on the pull request. \
+         `fearlezz run --ci --proof <dir>` writes every one, before and after, into a folder; \
+         the Fearlezz action keeps it as an artifact of the run (`fearlezz-proof-<job>`).\n"
     )?;
     let mut left = SHOWN;
     let mut hidden = 0;
@@ -384,6 +330,9 @@ fn pictures(proof: &Proof, text: &mut String) -> std::fmt::Result {
                 item.change.label(),
                 cell(&item.summary)
             )?;
+            if item.kind == crate::look::TEXT {
+                text_diff(look, item, text)?;
+            }
         }
         writeln!(text)?;
     }
@@ -391,6 +340,35 @@ fn pictures(proof: &Proof, text: &mut String) -> std::fmt::Result {
         writeln!(text, "And {hidden} more.\n")?;
     }
     Ok(())
+}
+
+/// The start of a text's diff, folded under its line.
+fn text_diff(look: &crate::look::Look, item: &Picture, text: &mut String) -> std::fmt::Result {
+    let diff = crate::look::text_diff(look, item);
+    let (shown, left) = crate::text::head(&diff, crate::look::DIFF_LINES);
+    let fence = fence(&shown);
+    writeln!(
+        text,
+        "\n  <details><summary>diff</summary>\n\n  {fence}diff"
+    )?;
+    for line in &shown {
+        writeln!(text, "  {line}")?;
+    }
+    writeln!(text, "  {fence}")?;
+    if left > 0 {
+        writeln!(text, "\n  And {left} more lines.")?;
+    }
+    writeln!(text, "\n  </details>\n")
+}
+
+/// A code fence longer than any run of backticks in `lines`, so it stays closed.
+fn fence(lines: &[impl AsRef<str>]) -> String {
+    let ticks = lines
+        .iter()
+        .filter_map(|l| l.as_ref().split(|c| c != '`').map(str::len).max())
+        .max()
+        .unwrap_or(0);
+    "`".repeat(ticks.max(2) + 1)
 }
 
 /// Text for a table cell.

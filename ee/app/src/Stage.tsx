@@ -1,12 +1,13 @@
 // One picture on the light table: its before and after, the five ways to compare them, and for
-// a film both films on one clock with lanes of where they differ. Side by side, the notes on the
+// a film both films on one clock with lanes of where they differ. A text shows as its diff. Side by side, the notes on the
 // picture show as numbered regions, and a person who may make notes drags on either picture to
 // draw one.
 
-import { type JSX, For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, splitProps } from "solid-js";
+import { type JSX, For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, onCleanup, splitProps } from "solid-js";
+import { DiffLines } from "./DiffLines";
 import { fileUrl } from "./grant";
 import { type Draft, type Shown as Noted, meant, onSide, regionBetween } from "./notes";
-import { type Box, type Shown, WORDS, isFilm, lanes, marksAt, plainSummary, stillMarks, title } from "./pictures";
+import { type Box, type Shown, WORDS, isFilm, isText, lanes, marksAt, plainSummary, stillMarks, title } from "./pictures";
 import type { Comparison } from "./proof";
 
 export const MODES = [
@@ -503,6 +504,27 @@ function Timeline(props: { film: Comparison; clock: Clock }) {
   );
 }
 
+/** A text of a look: its before and after read from the files origin, line by line. */
+function TextDiff(props: { before: string; after: string }) {
+  const read = async (url: string) => {
+    if (!url) return "";
+    const answer = await fetch(url);
+    if (!answer.ok) throw new Error(`the files origin answered ${answer.status}`);
+    return answer.text();
+  };
+  const [texts] = createResource(
+    () => [props.before, props.after] as const,
+    ([before, after]) => Promise.all([read(before), read(after)]),
+  );
+  return (
+    <Show when={!texts.error} fallback={<p class="missing">The text could not be read.</p>}>
+      <Show when={texts()} fallback={<p class="missing">Reading the text.</p>}>
+        {(t) => <DiffLines was={t()[0]} now={t()[1]} context={3} />}
+      </Show>
+    </Show>
+  );
+}
+
 /** The picture on the stage: what it is, how to compare it, and the comparison itself. */
 export function Stage(props: {
   shown: Shown;
@@ -518,6 +540,7 @@ export function Stage(props: {
   const picture = () => props.shown.picture;
   const url = (path: string | null) => (path && props.files ? fileUrl(props.files, path) : "");
   const film = () => isFilm(picture());
+  const text = () => isText(picture());
   const comparison = () => picture().comparison;
   const size = createMemo((): [number, number] | undefined => {
     const c = comparison();
@@ -556,7 +579,7 @@ export function Stage(props: {
         >
           {film() ? `${WORDS[picture().change]} film` : WORDS[picture().change]}
         </span>
-        <Show when={both()}>
+        <Show when={both() && !text()}>
           <div class="modes seg" role="group" aria-label="How to compare">
             <For each={MODES}>
               {([key, label], k) => (
@@ -576,6 +599,7 @@ export function Stage(props: {
       <Show when={props.shown.look.no_before}>
         {(why) => <p class="look-note" title="Every picture of this check counts as new">No before: {why()}</p>}
       </Show>
+      <Show when={!text()} fallback={<TextDiff before={url(picture().before)} after={url(picture().after)} />}>
       <Show
         when={both()}
         fallback={
@@ -632,6 +656,7 @@ export function Stage(props: {
             );
           }}
         </Show>
+      </Show>
       </Show>
     </article>
   );

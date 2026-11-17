@@ -325,6 +325,35 @@ fn notes_saves_each_notes_pictures_with_its_region_drawn() {
 }
 
 #[test]
+fn notes_saves_a_noted_text_as_it_is() {
+    let host = FakeHost::start();
+    let mut said = feedback(&host);
+    let text = note("n3", "app", "after", [0.0, 0.0, 1.0, 1.0], None);
+    said["notes"] = json!([{"note": text, "kind": "text",
+        "before": "looks/render/media/before-app.yaml.txt",
+        "after": "looks/render/media/after-app.yaml.txt"}]);
+    {
+        let mut state = host.state.lock().unwrap();
+        state.feedback = Some(said);
+        for side in ["before", "after"] {
+            state.pictures.insert(
+                format!("/api/v2/runs/r1/files/looks/render/media/{side}-app.yaml.txt"),
+                format!("color: {side}\n").into_bytes(),
+            );
+        }
+    }
+    let repo = repo(&host.url);
+    let config = signed_in(&host.url);
+    let out = fz(&repo, config.path(), &["--notes"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("the after text"), "{}", out.stdout);
+    let after = saved(&out, "1-after.txt");
+    assert_eq!(std::fs::read_to_string(after).unwrap(), "color: after\n");
+    let before = saved(&out, "1-before.txt");
+    assert_eq!(std::fs::read_to_string(before).unwrap(), "color: before\n");
+}
+
+#[test]
 fn notes_without_a_sign_in_leads_to_login() {
     let host = FakeHost::start();
     let repo = repo(&host.url);

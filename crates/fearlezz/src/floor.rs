@@ -186,6 +186,18 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
         if let Some(how) = h.flaky_tests.widened(&b.flaky_tests, "tests") {
             say(how);
         }
+        let (bg, hg) = (b.generates.patterns(), h.generates.patterns());
+        if !bg.is_empty() && !b.generates.widenings(&h.generates).is_empty() {
+            say(if hg.is_empty() {
+                format!("it no longer checks generated files ({})", bg.join(", "))
+            } else {
+                format!(
+                    "it checks fewer generated files ({}, now {})",
+                    bg.join(", "),
+                    hg.join(", ")
+                )
+            });
+        }
         if b.tests.is_some() && h.tests.is_none() {
             say("it no longer counts its tests".into());
         }

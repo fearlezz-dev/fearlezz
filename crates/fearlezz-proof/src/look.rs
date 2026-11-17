@@ -1,5 +1,5 @@
-//! The look at a change: every still and film a check records, compared with the same check
-//! run on the base commit.
+//! The look at a change: every still, film and text a check takes, compared with the same
+//! check run on the base commit.
 
 use std::path::{Path, PathBuf};
 
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::media::Comparison;
 
-/// How a picture differs from its before.
+/// How a picture or text differs from its before.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "PictureChange"))]
 #[serde(rename_all = "snake_case")]
@@ -40,13 +40,13 @@ impl Change {
     }
 }
 
-/// One still or film of a look.
+/// One still, film or text of a look.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "Picture"))]
 pub struct Item {
     /// Its path below the check's media folder.
     pub name: String,
-    /// `still` or `film`.
+    /// `still`, `film` or `text`.
     pub kind: String,
     /// How it differs from its before.
     pub change: Change,

@@ -391,25 +391,33 @@ pub(crate) fn notes(git: &Git, url: &str) -> Result<bool> {
             note.by,
             note.head.get(..7).unwrap_or(&note.head)
         );
+        // A note on a text is about the whole text, saved as it is.
+        let text = noted.kind == crate::look::TEXT;
         for (side, path) in [("after", &noted.after), ("before", &noted.before)] {
             let Some(path) = path else { continue };
-            let drawn = matches!(
-                (side, note.side),
-                (_, Side::Both) | ("after", Side::After) | ("before", Side::Before)
-            );
-            let out = dir.join(format!("{n}-{side}.png"));
+            let drawn = !text
+                && matches!(
+                    (side, note.side),
+                    (_, Side::Both) | ("after", Side::After) | ("before", Side::Before)
+                );
+            let out = dir.join(format!("{n}-{side}.{}", if text { "txt" } else { "png" }));
             match picture(
                 url, &login, &note.run, path, &dir, n, side, noted, drawn, &out,
             ) {
                 Ok(()) => {
-                    let what = if drawn {
+                    let what = if text {
+                        format!("the {side} text")
+                    } else if drawn {
                         format!("the {side} picture, region {n} drawn")
                     } else {
                         format!("the {side} picture, to compare")
                     };
                     println!("  {}  {what}", out.display());
                 }
-                Err(e) => println!("  the {side} picture could not be saved: {e:#}"),
+                Err(e) => {
+                    let what = if text { "text" } else { "picture" };
+                    println!("  the {side} {what} could not be saved: {e:#}");
+                }
             }
         }
     }
@@ -422,7 +430,7 @@ pub(crate) fn notes(git: &Git, url: &str) -> Result<bool> {
 }
 
 /// Fetches one picture of a note's run and saves it as a PNG at `out`, the region drawn when
-/// `drawn`, a film's frame at the note's moment.
+/// `drawn`, a film's frame at the note's moment; a text is saved as it is.
 #[expect(
     clippy::too_many_arguments,
     reason = "one picture of one note, said in full"
@@ -450,6 +458,10 @@ fn picture(
     let status = host::download(&file, &login.token, &source)?;
     if status != 200 {
         bail!("the proof host answered {status}");
+    }
+    if noted.kind == crate::look::TEXT {
+        fs::copy(&source, out)?;
+        return Ok(());
     }
     let r = noted.note.region;
     let time = (noted.kind == "film").then(|| noted.note.time.unwrap_or(0.0));

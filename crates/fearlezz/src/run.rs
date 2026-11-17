@@ -61,6 +61,11 @@ pub(crate) fn execute(
     // Reports from before this moment are another run's, never proof of this one.
     let started = SystemTime::now();
     let clock = Instant::now();
+    let generated = if check.generates.patterns().is_empty() || check.builtin.is_some() {
+        None
+    } else {
+        Some(crate::generated::Snapshot::take(at.root, check)?)
+    };
     let (exit_ok, exit_code, missing_secret) = if let Some(builtin) = &check.builtin {
         run_builtin(builtin, at, &dir, out)?;
         (true, Some(0), None)
@@ -89,6 +94,17 @@ pub(crate) fn execute(
     let (mut proofs, mut proof_errors) = read_proofs(&dir.join("proof.jsonl"));
     proofs.extend(check.pictures.proofs(&dir));
     let mut passed = exit_ok;
+    let mut generated_failed = None;
+    if let (true, Some(snapshot)) = (exit_ok, &generated) {
+        let diff;
+        (generated_failed, diff) = snapshot.compare(at.root, check)?;
+        if generated_failed.is_some() {
+            passed = false;
+        }
+        if !diff.is_empty() {
+            fs::write(dir.join(crate::generated::DIFF), diff)?;
+        }
+    }
     let (mut findings, mut findings_elsewhere) = (Vec::new(), 0);
     if let Some(spec) = &check.findings {
         let (found, errors) = spec
@@ -184,6 +200,7 @@ pub(crate) fn execute(
         cases,
         missing_secret,
         no_preview: at.no_preview.map(|u| u.why.clone()),
+        generated: generated_failed,
         dir,
         log,
     };

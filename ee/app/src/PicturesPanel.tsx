@@ -14,6 +14,7 @@ import {
   grouped,
   groupings,
   isFilm,
+  isText,
   picturesOf,
   title,
 } from "./pictures";
@@ -275,8 +276,15 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer
 }
 
 /** A picture in the sheet, small: its after, or its before when it is gone; a film's first
- * frame. Empty until the files origin grants the run's files. */
+ * frame; a text's summary. Empty until the files origin grants the run's files. */
 function Thumb(props: { shown: Shown; files: string }) {
+  if (isText(props.shown.picture)) {
+    return (
+      <span class="text-thumb" data-text-thumb>
+        {props.shown.picture.summary}
+      </span>
+    );
+  }
   const path = () => props.shown.picture.after ?? props.shown.picture.before;
   const src = () => {
     const p = path();
@@ -360,7 +368,9 @@ function ReviewBar(props: {
     setError((await resolveNote(id)) ?? "");
   };
   const noteHint = () =>
-    props.sideBySide
+    isText(props.shown.picture)
+      ? "Note what should change in this text"
+      : props.sideBySide
       ? `Drag on ${both() ? "either picture" : "the picture"} to mark what should change, or note the whole picture`
       : "Side by side, drag on a picture to mark what should change; or note the whole picture";
   return (

@@ -199,15 +199,19 @@ pub struct Job {
     pub since: f64,
 }
 
-/// What a picture shows, as a verdict follows it, from `sha`, the SHA-256 of a file of the run
-/// by its path. A still is its before's and after's bytes (`still:<before>:<after>`, `-` for a
-/// side it lacks). A compared film's bytes differ each time it is recorded, so it is which of
-/// its stable states changed, as its comparison says (`film:<states before>:<states
-/// after>:<pairs that differ>`). A film nothing compared (new, gone) is its bytes like a
+/// What a picture or text shows, as a verdict follows it, from `sha`, the SHA-256 of a file of
+/// the run by its path. A still is its before's and after's bytes (`still:<before>:<after>`,
+/// `-` for a side it lacks), and a text likewise (`text:<before>:<after>`). A compared film's
+/// bytes differ each time it is recorded, so it is which of its stable states changed, as its
+/// comparison says (`film:<states before>:<states after>:<pairs that differ>`). A film nothing compared (new, gone) is its bytes like a
 /// still (`film:<before>:<after>`), so its verdict never carries over to another recording.
 /// None while a file it names is not known.
 pub fn key(item: &Item, sha: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let kind = if item.kind == "film" { "film" } else { "still" };
+    let kind = match item.kind.as_str() {
+        "film" => "film",
+        "text" => "text",
+        _ => "still",
+    };
     if let (true, Some(c)) = (kind == "film", &item.comparison) {
         let changed: Vec<String> = c
             .pairs
