@@ -3,25 +3,41 @@ goal: language pieces for the tools the developer's other projects prove their w
 
 pieces:
   - id: js-tools
-    status: figuring-out
-    open: how Prettier, ESLint, oxlint and svelte-check sit beside the typescript piece, which bundles Biome and tsc
+    status: done
+    tries:
+      - id: split-biome
+        what: typescript = tsc; biome, eslint, oxlint, prettier pieces; setup init picks from package.json
+        state: picked
+        evidence: [tests/init.rs init_picks_the_linter_and_formatter_package_json_depends_on_and_biome_otherwise, tests/presets.rs biome_is_a_piece_of_its_own_beside_the_type_checker, tests/settings.rs a_project_whose_typescript_piece_still_lints_with_biome_is_led_to_the_biome_piece]
+  - id: prettier
+    status: done
+    evidence: [tests/presets.rs the_prettier_piece_fails_on_an_unformatted_file_and_leaves_fearlezz_files_alone (real prettier 3.9.10)]
+  - id: svelte
+    status: done
+    evidence: [tests/presets.rs the_svelte_piece_reads_svelte_check_and_its_type_errors_block_anywhere (output of real svelte-check 4.7 captured), findings.rs svelte_check_errors_block_anywhere_and_warnings_flag]
   - id: node-test
-    status: figuring-out
+    status: done
+    evidence: [tests/presets.rs the_node_test_piece_counts_the_tests_node_ran (real node 26)]
   - id: stylua
-    status: figuring-out
+    status: done
+    evidence: [tests/presets.rs the_lua_piece_fails_on_a_file_stylua_would_change (real stylua 2.6)]
   - id: go-race
-    status: figuring-out
+    status: done
   - id: envtest
-    status: figuring-out
+    status: done
+    evidence: [tests/presets.rs the_envtest_piece_gives_go_test_the_binaries_of_the_kubernetes_version_in_go_mod, run.rs the_kubernetes_version_follows_k8s_io_api_and_its_replacement]
   - id: dart-package
-    status: figuring-out
+    status: done
+    evidence: [tests/presets.rs a_dart_package_gets_the_flutter_apps_analyzer_and_runs_dart_test, tests/init.rs init_tells_a_dart_package_from_a_flutter_app_by_its_sdk]
   - id: oxlint
-    status: figuring-out
+    status: done
+    evidence: [tests/presets.rs the_oxlint_piece_writes_every_rule_and_gates_a_finding_on_a_changed_line (real oxlint 1.91), docs/drive/language-pieces/oxlint-levels.tsv]
   - id: commit-convention
-    status: figuring-out
+    status: done
+    evidence: [tests/commits.rs]
   - id: wasm-tests
-    status: figuring-out
-    open: whether the rust piece copes with a wasm32-wasip1 target run by wasmtime (evidence says zellij-harpoon has zero tests, so it would fail on zero tests)
+    status: building
+    open: probe on a copy of zellij-harpoon with one test, run by fearlezz run --ci in its devenv
 
 decided:
   - id: scope
@@ -42,4 +58,4 @@ decided:
 evidence:
   survey: Svelte sites (aarnoudse/website, guia/guia-website) use ESLint, Prettier and svelte-check, no Biome; Agora runs bare oxlint per package with one root oxlint.json; Winston runs node --test on .ts with type stripping, HomeLabbing with --import tsx; arcleaf runs go test -race; surrealdb-credential-operator runs envtest through setup-envtest and KUBEBUILDER_ASSETS; jar.yazi runs stylua --check; skir-dart-client runs dart analyze --fatal-infos and dart test (vm, plus chrome and dart2wasm for one file); GrammarGuard runs convco on the commit message; TypewriterV1 checks base..head in CI.
 
-next: ask how the JavaScript tools sit beside the typescript piece, since Prettier, Svelte and oxlint all depend on it
+next: full test suite and the wasm probe, then a check-in with the oxlint levels for review, then fresh review and PR

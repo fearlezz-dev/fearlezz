@@ -1115,10 +1115,28 @@ mod tests {
     #[test]
     fn every_built_in_piece_is_a_valid_config() {
         for (name, piece) in presets::BUILTIN {
-            let mut table: toml::Table =
-                toml::from_str(piece).unwrap_or_else(|e| panic!("{name}: {e}"));
-            // The pieces it builds on are checked on their own.
-            table.remove("use");
+            let parse = |name: &str, text: &str| -> toml::Table {
+                toml::from_str(text).unwrap_or_else(|e| panic!("{name}: {e}"))
+            };
+            let mut own = parse(name, piece);
+            // Merged over the built in pieces it builds on, as `use` does.
+            let mut table = toml::Table::new();
+            if let Some(toml::Value::Array(used)) = own.remove("use") {
+                for used in used.iter().filter_map(toml::Value::as_str) {
+                    let (_, text) = presets::BUILTIN
+                        .iter()
+                        .find(|(n, _)| *n == used)
+                        .unwrap_or_else(|| panic!("{name} uses {used}"));
+                    let mut base = parse(used, text);
+                    base.remove("use");
+                    presets::merge(&mut table, base);
+                }
+            }
+            presets::merge(&mut table, own);
+            // Checks turned off are dropped when pieces merge.
+            if let Some(toml::Value::Table(checks)) = table.get_mut("check") {
+                checks.retain(|_, c| c.get("off").and_then(toml::Value::as_bool) != Some(true));
+            }
             // As in a project with a nested project of each marker, so `each` is read too.
             let found = |_: &str| vec![".".to_string(), "sub".to_string()];
             expand_each(&mut table, &found).unwrap_or_else(|e| panic!("{name}: {e:#}"));
