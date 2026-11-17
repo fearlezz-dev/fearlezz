@@ -280,6 +280,7 @@ fn env_weakenings(base: &Env, head: &Env) -> Vec<(String, String)> {
         ("down", base.down.clone(), head.down.clone()),
         ("reset", base.reset.clone(), head.reset.clone()),
         ("ports", ports(&base.ports), ports(&head.ports)),
+        ("preview", base.preview.clone(), head.preview.clone()),
     ];
     let mut found = Vec::new();
     for (field, was, now) in commands {
@@ -295,6 +296,7 @@ fn env_weakenings(base: &Env, head: &Env) -> Vec<(String, String)> {
         ("clone", &base.clone, &head.clone),
         ("clone_when", &base.clone_when, &head.clone_when),
         ("env", &base.vars, &head.vars),
+        ("secrets", &base.secrets, &head.secrets),
     ];
     for (field, was, now) in lists {
         let changes: Vec<String> = now

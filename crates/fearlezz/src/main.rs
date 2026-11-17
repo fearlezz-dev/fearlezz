@@ -988,6 +988,10 @@ fn print_failure(f: &store::RunResult) {
         if let Some(name) = &f.missing_secret {
             println!("fail {}: SecretSpec could not give it {name}", f.check);
             println!("  fix: {}", secret_fix(name));
+        } else if let Some(why) = &f.no_preview {
+            let (why, fix) = no_preview(why);
+            println!("fail {}: {why}", f.check);
+            println!("  fix: {fix}");
         } else if let Some(tool) = f
             .not_found()
             .then(|| run::missing_command(&f.log))
@@ -1381,8 +1385,46 @@ fn secret_fix(name: &str) -> String {
     )
 }
 
+/// Why a check's preview could not be deployed, and what to do about it.
+fn no_preview(why: &env::NoPreview) -> (String, String) {
+    let by_hand = "run `[env] preview` by hand at the checkout root, with FEARLEZZ_PREVIEW_NAME set, \
+                   and read its log (above)";
+    match why {
+        env::NoPreview::Failed { code } => (
+            format!(
+                "the preview failed (exit {})",
+                code.map_or_else(|| "signal".to_string(), |c| c.to_string())
+            ),
+            format!("make it deploy: {by_hand}"),
+        ),
+        env::NoPreview::NoUrl => (
+            "the preview printed no URL".to_string(),
+            format!(
+                "make [env] preview print the URL of its deploy (the last http:// or https:// URL \
+                 it prints is taken): {by_hand}"
+            ),
+        ),
+        env::NoPreview::Secret { name } => (
+            format!("SecretSpec could not give the preview {name}"),
+            secret_fix(name),
+        ),
+        env::NoPreview::NoSecretSpec => (
+            "secretspec was not found for the preview's secrets".to_string(),
+            install_fix("secretspec"),
+        ),
+        env::NoPreview::Unset => (
+            "its checkout's [env] has no preview command".to_string(),
+            "add a preview command to [env] in fearlezz.toml".to_string(),
+        ),
+    }
+}
+
 fn failure_item(f: &store::RunResult) -> proof::Item {
     let what = format!("check `{}` failed", f.check);
+    if let Some(why) = &f.no_preview {
+        let (why, fix) = no_preview(why);
+        return proof::Item { what, why, fix };
+    }
     if let Some(name) = &f.missing_secret {
         return proof::Item {
             what,
@@ -1643,6 +1685,23 @@ fn run_checks(
                 }
                 vars = services.ports;
             }
+            let mut undeployed = None;
+            if check.needs_preview() {
+                if held.is_none() {
+                    held = Some(env.state.hold(&wt.git.root)?);
+                }
+                let name =
+                    env::preview_name(wt.git.branch().ok().as_deref(), &wt.git.head_short()?);
+                match env.state.preview(env.cfg, &wt.git.root, &wt.tree, &name)? {
+                    Ok(deployed) => {
+                        if let Some(line) = deployed.line {
+                            println!("{line}");
+                        }
+                        vars.insert("FEARLEZZ_PREVIEW_URL".to_string(), deployed.url);
+                    }
+                    Err(u) => undeployed = Some(u),
+                }
+            }
             let at = run::Where {
                 root: &wt.git.root,
                 shell: wt.shell.as_deref(),
@@ -1651,6 +1710,7 @@ fn run_checks(
                 stage: &stage,
                 vars: &vars,
                 changed: &wt.lines,
+                no_preview: undeployed.as_ref(),
             };
             let result = run::execute(&ctx.store, check, &inputs, &at)?;
             if check.needs_services() {
@@ -1708,6 +1768,10 @@ fn run_checks(
     }
     if let Some(r) = report.as_mut() {
         r.proof.looks = looks;
+        // The preview of the tree this run proved, deployed now or by an earlier run.
+        if targets.iter().any(|c| c.needs_preview()) {
+            r.proof.preview = env.state.preview_of(&wt.git.root, &wt.tree);
+        }
         for id in &unstable {
             if let Some(c) = r.proof.check_mut(id) {
                 c.unstable = true;

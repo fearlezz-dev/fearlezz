@@ -41,6 +41,8 @@ pub(crate) struct Where<'a> {
     pub vars: &'a std::collections::BTreeMap<String, String>,
     /// The lines the change touched, for judging findings.
     pub changed: &'a crate::findings::Changed,
+    /// Why the preview the check needs could not be deployed: then its command never runs.
+    pub no_preview: Option<&'a crate::env::Undeployed>,
 }
 
 pub(crate) fn execute(
@@ -62,6 +64,13 @@ pub(crate) fn execute(
     let (exit_ok, exit_code, missing_secret) = if let Some(builtin) = &check.builtin {
         run_builtin(builtin, at, &dir, out)?;
         (true, Some(0), None)
+    } else if let Some(undeployed) = at.no_preview {
+        // The check's log ends as the preview's did, so its failure shows why.
+        let mut out = out;
+        for line in tail(&undeployed.log, 12) {
+            writeln!(out, "{line}")?;
+        }
+        (false, None, None)
     } else if check.needs_envtest() {
         match envtest_assets(check, at, &out)? {
             Ok(assets) => {
@@ -135,6 +144,7 @@ pub(crate) fn execute(
         tests,
         cases,
         missing_secret,
+        no_preview: at.no_preview.map(|u| u.why.clone()),
         dir,
         log,
     };
@@ -181,7 +191,20 @@ fn run_command(
     dir: &Path,
     mut out: File,
 ) -> Result<(bool, Option<i32>, Option<String>)> {
-    Ok(match fetch_secrets(check, at, &mut out)? {
+    let folder = check
+        .dir
+        .as_ref()
+        .map_or_else(|| at.root.to_path_buf(), |d| at.root.join(d));
+    let reason = format!("the Fearlezz check {}", check.id);
+    let asked = fetch_secrets(
+        &check.secrets,
+        &reason,
+        &folder,
+        at.root,
+        at.shell,
+        &mut out,
+    )?;
+    Ok(match asked {
         Ok(secrets) => {
             let (passed, code) = spawn(check, &secrets, dir, out, at)?;
             mask(dir, &masked_forms(&secrets))?;
@@ -373,53 +396,49 @@ pub(crate) fn clean_command(
     cmd
 }
 
-/// Why a check did not get its secrets.
-enum Unfetched {
+/// Why a check or the preview did not get its secrets.
+pub(crate) enum Unfetched {
     /// SecretSpec could not give this one; its reason is in the log.
     Secret(String),
     /// The shell found no `secretspec` to ask.
     NoSecretSpec,
 }
 
-/// Fetches each secret `check` names from SecretSpec, outside its clean env: in the
-/// environment's shell and the check's folder, so the project's SecretSpec and provider
-/// settings apply, and with Fearlezz's own variables, so the provider's token (such as
-/// 1Password's `OP_SERVICE_ACCOUNT_TOKEN`) reaches SecretSpec but never the check. One name at
-/// a time, since SecretSpec refuses a whole profile when any required secret in it is missing.
-/// SecretSpec's own words go to `out`.
-fn fetch_secrets(
-    check: &Check,
-    at: &Where<'_>,
+/// Fetches each secret in `names` from SecretSpec, giving it `reason`, outside a check's clean
+/// env: in `shell` (the environment's, started at `root`) and `folder`, so the project's
+/// SecretSpec and provider settings apply, and with Fearlezz's own variables, so the
+/// provider's token (such as 1Password's `OP_SERVICE_ACCOUNT_TOKEN`) reaches SecretSpec but
+/// never the check. One name at a time, since SecretSpec refuses a whole profile when any
+/// required secret in it is missing. SecretSpec's own words go to `out`.
+pub(crate) fn fetch_secrets(
+    names: &[String],
+    reason: &str,
+    folder: &Path,
+    root: &Path,
+    shell: Option<&str>,
     out: &mut File,
 ) -> Result<std::result::Result<Vec<(String, String)>, Unfetched>> {
     // The value goes to a file of its own, so nothing the shell prints on entering can mix in.
     let get = r#"cd "$FEARLEZZ_DIR" && secretspec get "$FEARLEZZ_SECRET" --reason "$FEARLEZZ_REASON" --caller fearlezz > "$FEARLEZZ_SECRET_FILE""#;
-    let script = match at.shell {
+    let script = match shell {
         Some(shell) => format!("{shell} sh -c '{get}'"),
         None => get.to_string(),
     };
-    let folder = check
-        .dir
-        .as_ref()
-        .map_or_else(|| at.root.to_path_buf(), |d| at.root.join(d));
     let mut secrets = Vec::new();
-    for name in &check.secrets {
+    for name in names {
         let file = tempfile::NamedTempFile::new()?;
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
             .arg(&script)
-            .current_dir(at.root)
+            .current_dir(root)
             .stdin(Stdio::null())
             .stdout(out.try_clone()?)
             .stderr(out.try_clone()?)
-            .env("FEARLEZZ_DIR", &folder)
+            .env("FEARLEZZ_DIR", folder)
             .env("FEARLEZZ_SECRET", name)
             .env("FEARLEZZ_SECRET_FILE", file.path())
-            .env(
-                "FEARLEZZ_REASON",
-                format!("the Fearlezz check {}", check.id),
-            );
-        if let Some(path) = project_path(at.root) {
+            .env("FEARLEZZ_REASON", reason);
+        if let Some(path) = project_path(root) {
             cmd.env("PATH", path);
         }
         let status = cmd
@@ -455,7 +474,7 @@ const UNMASKED: [&str; 9] = [
 /// Every form a secret's value can take in a run's text files: as it is, as JSON escapes it
 /// (findings, SARIF, logs), and each of its lines, for a value of several lines (a PEM key)
 /// printed line by line.
-fn masked_forms(values: &[(String, String)]) -> Vec<Vec<u8>> {
+pub(crate) fn masked_forms(values: &[(String, String)]) -> Vec<Vec<u8>> {
     let mut forms: Vec<String> = Vec::new();
     for (_, value) in values {
         forms.push(value.clone());
@@ -490,14 +509,20 @@ fn mask(dir: &Path, forms: &[Vec<u8>]) -> Result<()> {
         if picture {
             continue;
         }
-        let bytes = fs::read(&path)?;
-        let mut masked = bytes.clone();
-        for form in forms {
-            masked = replace(&masked, form, MASK);
-        }
-        if masked != bytes {
-            fs::write(&path, masked)?;
-        }
+        mask_file(&path, forms)?;
+    }
+    Ok(())
+}
+
+/// Replaces every form of a secret's value in the file at `path` with [`MASK`].
+pub(crate) fn mask_file(path: &Path, forms: &[Vec<u8>]) -> Result<()> {
+    let bytes = fs::read(path)?;
+    let mut masked = bytes.clone();
+    for form in forms {
+        masked = replace(&masked, form, MASK);
+    }
+    if masked != bytes {
+        fs::write(path, masked)?;
     }
     Ok(())
 }
@@ -531,7 +556,7 @@ fn free_port() -> Result<u16> {
 pub(crate) const TOOL_DIRS: [&str; 2] = ["node_modules/.bin", ".venv/bin"];
 
 /// PATH with the project's tool folders that exist in front, or None when there are none.
-fn project_path(root: &Path) -> Option<std::ffi::OsString> {
+pub(crate) fn project_path(root: &Path) -> Option<std::ffi::OsString> {
     let dirs: Vec<std::path::PathBuf> = TOOL_DIRS
         .iter()
         .map(|d| root.join(d))

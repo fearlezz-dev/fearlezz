@@ -31,7 +31,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `floor.rs`: the base branch's config as the floor of a change's proof: what the change weakens about its checks, as typed weakenings, one per part with every way it weakened and the part as it was and is now, rendered from the merged config table `Config` keeps. Proof is about behaviour, so it never judges files.
 - `findings.rs`: findings a check reports at file and line (cargo JSON, SARIF, jsonl), the lines a change touched, and the verdict.
 - `counts.rs`: how many tests a check ran (JUnit reports, or a pattern in its output) and which failed or passed only on a rerun; zero fails the check.
-- `env.rs`: the environment: preparing a fresh checkout (copy-on-write clones of ignored folders), and starting, reusing, resetting and stopping the services checks need.
+- `env.rs`: the environment: preparing a fresh checkout (copy-on-write clones of ignored folders), starting, reusing, resetting and stopping the services checks need, and deploying the preview once per tree.
 - `media.rs`: comparing two stills or films (stable states, time warping, blurred pixel diff).
 - `record.rs`: recording an app's window on macOS (ScreenCaptureKit through objc2): `fearlezz --still` and a check's `record` table; `record/place.rs` parks it off the developer's screens (`FEARLEZZ_OFF_SCREEN=1`), by AeroSpace when it runs, Accessibility otherwise, gives focus back, and puts back the window positions the app saved while parked.
 - `look.rs`: comparing a check's pictures with the same check run on the base commit, and the lines naming each changed picture's before and after files.

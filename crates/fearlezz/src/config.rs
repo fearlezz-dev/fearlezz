@@ -71,6 +71,11 @@ pub(crate) struct Env {
     pub ports: Option<Ports>,
     /// Environment variables the commands above may see.
     pub vars: Vec<String>,
+    /// Deploys the checkout somewhere remote and prints its URL: a service that lives
+    /// remotely, deployed once per tree.
+    pub preview: Option<String>,
+    /// Secrets the preview gets from SecretSpec, by name, as a check gets its own.
+    pub secrets: Vec<String>,
 }
 
 /// Where the ports of running services come from.
@@ -99,6 +104,9 @@ pub(crate) enum Need {
     /// The envtest binaries (etcd, kube-apiserver) of the Kubernetes version its go.mod
     /// requires, fetched by setup-envtest; their folder reaches it as `KUBEBUILDER_ASSETS`.
     Envtest,
+    /// The deploy `[env] preview` makes of the checkout; its URL reaches the check as
+    /// `FEARLEZZ_PREVIEW_URL`.
+    Preview,
 }
 
 /// The ordered stages of a change. The last one is the merge gate, where every check runs
@@ -134,6 +142,9 @@ pub(crate) struct Check {
     pub needs: Vec<Need>,
     /// For a check that needs services: the commands that make them, part of its inputs.
     pub services: Option<String>,
+    /// For a check that needs the preview: the command that deploys it and the names of the
+    /// secrets it gets, part of its inputs.
+    pub preview: Option<String>,
     /// For a check that reports findings: where they come from and which count.
     pub findings: Option<FindingsSpec>,
     /// For a check that runs tests: where it says how many ran. Zero tests fails it.
@@ -473,6 +484,9 @@ struct RawEnv {
     ports: Option<RawPorts>,
     #[serde(default)]
     env: Vec<String>,
+    preview: Option<String>,
+    #[serde(default)]
+    secrets: Vec<String>,
 }
 
 impl RawEnv {
@@ -495,6 +509,8 @@ impl RawEnv {
                 }
             },
             vars: self.env,
+            preview: self.preview,
+            secrets: self.secrets,
         })
     }
 }
@@ -559,6 +575,17 @@ impl Config {
                 env.ports
             )
         });
+        if let Some(name) = env.secrets.iter().find(|n| replaces_given(n)) {
+            bail!(
+                "[env] secrets: the secret {name} would replace a variable the preview gets; \
+                 give it another name in secretspec.toml"
+            );
+        }
+        let preview = env.preview.as_ref().map(|preview| {
+            let mut names = env.secrets.clone();
+            names.sort();
+            format!("{preview}\0{}", names.join("\0"))
+        });
         let all_lints = Lints::parse(raw.lints.unwrap_or_default())?;
         // Without inputs of its own, a check reads every file outside `no_proof`, so an edit
         // to prose reruns nothing: `no_proof` taken back out of `**`, in its own order.
@@ -589,11 +616,13 @@ impl Config {
             if needs_services && services.is_none() {
                 bail!("check {id} needs services, but [env] has no up command to start them");
             }
-            if let Some(name) = c
-                .secrets
-                .iter()
-                .find(|n| n.starts_with("FEARLEZZ_") || crate::run::BASE_ENV.contains(&n.as_str()))
-            {
+            let needs_preview = c.needs.contains(&Need::Preview);
+            if needs_preview && preview.is_none() {
+                bail!(
+                    "check {id} needs the preview, but [env] has no preview command to deploy it"
+                );
+            }
+            if let Some(name) = c.secrets.iter().find(|n| replaces_given(n)) {
                 bail!(
                     "check {id}: the secret {name} would replace a variable every check gets; \
                      give it another name in secretspec.toml"
@@ -668,6 +697,7 @@ impl Config {
                 } else {
                     None
                 },
+                preview: if needs_preview { preview.clone() } else { None },
                 findings: match c.findings {
                     None => None,
                     Some(RawFindings::Read(read)) => Some(FindingsSpec {
@@ -831,6 +861,11 @@ impl Config {
     }
 }
 
+/// Whether a secret named `name` would replace a variable Fearlezz itself gives every command.
+fn replaces_given(name: &str) -> bool {
+    name.starts_with("FEARLEZZ_") || crate::run::BASE_ENV.contains(&name)
+}
+
 /// A check Fearlezz runs itself at the working stage, its findings judged in `on`.
 fn builtin_check(
     id: &str,
@@ -859,6 +894,7 @@ fn builtin_check(
         schedule: false,
         needs: Vec::new(),
         services: None,
+        preview: None,
         findings: Some(FindingsSpec {
             read: Reader::Jsonl,
             on,
@@ -1175,6 +1211,10 @@ impl Check {
 
     pub(crate) fn needs_envtest(&self) -> bool {
         self.needs.contains(&Need::Envtest)
+    }
+
+    pub(crate) fn needs_preview(&self) -> bool {
+        self.needs.contains(&Need::Preview)
     }
 }
 

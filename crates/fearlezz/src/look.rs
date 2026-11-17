@@ -315,6 +315,21 @@ pub(crate) fn run_on_base(
         }
         vars = services.ports;
     }
+    // The base is deployed by its own `[env]` as the change is, so pictures of its preview
+    // compare with pictures of the change's.
+    let mut undeployed = None;
+    if check.needs_preview() {
+        let name = format!("base-{}", base.wt.git.head_short()?);
+        match env.state.preview(&base.env, &root, &base.wt.tree, &name)? {
+            Ok(deployed) => {
+                if let Some(line) = deployed.line {
+                    println!("base {line}");
+                }
+                vars.insert("FEARLEZZ_PREVIEW_URL".to_string(), deployed.url);
+            }
+            Err(u) => undeployed = Some(u),
+        }
+    }
     let at = run::Where {
         root: &root,
         shell: base.wt.shell.as_deref(),
@@ -323,6 +338,7 @@ pub(crate) fn run_on_base(
         stage,
         vars: &vars,
         changed: &base.wt.lines,
+        no_preview: undeployed.as_ref(),
     };
     let result = run::execute(store, check, inputs, &at);
     let stopped = if check.needs_services() {

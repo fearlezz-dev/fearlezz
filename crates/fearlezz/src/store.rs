@@ -58,6 +58,9 @@ pub(crate) struct RunResult {
     /// A secret SecretSpec could not give the check, so its command never ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub missing_secret: Option<String>,
+    /// Why the preview the check needs could not be deployed, so its command never ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_preview: Option<crate::env::NoPreview>,
     pub dir: PathBuf,
     pub log: PathBuf,
 }
@@ -69,9 +72,9 @@ impl RunResult {
     }
 
     /// It never got to say anything about its inputs: the shell could not find its command,
-    /// or SecretSpec could not give it a secret.
+    /// SecretSpec could not give it a secret, or its preview could not be deployed.
     pub(crate) fn proves_nothing(&self) -> bool {
-        self.not_found() || self.missing_secret.is_some()
+        self.not_found() || self.missing_secret.is_some() || self.no_preview.is_some()
     }
 
     /// Whether `journal` made this run at its final stage `final_stage`: the only kind of
@@ -214,6 +217,9 @@ impl Hasher {
         }
         if let Some(services) = &check.services {
             parts.insert("(services)".into(), sha256(services.as_bytes()));
+        }
+        if let Some(preview) = &check.preview {
+            parts.insert("(preview)".into(), sha256(preview.as_bytes()));
         }
         for path in files.iter().filter(|p| check.reads(p)) {
             let hash = if let Some(h) = self.files.get(path) {
