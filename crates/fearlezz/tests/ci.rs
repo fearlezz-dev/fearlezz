@@ -291,6 +291,27 @@ fn the_job_summary_shows_a_check_weakened_two_ways_as_one_diff() {
 }
 
 #[test]
+fn steps_folded_into_one_script_weaken_the_check() {
+    // As one script, a failing first line no longer fails the check.
+    let steps = CHECKS.replace(
+        "run = \"echo run >> .runs/tests; test ! -e src/broken\"",
+        "run = [\"test ! -e src/broken\", \"echo run >> .runs/tests\"]",
+    );
+    let repo = repo_with(&format!("{NO_PROOF}{steps}"));
+    repo.branch("feat/x");
+    with_checks(
+        &repo,
+        &steps.replace(
+            "run = [\"test ! -e src/broken\", \"echo run >> .runs/tests\"]",
+            "run = \"test ! -e src/broken\\necho run >> .runs/tests\"",
+        ),
+    );
+    let (out, text) = summary(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(text.contains("`tests`: it runs another command"), "{text}");
+}
+
+#[test]
 fn the_status_comment_is_gone() {
     let repo = branch_with_change();
     assert!(!repo.fz(&["run", "--ci", "--comment", "x.md"]).ok);

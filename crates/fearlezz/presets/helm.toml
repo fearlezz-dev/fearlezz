@@ -1,0 +1,13 @@
+# Helm: every chart lints and renders. The check runs in every chart folder that is not inside
+# another (`each`), so a chart's own subcharts are its business. Its dependencies are built
+# first from Chart.lock (into its charts folder, which git should ignore), so it needs the
+# network when the chart has any.
+
+[check.helm]
+run = [
+  "helm dependency build",
+  "helm lint .",
+  'helm template . --output-dir "$FEARLEZZ_OUT/rendered"',
+]
+stage = "working"
+each = "Chart.yaml"

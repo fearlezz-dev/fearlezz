@@ -1,0 +1,53 @@
+# docs/drive/infra-pieces/record.yaml: the working state of this piece of work.
+goal: "Infra pieces in crates/fearlezz/presets/ (Kubernetes, Terraform/OpenTofu, Nix, yamllint, SOPS), with setup init detection and findings read natively, no shell glue."
+
+pieces:
+  - id: split
+    status: done
+  - id: steps
+    status: done
+    evidence: [tests/core.rs a_check_runs_its_steps_in_order_and_stops_at_the_first_that_fails, tests/findings.rs findings_on_stdout_come_from_the_last_step_alone, tests/hooks.rs any_step_of_a_check_run_by_hand_is_not_proof]
+  - id: sops
+    status: done
+    evidence: [tests/infra.rs sops tests]
+  - id: readers
+    status: done
+    evidence: [findings.rs terraform and yamllint readers, tests/infra.rs opentofu and yamllint tests]
+  - id: init
+    status: building
+    evidence: [tests/init.rs init_adds_the_infra_pieces_from_the_files_each_tool_reads]
+  - id: real-repos
+    status: figuring-out
+    open: do the pieces pass on clones of HomeLabbing and Infrastructure/v3
+
+decided:
+  - id: split
+    what: "Per tool family: kustomize, helm, flux, terraform, opentofu, nix, yamllint, sops; init adds each from its marker."
+    why: "A check with each but no project folder fails at the root, so bundling breaks repos without that tool."
+  - id: steps
+    what: "Steps list: run takes a list of plain commands run in order; the last one's output is read."
+    why: "terraform init then validate, and render then kubeconform, without shell glue or a pipe that hides a failed build."
+  - id: sops
+    what: ".sops.yaml decides: a rule kind (encrypted = \"sops\") gates a file its path_regex names that has no sops metadata; never decrypts."
+  - id: sops-values
+    what: "Check every value: values sops would encrypt (by the file's own metadata) must be ENC[...]; findings name file and line, never the value."
+  - id: flux-init
+    what: "flux only: a Flux repository gets flux, not kustomize."
+  - id: yamllint
+    what: "Be consistent with the other pieces: Fearlezz writes .yamllint.yaml from [settings.yamllint] (whole, like golangci), skipping what git ignores."
+
+open: []
+
+trial: # clones of the real repositories, run with this branch (scratchpad, devenv piece off)
+  homelabbing: "init: actions, flux, terraform, sops. rules (sops) and terraform pass; the 16 encrypted secrets show no plain value; kubernetes/secrets/kustomization.yaml is the one finding, untouched so it never blocks. flate missing from the repo's devenv."
+  infrastructure: "init: actions, flux, terraform (5 folders), yamllint. 4 terraform folders validate; platform/authentik/terraform fails (its provider reads the in-cluster token file), which its own check never validated. yamllint passes; sync wrote .yamllint.yaml whole, so its own rules move into fearlezz.toml."
+
+slices:
+  - id: steps
+    status: done
+  - id: pieces
+    status: done
+  - id: init
+    status: building
+
+next: Pull request 33 waits for review and the developer's OK to merge.

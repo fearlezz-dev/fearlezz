@@ -1,0 +1,8 @@
+# Nix: the flake evaluates and every check it declares builds. A flake sees only the files git
+# tracks, so `git add` a new file before the check can find it.
+#
+# A project built with `nix-build` adds its own check, such as `run = "nix-build config"`.
+
+[check.nix]
+run = "nix flake check --keep-going --print-build-logs"
+stage = "working"

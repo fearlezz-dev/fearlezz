@@ -1,0 +1,14 @@
+# OpenTofu: formatting, and every configuration validates. Validation runs in every folder
+# with a `.terraform.lock.hcl` (`each`), after `init` without the backend, so it never touches
+# state or needs credentials; init fetches the providers, so it needs the network. A
+# validation error blocks wherever it is; a warning counts on lines the change touched.
+
+[check.tofu-fmt]
+run = "tofu fmt -check -recursive -diff"
+stage = "working"
+
+[check.tofu-validate]
+run = ["tofu init -backend=false -input=false", "tofu validate -json -no-color"]
+stage = "working"
+each = ".terraform.lock.hcl"
+findings = "terraform"

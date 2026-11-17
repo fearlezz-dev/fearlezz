@@ -7,6 +7,8 @@
 //! - `name = "snake_case"`: files matching `files` are named in this style, or match this
 //!   regex when it is not a style Fearlezz knows;
 //! - `needs = "test/{stem}_test.dart"`: every file matching `files` has this companion file;
+//! - `encrypted = "sops"`: every file a `.sops.yaml` creation rule names is encrypted, which
+//!   Fearlezz sees from the metadata sops writes, never decrypting or keeping what it read;
 //! - one table per language (`[rule.<name>.rust]`) with `pattern`, `any` or an ast-grep
 //!   `rule`: code that must not appear, matched by the `ast-grep` tool.
 //!
@@ -51,8 +53,17 @@ enum Kind {
     Changed(Patterns),
     Name(Style),
     Needs(String),
+    /// Files the encryption tool's own config names carry its metadata.
+    Encrypted(Encryption),
     /// Per language, the ast-grep fields (`rule`, and `utils` or `constraints` when given).
     Code(BTreeMap<String, Json>),
+}
+
+/// The tools whose encrypted files a rule knows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Encryption {
+    /// `.sops.yaml` creation rules name the files by `path_regex`, from the folder it is in.
+    Sops,
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +121,7 @@ struct RawRule {
     changed: Option<OneOrMany>,
     name: Option<String>,
     needs: Option<String>,
+    encrypted: Option<String>,
     #[serde(default)]
     test: Vec<BTreeMap<String, Example>>,
     #[serde(default)]
@@ -241,6 +253,35 @@ impl Rules {
                         }
                     }
                 }
+                Kind::Encrypted(Encryption::Sops) => {
+                    for path in crate::sops::named(root, files)? {
+                        if !rule.covers(&path) {
+                            continue;
+                        }
+                        match crate::sops::state(&root.join(&path)) {
+                            crate::sops::State::Encrypted => {}
+                            // No line: it counts when the change touched the file at all.
+                            crate::sops::State::Plain => {
+                                found.push(rule.finding(&path, 0, None, false, || {
+                                    format!(
+                                        "{path} is not encrypted, but .sops.yaml names it; \
+                                         encrypt it with sops, or narrow path_regex or skip it if \
+                                         it is no secret"
+                                    )
+                                }));
+                            }
+                            crate::sops::State::Leaks(lines) => {
+                                for line in lines {
+                                    found.push(rule.finding(&path, line, None, false, || {
+                                        "a value sops encrypts in this file is in plain text; set \
+                                         it with `sops edit`"
+                                            .into()
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
                 Kind::Code(_) => {}
             }
         }
@@ -351,6 +392,12 @@ impl Rule {
         if let Some(needs) = raw.needs {
             kinds.push(Kind::Needs(needs));
         }
+        if let Some(tool) = raw.encrypted {
+            kinds.push(Kind::Encrypted(match tool.as_str() {
+                "sops" => Encryption::Sops,
+                other => bail!("encrypted = \"{other}\": the tool Fearlezz knows is \"sops\""),
+            }));
+        }
         if !code.is_empty() {
             let mut langs = BTreeMap::new();
             for (lang, table) in code {
@@ -380,10 +427,12 @@ impl Rule {
             1 => kinds.remove(0),
             0 => bail!(
                 "say what it checks: changed = [paths], name = \"snake_case\", \
-                 needs = \"path\", or a language table like [rule.{id}.rust]"
+                 needs = \"path\", encrypted = \"sops\", or a language table like \
+                 [rule.{id}.rust]"
             ),
             _ => bail!(
-                "give it one of changed, name, needs or language tables; split it into two rules"
+                "give it one of changed, name, needs, encrypted or language tables; split it \
+                 into two rules"
             ),
         };
         if matches!(kind, Kind::Name(_) | Kind::Needs(_)) && files.is_empty() {
@@ -437,6 +486,7 @@ impl Kind {
             (Kind::Changed(a), Kind::Changed(b)) => a.text == b.text,
             (Kind::Name(a), Kind::Name(b)) => a.to_string() == b.to_string(),
             (Kind::Needs(a), Kind::Needs(b)) => a == b,
+            (Kind::Encrypted(a), Kind::Encrypted(b)) => a == b,
             (Kind::Code(a), Kind::Code(b)) => a == b,
             _ => false,
         }

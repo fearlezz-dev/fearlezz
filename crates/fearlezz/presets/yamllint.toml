@@ -1,0 +1,22 @@
+# yamllint over every YAML file git does not ignore. Its findings get yamllint's own levels: an
+# error is a gate, a warning a flag; only lines the change touched count.
+#
+# The config is written into .yamllint.yaml from [settings.yamllint]; tune rules there. A file
+# to leave out goes in a file `ignore-from-file` lists beside .gitignore, since yamllint takes
+# `ignore` or `ignore-from-file`, never both.
+
+[check.yamllint]
+run = "yamllint -f parsable ."
+stage = "working"
+findings = "yamllint"
+
+# yamllint's defaults, with what makes them fit manifests and workflows: no document start
+# marker, `on:` as a key, and long lines only flagged.
+[settings.yamllint]
+extends = "default"
+ignore-from-file = [".gitignore"]
+
+[settings.yamllint.rules]
+document-start = "disable"
+truthy = { check-keys = false }
+line-length = { level = "warning" }

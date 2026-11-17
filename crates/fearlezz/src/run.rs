@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use jiff::Timestamp;
 
 use crate::config::Check;
@@ -140,15 +140,15 @@ pub(crate) fn execute(
     Ok(result)
 }
 
-/// Runs the check's command in a clean env, inside the environment's shell if any, recording
-/// its app's window when it has `record`. Returns whether it passed and its exit code.
-fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, Option<i32>)> {
-    // A tool that prints findings on stdout keeps them apart from its log.
-    let stdout_path = dir.join("stdout.txt");
-    let stdout = match &check.findings {
-        Some(f) if f.read.reads_stdout() => File::create(&stdout_path)?,
-        _ => out.try_clone()?,
-    };
+/// One step of a check as a command in a clean env, inside the environment's shell if any.
+fn command(
+    check: &Check,
+    step: &str,
+    dir: &Path,
+    stdout: File,
+    log: &File,
+    at: &Where<'_>,
+) -> Result<Command> {
     // Inside a shell the command travels in a variable, so no quoting can break it. A check
     // with a folder starts there; the shell itself starts at the root, where it finds its own
     // files, and moves into the folder before the command.
@@ -158,7 +158,7 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
         (Some(shell), Some(_)) => {
             format!("{shell} sh -c 'cd \"$FEARLEZZ_DIR\" && eval \"$FEARLEZZ_RUN\"'")
         }
-        (None, _) => check.run.clone(),
+        (None, _) => step.to_string(),
     };
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
@@ -170,7 +170,7 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
         .env_clear()
         .stdin(Stdio::null())
         .stdout(stdout)
-        .stderr(out.try_clone()?);
+        .stderr(log.try_clone()?);
     for name in BASE_ENV
         .iter()
         .copied()
@@ -188,11 +188,35 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
     if let Some(folder) = &folder {
         cmd.env("FEARLEZZ_DIR", folder);
     }
-    cmd.env("FEARLEZZ_RUN", &check.run)
+    cmd.env("FEARLEZZ_RUN", step)
         .env("FEARLEZZ_OUT", dir)
         .env("FEARLEZZ_CHECK", &check.id)
         .env("FEARLEZZ_STAGE", at.stage);
+    Ok(cmd)
+}
 
+/// Runs the check's command in a clean env, inside the environment's shell if any, recording
+/// its app's window when it has `record`. Returns whether it passed and its exit code.
+fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, Option<i32>)> {
+    // A tool that prints findings on stdout keeps them apart from its log; only the last
+    // step's stdout holds them, the steps before it prepare.
+    let stdout_path = dir.join("stdout.txt");
+    let stdout = match &check.findings {
+        Some(f) if f.read.reads_stdout() => File::create(&stdout_path)?,
+        _ => out.try_clone()?,
+    };
+    let Some((last, before)) = check.steps.split_last() else {
+        bail!("check {} has no command to run", check.id);
+    };
+    for step in before {
+        let status = command(check, step, dir, out.try_clone()?, &out, at)?
+            .status()
+            .with_context(|| format!("starting check {}", check.id))?;
+        if !status.success() {
+            return Ok((false, status.code()));
+        }
+    }
+    let mut cmd = command(check, last, dir, stdout, &out, at)?;
     let Some(record) = &check.pictures.record else {
         let status = cmd
             .status()

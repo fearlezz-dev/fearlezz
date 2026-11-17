@@ -29,6 +29,10 @@ pub(crate) enum Reader {
     Eslint,
     /// `svelte-check --output machine-verbose` on stdout.
     Svelte,
+    /// `terraform validate -json` (or OpenTofu's `tofu validate -json`) on stdout.
+    Terraform,
+    /// `yamllint -f parsable` on stdout.
+    Yamllint,
 }
 
 /// Which findings count.
@@ -51,6 +55,8 @@ impl Reader {
             Reader::Dart => "dart",
             Reader::Eslint => "eslint",
             Reader::Svelte => "svelte",
+            Reader::Terraform => "terraform",
+            Reader::Yamllint => "yamllint",
         }
     }
 
@@ -58,7 +64,13 @@ impl Reader {
     pub(crate) fn reads_stdout(self) -> bool {
         matches!(
             self,
-            Reader::Cargo | Reader::Sarif | Reader::Dart | Reader::Eslint | Reader::Svelte
+            Reader::Cargo
+                | Reader::Sarif
+                | Reader::Dart
+                | Reader::Eslint
+                | Reader::Svelte
+                | Reader::Terraform
+                | Reader::Yamllint
         )
     }
 
@@ -88,6 +100,8 @@ impl Reader {
             Reader::Dart => (dart(&text(stdout)), Vec::new()),
             Reader::Eslint => eslint(&text(stdout)),
             Reader::Svelte => svelte(&text(stdout)),
+            Reader::Terraform => terraform(&text(stdout)),
+            Reader::Yamllint => (yamllint(&text(stdout)), Vec::new()),
         };
         for f in &mut found.0 {
             // A tool run in the check's folder names files from there, so a relative path is
@@ -569,6 +583,82 @@ fn sarif(text: &str) -> (Vec<Finding>, Vec<String>) {
     (found, Vec::new())
 }
 
+/// `validate -json` diagnostics. An error means the configuration does not hold together, so
+/// it counts wherever it is, as a compile error does; a warning counts on changed lines.
+fn terraform(text: &str) -> (Vec<Finding>, Vec<String>) {
+    if text.trim().is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let doc: Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(e) => return (Vec::new(), vec![format!("validate -json: {e}")]),
+    };
+    let line = |v: Option<&Value>| u32::try_from(v?.as_u64()?).ok();
+    let found = doc
+        .get("diagnostics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|d| {
+            let text = |key: &str| d.get(key).and_then(Value::as_str);
+            let error = text("severity") != Some("warning");
+            let range = d.get("range");
+            let at = |end: &str| line(range?.get(end)?.get("line"));
+            let detail = text("detail").filter(|s| !s.is_empty());
+            Finding {
+                file: range
+                    .and_then(|r| r.get("filename"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                line: at("start").unwrap_or(0),
+                end_line: at("end"),
+                level: if error { Level::Gate } else { Level::Flag },
+                rule: "validate".into(),
+                message: text("summary").unwrap_or("").to_string(),
+                fix: None,
+                why: detail.map(String::from),
+                anywhere: error,
+            }
+        })
+        .collect();
+    (found, Vec::new())
+}
+
+/// `file:line:column: [level] message (rule)`: an error is a gate, a warning a flag, as the
+/// project's yamllint config sets each rule's level.
+fn yamllint(text: &str) -> Vec<Finding> {
+    text.lines()
+        .filter_map(|l| {
+            let (place, rest) = l.split_once(": [")?;
+            let mut parts = place.rsplitn(3, ':');
+            let _column = parts.next()?;
+            let line = parts.next()?.parse().ok()?;
+            let file = parts.next()?.to_string();
+            let (level, rest) = rest.split_once("] ")?;
+            let (message, rule) = match rest.rsplit_once(" (") {
+                Some((m, r)) if r.ends_with(')') => (m, r.trim_end_matches(')')),
+                _ => (rest, ""),
+            };
+            Some(Finding {
+                file,
+                line,
+                end_line: None,
+                level: if level == "error" {
+                    Level::Gate
+                } else {
+                    Level::Flag
+                },
+                rule: rule.to_string(),
+                message: message.to_string(),
+                fix: None,
+                why: None,
+                anywhere: false,
+            })
+        })
+        .collect()
+}
+
 fn jsonl(text: &str) -> (Vec<Finding>, Vec<String>) {
     let mut found = Vec::new();
     let mut errors = Vec::new();
@@ -821,6 +911,40 @@ mod tests {
             found[0].message,
             "`<img>` element should have an alt attribute"
         );
+    }
+
+    #[test]
+    fn terraform_errors_count_anywhere_and_warnings_on_changed_lines() {
+        let text = r#"{"diagnostics":[{"severity":"error","summary":"Reference to undeclared input variable","detail":"No nope.","range":{"filename":"main.tf","start":{"line":6},"end":{"line":6}}},{"severity":"warning","summary":"Deprecated","detail":"","range":{"filename":"main.tf","start":{"line":2},"end":{"line":3}}}]}"#;
+        let (found, errors) = terraform(text);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(found.len(), 2);
+        assert_eq!((found[0].file.as_str(), found[0].line), ("main.tf", 6));
+        assert!(found[0].anywhere && found[0].level == Level::Gate);
+        assert_eq!(found[0].why.as_deref(), Some("No nope."));
+        assert!(!found[1].anywhere && found[1].level == Level::Flag);
+        assert_eq!(
+            (found[1].end_line, found[1].why.as_deref()),
+            (Some(3), None)
+        );
+    }
+
+    #[test]
+    fn yamllint_lines_become_findings() {
+        let found = yamllint(
+            "a/x.yaml:2:5: [error] too many spaces after colon (colons)\nx.yaml:1:4: [warning] truthy value should be one of [false, true] (truthy)\n",
+        );
+        assert_eq!(found.len(), 2);
+        assert_eq!((found[0].file.as_str(), found[0].line), ("a/x.yaml", 2));
+        assert_eq!(
+            (found[0].level, found[0].rule.as_str()),
+            (Level::Gate, "colons")
+        );
+        assert_eq!(
+            found[1].message,
+            "truthy value should be one of [false, true]"
+        );
+        assert_eq!(found[1].level, Level::Flag);
     }
 
     #[test]

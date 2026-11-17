@@ -103,7 +103,11 @@ pub(crate) struct Stage(usize);
 
 pub(crate) struct Check {
     pub id: String,
+    /// What it runs, as shown: its one command, or its steps one per line.
     pub run: String,
+    /// The plain commands it runs in order, the first that fails ending the check; a
+    /// reader of stdout reads only the last one's. Empty for a built in check.
+    pub steps: Vec<String>,
     /// The folder of the repository it runs in, from `each` or written; the root without one.
     pub dir: Option<String>,
     pub stage: Stage,
@@ -380,7 +384,7 @@ struct RawStages {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawCheck {
-    run: String,
+    run: RawRun,
     stage: String,
     dir: Option<String>,
     #[serde(default)]
@@ -408,6 +412,15 @@ struct RawCheck {
                   lets serde accept the key"
     )]
     off: bool,
+}
+
+/// A check's `run`: one command, or steps run in order, so a check that needs two
+/// commands (`terraform init`, then `terraform validate`) needs no shell glue.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawRun {
+    One(String),
+    Steps(Vec<String>),
 }
 
 #[derive(Deserialize, Default)]
@@ -530,6 +543,13 @@ impl Config {
                     stages.0.join(", ")
                 )
             })?;
+            let steps = match c.run {
+                RawRun::One(command) => vec![command],
+                RawRun::Steps(steps) if steps.is_empty() => {
+                    bail!("check {id}: run names no command; give it one, or a list of steps")
+                }
+                RawRun::Steps(steps) => steps,
+            };
             let needs_services = c.needs.contains(&Need::Services);
             if needs_services && services.is_none() {
                 bail!("check {id} needs services, but [env] has no up command to start them");
@@ -582,7 +602,8 @@ impl Config {
                     None => None,
                 },
                 id: id.clone(),
-                run: c.run,
+                run: steps.join("\n"),
+                steps,
                 stage,
                 env: c.env,
                 needs: c.needs,
@@ -741,6 +762,7 @@ fn builtin_check(id: &str, stages: &Stages, inputs: Globs, on: Scope, builtin: B
     Check {
         id: id.into(),
         run: format!("(fearlezz {id})"),
+        steps: Vec::new(),
         dir: None,
         stage: stages.find("working").unwrap_or(stages.first()),
         inputs,

@@ -255,7 +255,9 @@ fn opens_pull_request(line: &str) -> bool {
     })
 }
 
-/// The check whose command, by its first two words, the line ran outside Fearlezz.
+/// The check whose command (its last step, the one whose result is the proof), by its first
+/// two words, the line ran outside Fearlezz. A step before it only prepares, so running it
+/// by hand to look at the work is no attempt at proof.
 fn check_run_by_hand(config: &Config, line: &str) -> Option<String> {
     let commands = commands(line);
     if commands.iter().any(|w| w.first() == Some(&"fearlezz")) {
@@ -266,8 +268,10 @@ fn check_run_by_hand(config: &Config, line: &str) -> Option<String> {
         .iter()
         .filter(|c| c.builtin.is_none())
         .find(|c| {
-            let start: Vec<&str> = c.run.split_whitespace().take(2).collect();
-            start.len() == 2 && commands.iter().any(|w| w.starts_with(&start))
+            c.steps.last().is_some_and(|step| {
+                let start: Vec<&str> = step.split_whitespace().take(2).collect();
+                start.len() == 2 && commands.iter().any(|w| w.starts_with(&start))
+            })
         })
         .map(|c| c.id.clone())
 }

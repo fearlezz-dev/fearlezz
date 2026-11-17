@@ -1,6 +1,6 @@
 //! `fearlezz setup init`: the starter `fearlezz.toml` for a repository that has none, from the
-//! languages the files at its root show (Rust also from Cargo projects in folders), and the
-//! frameworks its package.json depends on.
+//! languages the files at its root show (Rust also from Cargo projects in folders), the
+//! frameworks its package.json depends on, and the infrastructure tools its files show.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -248,6 +248,7 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
                 file: Some(file.clone()),
             })
         })
+        .chain(infra(root, &files))
         .chain([Found {
             piece: SAFETY,
             file: None,
@@ -256,6 +257,62 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
     std::fs::write(&path, starter(&found)?)
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(found)
+}
+
+/// The infrastructure pieces, after the languages, each from a file its tool reads anywhere
+/// in the repository: the kustomize, helm and terraform checks run in every folder that has
+/// one (`each`). A Flux repository gets flux instead of kustomize, since flate renders every
+/// Kustomization; a lockfile naming OpenTofu's registry gets opentofu instead of terraform.
+fn infra(root: &Path, files: &[String]) -> Vec<Found> {
+    let none = crate::config::Globs::none();
+    let first = |marker: &str| -> Option<String> {
+        let folder = crate::config::projects(root, files, marker, &none)
+            .into_iter()
+            .next()?;
+        Some(if folder == "." {
+            marker.to_string()
+        } else {
+            format!("{folder}/{marker}")
+        })
+    };
+    let at_root = |names: &[&str]| {
+        names
+            .iter()
+            .find(|n| root.join(n).exists())
+            .map(|n| (*n).to_string())
+    };
+    let flux = ["gotk-sync.yaml", "gotk-components.yaml"]
+        .iter()
+        .find_map(|m| first(m));
+    let lock = first(".terraform.lock.hcl");
+    let tofu = lock.as_ref().is_some_and(|l| {
+        std::fs::read_to_string(root.join(l)).is_ok_and(|t| t.contains("registry.opentofu.org"))
+    });
+    [
+        ("nix", at_root(&["flake.nix"])),
+        ("flux", flux.clone()),
+        (
+            "kustomize",
+            flux.is_none()
+                .then(|| first("kustomization.yaml"))
+                .flatten(),
+        ),
+        ("helm", first("Chart.yaml")),
+        (if tofu { "opentofu" } else { "terraform" }, lock),
+        (
+            "yamllint",
+            at_root(&[".yamllint", ".yamllint.yaml", ".yamllint.yml"]),
+        ),
+        ("sops", first(".sops.yaml")),
+    ]
+    .into_iter()
+    .filter_map(|(piece, file)| {
+        Some(Found {
+            piece,
+            file: Some(file?),
+        })
+    })
+    .collect()
 }
 
 fn starter(found: &[Found]) -> Result<String, std::fmt::Error> {

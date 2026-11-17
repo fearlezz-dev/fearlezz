@@ -185,6 +185,56 @@ fn every_command_ends_with_a_next_line() {
     }
 }
 
+#[test]
+fn a_check_runs_its_steps_in_order_and_stops_at_the_first_that_fails() {
+    let config = r#"
+[check.steps]
+run = ["echo one >> .runs/steps", "test ! -e src/broken", "echo three >> .runs/steps"]
+stage = "working"
+"#;
+    let repo = Repo::new(config, &[(".gitignore", ".runs/\n"), ("src/lib.rs", "")]);
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo.write("src/lib.rs", "fn a() {}\n");
+    let out = repo.fz(&["run", "steps"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(runs(&repo.path(".runs/steps")), 2);
+
+    repo.write("src/broken", "x");
+    let out = repo.fz(&["run", "steps"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert_eq!(
+        runs(&repo.path(".runs/steps")),
+        3,
+        "the third step never ran"
+    );
+}
+
+#[test]
+fn every_step_of_a_check_in_a_folder_runs_there() {
+    let config = r#"
+[check.steps]
+run = ["test -e here", "test -e here"]
+stage = "working"
+dir = "app"
+"#;
+    let repo = Repo::new(config, &[("app/here", "")]);
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo.write("app/here", "x");
+    let out = repo.fz(&["run", "steps"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+}
+
+#[test]
+fn a_check_needs_at_least_one_step() {
+    let repo = Repo::new("[check.a]\nrun = []\nstage = \"working\"\n", &[]);
+    let out = repo.fz(&["--plan"]);
+    assert!(!out.ok);
+    assert!(out.stderr.contains("check a"), "{}", out.stderr);
+}
+
 // Run and result store
 
 #[test]

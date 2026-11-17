@@ -10,8 +10,8 @@ mod common;
 
 use common::Repo;
 
-/// `tests` passes; `unit` starts with a command an agent would run by hand, and passes here
-/// without a Cargo project.
+/// `tests` passes; `unit` and each step of `validate` start with a command an agent would run
+/// by hand, and pass here without a Cargo project or terraform.
 const CONFIG: &str = r#"
 [check.tests]
 run = "true"
@@ -19,6 +19,10 @@ stage = "working"
 
 [check.unit]
 run = "cargo test --quiet || true"
+stage = "working"
+
+[check.validate]
+run = ["terraform init -backend=false || true", "terraform validate -json || true"]
 stage = "working"
 
 [settings.skill]
@@ -284,6 +288,25 @@ fn a_checks_command_run_by_hand_is_not_proof() {
         .unwrap();
     assert!(context.contains("not proof"), "{context}");
     assert!(context.contains("fearlezz run unit"), "{context}");
+}
+
+#[test]
+fn the_last_step_of_a_check_run_by_hand_is_not_proof_and_a_step_before_it_is_no_attempt() {
+    let repo = changed();
+    let ran = |command: &str| {
+        let input = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": command },
+        });
+        hook(&repo, "claude", "after-shell", &input.to_string())
+    };
+    assert!(ran("terraform init -backend=false").is_null());
+    let answer = ran("terraform validate");
+    let context = answer["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("fearlezz run validate"), "{context}");
 }
 
 // When the agent wants to stop
