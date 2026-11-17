@@ -593,22 +593,29 @@ fn terraform(text: &str) -> (Vec<Finding>, Vec<String>) {
         Ok(v) => v,
         Err(e) => return (Vec::new(), vec![format!("validate -json: {e}")]),
     };
-    let line = |v: &Value| v.as_u64().and_then(|n| u32::try_from(n).ok());
-    let found = doc["diagnostics"]
-        .as_array()
+    let line = |v: Option<&Value>| u32::try_from(v?.as_u64()?).ok();
+    let found = doc
+        .get("diagnostics")
+        .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .map(|d| {
-            let error = d["severity"].as_str() != Some("warning");
-            let range = &d["range"];
-            let detail = d["detail"].as_str().filter(|s| !s.is_empty());
+            let text = |key: &str| d.get(key).and_then(Value::as_str);
+            let error = text("severity") != Some("warning");
+            let range = d.get("range");
+            let at = |end: &str| line(range?.get(end)?.get("line"));
+            let detail = text("detail").filter(|s| !s.is_empty());
             Finding {
-                file: range["filename"].as_str().unwrap_or("").to_string(),
-                line: line(&range["start"]["line"]).unwrap_or(0),
-                end_line: line(&range["end"]["line"]),
+                file: range
+                    .and_then(|r| r.get("filename"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                line: at("start").unwrap_or(0),
+                end_line: at("end"),
                 level: if error { Level::Gate } else { Level::Flag },
                 rule: "validate".into(),
-                message: d["summary"].as_str().unwrap_or("").to_string(),
+                message: text("summary").unwrap_or("").to_string(),
                 fix: None,
                 why: detail.map(String::from),
                 anywhere: error,

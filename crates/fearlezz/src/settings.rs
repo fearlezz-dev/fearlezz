@@ -1526,7 +1526,7 @@ avoid_print = false
             .unwrap_err()
             .to_string();
         assert!(
-            e.contains("tools are cargo-lints, dart-analysis, clippy, claude, biome, eslint, ruff, ktlint, detekt, golangci, oxlint, tsconfig, flutter-look, skill, hooks"),
+            e.contains("tools are cargo-lints, dart-analysis, clippy, claude, biome, eslint, ruff, ktlint, detekt, golangci, oxlint, tsconfig, yamllint, flutter-look, skill, hooks"),
             "{e}"
         );
     }

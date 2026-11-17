@@ -136,7 +136,7 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
             }
             continue;
         };
-        if h.run != b.run {
+        if h.steps != b.steps {
             say("it runs another command".into());
         }
         if h.dir != b.dir {

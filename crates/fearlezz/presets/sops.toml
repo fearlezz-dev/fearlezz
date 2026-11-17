@@ -1,7 +1,9 @@
-# SOPS: every file a `.sops.yaml` creation rule names by `path_regex` is encrypted. Fearlezz
-# sees that from the metadata sops writes into each file it encrypts; it never decrypts, and
-# never shows or keeps what a file holds. A plain file counts when the change touched it, so
-# one from before the piece never blocks new work.
+# SOPS: every file a `.sops.yaml` creation rule names by `path_regex` is encrypted, and every
+# value sops encrypts in it (by the file's own metadata: `encrypted_regex`, the unencrypted
+# suffix and the like) is ciphertext. Fearlezz reads the metadata sops writes; it never
+# decrypts, and never shows or keeps what a file holds, only where. A file that is not
+# encrypted counts when the change touched it, and a plain value when the change touched its
+# line, so one from before the piece never blocks new work.
 #
 # A file the regex names that is no secret (a kustomization.yaml beside the secrets): narrow
 # `path_regex`, or list it in `skip` of this rule.

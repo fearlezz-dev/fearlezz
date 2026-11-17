@@ -291,14 +291,18 @@ fn a_checks_command_run_by_hand_is_not_proof() {
 }
 
 #[test]
-fn any_step_of_a_check_run_by_hand_is_not_proof() {
+fn the_last_step_of_a_check_run_by_hand_is_not_proof_and_a_step_before_it_is_no_attempt() {
     let repo = changed();
-    let input = serde_json::json!({
-        "hook_event_name": "PostToolUse",
-        "tool_name": "Bash",
-        "tool_input": { "command": "terraform validate" },
-    });
-    let answer = hook(&repo, "claude", "after-shell", &input.to_string());
+    let ran = |command: &str| {
+        let input = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": command },
+        });
+        hook(&repo, "claude", "after-shell", &input.to_string())
+    };
+    assert!(ran("terraform init -backend=false").is_null());
+    let answer = ran("terraform validate");
     let context = answer["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();

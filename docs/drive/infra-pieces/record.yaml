@@ -29,12 +29,18 @@ decided:
     why: "terraform init then validate, and render then kubeconform, without shell glue or a pipe that hides a failed build."
   - id: sops
     what: ".sops.yaml decides: a rule kind (encrypted = \"sops\") gates a file its path_regex names that has no sops metadata; never decrypts."
+  - id: sops-values
+    what: "Check every value: values sops would encrypt (by the file's own metadata) must be ENC[...]; findings name file and line, never the value."
+  - id: flux-init
+    what: "flux only: a Flux repository gets flux, not kustomize."
   - id: yamllint
     what: "Be consistent with the other pieces: Fearlezz writes .yamllint.yaml from [settings.yamllint] (whole, like golangci), skipping what git ignores."
 
-open:
-  - id: flux-over-kustomize
-    ask: "Should init give a Flux repository flux instead of kustomize?"
+open: []
+
+trial: # clones of the real repositories, run with this branch (scratchpad, devenv piece off)
+  homelabbing: "init: actions, flux, terraform, sops. rules (sops) and terraform pass; the 16 encrypted secrets show no plain value; kubernetes/secrets/kustomization.yaml is the one finding, untouched so it never blocks. flate missing from the repo's devenv."
+  infrastructure: "init: actions, flux, terraform (5 folders), yamllint. 4 terraform folders validate; platform/authentik/terraform fails (its provider reads the in-cluster token file), which its own check never validated. yamllint passes; sync wrote .yamllint.yaml whole, so its own rules move into fearlezz.toml."
 
 slices:
   - id: steps
@@ -44,4 +50,4 @@ slices:
   - id: init
     status: building
 
-next: Check in on init's Flux choice, then try the pieces on clones of HomeLabbing and Infrastructure/v3.
+next: Prove the branch with fearlezz, open the pull request.

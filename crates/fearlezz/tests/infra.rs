@@ -51,8 +51,13 @@ fn feature(config: &str, files: &[(&str, &str)]) -> Repo {
 const SOPS_YAML: &str =
     "creation_rules:\n  - path_regex: kubernetes/secrets/.*\\.yaml$\n    age: age1example\n";
 
-/// What sops writes for a Secret: the values encrypted, and its metadata under `sops`.
-const ENCRYPTED: &str = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: db\nstringData:\n  password: ENC[AES256_GCM,data:Zm9v,iv:YmFy,tag:YmF6,type:str]\nsops:\n  age:\n    - recipient: age1example\n  version: 3.13.3\n";
+/// What sops 3.13.3 wrote for a Secret with `--encrypted-regex '^(data|stringData)$'`, the
+/// age key's encrypted block left out: its values encrypted, its metadata under `sops`.
+const ENCRYPTED: &str = include_str!("fixtures/sops/secret.yaml");
+
+/// What sops wrote for JSON and dotenv files with its default `unencrypted_suffix`.
+const ENCRYPTED_JSON: &str = include_str!("fixtures/sops/app.json");
+const ENCRYPTED_ENV: &str = include_str!("fixtures/sops/app.env");
 
 const PLAIN_VALUE: &str = "hunter2-in-plain-text";
 
@@ -84,7 +89,7 @@ fn the_sops_piece_gates_a_file_sops_yaml_names_that_is_not_encrypted() {
 
     repo.write(
         "kubernetes/secrets/db.yaml",
-        &ENCRYPTED.replace("Zm9v", "YWJj"),
+        &ENCRYPTED.replace("l3t0UA==", "l3t0UB=="),
     );
     let out = repo.fz(&["run", "rules"]);
     assert!(
@@ -162,14 +167,8 @@ fn json_and_dotenv_files_sops_encrypted_pass() {
             "creation_rules:\n  - path_regex: \\.enc\\.(json|env)$\n",
         )],
     );
-    repo.write(
-        "app.enc.json",
-        "{\n  \"token\": \"ENC[AES256_GCM,data:Zm9v,type:str]\",\n  \"sops\": {\"version\": \"3.13.3\"}\n}\n",
-    );
-    repo.write(
-        "app.enc.env",
-        "TOKEN=ENC[AES256_GCM,data:Zm9v,type:str]\nsops_version=3.13.3\n",
-    );
+    repo.write("app.enc.json", ENCRYPTED_JSON);
+    repo.write("app.enc.env", ENCRYPTED_ENV);
     let out = repo.fz(&["run", "rules"]);
     assert!(out.ok, "{}", out.stdout);
 
@@ -177,6 +176,80 @@ fn json_and_dotenv_files_sops_encrypted_pass() {
     let out = repo.fz(&["run", "rules"]);
     assert!(!out.ok, "{}", out.stdout);
     assert!(out.stdout.contains("app.enc.env"), "{}", out.stdout);
+    assert!(!out.stdout.contains(PLAIN_VALUE), "{}", out.stdout);
+}
+
+#[test]
+fn a_plain_value_added_to_an_encrypted_file_is_gated_at_its_line() {
+    let repo = sops_repo();
+    // Under stringData, which the file's encrypted_regex says sops encrypts.
+    repo.write(
+        "kubernetes/secrets/db.yaml",
+        &ENCRYPTED.replace(
+            "    list:\n",
+            &format!("    token: {PLAIN_VALUE}\n    list:\n"),
+        ),
+    );
+    let out = repo.fz(&["run", "rules"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("kubernetes/secrets/db.yaml:7"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains(PLAIN_VALUE), "{}", out.stdout);
+    assert_nothing_stored_holds(&repo, PLAIN_VALUE);
+}
+
+#[test]
+fn a_plain_value_sops_leaves_plain_passes() {
+    let repo = sops_repo();
+    // Outside the file's encrypted_regex.
+    repo.write(
+        "kubernetes/secrets/db.yaml",
+        &ENCRYPTED.replace("    name: db\n", "    name: db\n    namespace: apps\n"),
+    );
+    let out = repo.fz(&["run", "rules"]);
+    assert!(out.ok, "{}", out.stdout);
+
+    let repo = feature(
+        "use = [\"sops\"]\n",
+        &[
+            (
+                ".sops.yaml",
+                "creation_rules:\n  - path_regex: \\.enc\\.(json|env)$\n",
+            ),
+            ("app.enc.json", ENCRYPTED_JSON),
+            ("app.enc.env", ENCRYPTED_ENV),
+        ],
+    );
+    // Keys with the unencrypted suffix the files' metadata names stay plain.
+    repo.write(
+        "app.enc.env",
+        &ENCRYPTED_ENV.replace("B_unencrypted=y", "B_unencrypted=z"),
+    );
+    repo.write(
+        "app.enc.json",
+        &ENCRYPTED_JSON.replace("\"b_unencrypted\": \"y\"", "\"b_unencrypted\": \"z\""),
+    );
+    let out = repo.fz(&["run", "rules"]);
+    assert!(out.ok, "{}", out.stdout);
+
+    repo.write(
+        "app.enc.env",
+        &ENCRYPTED_ENV.replace("B_unencrypted=y", &format!("B={PLAIN_VALUE}")),
+    );
+    repo.write(
+        "app.enc.json",
+        &ENCRYPTED_JSON.replace(
+            "\"b_unencrypted\": \"y\"",
+            &format!("\"b\": \"{PLAIN_VALUE}\""),
+        ),
+    );
+    let out = repo.fz(&["run", "rules"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stdout.contains("app.enc.env:2"), "{}", out.stdout);
+    assert!(out.stdout.contains("app.enc.json"), "{}", out.stdout);
     assert!(!out.stdout.contains(PLAIN_VALUE), "{}", out.stdout);
 }
 

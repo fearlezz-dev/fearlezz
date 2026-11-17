@@ -255,14 +255,30 @@ impl Rules {
                 }
                 Kind::Encrypted(Encryption::Sops) => {
                     for path in crate::sops::named(root, files)? {
-                        if rule.covers(&path) && !crate::sops::encrypted(&root.join(&path)) {
+                        if !rule.covers(&path) {
+                            continue;
+                        }
+                        match crate::sops::state(&root.join(&path)) {
+                            crate::sops::State::Encrypted => {}
                             // No line: it counts when the change touched the file at all.
-                            found.push(rule.finding(&path, 0, None, false, || {
-                                format!(
-                                    "{path} is not encrypted, but .sops.yaml names it; encrypt it \
-                                     with sops, or narrow path_regex or skip it if it is no secret"
-                                )
-                            }));
+                            crate::sops::State::Plain => {
+                                found.push(rule.finding(&path, 0, None, false, || {
+                                    format!(
+                                        "{path} is not encrypted, but .sops.yaml names it; \
+                                         encrypt it with sops, or narrow path_regex or skip it if \
+                                         it is no secret"
+                                    )
+                                }));
+                            }
+                            crate::sops::State::Leaks(lines) => {
+                                for line in lines {
+                                    found.push(rule.finding(&path, line, None, false, || {
+                                        "a value sops encrypts in this file is in plain text; set \
+                                         it with `sops edit`"
+                                            .into()
+                                    }));
+                                }
+                            }
                         }
                     }
                 }

@@ -145,7 +145,7 @@ needs = "test/widgets/{stem}_test.dart"  # also {name} and {dir}
 
 [rule.sops]
 level = "gate"
-encrypted = "sops"                       # every file a .sops.yaml path_regex names is encrypted
+encrypted = "sops"                       # every file a .sops.yaml path_regex names is encrypted, every value sops encrypts ciphertext
 
 [rule.silent-fallback]
 level = "gate"

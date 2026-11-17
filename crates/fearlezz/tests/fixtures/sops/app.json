@@ -1,0 +1,16 @@
+{
+	"a": "ENC[AES256_GCM,data:4Q==,iv:UqPjtClJiumAVxQ/vmxGOECJWhTts8MQeTVKgL6CC4o=,tag:2EoQqfbdKLIGfKoshAvTYQ==,type:str]",
+	"n": "ENC[AES256_GCM,data:KQ==,iv:hXqE2J78htUoVyRIzoVgg3r4o32OCkG/vv+R3gaoytE=,tag:eprqHKoQYyXhi1P5sH2KoA==,type:int]",
+	"b_unencrypted": "y",
+	"sops": {
+		"age": [
+			{
+				"recipient": "age1232q2myv3yl63px3ky2hq9fdpqyk7dfkpcm70v2vlv87hz0ulcsstyscqq"
+			}
+		],
+		"lastmodified": "2026-11-17T04:06:04Z",
+		"mac": "ENC[AES256_GCM,data:PVRrGYr1nycnmJRtrpD81Hxb62wux8VIJ7SADRRtJoBv78U7ZQ4iTqcTYox4VlD2lx4lRNuHL+3gMiZoowZEnZZ7lJes8pIh3Rt3SKNctFYnLm6tNt4dmhD6H6ze0v4mMPJza8j3Ov14K9rsRbvjmllTIG+Nz/flwtukpm33hHk=,iv:7dDN3Vqc43BDHqlJpRKl49RPB9WI5/Xpl6MiDwRIfOk=,tag:PMKr7hwXkdo1CgutF3yv9Q==,type:str]",
+		"unencrypted_suffix": "_unencrypted",
+		"version": "3.13.3"
+	}
+}
