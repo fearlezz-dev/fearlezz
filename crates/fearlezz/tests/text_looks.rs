@@ -134,7 +134,8 @@ fn ci_shows_changed_texts_in_the_job_summary_and_the_bundle() {
     let app = items.iter().find(|i| i["name"] == "app").unwrap();
     assert_eq!(app["kind"], "text", "{app:#}");
     // Kept as plain text, the one kind of text the proof host serves.
-    assert!(app["after"].as_str().unwrap().ends_with(".txt"), "{app:#}");
+    let kept = std::path::Path::new(app["after"].as_str().unwrap());
+    assert_eq!(kept.extension().unwrap(), "txt", "{app:#}");
     assert_eq!(app["change"], "changed", "{app:#}");
     let after = bundle.join(app["after"].as_str().unwrap());
     assert!(

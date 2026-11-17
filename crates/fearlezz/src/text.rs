@@ -47,13 +47,14 @@ pub(crate) fn lines(was: &[&str], now: &[&str]) -> Vec<String> {
 /// Bytes as text for a diff: a file that is not UTF-8 is named as binary instead, by its size
 /// and digest, so two that differ never read the same.
 pub(crate) fn readable(bytes: &[u8]) -> String {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => text.to_string(),
-        Err(_) => {
-            let digest = hex::encode(&Sha256::digest(bytes)[..8]);
-            format!("(binary, {} bytes, sha256 {digest}...)\n", bytes.len())
-        }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_string();
     }
+    let digest: String = hex::encode(Sha256::digest(bytes))
+        .chars()
+        .take(16)
+        .collect();
+    format!("(binary, {} bytes, sha256 {digest}...)\n", bytes.len())
 }
 
 /// How many characters of one line are shown, so a minified file stays readable.
@@ -62,18 +63,19 @@ const WIDTH: usize = 300;
 /// The first `lines` lines of `text`, each cut at a readable width, and how many lines were
 /// left out.
 pub(crate) fn head(text: &str, lines: usize) -> (Vec<String>, usize) {
-    let all: Vec<&str> = text.lines().collect();
-    let shown = all.len().min(lines);
-    let cut = all[..shown]
-        .iter()
-        .map(|line| match line.char_indices().nth(WIDTH) {
-            Some((at, _)) => format!(
-                "{}... ({} more characters)",
-                &line[..at],
-                line[at..].chars().count()
-            ),
-            None => (*line).to_string(),
+    let cut: Vec<String> = text
+        .lines()
+        .take(lines)
+        .map(|line| {
+            let shown: String = line.chars().take(WIDTH).collect();
+            let more = line.chars().count().saturating_sub(WIDTH);
+            if more == 0 {
+                shown
+            } else {
+                format!("{shown}... ({more} more characters)")
+            }
         })
         .collect();
-    (cut, all.len() - shown)
+    let left = text.lines().count() - cut.len();
+    (cut, left)
 }

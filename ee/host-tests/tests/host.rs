@@ -1307,8 +1307,9 @@ fn the_files_origin_serves_only_pictures_films_and_plain_text() {
     // The page reads a text to diff it, across origins.
     let answer = get_url(&format!("{base}looks/s/i.yaml.txt"), &[]);
     assert_eq!(
-        answer.header("access-control-allow-origin").unwrap(),
-        world().worker.url
+        answer.header("access-control-allow-origin"),
+        Some(world().worker.url.as_str()),
+        "the app origin may read a text"
     );
     for (path, _) in refused {
         let answer = get_url(&format!("{base}{path}"), &[]);
@@ -1825,17 +1826,20 @@ fn the_page_shows_a_changed_text_as_its_diff() {
         browser.eval(
             r#"[...document.querySelectorAll('[data-stage] [data-line="was"]')].map(l => l.textContent)"#
         ),
-        json!(["-color: red"])
+        json!(["-color: red"]),
+        "the removed line"
     );
     // A text has no picture modes, and its card in the sheet says it is a text.
     assert_eq!(
         browser.eval("document.querySelectorAll('[data-stage] button[data-mode]').length"),
-        json!(0)
+        json!(0),
+        "no picture modes"
     );
     assert_eq!(
         browser
             .eval(r#"!!document.querySelector('[data-picture="render/app"] [data-text-thumb]')"#),
-        json!(true)
+        json!(true),
+        "a text card in the sheet"
     );
 }
 

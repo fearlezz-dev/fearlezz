@@ -421,7 +421,10 @@ fn build(
         let name = p.file.rsplit('/').next().unwrap_or(&p.file);
         // A text is kept as `.txt` whatever its own extension, the one type of text the proof
         // host serves, as plain text a browser never runs.
-        let txt = if p.kind == TEXT && !name.ends_with(".txt") {
+        let is_txt = Path::new(name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("txt"));
+        let txt = if p.kind == TEXT && !is_txt {
             ".txt"
         } else {
             ""
