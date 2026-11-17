@@ -324,9 +324,16 @@ fn kubernetes_version(go_mod: &str) -> Option<String> {
 /// check's go.mod requires, with setup-envtest run like the check (clean env, the project's
 /// shell), and returns their folder. Its output goes to the check's log; when it fails, the
 /// error is the exit code the check fails with.
-fn envtest_assets(check: &Check, at: &Where<'_>, log: &File) -> Result<Result<String, Option<i32>>> {
+fn envtest_assets(
+    check: &Check,
+    at: &Where<'_>,
+    log: &File,
+) -> Result<Result<String, Option<i32>>> {
     use std::io::Write as _;
-    let folder = check.dir.as_ref().map_or(at.root.to_path_buf(), |d| at.root.join(d));
+    let folder = check
+        .dir
+        .as_ref()
+        .map_or(at.root.to_path_buf(), |d| at.root.join(d));
     let go_mod = fs::read_to_string(folder.join("go.mod")).unwrap_or_default();
     let Some(version) = kubernetes_version(&go_mod) else {
         writeln!(
@@ -357,11 +364,15 @@ fn envtest_assets(check: &Check, at: &Where<'_>, log: &File) -> Result<Result<St
     if let Some(path) = project_path(at.root) {
         cmd.env("PATH", path);
     }
-    cmd.env("FEARLEZZ_K8S", &version).env("FEARLEZZ_ENVTEST", &bin);
+    cmd.env("FEARLEZZ_K8S", &version)
+        .env("FEARLEZZ_ENVTEST", &bin);
     let output = cmd.output().context("starting setup-envtest")?;
     let assets = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !output.status.success() || assets.is_empty() {
-        writeln!(&*log, "envtest: setup-envtest found no binaries for Kubernetes {version}")?;
+        writeln!(
+            &*log,
+            "envtest: setup-envtest found no binaries for Kubernetes {version}"
+        )?;
         return Ok(Err(output.status.code()));
     }
     Ok(Ok(assets))
@@ -412,6 +423,16 @@ fn run_builtin(
             }
             if found.is_empty() {
                 writeln!(out, "every managed file matches the shared settings")?;
+            }
+            found
+        }
+        crate::config::Builtin::Commits(commits) => {
+            let found = commits.check(at.root)?;
+            for f in &found {
+                writeln!(out, "{}", f.message)?;
+            }
+            if found.is_empty() {
+                writeln!(out, "every message is a conventional commit")?;
             }
             found
         }
@@ -468,7 +489,8 @@ mod tests {
 
     #[test]
     fn the_kubernetes_version_follows_k8s_io_api_and_its_replacement() {
-        let required = "module op\n\nrequire (\n\tk8s.io/api v0.31.2\n\tk8s.io/apimachinery v0.31.2\n)\n";
+        let required =
+            "module op\n\nrequire (\n\tk8s.io/api v0.31.2\n\tk8s.io/apimachinery v0.31.2\n)\n";
         assert_eq!(kubernetes_version(required).as_deref(), Some("1.31"));
         let one_line = "module op\nrequire k8s.io/api v0.29.0 // indirect\n";
         assert_eq!(kubernetes_version(one_line).as_deref(), Some("1.29"));

@@ -26,6 +26,7 @@ pub(crate) const BUILTIN: &[(&str, &str)] = &[
     ("betterleaks", include_str!("../presets/betterleaks.toml")),
     ("biome", include_str!("../presets/biome.toml")),
     ("bun", include_str!("../presets/bun.toml")),
+    ("commits", include_str!("../presets/commits.toml")),
     ("dart", include_str!("../presets/dart.toml")),
     ("devenv", include_str!("../presets/devenv.toml")),
     ("envtest", include_str!("../presets/envtest.toml")),

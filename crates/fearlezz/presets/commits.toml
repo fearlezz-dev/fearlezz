@@ -1,0 +1,7 @@
+# Commit messages hold to Conventional Commits (`feat: ...`, `fix(scope)!: ...`), which release
+# notes and versions are made from: the built in `commits` check. In CI it judges the pull
+# request title, which a squash merge makes the commit; locally every commit since the base.
+# The types are those release tools know (feat, fix, docs, style, refactor, perf, test, build,
+# ci, chore, revert); a project names its own with `types = [...]` here.
+
+[commits]

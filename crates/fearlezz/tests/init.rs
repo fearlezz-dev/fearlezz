@@ -275,7 +275,10 @@ fn init_adds_envtest_to_a_go_module_that_requires_controller_runtime() {
     let out = repo.fz(&["setup", "init"]);
     assert!(out.ok, "{}{}", out.stdout, out.stderr);
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
-    assert!(config.contains(r#"use = ["go", "envtest", "safety"]"#), "{config}");
+    assert!(
+        config.contains(r#"use = ["go", "envtest", "safety"]"#),
+        "{config}"
+    );
 }
 
 #[test]

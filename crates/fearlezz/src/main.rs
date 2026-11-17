@@ -1,6 +1,7 @@
 //! `fearlezz`: helps coding agents prove their work. See the README for the model.
 
 mod action;
+mod commits;
 mod config;
 mod counts;
 mod env;

@@ -266,6 +266,8 @@ pub(crate) enum Builtin {
     Settings(Settings),
     /// The project's `[rule]` table.
     Rules(Rules),
+    /// `[commits]`: the change's commit messages.
+    Commits(crate::commits::Commits),
 }
 
 impl Builtin {
@@ -276,6 +278,7 @@ impl Builtin {
         match self {
             Builtin::Settings(s) => format!("{version} settings {}", s.fingerprint()),
             Builtin::Rules(r) => format!("{version} rules {}", r.fingerprint()),
+            Builtin::Commits(c) => format!("{version} commits {}", c.fingerprint()),
         }
     }
 
@@ -283,7 +286,7 @@ impl Builtin {
     pub(crate) fn files(&self) -> Vec<String> {
         match self {
             Builtin::Settings(s) => s.files(),
-            Builtin::Rules(_) => Vec::new(),
+            Builtin::Rules(_) | Builtin::Commits(_) => Vec::new(),
         }
     }
 }
@@ -356,6 +359,7 @@ struct RawConfig {
     settings: Option<toml::Table>,
     lints: Option<BTreeMap<String, BTreeMap<String, lints::Level>>>,
     rule: Option<BTreeMap<String, toml::Table>>,
+    commits: Option<crate::commits::RawCommits>,
     #[serde(default)]
     no_proof: Vec<String>,
     host: Option<RawHost>,
@@ -656,13 +660,30 @@ impl Config {
                 Builtin::Rules(rules),
             ));
         }
+        let base = raw.base.unwrap_or_else(|| "main".into());
+        if let Some(commits) = raw.commits {
+            if checks.iter().any(|c| c.id == crate::commits::CHECK) {
+                bail!(
+                    "check {} is the name of the check [commits] forms; rename it",
+                    crate::commits::CHECK
+                );
+            }
+            // What it reads is the messages, which its inputs hold; no file.
+            checks.push(builtin_check(
+                crate::commits::CHECK,
+                &stages,
+                globs(&[])?,
+                Scope::Everywhere,
+                Builtin::Commits(crate::commits::Commits::parse(commits, &base)),
+            ));
+        }
         checks.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(Config {
             no_proof: globs(&raw.no_proof).context("no_proof")?,
             settings,
             stages,
             checks,
-            base: raw.base.unwrap_or_else(|| "main".into()),
+            base,
             env,
             host: raw.host.map(|h| h.url),
             table,

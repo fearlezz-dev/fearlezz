@@ -820,7 +820,11 @@ fn scripts(scripts: &[(&str, &str)]) -> (tempfile::TempDir, String) {
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let path = format!("{}:{}", dir.path().display(), std::env::var("PATH").unwrap());
+    let path = format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").unwrap()
+    );
     (dir, path)
 }
 
