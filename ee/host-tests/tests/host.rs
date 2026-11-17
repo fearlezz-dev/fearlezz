@@ -2602,13 +2602,18 @@ fn the_comment_and_the_page_name_the_preview_the_proof_deployed() {
     assert_eq!(answer.status, 200, "{}", answer.text());
     published(109);
     let comments = world().github.comments("owner/review", 109);
-    let last = comments[0].bodies.last().unwrap();
     assert!(
-        last.contains("Preview: https://review-preview.example.dev/"),
+        comments[0]
+            .bodies
+            .last()
+            .is_some_and(|last| last.contains("Preview: https://review-preview.example.dev/")),
         "{comments:?}"
     );
     let review = &live("/owner/review/pull/109", &[]).json()["review"];
-    assert_eq!(review["preview"], "https://review-preview.example.dev/", "{review}");
+    assert_eq!(
+        review["preview"], "https://review-preview.example.dev/",
+        "{review}"
+    );
 }
 
 fn one_comment_is_created_then_edited() {

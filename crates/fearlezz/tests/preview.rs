@@ -417,7 +417,7 @@ fn the_preview_sees_only_the_base_variables_its_env_and_its_secrets() {
     );
     let out = s.fz_env(
         &["run", "--stage", "working"],
-        &[("OP_SERVICE_ACCOUNT_TOKEN", "ops-test-0123456789")],
+        &[("OP_SERVICE_ACCOUNT_TOKEN", "not-a-real-token")],
     );
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let mut kept = vec![s.repo.path(".git/fearlezz"), s.repo.cache.clone()];
@@ -429,7 +429,7 @@ fn the_preview_sees_only_the_base_variables_its_env_and_its_secrets() {
         }
         let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).to_string();
         assert!(
-            !text.contains("ops-test"),
+            !text.contains("not-a-real-token"),
             "{} holds the token",
             path.display()
         );
