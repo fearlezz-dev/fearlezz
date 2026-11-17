@@ -595,6 +595,12 @@ fn removing_an_env_variable_is_red() {
 }
 
 #[test]
+fn giving_a_check_other_secrets_is_red() {
+    let out = ci_after(|c| c.replace("env = [\"HOME\"]", "env = [\"HOME\"]\nsecrets = [\"KEY\"]"));
+    assert_weakens(&out, "weakens lint: it gets other secrets (+KEY)");
+}
+
+#[test]
 fn turning_a_rule_off_is_red() {
     let out = ci_after(|c| c.replace("[rule.no-secrets]\n", "[rule.no-secrets]\noff = true\n"));
     assert_weakens(&out, "weakens rule.no-secrets: it is gone");

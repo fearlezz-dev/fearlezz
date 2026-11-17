@@ -150,7 +150,7 @@ fn on_base(
     env: &EnvCtx<'_>,
 ) -> Result<RunResult> {
     let inputs = base.wt.inputs(check)?;
-    match store.for_key(&inputs.key).pop() {
+    match store.latest_that_ran(&inputs.key) {
         Some(r) => Ok(r),
         None => look::run_on_base(store, check, &inputs, base, stage, env),
     }

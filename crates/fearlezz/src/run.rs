@@ -2,6 +2,7 @@
 //! facts the command cannot fake (inputs, tree, exit code, time) itself.
 
 use std::fs::{self, File};
+use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -58,20 +59,20 @@ pub(crate) fn execute(
     // Reports from before this moment are another run's, never proof of this one.
     let started = SystemTime::now();
     let clock = Instant::now();
-    let (exit_ok, exit_code) = if let Some(builtin) = &check.builtin {
+    let (exit_ok, exit_code, missing_secret) = if let Some(builtin) = &check.builtin {
         run_builtin(builtin, at, &dir, out)?;
-        (true, Some(0))
+        (true, Some(0), None)
     } else if check.needs_envtest() {
         match envtest_assets(check, at, &out)? {
             Ok(assets) => {
                 let mut vars = at.vars.clone();
                 vars.insert("KUBEBUILDER_ASSETS".into(), assets);
-                spawn(check, &dir, out, &Where { vars: &vars, ..*at })?
+                run_command(check, &Where { vars: &vars, ..*at }, &dir, out)?
             }
-            Err(code) => (false, code),
+            Err(code) => (false, code, None),
         }
     } else {
-        spawn(check, &dir, out, at)?
+        run_command(check, at, &dir, out)?
     };
     let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
     let stdout_path = dir.join("stdout.txt");
@@ -133,6 +134,7 @@ pub(crate) fn execute(
         findings_elsewhere,
         tests,
         cases,
+        missing_secret,
         dir,
         log,
     };
@@ -148,6 +150,7 @@ fn command(
     stdout: File,
     log: &File,
     at: &Where<'_>,
+    secrets: &[(String, String)],
 ) -> Result<Command> {
     let mut cmd = clean_command(
         at.root,
@@ -162,15 +165,43 @@ fn command(
         .stderr(log.try_clone()?);
     cmd.env("FEARLEZZ_PORT", free_port()?.to_string());
     cmd.envs(at.vars);
+    cmd.envs(secrets.iter().map(|(name, value)| (name, value)));
     cmd.env("FEARLEZZ_OUT", dir)
         .env("FEARLEZZ_CHECK", &check.id)
         .env("FEARLEZZ_STAGE", at.stage);
     Ok(cmd)
 }
 
+/// Gets the check's secrets and runs its command with them, masking them in its files before
+/// anything reads those, since they are kept, shown and uploaded. Returns whether it passed,
+/// its exit code, and the secret SecretSpec could not give it, if any.
+fn run_command(
+    check: &Check,
+    at: &Where<'_>,
+    dir: &Path,
+    mut out: File,
+) -> Result<(bool, Option<i32>, Option<String>)> {
+    Ok(match fetch_secrets(check, at, &mut out)? {
+        Ok(secrets) => {
+            let (passed, code) = spawn(check, &secrets, dir, out, at)?;
+            mask(dir, &masked_forms(&secrets))?;
+            (passed, code, None)
+        }
+        // The log names what the shell could not find, as for a check's own command.
+        Err(Unfetched::NoSecretSpec) => (false, Some(NOT_FOUND), None),
+        Err(Unfetched::Secret(name)) => (false, None, Some(name)),
+    })
+}
+
 /// Runs the check's command in a clean env, inside the environment's shell if any, recording
 /// its app's window when it has `record`. Returns whether it passed and its exit code.
-fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, Option<i32>)> {
+fn spawn(
+    check: &Check,
+    secrets: &[(String, String)],
+    dir: &Path,
+    out: File,
+    at: &Where<'_>,
+) -> Result<(bool, Option<i32>)> {
     // A tool that prints findings on stdout keeps them apart from its log; only the last
     // step's stdout holds them, the steps before it prepare.
     let stdout_path = dir.join("stdout.txt");
@@ -182,14 +213,14 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
         bail!("check {} has no command to run", check.id);
     };
     for step in before {
-        let status = command(check, step, dir, out.try_clone()?, &out, at)?
+        let status = command(check, step, dir, out.try_clone()?, &out, at, secrets)?
             .status()
             .with_context(|| format!("starting check {}", check.id))?;
         if !status.success() {
             return Ok((false, status.code()));
         }
     }
-    let mut cmd = command(check, last, dir, stdout, &out, at)?;
+    let mut cmd = command(check, last, dir, stdout, &out, at, secrets)?;
     let Some(record) = &check.pictures.record else {
         let Some(budget) = &check.timeout else {
             let status = cmd
@@ -342,6 +373,149 @@ pub(crate) fn clean_command(
     cmd
 }
 
+/// Why a check did not get its secrets.
+enum Unfetched {
+    /// SecretSpec could not give this one; its reason is in the log.
+    Secret(String),
+    /// The shell found no `secretspec` to ask.
+    NoSecretSpec,
+}
+
+/// Fetches each secret `check` names from SecretSpec, outside its clean env: in the
+/// environment's shell and the check's folder, so the project's SecretSpec and provider
+/// settings apply, and with Fearlezz's own variables, so the provider's token (such as
+/// 1Password's `OP_SERVICE_ACCOUNT_TOKEN`) reaches SecretSpec but never the check. One name at
+/// a time, since SecretSpec refuses a whole profile when any required secret in it is missing.
+/// SecretSpec's own words go to `out`.
+fn fetch_secrets(
+    check: &Check,
+    at: &Where<'_>,
+    out: &mut File,
+) -> Result<std::result::Result<Vec<(String, String)>, Unfetched>> {
+    // The value goes to a file of its own, so nothing the shell prints on entering can mix in.
+    let get = r#"cd "$FEARLEZZ_DIR" && secretspec get "$FEARLEZZ_SECRET" --reason "$FEARLEZZ_REASON" --caller fearlezz > "$FEARLEZZ_SECRET_FILE""#;
+    let script = match at.shell {
+        Some(shell) => format!("{shell} sh -c '{get}'"),
+        None => get.to_string(),
+    };
+    let folder = check
+        .dir
+        .as_ref()
+        .map_or_else(|| at.root.to_path_buf(), |d| at.root.join(d));
+    let mut secrets = Vec::new();
+    for name in &check.secrets {
+        let file = tempfile::NamedTempFile::new()?;
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(&script)
+            .current_dir(at.root)
+            .stdin(Stdio::null())
+            .stdout(out.try_clone()?)
+            .stderr(out.try_clone()?)
+            .env("FEARLEZZ_DIR", &folder)
+            .env("FEARLEZZ_SECRET", name)
+            .env("FEARLEZZ_SECRET_FILE", file.path())
+            .env(
+                "FEARLEZZ_REASON",
+                format!("the Fearlezz check {}", check.id),
+            );
+        if let Some(path) = project_path(at.root) {
+            cmd.env("PATH", path);
+        }
+        let status = cmd
+            .status()
+            .with_context(|| format!("asking SecretSpec for {name}"))?;
+        if status.code() == Some(NOT_FOUND) {
+            return Ok(Err(Unfetched::NoSecretSpec));
+        }
+        if !status.success() {
+            return Ok(Err(Unfetched::Secret(name.clone())));
+        }
+        let Ok(value) = String::from_utf8(fs::read(file.path())?) else {
+            writeln!(out, "SecretSpec gave {name} as bytes that are not text")?;
+            return Ok(Err(Unfetched::Secret(name.clone())));
+        };
+        secrets.push((name.clone(), value));
+    }
+    Ok(Ok(secrets))
+}
+
+/// What stands in for a secret's value in a run's files.
+const MASK: &[u8] = b"***";
+
+/// Values shorter than this are not masked: replacing a word as short as `dev` everywhere
+/// would garble every report, and a value that short protects nothing.
+const MASKED_FROM: usize = 4;
+
+/// Pictures hold no text a tool printed, and masking would break them.
+const UNMASKED: [&str; 9] = [
+    "png", "jpg", "jpeg", "gif", "webp", "mp4", "webm", "mov", "mkv",
+];
+
+/// Every form a secret's value can take in a run's text files: as it is, as JSON escapes it
+/// (findings, SARIF, logs), and each of its lines, for a value of several lines (a PEM key)
+/// printed line by line.
+fn masked_forms(values: &[(String, String)]) -> Vec<Vec<u8>> {
+    let mut forms: Vec<String> = Vec::new();
+    for (_, value) in values {
+        forms.push(value.clone());
+        let json = serde_json::to_string(value).unwrap_or_default();
+        forms.push(json.trim_matches('"').to_string());
+        if value.contains('\n') {
+            forms.extend(value.lines().map(str::to_string));
+        }
+    }
+    forms.retain(|f| f.len() >= MASKED_FROM);
+    // The longest first, so a line never masks part of the whole value before it is matched.
+    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    forms.dedup();
+    forms.into_iter().map(String::into_bytes).collect()
+}
+
+/// Replaces every form of a secret's value in the files under `dir` with [`MASK`].
+fn mask(dir: &Path, forms: &[Vec<u8>]) -> Result<()> {
+    if forms.is_empty() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            mask(&path, forms)?;
+            continue;
+        }
+        let picture = path
+            .extension()
+            .and_then(|x| x.to_str())
+            .is_some_and(|x| UNMASKED.contains(&x.to_ascii_lowercase().as_str()));
+        if picture {
+            continue;
+        }
+        let bytes = fs::read(&path)?;
+        let mut masked = bytes.clone();
+        for form in forms {
+            masked = replace(&masked, form, MASK);
+        }
+        if masked != bytes {
+            fs::write(&path, masked)?;
+        }
+    }
+    Ok(())
+}
+
+/// `bytes` with every `from` replaced by `to`.
+fn replace(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut rest = bytes;
+    while let Some(at) = rest.windows(from.len()).position(|w| w == from) {
+        let (before, found) = rest.split_at(at);
+        out.extend_from_slice(before);
+        out.extend_from_slice(to);
+        rest = found.get(from.len()..).unwrap_or_default();
+    }
+    out.extend_from_slice(rest);
+    out
+}
+
 /// A port nothing listens on right now, for a server the check starts itself (such as
 /// Playwright's `webServer`), so checks in two worktrees or on the base never collide. The
 /// system picks it from its wide ephemeral range, so another process taking it in the
@@ -465,12 +639,13 @@ fn envtest_assets(
 
 /// Tools the built in pieces run that nixpkgs packages under the same name, so a missing one
 /// can be answered with the line that adds it to a project's devenv.
-pub(crate) const NIX_TOOLS: [&str; 10] = [
+pub(crate) const NIX_TOOLS: [&str; 11] = [
     "oxlint",
     "prettier",
     "stylua",
     "svelte-check",
     "setup-envtest",
+    "secretspec",
     "gitleaks",
     "trufflehog",
     "betterleaks",
@@ -570,7 +745,35 @@ pub(crate) fn tail(log: &Path, lines: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::kubernetes_version;
+    use super::*;
+
+    #[test]
+    fn a_secret_is_masked_as_it_is_as_json_escapes_it_and_line_by_line() {
+        let value = "first-line\"quoted\nsecond-line";
+        let dir = tempfile::tempdir().unwrap();
+        let text = format!(
+            "raw {value} json {} lines {} {} short ab\n",
+            serde_json::to_string(value).unwrap(),
+            "first-line\"quoted",
+            "second-line"
+        );
+        fs::write(dir.path().join("log.txt"), &text).unwrap();
+        fs::write(dir.path().join("still.png"), value).unwrap();
+        let secrets = [
+            ("KEY".to_string(), value.to_string()),
+            ("SHORT".to_string(), "ab".to_string()),
+        ];
+        mask(dir.path(), &masked_forms(&secrets)).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("log.txt")).unwrap(),
+            "raw *** json \"***\" lines *** *** short ab\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("still.png")).unwrap(),
+            value,
+            "pictures are left whole"
+        );
+    }
 
     #[test]
     fn the_kubernetes_version_follows_k8s_io_api_and_its_replacement() {

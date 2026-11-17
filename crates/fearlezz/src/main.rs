@@ -962,7 +962,10 @@ fn print_failure(f: &store::RunResult) {
     if f.findings.iter().any(|x| x.level == findings::Level::Gate) {
         println!("fail {}: blocking findings", f.check);
     } else {
-        if let Some(tool) = f
+        if let Some(name) = &f.missing_secret {
+            println!("fail {}: SecretSpec could not give it {name}", f.check);
+            println!("  fix: {}", secret_fix(name));
+        } else if let Some(tool) = f
             .not_found()
             .then(|| run::missing_command(&f.log))
             .flatten()
@@ -1346,8 +1349,24 @@ fn install_fix(tool: &str) -> String {
     )
 }
 
+/// How to let SecretSpec give a check the secret `name`.
+fn secret_fix(name: &str) -> String {
+    format!(
+        "declare {name} in secretspec.toml and store it with its provider (1Password: \
+         `secretspec set {name}`); sign in to the provider locally (`op signin`), and give CI \
+         its token (1Password: the OP_SERVICE_ACCOUNT_TOKEN secret in the job's env)"
+    )
+}
+
 fn failure_item(f: &store::RunResult) -> proof::Item {
     let what = format!("check `{}` failed", f.check);
+    if let Some(name) = &f.missing_secret {
+        return proof::Item {
+            what,
+            why: format!("SecretSpec could not give it {name}"),
+            fix: secret_fix(name),
+        };
+    }
     if let Some(tool) = f
         .not_found()
         .then(|| run::missing_command(&f.log))
