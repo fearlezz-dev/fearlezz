@@ -46,7 +46,10 @@ fn init_uses_the_pieces_of_the_languages_it_finds() {
         ("pyproject.toml", "[project]\nname = \"app\"\n"),
         ("go.mod", "module app\n"),
         ("settings.gradle.kts", "rootProject.name = \"app\"\n"),
-        ("pubspec.yaml", "name: app\n"),
+        (
+            "pubspec.yaml",
+            "name: app\ndependencies:\n  flutter:\n    sdk: flutter\n",
+        ),
         (".github/workflows/ci.yml", "on: push\njobs: {}\n"),
     ]);
     let out = repo.fz(&["setup", "init"]);
@@ -54,7 +57,7 @@ fn init_uses_the_pieces_of_the_languages_it_finds() {
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
     assert!(
         config.contains(
-            r#"use = ["devenv", "rust", "typescript", "python", "go", "kotlin", "flutter", "actions", "safety"]"#
+            r#"use = ["devenv", "rust", "typescript", "biome", "python", "go", "kotlin", "flutter", "actions", "safety"]"#
         ),
         "{config}"
     );
@@ -107,7 +110,7 @@ fn init_adds_the_piece_of_each_framework_package_json_depends_on() {
     assert!(out.ok, "{}{}", out.stdout, out.stderr);
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
     assert!(
-        config.contains(r#"use = ["typescript", "react", "next", "vue", "safety"]"#),
+        config.contains(r#"use = ["typescript", "biome", "react", "next", "vue", "safety"]"#),
         "{config}"
     );
     assert!(
@@ -124,7 +127,7 @@ fn init_adds_the_piece_of_each_framework_package_json_depends_on() {
     assert!(plain.fz(&["setup", "init"]).ok);
     let config = std::fs::read_to_string(plain.path("fearlezz.toml")).unwrap();
     assert!(
-        config.contains(r#"use = ["typescript", "safety"]"#),
+        config.contains(r#"use = ["typescript", "biome", "safety"]"#),
         "{config}"
     );
 }
@@ -139,11 +142,11 @@ fn init_adds_the_piece_of_the_test_runner_the_project_uses() {
                 "package.json",
                 r#"{ "devDependencies": { "vitest": "3.0.0" } }"#,
             )][..],
-            r#"use = ["typescript", "vitest", "safety"]"#,
+            r#"use = ["typescript", "biome", "vitest", "safety"]"#,
         ),
         (
             &[("package.json", "{}\n"), ("bun.lock", "{}\n")][..],
-            r#"use = ["typescript", "bun", "safety"]"#,
+            r#"use = ["typescript", "biome", "bun", "safety"]"#,
         ),
         (
             &[
@@ -153,11 +156,11 @@ fn init_adds_the_piece_of_the_test_runner_the_project_uses() {
                 ),
                 ("bun.lock", "{}\n"),
             ][..],
-            r#"use = ["typescript", "vitest", "safety"]"#,
+            r#"use = ["typescript", "biome", "vitest", "safety"]"#,
         ),
         (
             &[("package.json", "{}\n")][..],
-            r#"use = ["typescript", "safety"]"#,
+            r#"use = ["typescript", "biome", "safety"]"#,
         ),
     ] {
         let repo = project(files);
@@ -165,6 +168,101 @@ fn init_adds_the_piece_of_the_test_runner_the_project_uses() {
         assert!(out.ok, "{}{}", out.stdout, out.stderr);
         let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
         assert!(config.contains(pieces), "{files:?}: {config}");
+    }
+}
+
+#[test]
+fn init_picks_the_linter_and_formatter_package_json_depends_on_and_biome_otherwise() {
+    // Biome lints and formats a project that names no other tool, or names Biome itself.
+    // The framework pieces hold Biome's and oxlint's rules, so they come with either.
+    for (package, pieces) in [
+        (
+            r#"{ "devDependencies": { "@biomejs/biome": "2.6.6", "react": "19.0.0" } }"#,
+            r#"use = ["typescript", "biome", "react", "safety"]"#,
+        ),
+        (
+            r#"{ "devDependencies": { "eslint": "9.0.0", "prettier": "3.0.0", "react": "19.0.0" } }"#,
+            r#"use = ["typescript", "eslint", "prettier", "safety"]"#,
+        ),
+        (
+            r#"{ "devDependencies": { "oxlint": "1.0.0", "react": "19.0.0" } }"#,
+            r#"use = ["typescript", "oxlint", "react", "safety"]"#,
+        ),
+        (
+            r#"{ "devDependencies": { "prettier": "3.0.0" } }"#,
+            r#"use = ["typescript", "prettier", "safety"]"#,
+        ),
+    ] {
+        let repo = project(&[("package.json", package)]);
+        let out = repo.fz(&["setup", "init"]);
+        assert!(out.ok, "{}{}", out.stdout, out.stderr);
+        let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+        assert!(config.contains(pieces), "{package}: {config}");
+    }
+}
+
+#[test]
+fn init_adds_node_test_when_the_test_script_runs_it() {
+    let repo = project(&[(
+        "package.json",
+        r#"{ "scripts": { "test": "node --test --test-concurrency=1 'test/**/*.test.ts'" } }"#,
+    )]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(
+        config.contains(r#"use = ["typescript", "biome", "node-test", "safety"]"#),
+        "{config}"
+    );
+}
+
+#[test]
+fn init_finds_lua_by_its_formatter_config() {
+    for file in ["stylua.toml", ".stylua.toml"] {
+        let repo = project(&[(file, "indent_type = \"Spaces\"\n"), ("main.lua", "\n")]);
+        let out = repo.fz(&["setup", "init"]);
+        assert!(out.ok, "{}{}", out.stdout, out.stderr);
+        let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+        assert!(
+            config.contains(r#"use = ["lua", "safety"]"#),
+            "{file}: {config}"
+        );
+    }
+}
+
+#[test]
+fn init_gives_a_svelte_project_svelte_check_in_place_of_tsc() {
+    // As the developer's SvelteKit sites have it: ESLint, Prettier, Vitest.
+    let repo = project(&[(
+        "package.json",
+        r#"{ "devDependencies": { "@sveltejs/kit": "2.0.0", "svelte": "5.0.0", "svelte-check": "4.0.0", "eslint": "9.0.0", "prettier": "3.0.0", "vitest": "3.0.0" } }"#,
+    )]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(
+        config.contains(r#"use = ["svelte", "eslint", "prettier", "vitest", "safety"]"#),
+        "{config}"
+    );
+}
+
+#[test]
+fn init_tells_a_dart_package_from_a_flutter_app_by_its_sdk() {
+    for (pubspec, pieces) in [
+        (
+            "name: client\nenvironment:\n  sdk: ^3.5.0\n",
+            r#"use = ["dart", "safety"]"#,
+        ),
+        (
+            "name: app\ndependencies:\n  flutter:\n    sdk: flutter\n",
+            r#"use = ["flutter", "safety"]"#,
+        ),
+    ] {
+        let repo = project(&[("pubspec.yaml", pubspec)]);
+        let out = repo.fz(&["setup", "init"]);
+        assert!(out.ok, "{}{}", out.stdout, out.stderr);
+        let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+        assert!(config.contains(pieces), "{pubspec}: {config}");
     }
 }
 

@@ -30,14 +30,16 @@ const MARKERS: &[(&str, &[&str])] = &[
             "build.gradle",
         ],
     ),
+    // A Dart package or a Flutter app; `refine` tells which.
     ("flutter", &["pubspec.yaml"]),
+    ("lua", &["stylua.toml", ".stylua.toml"]),
     // A folder, not a file: zizmor audits the workflows GitHub runs.
     ("actions", &[".github/workflows"]),
 ];
 
 /// The framework pieces and the packages in package.json that show each, in the order the
-/// starter names them, after `typescript`: Biome runs every rule it is given, so a framework's
-/// rules come only with its piece. A Next app depends on react too, and gets both.
+/// starter names them, after the linters: Biome and oxlint run every rule they are given, so a
+/// framework's rules come only with its piece. A Next app depends on react too, and gets both.
 const FRAMEWORKS: &[(&str, &[&str])] = &[
     ("react", &["react"]),
     ("next", &["next"]),
@@ -57,12 +59,49 @@ pub(crate) fn frameworks(root: &Path) -> Vec<&'static str> {
         .collect()
 }
 
+/// The pieces of the linters and formatters other than Biome, and the package in package.json
+/// that shows each, in the order the starter names them.
+const TOOLS: &[(&str, &str)] = &[
+    ("eslint", "eslint"),
+    ("oxlint", "oxlint"),
+    ("prettier", "prettier"),
+];
+
+/// The pieces a TypeScript project in `root` gets after `typescript`: the linters and
+/// formatters package.json depends on, or Biome when it names Biome or none of them; the
+/// pieces of its frameworks, when Biome or oxlint lints; then its test runner's.
+fn javascript(root: &Path) -> Vec<&'static str> {
+    let depends = depends(root);
+    let tools: Vec<&'static str> = TOOLS
+        .iter()
+        .filter(|(_, package)| depends(package))
+        .map(|(piece, _)| *piece)
+        .collect();
+    let biome = depends("@biomejs/biome") || tools.is_empty();
+    // The framework pieces hold the rules of Biome and oxlint, so either brings them.
+    let frameworks = if biome || tools.contains(&"oxlint") {
+        frameworks(root)
+    } else {
+        Vec::new()
+    };
+    biome
+        .then_some("biome")
+        .into_iter()
+        .chain(tools)
+        .chain(frameworks)
+        .chain(runner(root))
+        .collect()
+}
+
 /// The piece of the test runner a TypeScript project in `root` uses: Vitest when package.json
-/// depends on it, as a Bun project running Vitest does; otherwise Bun's own runner when a Bun
-/// lockfile shows Bun; none without a sign of either.
+/// depends on it, as a Bun project running Vitest does; otherwise Node's own runner when the
+/// test script runs it; otherwise Bun's own runner when a Bun lockfile shows Bun; none without
+/// a sign of one.
 fn runner(root: &Path) -> Option<&'static str> {
     if depends(root)("vitest") {
         Some("vitest")
+    } else if node_test(root) {
+        Some("node-test")
     } else if ["bun.lock", "bun.lockb"]
         .iter()
         .any(|f| root.join(f).exists())
@@ -73,12 +112,46 @@ fn runner(root: &Path) -> Option<&'static str> {
     }
 }
 
+/// The piece a marker's language takes in `root`: svelte (svelte-check in place of tsc) for a
+/// TypeScript project that depends on Svelte, dart for a pubspec.yaml without Flutter.
+fn refine(root: &Path, piece: &'static str) -> &'static str {
+    match piece {
+        "typescript" if depends(root)("svelte") => "svelte",
+        "flutter" => {
+            let pubspec = std::fs::read_to_string(root.join("pubspec.yaml")).unwrap_or_default();
+            let flutter = pubspec
+                .lines()
+                .any(|line| line.trim().replace(' ', "") == "sdk:flutter");
+            if flutter { "flutter" } else { "dart" }
+        }
+        _ => piece,
+    }
+}
+
+/// Whether package.json's test script runs Node's own test runner (`node --test`, also with
+/// options such as a loader before `--test`).
+fn node_test(root: &Path) -> bool {
+    let Some(json) = package_json(root) else {
+        return false;
+    };
+    json.pointer("/scripts/test")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|script| {
+            let mut words = script.split_whitespace();
+            words.next() == Some("node") && words.any(|w| w == "--test")
+        })
+}
+
+/// `package.json` in `root` as JSON; none when it is missing or not JSON.
+fn package_json(root: &Path) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(root.join("package.json")).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 /// Whether `package.json` in `root` depends on a package (its dependencies or
 /// devDependencies). A file that cannot be read as JSON depends on none.
 fn depends(root: &Path) -> impl Fn(&str) -> bool {
-    let json = std::fs::read_to_string(root.join("package.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let json = package_json(root);
     move |package| {
         json.as_ref().is_some_and(|json| {
             ["dependencies", "devDependencies"]
@@ -148,12 +221,13 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
             Some((*piece, file))
         })
         .flat_map(|(piece, file)| {
-            // A TypeScript project also gets its frameworks' pieces and its test runner's.
+            // A TypeScript project also gets its linters', formatters' and test runner's pieces.
             let more = if piece == "typescript" {
-                frameworks(root).into_iter().chain(runner(root)).collect()
+                javascript(root)
             } else {
                 Vec::new()
             };
+            let piece = refine(root, piece);
             std::iter::once(piece).chain(more).map(move |piece| Found {
                 piece,
                 file: Some(file.clone()),

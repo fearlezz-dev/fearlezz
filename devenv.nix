@@ -35,7 +35,8 @@ in
   };
 
   # bun installs, builds and tests the proof host's page (ee/app); typescript type checks it.
-  packages = [ pkgs.git pkgs.ffmpeg pkgs.ast-grep pkgs.actionlint pkgs.shellcheck pkgs.jq pkgs.yq-go pkgs.gitleaks pkgs.trufflehog pkgs.betterleaks pkgs.osv-scanner pkgs.zizmor pkgs.wrangler worker-build pkgs.secretspec pkgs.bun pkgs.typescript ];
+  # oxlint, prettier and stylua are the tools the language pieces' tests run.
+  packages = [ pkgs.git pkgs.ffmpeg pkgs.ast-grep pkgs.actionlint pkgs.shellcheck pkgs.jq pkgs.yq-go pkgs.gitleaks pkgs.trufflehog pkgs.betterleaks pkgs.osv-scanner pkgs.zizmor pkgs.wrangler worker-build pkgs.secretspec pkgs.bun pkgs.typescript pkgs.oxlint pkgs.prettier pkgs.stylua ];
 
   scripts = {
     format = {

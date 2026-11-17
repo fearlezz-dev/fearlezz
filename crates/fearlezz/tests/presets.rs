@@ -27,6 +27,37 @@ fn a_built_in_piece_brings_its_checks() {
 }
 
 #[test]
+fn biome_is_a_piece_of_its_own_beside_the_type_checker() {
+    // The typescript piece is the type checker alone, so a project that lints and formats
+    // with other tools runs no Biome.
+    let repo = Repo::new("use = [\"typescript\"]\n", &[]);
+    assert_eq!(checks(&repo), "settings, tsc");
+    let repo = Repo::new("use = [\"biome\"]\n", &[]);
+    assert_eq!(checks(&repo), "biome-format, biome-lint, settings");
+}
+
+#[test]
+fn a_dart_package_gets_the_flutter_apps_analyzer_and_runs_dart_test() {
+    let repo = Repo::new("use = [\"dart\"]\n", &[]);
+    assert_eq!(
+        checks(&repo),
+        "dart-analyze, dart-format, dart-test, settings"
+    );
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    let options = std::fs::read_to_string(repo.path("analysis_options.yaml")).unwrap();
+    assert!(options.contains("prefer_double_quotes"), "{options}");
+    // A package has no platform folders for Flutter to add.
+    assert!(!options.contains("android/**"), "{options}");
+
+    let repo = Repo::new("use = [\"flutter\"]\n", &[]);
+    assert_eq!(
+        checks(&repo),
+        "dart-analyze, dart-format, flutter-test, settings"
+    );
+}
+
+#[test]
 fn the_flutter_piece_never_asks_for_the_types_it_forbids() {
     // omit_local_variable_types forbids the local types these two would ask for.
     let repo = Repo::new("use = [\"flutter\"]\n", &[]);
@@ -596,4 +627,186 @@ fn flutter_film_runs_its_entry_file_as_a_plain_command() {
     let preset: toml::Value = toml::from_str(include_str!("../presets/flutter-look.toml")).unwrap();
     let run = preset["check"]["flutter-film"]["run"].as_str().unwrap();
     assert_eq!(run, "flutter test integration_test/app_test.dart -d macos");
+}
+
+// The language pieces, run with the real tools devenv gives
+
+/// A repository on `config` with `files`, synced, on a branch whose change is to come.
+fn on_branch(config: &str, files: &[(&str, &str)]) -> Repo {
+    let repo = Repo::new(config, files);
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "--allow-empty", "-m", "synced"]);
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo
+}
+
+#[test]
+fn the_prettier_piece_fails_on_an_unformatted_file_and_leaves_fearlezz_files_alone() {
+    // The agent skill and settings Fearlezz writes have the layout Fearlezz gives them.
+    let repo = on_branch(
+        "use = [\"prettier\"]\n\n[settings.claude.permissions]\nallow = [\"Bash(ls)\",    \"Bash(pwd)\"]\n",
+        &[("src/a.ts", "export const a = 1;\n")],
+    );
+    assert_eq!(checks(&repo), "prettier, settings");
+    repo.write(".claude/notes.json", "{\"a\":   1}\n");
+    let out = repo.fz(&["run", "prettier"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+
+    repo.write("src/a.ts", "export   const a = 1\n");
+    let out = repo.fz(&["run", "prettier"]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("src/a.ts"), "{}", out.stdout);
+}
+
+#[test]
+fn the_lua_piece_fails_on_a_file_stylua_would_change() {
+    let repo = on_branch("use = [\"lua\"]\n", &[("main.lua", "local a = 1\n")]);
+    assert_eq!(checks(&repo), "stylua");
+    let out = repo.fz(&["run", "stylua"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+
+    repo.write("main.lua", "local   a=1\n");
+    let out = repo.fz(&["run", "stylua"]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("main.lua"), "{}", out.stdout);
+}
+
+#[test]
+fn the_node_test_piece_counts_the_tests_node_ran() {
+    let test = "import { test } from 'node:test';\nimport assert from 'node:assert';\n\
+                test('one', () => assert.equal(1, 1));\ntest('two', () => assert.equal(2, 2));\n";
+    let repo = on_branch(
+        "use = [\"node-test\"]\n",
+        &[
+            ("package.json", "{ \"type\": \"module\" }\n"),
+            ("test/a.test.js", test),
+        ],
+    );
+    assert_eq!(checks(&repo), "node-test");
+    repo.write("src/a.js", "export const a = 1;\n");
+    repo.commit("feat: a");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.lines()
+            .iter()
+            .any(|l| l.contains("node-test") && l.contains("  2 tests  ")),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn the_go_race_piece_runs_the_tests_once_at_the_merge_stage() {
+    let repo = Repo::new("use = [\"go\", \"go-race\"]\n", &[]);
+    assert_eq!(
+        checks(&repo),
+        "go-race, go-test, gofmt, golangci-lint, settings"
+    );
+    let plan = repo.fz(&["--plan"]);
+    assert!(plan.ok, "{}", plan.stderr);
+}
+
+/// A folder of stand ins for tools devenv does not give, each printing `output` to stdout and
+/// exiting with `code`, and PATH with that folder first.
+fn stand_ins(tools: &[(&str, &str, i32)]) -> (tempfile::TempDir, String) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    for (tool, output, code) in tools {
+        let path = dir.path().join(tool);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\ncat <<'OUT'\n{output}\nOUT\nexit {code}\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    (dir, path)
+}
+
+/// What svelte-check 4.7 printed for a type error on line 2 of src/App.svelte and an image
+/// without alt text on line 6 (its lines count from 0).
+const SVELTE_CHECK: &str = r#"1794884543133 START "/repo"
+1794884543135 {"type":"WARNING","filename":"src/App.svelte","start":{"line":5,"character":0},"end":{"line":5,"character":17},"message":"`<img>` element should have an alt attribute\nhttps://svelte.dev/e/a11y_missing_attribute","code":"a11y_missing_attribute","source":"svelte"}
+1794884543135 {"type":"ERROR","filename":"src/App.svelte","start":{"line":1,"character":6},"end":{"line":1,"character":11},"message":"Type 'string' is not assignable to type 'number'.","code":2322,"source":"ts"}
+1794884543135 COMPLETED 105 FILES 1 ERRORS 1 WARNINGS 1 FILES_WITH_PROBLEMS"#;
+
+#[test]
+fn the_svelte_piece_reads_svelte_check_and_its_type_errors_block_anywhere() {
+    let app = "<script lang=\"ts\">\n  let count: number = 0;\n</script>\n\n<p>{count}</p>\n<img src=\"x.png\" alt=\"x\">\n";
+    let repo = on_branch("use = [\"svelte\"]\n", &[("src/App.svelte", app)]);
+    // svelte-check takes the place of tsc, with the typescript piece's strictness.
+    assert_eq!(checks(&repo), "settings, svelte-check");
+    let (_bin, path) = stand_ins(&[("svelte-kit", "", 0), ("svelte-check", SVELTE_CHECK, 1)]);
+
+    // The change touched neither line, yet a type error blocks wherever it is.
+    repo.write("src/other.ts", "export const a = 1;\n");
+    let out = repo.fz_env(&["run", "svelte-check"], &[("PATH", &path)]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("src/App.svelte:2"), "{}", out.stdout);
+    assert!(!out.stdout.contains("src/App.svelte:6"), "{}", out.stdout);
+
+    // Without the error, a warning on a line the change touched is shown and passes.
+    let warning_only: String = SVELTE_CHECK
+        .lines()
+        .filter(|l| !l.contains("\"ERROR\""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (_bin, path) = stand_ins(&[("svelte-kit", "", 0), ("svelte-check", &warning_only, 0)]);
+    repo.write("src/App.svelte", &app.replace(" alt=\"x\"", ""));
+    let out = repo.fz_env(&["run", "svelte-check"], &[("PATH", &path)]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("src/App.svelte:6"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("a11y_missing_attribute"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn the_oxlint_piece_writes_every_rule_and_gates_a_finding_on_a_changed_line() {
+    let repo = on_branch(
+        "use = [\"oxlint\", \"react\"]\n",
+        &[("src/old.ts", "debugger;\n")],
+    );
+    assert_eq!(checks(&repo), "oxlint, settings");
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.path(".oxlintrc.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["rules"]["eslint/no-debugger"], "error", "{config}");
+    // The react piece's oxlint rules are written and their plugin turned on, and no Biome
+    // file is written for its Biome rules, since Biome does not run.
+    assert_eq!(config["rules"]["react/jsx-key"], "error", "{config}");
+    assert!(
+        config["plugins"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("react")),
+        "{config}"
+    );
+    assert_eq!(config["categories"]["correctness"], "off", "{config}");
+    assert!(!repo.path("biome.json").exists());
+
+    // The old debugger is not this change's.
+    repo.write("src/new.ts", "export const a = 1;\n");
+    let out = repo.fz(&["run", "oxlint"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+
+    repo.write("src/new.ts", "export const a = 1;\ndebugger;\n");
+    let out = repo.fz(&["run", "oxlint"]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("gate src/new.ts:2  eslint(no-debugger)"),
+        "{}",
+        out.stdout
+    );
 }

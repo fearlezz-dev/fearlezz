@@ -49,6 +49,8 @@ pub(crate) enum Tool {
     Detekt,
     /// `.golangci.yml` (or the `.yaml`, `.toml` or `.json` the project has).
     Golangci,
+    /// `.oxlintrc.json`; its `plugins`, `categories` and `rules`.
+    Oxlint,
     /// `tsconfig.json`; its `compilerOptions`.
     Tsconfig,
     /// The Fearlezz agent skill, in each agent's skills folder.
@@ -61,7 +63,7 @@ pub(crate) enum Tool {
     Hooks,
 }
 
-const TOOLS: [(&str, Tool); 14] = [
+const TOOLS: [(&str, Tool); 15] = [
     ("cargo-lints", Tool::CargoLints),
     ("dart-analysis", Tool::DartAnalysis),
     ("clippy", Tool::Clippy),
@@ -72,6 +74,7 @@ const TOOLS: [(&str, Tool); 14] = [
     ("ktlint", Tool::Ktlint),
     ("detekt", Tool::Detekt),
     ("golangci", Tool::Golangci),
+    ("oxlint", Tool::Oxlint),
     ("tsconfig", Tool::Tsconfig),
     ("flutter-look", Tool::FlutterLook),
     ("skill", Tool::Skill),
@@ -79,7 +82,7 @@ const TOOLS: [(&str, Tool); 14] = [
 ];
 
 /// Which file writer turns each lint table's rules on or off.
-const LINT_FILES: [(lints::Tool, Tool); 9] = [
+const LINT_FILES: [(lints::Tool, Tool); 10] = [
     (lints::Tool::Clippy, Tool::CargoLints),
     (lints::Tool::Rustc, Tool::CargoLints),
     (lints::Tool::Dart, Tool::DartAnalysis),
@@ -89,6 +92,7 @@ const LINT_FILES: [(lints::Tool, Tool); 9] = [
     (lints::Tool::Ktlint, Tool::Ktlint),
     (lints::Tool::Detekt, Tool::Detekt),
     (lints::Tool::Golangci, Tool::Golangci),
+    (lints::Tool::Oxlint, Tool::Oxlint),
 ];
 
 /// The settings of every tool, after merging pieces and overrides, and the lint tables
@@ -103,7 +107,14 @@ pub(crate) struct Settings {
 }
 
 impl Settings {
-    pub(crate) fn parse(table: Table, lints: Lints) -> Result<Settings> {
+    /// `read` are the lint tools a check reads the findings of: only their tables are written
+    /// into the tool's file, so a framework piece's rules for one linter leave no file behind
+    /// in a project that runs another.
+    pub(crate) fn parse(
+        table: Table,
+        lints: Lints,
+        read: &BTreeSet<lints::Tool>,
+    ) -> Result<Settings> {
         let mut tools = BTreeMap::new();
         for (name, value) in table {
             let Some((_, tool)) = TOOLS.iter().find(|(n, _)| *n == name) else {
@@ -130,9 +141,9 @@ impl Settings {
         if hooks.is_none_or(|agents| agents.contains(&Agent::Claude)) {
             tools.entry(Tool::Claude).or_default();
         }
-        // A lint table is written into its tool's file.
+        // A lint table a check reads is written into its tool's file.
         for (lint, file) in LINT_FILES {
-            if lints.of(lint).is_some() {
+            if lints.of(lint).is_some() && read.contains(&lint) {
                 tools.entry(file).or_default();
             }
         }
@@ -159,6 +170,7 @@ impl Settings {
             Tool::Ktlint => ktlint_lint_table(&self.lints),
             Tool::Detekt => detekt_lint_table(&self.lints),
             Tool::Golangci => golangci_lint_table(&self.lints),
+            Tool::Oxlint => oxlint_lint_table(&self.lints),
             Tool::Claude => self.claude_hooks(),
             Tool::Clippy | Tool::Tsconfig | Tool::Skill | Tool::Hooks | Tool::FlutterLook => {
                 Table::new()
@@ -288,6 +300,14 @@ impl Settings {
                 }
                 Tool::Clippy | Tool::Ruff => vec![toml_file(root, &path, &table)?],
                 Tool::Claude => vec![json_file(root, &path, &table, false, &[])?],
+                // Fearlezz decides every rule and the plugins they need, as for Biome.
+                Tool::Oxlint => vec![json_file(
+                    root,
+                    &path,
+                    &table,
+                    true,
+                    &[&["rules"], &["plugins"], &["categories"]],
+                )?],
                 // Fearlezz decides every Biome rule ("preset": "none"), so a rule a piece
                 // dropped leaves biome.json instead of keeping the level Biome gives it.
                 Tool::Biome if table.get("linter").and_then(|l| l.get("rules")).is_some() => {
@@ -430,6 +450,18 @@ impl Settings {
                 }
             }
         }
+        // Biome left the typescript piece, so a project set up before keeps the biome.json
+        // Fearlezz wrote and would stop linting with Biome without a word.
+        if self.tools.contains_key(&Tool::Tsconfig) && !self.tools.contains_key(&Tool::Biome) {
+            let biome = Tool::Biome.resolve(root)?;
+            if root.join(&biome).exists() {
+                found.push(finding(
+                    biome.clone(),
+                    format!("{biome} is here, but no piece gives Biome its rules"),
+                    "add \"biome\" to use in fearlezz.toml, or remove the file when another tool lints",
+                ));
+            }
+        }
         Ok(found)
     }
 
@@ -489,6 +521,7 @@ impl Tool {
                 ".golangci.yml",
             ),
             Tool::Tsconfig => (&["tsconfig.json"], "tsconfig.json"),
+            Tool::Oxlint => (&[".oxlintrc.json"], ".oxlintrc.json"),
             // Every file is written, like the skill.
             Tool::FlutterLook => (&[FLUTTER_LOOK[0].0, FLUTTER_LOOK[1].0], FLUTTER_LOOK[0].0),
             // Unlike the others, every file is written; `skill_files` picks which.
@@ -1156,6 +1189,51 @@ fn severity(level: lints::Level, info: &str) -> &str {
     }
 }
 
+/// oxlint's categories, all off in the file Fearlezz writes, so only rules with a level run.
+const OXLINT_CATEGORIES: [&str; 7] = [
+    "correctness",
+    "suspicious",
+    "pedantic",
+    "perf",
+    "style",
+    "restriction",
+    "nursery",
+];
+
+/// oxlint rules by `plugin/rule`, the plugins of the rules that are on (each one's rules run
+/// only when it is listed), and every category off. oxlint has no info level, so a hint warns.
+fn oxlint_lint_table(lints: &Lints) -> Table {
+    let Some(rules) = lints.of(lints::Tool::Oxlint) else {
+        return Table::new();
+    };
+    let plugins: BTreeSet<&str> = rules
+        .iter()
+        .filter(|(_, level)| **level != lints::Level::Off)
+        .filter_map(|(name, _)| name.split_once('/').map(|(plugin, _)| plugin))
+        .collect();
+    let table: Table = rules
+        .iter()
+        .map(|(rule, level)| (rule.clone(), Value::String(severity(*level, "warn").into())))
+        .collect();
+    let categories: Table = OXLINT_CATEGORIES
+        .iter()
+        .map(|c| ((*c).to_string(), Value::String("off".into())))
+        .collect();
+    Table::from_iter([
+        (
+            "plugins".to_string(),
+            Value::Array(
+                plugins
+                    .into_iter()
+                    .map(|p| Value::String(p.into()))
+                    .collect(),
+            ),
+        ),
+        ("categories".to_string(), Value::Table(categories)),
+        ("rules".to_string(), Value::Table(table)),
+    ])
+}
+
 /// Biome rules under their group; only the listed rules run.
 fn biome_lint_table(lints: &Lints) -> Table {
     let Some(rules) = lints.of(lints::Tool::Biome) else {
@@ -1411,11 +1489,11 @@ avoid_print = false
     #[test]
     fn an_unknown_tool_says_which_exist() {
         let table: Table = toml::from_str("[clipy]\npedantic = \"warn\"\n").unwrap();
-        let e = Settings::parse(table, Lints::default())
+        let e = Settings::parse(table, Lints::default(), &std::collections::BTreeSet::new())
             .unwrap_err()
             .to_string();
         assert!(
-            e.contains("tools are cargo-lints, dart-analysis, clippy, claude, biome, eslint, ruff, ktlint, detekt, golangci, tsconfig, flutter-look, skill, hooks"),
+            e.contains("tools are cargo-lints, dart-analysis, clippy, claude, biome, eslint, ruff, ktlint, detekt, golangci, oxlint, tsconfig, flutter-look, skill, hooks"),
             "{e}"
         );
     }

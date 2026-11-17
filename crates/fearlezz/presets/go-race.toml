@@ -1,0 +1,9 @@
+# The Go tests again under the race detector, once at the merge stage: it finds data races the
+# plain run cannot, and runs several times slower. It needs cgo, so a C compiler.
+
+# -v prints one "--- PASS" or "--- FAIL" line per test and subtest, which are counted.
+[check.go-race]
+run = "go test -race -v ./..."
+stage = "merge"
+tests = { count = '(?m)^\s*--- (?:PASS|FAIL):' }
+test_files = ["**/*_test.go"]

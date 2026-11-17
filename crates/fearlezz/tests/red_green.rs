@@ -635,6 +635,33 @@ fn the_flutter_piece_names_its_test_files() {
     );
 }
 
+#[test]
+fn the_node_test_piece_names_its_test_files() {
+    piece_names_its_test_files(
+        "node-test",
+        "node-test",
+        &[],
+        "test/sum.test.ts",
+        "src/sum.ts",
+    );
+}
+
+#[test]
+fn the_go_race_piece_names_its_test_files() {
+    piece_names_its_test_files("go-race", "go-race", &[], "pkg/sum_test.go", "pkg/sum.go");
+}
+
+#[test]
+fn the_dart_piece_names_its_test_files() {
+    piece_names_its_test_files(
+        "dart",
+        "dart-test",
+        &["dart-format", "dart-analyze"],
+        "test/sum_test.dart",
+        "lib/sum.dart",
+    );
+}
+
 // Which change is a fix, locally
 
 #[test]

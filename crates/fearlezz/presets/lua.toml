@@ -1,0 +1,6 @@
+# Lua formatted by StyLua, with the project's stylua.toml. StyLua prints the diff of each file
+# it would change.
+
+[check.stylua]
+run = "stylua --check ."
+stage = "working"

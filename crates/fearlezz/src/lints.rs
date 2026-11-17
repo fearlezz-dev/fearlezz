@@ -70,9 +70,11 @@ pub(crate) enum Tool {
     Detekt,
     /// One row per linter, such as `errcheck`.
     Golangci,
+    /// Rules named `plugin/rule` as .oxlintrc.json names them, such as `eslint/no-debugger`.
+    Oxlint,
 }
 
-const TOOLS: [(&str, Tool); 9] = [
+const TOOLS: [(&str, Tool); 10] = [
     ("clippy", Tool::Clippy),
     ("rustc", Tool::Rustc),
     ("dart", Tool::Dart),
@@ -82,6 +84,7 @@ const TOOLS: [(&str, Tool); 9] = [
     ("ktlint", Tool::Ktlint),
     ("detekt", Tool::Detekt),
     ("golangci", Tool::Golangci),
+    ("oxlint", Tool::Oxlint),
 ];
 
 impl Tool {
@@ -116,6 +119,11 @@ impl Tool {
                 .strip_prefix("detekt.")
                 .unwrap_or(reported)
                 .replacen('.', "/", 1),
+            // oxlint reports `eslint(no-debugger)` and `jsx_a11y(alt-text)`.
+            Tool::Oxlint => {
+                let (plugin, rule) = reported.strip_suffix(')')?.split_once('(')?;
+                format!("{}/{rule}", plugin.replace('_', "-"))
+            }
             Tool::Rustc
             | Tool::Dart
             | Tool::Eslint
@@ -140,6 +148,7 @@ impl Lints {
             let example = match tool {
                 Tool::Biome => Some("style/useConst"),
                 Tool::Detekt => Some("style/MagicNumber"),
+                Tool::Oxlint => Some("eslint/no-debugger"),
                 Tool::Clippy
                 | Tool::Rustc
                 | Tool::Dart

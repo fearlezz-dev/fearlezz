@@ -618,7 +618,12 @@ impl Config {
                 },
             });
         }
-        let mut settings = Settings::parse(raw.settings.unwrap_or_default(), all_lints)?;
+        let read: std::collections::BTreeSet<lints::Tool> = checks
+            .iter()
+            .filter_map(|c| c.findings.as_ref())
+            .flat_map(|f| f.tools.iter().copied())
+            .collect();
+        let mut settings = Settings::parse(raw.settings.unwrap_or_default(), all_lints, &read)?;
         settings.cargo = cargo;
         let own_settings_check = checks.iter().any(|c| c.id == SETTINGS_CHECK);
         if !settings.is_empty() && !own_settings_check && !settings_off {
@@ -1082,7 +1087,10 @@ mod tests {
     #[test]
     fn every_built_in_piece_is_a_valid_config() {
         for (name, piece) in presets::BUILTIN {
-            let mut table = toml::from_str(piece).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let mut table: toml::Table =
+                toml::from_str(piece).unwrap_or_else(|e| panic!("{name}: {e}"));
+            // The pieces it builds on are checked on their own.
+            table.remove("use");
             // As in a project with a nested project of each marker, so `each` is read too.
             let found = |_: &str| vec![".".to_string(), "sub".to_string()];
             expand_each(&mut table, &found).unwrap_or_else(|e| panic!("{name}: {e:#}"));

@@ -1,0 +1,12 @@
+# Tests run by Node's own test runner, counted from its JUnit report. Without paths Node runs
+# the files named below; a project that names its own, or loads TypeScript through a loader,
+# sets the command:
+#
+#   [check.node-test]
+#   run = "node --import tsx --test --test-reporter=junit --test-reporter-destination=\"$FEARLEZZ_OUT/junit.xml\" test/*.test.ts"
+
+[check.node-test]
+run = "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=\"$FEARLEZZ_OUT/junit.xml\""
+stage = "working"
+tests = "junit"
+test_files = ["**/*.test.*", "**/*-test.*", "**/*_test.*", "**/test-*.*", "**/test.*", "**/test/**"]

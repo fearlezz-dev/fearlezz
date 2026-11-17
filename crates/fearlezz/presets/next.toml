@@ -1,6 +1,6 @@
-# Next.js: the rules of Biome's next domain (images, scripts, the document head), at the levels
-# decided on the Lint Desk. With `typescript` and `react`; `setup init` adds it when package.json
-# depends on next.
+# Next.js: the rules of Biome's next domain (images, scripts, the document head) and of oxlint's
+# nextjs plugin, for whichever of the two runs. With `react`, and `biome` or `oxlint`;
+# `setup init` adds it when package.json depends on next.
 
 [lints.biome]
 "correctness/noBeforeInteractiveScriptOutsideDocument" = "off"
@@ -15,3 +15,27 @@
 "style/noHeadElement" = "flag"
 "suspicious/noDocumentImportInPage" = "gate"
 "suspicious/noHeadImportInDocument" = "gate"
+
+# The same framework's oxlint rules, at levels inferred like the oxlint piece's.
+[lints.oxlint]
+"nextjs/google-font-display" = "gate"
+"nextjs/google-font-preconnect" = "flag"
+"nextjs/inline-script-id" = "gate"
+"nextjs/next-script-for-ga" = "flag"
+"nextjs/no-assign-module-variable" = "flag"
+"nextjs/no-async-client-component" = "off"
+"nextjs/no-before-interactive-script-outside-document" = "off"
+"nextjs/no-css-tags" = "flag"
+"nextjs/no-document-import-in-page" = "gate"
+"nextjs/no-duplicate-head" = "flag"
+"nextjs/no-head-element" = "flag"
+"nextjs/no-head-import-in-document" = "gate"
+"nextjs/no-html-link-for-pages" = "flag"
+"nextjs/no-img-element" = "flag"
+"nextjs/no-page-custom-font" = "flag"
+"nextjs/no-script-component-in-head" = "flag"
+"nextjs/no-styled-jsx-in-document" = "flag"
+"nextjs/no-sync-scripts" = "flag"
+"nextjs/no-title-in-document-head" = "flag"
+"nextjs/no-typos" = "flag"
+"nextjs/no-unwanted-polyfillio" = "flag"
