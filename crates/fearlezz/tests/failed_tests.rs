@@ -147,7 +147,10 @@ fn a_test_named_twice_is_named_once() {
 
 #[test]
 fn many_failures_are_cut_short_with_how_many_more() {
-    let names: String = (0..15).map(|i| format!("t{i}\n")).collect();
+    let names = (0..15)
+        .map(|i| format!("t{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let repo = repo(CARGO, &[("src/failing.txt", &names)]);
     let out = repo.fz(&["run", "tests"]);
     let named = out
