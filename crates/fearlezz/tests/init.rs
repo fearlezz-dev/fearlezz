@@ -244,6 +244,18 @@ fn init_gives_a_svelte_project_svelte_check_in_place_of_tsc() {
         config.contains(r#"use = ["svelte", "eslint", "prettier", "vitest", "safety"]"#),
         "{config}"
     );
+
+    // The piece runs `svelte-kit sync`; a Svelte app without SvelteKit keeps tsc.
+    let plain = project(&[(
+        "package.json",
+        r#"{ "devDependencies": { "svelte": "5.0.0", "prettier": "3.0.0" } }"#,
+    )]);
+    assert!(plain.fz(&["setup", "init"]).ok);
+    let config = std::fs::read_to_string(plain.path("fearlezz.toml")).unwrap();
+    assert!(
+        config.contains(r#"use = ["typescript", "prettier", "safety"]"#),
+        "{config}"
+    );
 }
 
 #[test]

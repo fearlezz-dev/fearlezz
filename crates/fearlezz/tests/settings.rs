@@ -671,6 +671,15 @@ fn a_framework_package_json_depends_on_without_its_rules_is_a_finding() {
         );
     }
 
+    // oxlint runs a framework's rules only from its piece too.
+    let out = finding("use = [\"oxlint\"]\n");
+    assert!(
+        out.stdout
+            .contains("package.json depends on react, but no rule of the react piece has a level"),
+        "{}",
+        out.stdout
+    );
+
     let out = finding("use = [\"biome\", \"react\", \"vue\"]\n");
     assert!(out.ok, "{}", out.stdout);
     // A project that does not lint with Biome through Fearlezz is told nothing.
@@ -688,7 +697,10 @@ fn a_project_whose_typescript_piece_still_lints_with_biome_is_led_to_the_biome_p
     // and `use = ["typescript"]` only, so it would stop linting with Biome without a word.
     let repo = Repo::new(
         "use = [\"typescript\"]\n",
-        &[("biome.json", "{ \"linter\": { \"rules\": {} } }\n")],
+        &[(
+            "biome.json",
+            "{ \"linter\": { \"rules\": { \"preset\": \"none\" } } }\n",
+        )],
     );
     assert!(repo.fz(&["setup", "sync"]).ok);
     repo.branch("feat/x");
@@ -707,13 +719,18 @@ fn a_project_whose_typescript_piece_still_lints_with_biome_is_led_to_the_biome_p
         out.stdout
     );
 
-    // With the biome piece, or without a biome.json, nothing is said.
+    // With the biome piece, without a biome.json, or with one the project wrote itself (to
+    // format with Biome, say), nothing is said.
     for (config, files) in [
         (
             "use = [\"typescript\", \"biome\"]\n",
             &[("biome.json", "{}\n")][..],
         ),
         ("use = [\"typescript\"]\n", &[][..]),
+        (
+            "use = [\"typescript\"]\n",
+            &[("biome.json", "{ \"formatter\": {} }\n")][..],
+        ),
     ] {
         let repo = Repo::new(config, files);
         assert!(repo.fz(&["setup", "sync"]).ok);

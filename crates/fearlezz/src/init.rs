@@ -113,10 +113,11 @@ fn runner(root: &Path) -> Option<&'static str> {
 }
 
 /// The piece a marker's language takes in `root`: svelte (svelte-check in place of tsc) for a
-/// TypeScript project that depends on Svelte, dart for a pubspec.yaml without Flutter.
+/// SvelteKit project, dart for a pubspec.yaml without Flutter.
 fn refine(root: &Path, piece: &'static str) -> &'static str {
     match piece {
-        "typescript" if depends(root)("svelte") => "svelte",
+        // The piece runs `svelte-kit sync` first; a Svelte app without SvelteKit keeps tsc.
+        "typescript" if depends(root)("@sveltejs/kit") => "svelte",
         "flutter" => {
             let pubspec = std::fs::read_to_string(root.join("pubspec.yaml")).unwrap_or_default();
             let flutter = pubspec

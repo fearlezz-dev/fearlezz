@@ -298,26 +298,31 @@ fn project_path(root: &Path) -> Option<std::ffi::OsString> {
 /// The Kubernetes version whose envtest binaries a module needs: `k8s.io/api v0.31.2` in its
 /// go.mod (a replacement's version when it has one) is Kubernetes 1.31.
 fn kubernetes_version(go_mod: &str) -> Option<String> {
-    let version = go_mod
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            let line = line
-                .strip_prefix("require")
-                .or_else(|| line.strip_prefix("replace"))
-                .unwrap_or(line)
-                .trim();
-            let (module, rest) = line.split_once(char::is_whitespace)?;
-            let rest = rest.trim();
-            // `k8s.io/api => k8s.io/api v0.30.1` replaces the required version.
-            let version = rest
-                .strip_prefix("=>")
-                .map_or(rest, |r| r.split_whitespace().nth(1).unwrap_or(""));
-            (module == "k8s.io/api").then(|| version.split_whitespace().next().unwrap_or(""))
-        })
-        .last()?;
-    let minor = version.strip_prefix("v0.")?.split('.').next()?;
-    minor.parse::<u32>().ok().map(|m| format!("1.{m}"))
+    let minor = |version: &str| -> Option<String> {
+        let minor = version.strip_prefix("v0.")?.split('.').next()?;
+        minor.parse::<u32>().ok().map(|m| format!("1.{m}"))
+    };
+    let (mut required, mut replaced) = (None, None);
+    for line in go_mod.lines() {
+        let line = line.trim();
+        let line = line
+            .strip_prefix("require")
+            .or_else(|| line.strip_prefix("replace"))
+            .unwrap_or(line)
+            .trim();
+        let mut words = line.split_whitespace();
+        if words.next() != Some("k8s.io/api") {
+            continue;
+        }
+        let words: Vec<&str> = words.collect();
+        // `k8s.io/api [v0.31.2] => k8s.io/api v0.30.1` replaces the required version; a
+        // replacement by a local folder has none, and the required one stands.
+        match words.iter().position(|w| *w == "=>") {
+            Some(arrow) => replaced = words.get(arrow + 2).and_then(|v| minor(v)).or(replaced),
+            None => required = words.first().and_then(|v| minor(v)).or(required),
+        }
+    }
+    replaced.or(required)
 }
 
 /// Fetches, once into the user cache, the envtest binaries of the Kubernetes version the
@@ -356,7 +361,12 @@ fn envtest_assets(
         .env_clear()
         .stdin(Stdio::null())
         .stderr(log.try_clone()?);
-    for name in BASE_ENV {
+    // The check's own variables too, such as a proxy the download needs.
+    for name in BASE_ENV
+        .iter()
+        .copied()
+        .chain(check.env.iter().map(String::as_str))
+    {
         if let Ok(value) = std::env::var(name) {
             cmd.env(name, value);
         }
@@ -496,6 +506,12 @@ mod tests {
         assert_eq!(kubernetes_version(one_line).as_deref(), Some("1.29"));
         let replaced = format!("{required}\nreplace k8s.io/api => k8s.io/api v0.30.1\n");
         assert_eq!(kubernetes_version(&replaced).as_deref(), Some("1.30"));
+        // A replace before the require, naming the version it replaces, still wins.
+        let first = "module op\nreplace k8s.io/api v0.31.2 => k8s.io/api v0.30.1\nrequire k8s.io/api v0.31.2\n";
+        assert_eq!(kubernetes_version(first).as_deref(), Some("1.30"));
+        // A local replacement has no version; the required one stands.
+        let local = format!("{required}\nreplace k8s.io/api => ../api\n");
+        assert_eq!(kubernetes_version(&local).as_deref(), Some("1.31"));
         assert_eq!(kubernetes_version("module op\n"), None);
     }
 }

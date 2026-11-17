@@ -431,30 +431,51 @@ impl Settings {
                 "add the Cargo.toml, or drop those tables (and the rust piece) from this project",
             ));
         }
-        // Biome runs a framework's rules only when its piece gives them, so a project set up
-        // before the framework pieces existed would lose them without a word.
-        if let Some(biome) = self.lints.of(lints::Tool::Biome) {
+        // Biome and oxlint run a framework's rules only when its piece gives them, so a project
+        // set up before the framework pieces existed would lose them without a word.
+        // Only a linter a check runs counts (its file is written then).
+        let linters = [
+            (lints::Tool::Biome, Tool::Biome),
+            (lints::Tool::Oxlint, Tool::Oxlint),
+        ];
+        let mut lacking: Vec<&str> = Vec::new();
+        for (lint, file) in linters {
+            if !self.tools.contains_key(&file) {
+                continue;
+            }
+            let given = self.lints.of(lint);
             for piece in crate::init::frameworks(root) {
-                if !crate::presets::biome_rules(piece)
-                    .iter()
-                    .any(|rule| biome.contains_key(rule))
+                let rules = crate::presets::lint_rules(piece, lint.name());
+                if !rules.is_empty()
+                    && !rules
+                        .iter()
+                        .any(|rule| given.is_some_and(|g| g.contains_key(rule)))
+                    && !lacking.contains(&piece)
                 {
-                    found.push(finding(
-                        "package.json".into(),
-                        format!(
-                            "package.json depends on {piece}, but no rule of the {piece} piece \
-                             has a level"
-                        ),
-                        &format!("add \"{piece}\" to use in fearlezz.toml"),
-                    ));
+                    lacking.push(piece);
                 }
             }
         }
+        for piece in lacking {
+            found.push(finding(
+                "package.json".into(),
+                format!(
+                    "package.json depends on {piece}, but no rule of the {piece} piece has a level"
+                ),
+                &format!("add \"{piece}\" to use in fearlezz.toml"),
+            ));
+        }
         // Biome left the typescript piece, so a project set up before keeps the biome.json
-        // Fearlezz wrote and would stop linting with Biome without a word.
+        // Fearlezz wrote and would stop linting with Biome without a word. Fearlezz's decides
+        // every rule ("preset": "none"); a project's own biome.json is left alone.
         if self.tools.contains_key(&Tool::Tsconfig) && !self.tools.contains_key(&Tool::Biome) {
             let biome = Tool::Biome.resolve(root)?;
-            if root.join(&biome).exists() {
+            let written = read(root, &biome)?
+                .and_then(|text| {
+                    serde_json::from_str::<serde_json::Value>(&strip_jsonc(&text)).ok()
+                })
+                .is_some_and(|doc| doc["linter"]["rules"]["preset"] == "none");
+            if written {
                 found.push(finding(
                     biome.clone(),
                     format!("{biome} is here, but no piece gives Biome its rules"),

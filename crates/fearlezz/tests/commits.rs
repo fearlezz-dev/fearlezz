@@ -115,3 +115,27 @@ fn a_project_names_its_own_types() {
     repo.commit("chore: tidy");
     assert!(!repo.fz(&["run", "commits"]).ok);
 }
+
+#[test]
+fn fixup_commits_an_autosquash_folds_away_are_left_alone() {
+    let repo = repo();
+    repo.write("src/a.txt", "3\n");
+    repo.commit("fixup! feat: a is two");
+    let out = repo.fz(&["run", "commits"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+}
+
+#[test]
+fn a_project_turns_off_the_check_a_piece_brings() {
+    let repo = Repo::new(
+        "use = [\"commits\"]\n\n[commits]\noff = true\n",
+        &[("src/a.txt", "1\n")],
+    );
+    let out = repo.fz(&["run", "commits"]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr.contains("no check \"commits\""),
+        "{}",
+        out.stderr
+    );
+}

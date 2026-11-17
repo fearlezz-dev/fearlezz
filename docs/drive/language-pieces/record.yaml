@@ -36,8 +36,9 @@ pieces:
     status: done
     evidence: [tests/commits.rs]
   - id: wasm-tests
-    status: building
-    open: probe on a copy of zellij-harpoon with one test, run by fearlezz run --ci in its devenv
+    status: figuring-out
+    open: 'unverified. By reading: cargo test under a wasmtime runner prints the same "test result:" lines the rust piece counts, so it should cope; zellij-harpoon and zellij-theme-sync have no tests, so their tests check fails on zero tests, as intended. A probe on a copy of zellij-harpoon hung in its devenv shell for an hour, and a probe with a scratch toolchain was not allowed.'
+
 
 decided:
   - id: scope

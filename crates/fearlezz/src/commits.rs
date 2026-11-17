@@ -1,7 +1,8 @@
 //! `[commits]`: the built in `commits` check, which holds a change to Conventional Commits
 //! (`type(scope)!: words`). In CI the pull request title is judged, since with a squash merge
-//! it is the commit; locally (no title) every commit since the base commit is. Merge commits
-//! and the `Revert "..."` commits git writes are left alone.
+//! it is the commit; locally (no title) every commit since the base commit is. Merge commits,
+//! the `Revert "..."` commits git writes and the `fixup!` and `squash!` commits an autosquash
+//! folds away are left alone.
 
 use std::path::Path;
 
@@ -19,10 +20,23 @@ const TYPES: [&str; 11] = [
     "feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert",
 ];
 
+/// The subjects `git commit --fixup` and `--squash` write, which `rebase --autosquash` folds
+/// into the commit they name.
+const AUTOSQUASH: [&str; 3] = ["fixup! ", "squash! ", "amend! "];
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawCommits {
     types: Option<Vec<String>>,
+    /// Turns off the check a piece's `[commits]` brings in.
+    #[serde(default)]
+    off: bool,
+}
+
+impl RawCommits {
+    pub(crate) fn off(&self) -> bool {
+        self.off
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +95,7 @@ impl Commits {
         Ok(git
             .commits_since(&base)?
             .into_iter()
+            .filter(|(_, subject)| !AUTOSQUASH.iter().any(|p| subject.starts_with(p)))
             .map(|(id, subject)| Message {
                 commit: Some(id),
                 subject,

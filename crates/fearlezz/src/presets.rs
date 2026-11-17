@@ -56,13 +56,13 @@ pub(crate) const BUILTIN: &[(&str, &str)] = &[
     ("vue", include_str!("../presets/vue.toml")),
 ];
 
-/// The Biome rules the built in piece `piece` gives a level.
-pub(crate) fn biome_rules(piece: &str) -> Vec<String> {
+/// The rules of the lint tool `tool` the built in piece `piece` gives a level.
+pub(crate) fn lint_rules(piece: &str, tool: &str) -> Vec<String> {
     BUILTIN
         .iter()
         .find(|(name, _)| *name == piece)
         .and_then(|(_, text)| toml::from_str::<Table>(text).ok())
-        .and_then(|t| t.get("lints")?.get("biome")?.as_table().cloned())
+        .and_then(|t| t.get("lints")?.get(tool)?.as_table().cloned())
         .map(|rules| rules.keys().cloned().collect())
         .unwrap_or_default()
 }

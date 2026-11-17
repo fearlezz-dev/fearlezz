@@ -2,6 +2,8 @@
 # notes and versions are made from: the built in `commits` check. In CI it judges the pull
 # request title, which a squash merge makes the commit; locally every commit since the base.
 # The types are those release tools know (feat, fix, docs, style, refactor, perf, test, build,
-# ci, chore, revert); a project names its own with `types = [...]` here.
+# ci, chore, revert); a project names its own with `types = [...]` here, or turns the check off
+# with `off = true`. GitHub runs a pull request workflow again on a rename only when its
+# `pull_request` trigger lists the `edited` type.
 
 [commits]

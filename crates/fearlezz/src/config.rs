@@ -661,7 +661,7 @@ impl Config {
             ));
         }
         let base = raw.base.unwrap_or_else(|| "main".into());
-        if let Some(commits) = raw.commits {
+        if let Some(commits) = raw.commits.filter(|c| !c.off()) {
             if checks.iter().any(|c| c.id == crate::commits::CHECK) {
                 bail!(
                     "check {} is the name of the check [commits] forms; rename it",
