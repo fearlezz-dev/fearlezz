@@ -249,3 +249,24 @@ run = "bun run e2e"        # sees WEB_HTTP_PORT and the other ports
 stage = "look"
 needs = ["services"]
 ```
+
+## Releases
+
+`[release.<place>]` names a place a release goes to. Its `dry` run becomes the check `release/<place>` at the last stage, so a release pull request proves the bumped version will publish. `fearlezz run --release` (CI, after the release is tagged) publishes to every place that does not have its version yet and waits until each shows it; places that have it are skipped, so running it again finishes a half done release. The version is the one in the place's own file (`Cargo.toml`, `package.json`, `pubspec.yaml`), which release-please bumps.
+
+```toml
+use = ["crates", "github"]     # built in: crates, npm, pub (dry run, publish, landed), github (files on the release)
+
+[release.github]
+version = "Cargo.toml"         # the file the version comes from
+files = ["dist/*.tar.gz"]      # built before the release; landed when each is there with the same digest
+# tag = "v{version}"           the default
+
+[release.shop]                 # a place of your own
+dry = "shop check"
+publish = "shop push"          # sees FEARLEZZ_VERSION, FEARLEZZ_TAG and env; the files are its arguments ("$@")
+landed = "shop has \"$FEARLEZZ_VERSION\""   # exits 0 once the place has it
+version = "package.json"
+env = ["SHOP_TOKEN"]
+# wait = 600                   seconds it may take to show the version
+```

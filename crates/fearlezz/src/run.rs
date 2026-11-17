@@ -149,47 +149,20 @@ fn command(
     log: &File,
     at: &Where<'_>,
 ) -> Result<Command> {
-    // Inside a shell the command travels in a variable, so no quoting can break it. A check
-    // with a folder starts there; the shell itself starts at the root, where it finds its own
-    // files, and moves into the folder before the command.
-    let folder = check.dir.as_ref().map(|d| at.root.join(d));
-    let script = match (at.shell, &folder) {
-        (Some(shell), None) => format!("{shell} sh -c \"$FEARLEZZ_RUN\""),
-        (Some(shell), Some(_)) => {
-            format!("{shell} sh -c 'cd \"$FEARLEZZ_DIR\" && eval \"$FEARLEZZ_RUN\"'")
-        }
-        (None, _) => step.to_string(),
-    };
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(&script)
-        .current_dir(match (at.shell, &folder) {
-            (None, Some(folder)) => folder,
-            _ => at.root,
-        })
-        .env_clear()
-        .stdin(Stdio::null())
+    let mut cmd = clean_command(
+        at.root,
+        at.shell,
+        check.dir.as_deref(),
+        step,
+        &check.env,
+        &[],
+    );
+    cmd.stdin(Stdio::null())
         .stdout(stdout)
         .stderr(log.try_clone()?);
-    for name in BASE_ENV
-        .iter()
-        .copied()
-        .chain(check.env.iter().map(String::as_str))
-    {
-        if let Ok(value) = std::env::var(name) {
-            cmd.env(name, value);
-        }
-    }
-    if let Some(path) = project_path(at.root) {
-        cmd.env("PATH", path);
-    }
     cmd.env("FEARLEZZ_PORT", free_port()?.to_string());
     cmd.envs(at.vars);
-    if let Some(folder) = &folder {
-        cmd.env("FEARLEZZ_DIR", folder);
-    }
-    cmd.env("FEARLEZZ_RUN", step)
-        .env("FEARLEZZ_OUT", dir)
+    cmd.env("FEARLEZZ_OUT", dir)
         .env("FEARLEZZ_CHECK", &check.id)
         .env("FEARLEZZ_STAGE", at.stage);
     Ok(cmd)
@@ -289,6 +262,58 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
         crate::record::Ended::AfterSeconds | crate::record::Ended::WaitedTooLong => None,
     };
     Ok((recorded.passed(), code))
+}
+
+/// `script` run the way a check runs it: through `sh -c` inside the `[env]` `shell`, in the
+/// folder `dir` of `root`, with only the base variables and the ones `env` names from
+/// Fearlezz's own, and the project's tool folders in front of PATH. `args` reach the script
+/// as its arguments (`"$@"`), whole, whatever they hold.
+pub(crate) fn clean_command(
+    root: &Path,
+    shell: Option<&str>,
+    dir: Option<&str>,
+    script: &str,
+    env: &[String],
+    args: &[String],
+) -> Command {
+    // Inside a shell the command travels in a variable, so no quoting can break it. A command
+    // with a folder starts there; the shell itself starts at the root, where it finds its own
+    // files, and moves into the folder before the command.
+    let folder = dir.map(|d| root.join(d));
+    let line = match (shell, &folder) {
+        (Some(shell), None) => format!("{shell} sh -c \"$FEARLEZZ_RUN\" sh \"$@\""),
+        (Some(shell), Some(_)) => {
+            format!("{shell} sh -c 'cd \"$FEARLEZZ_DIR\" && eval \"$FEARLEZZ_RUN\"' sh \"$@\"")
+        }
+        (None, _) => script.to_string(),
+    };
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(&line)
+        .arg("sh")
+        .args(args)
+        .current_dir(match (shell, &folder) {
+            (None, Some(folder)) => folder,
+            _ => root,
+        })
+        .env_clear();
+    for name in BASE_ENV
+        .iter()
+        .copied()
+        .chain(env.iter().map(String::as_str))
+    {
+        if let Ok(value) = std::env::var(name) {
+            cmd.env(name, value);
+        }
+    }
+    if let Some(path) = project_path(root) {
+        cmd.env("PATH", path);
+    }
+    if let Some(folder) = &folder {
+        cmd.env("FEARLEZZ_DIR", folder);
+    }
+    cmd.env("FEARLEZZ_RUN", script);
+    cmd
 }
 
 /// A port nothing listens on right now, for a server the check starts itself (such as

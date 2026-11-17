@@ -1,0 +1,65 @@
+# docs/drive/releases/record.yaml: the working state of releases as a layer.
+goal: Help with product releases, so publishing to many places at once is easy, as layers, with pieces per destination and proof that each place really got the release.
+
+pieces:
+  - id: direction
+    status: done
+    tries:
+      - id: prove-only
+        what: pieces bring a dry run and a landed check; the project's workflow publishes
+        state: dropped
+        why: the developer chose that Fearlezz also publishes
+      - id: prove-and-publish
+        what: a place carries dry run, publish and landed; Fearlezz runs the release
+        state: picked
+  - id: place-shape
+    status: done
+    tries:
+      - id: one-table
+        what: "[release.<place>] holds dry, publish, landed, env; dry becomes the check release/<place> at the last stage"
+        state: picked
+      - id: check-beside
+        what: the dry run is an ordinary check beside a table of publish and landed
+        state: dropped
+        why: the place would be split, and turning the check off leaves publish unproven
+  - id: version
+    status: done
+    tries:
+      - id: manifest
+        what: each place's own file (Cargo.toml, package.json, pubspec.yaml); github names a file and a tag pattern
+        state: picked
+        why: "the developer wants it to work well with release-please: it bumps the files and makes the tag and the GitHub release, so the release PR's dry runs prove the bumped version, and a merge publishes what has not landed"
+      - id: tag-at-head
+        what: the tag on HEAD names the release and every file must match it
+        state: dropped
+  - id: first-slice
+    status: done
+
+decided:
+  - id: publish
+    what: Fearlezz also publishes (direction B)
+  - id: shape
+    what: one table per place
+  - id: first-pr
+    what: the layer, the crates, npm and pub pieces, and GitHub Releases with files
+  - id: release-please
+    what: work well with release-please
+  - id: engine
+    what: merge this slice, then move places onto checks next (same config; the next PR runs places through run_checks before more pieces)
+    why: a place is a smaller second check; on the check engine a landed release reaches the journal, proof bundle, job summary and host, and needs and each give order and one place per crate
+
+open: []
+
+slices:
+  - id: layer
+    tests: [crates/fearlezz/tests/release.rs]
+    status: done
+  - id: review-fixes
+    what: absolute FEARLEZZ_FILES, retry while waiting, npm packument, unique file names, set dir hint
+    status: done
+
+  - id: health-review-fixes
+    what: files as arguments, a root package's workspace version, the GitHub repository from the workflow or git, tests for the earlier fixes
+    status: done
+
+next: PR 36 to ready to merge (full stop); then the next PR moves places onto the check engine

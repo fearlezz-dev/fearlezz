@@ -32,6 +32,8 @@ pub(crate) struct Config {
     pub no_proof: Globs,
     /// The proof host CI sends its bundle to, when it is not the default one.
     pub host: Option<String>,
+    /// The places a release goes to, `fearlezz run --release`.
+    pub releases: Vec<crate::release::Place>,
     /// The table it was read from, pieces merged in and checks turned off left out, so a part
     /// of it can be shown as written.
     table: toml::Table,
@@ -367,6 +369,7 @@ struct RawConfig {
     #[serde(default)]
     no_proof: Vec<String>,
     host: Option<RawHost>,
+    release: Option<toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -503,6 +506,7 @@ impl Config {
             .and_then(|c| c.get("off"))
             .and_then(toml::Value::as_bool)
             == Some(true);
+        crate::release::add_dry_checks(&mut table, DEFAULT_STAGES.last().copied());
         if let Some(toml::Value::Table(checks)) = table.get_mut("check") {
             checks.retain(|_, c| c.get("off").and_then(toml::Value::as_bool) != Some(true));
         }
@@ -707,6 +711,7 @@ impl Config {
             base,
             env,
             host: raw.host.map(|h| h.url),
+            releases: crate::release::parse(raw.release.as_ref())?,
             table,
             fanned: BTreeMap::new(),
         })
