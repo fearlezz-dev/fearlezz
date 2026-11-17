@@ -173,7 +173,7 @@ fn an_unknown_piece_says_what_exists() {
     assert!(!out.ok);
     assert!(
         out.stderr.contains(
-            "built in are actions, agents, betterleaks, bun, devenv, eslint, flutter, flutter-look, go, kotlin, next, osv-scanner, playwright, python, qwik, react, rust, safety, solid, trufflehog, typescript, vitest, vue"
+            "built in are actions, agents, betterleaks, biome, bun, commits, dart, devenv, envtest, eslint, flutter, flutter-look, go, go-race, kotlin, lua, next, node-test, osv-scanner, oxlint, playwright, prettier, python, qwik, react, rust, safety, solid, svelte, trufflehog, typescript, vitest, vue"
         ),
         "{}",
         out.stderr
