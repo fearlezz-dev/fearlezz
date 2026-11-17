@@ -264,8 +264,7 @@ fn check_run_by_hand(config: &Config, line: &str) -> Option<String> {
         return None;
     }
     config
-        .checks
-        .iter()
+        .every_check()
         .filter(|c| c.builtin.is_none())
         .find(|c| {
             c.steps.last().is_some_and(|step| {

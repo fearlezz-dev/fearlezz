@@ -411,6 +411,39 @@ fn moving_a_check_to_a_later_stage_is_red_and_named() {
 }
 
 #[test]
+fn putting_a_check_on_a_schedule_is_red_and_named() {
+    let repo = branch_with_change();
+    with_checks(
+        &repo,
+        &CHECKS.replacen(
+            "stage = \"working\"",
+            "stage = \"working\"\nschedule = true",
+            1,
+        ),
+    );
+    let out = ci(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("weakens tests: it runs on a schedule instead of for each change"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_new_scheduled_check_is_fine() {
+    let repo = branch_with_change();
+    with_checks(
+        &repo,
+        &format!("{CHECKS}\n[check.full]\nrun = \"true\"\nstage = \"working\"\nschedule = true\n"),
+    );
+    let out = ci(&repo);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains("weakens"), "{}", out.stdout);
+}
+
+#[test]
 fn adding_a_check_or_widening_its_inputs_is_fine() {
     let repo = branch_with_change();
     let more = CHECKS.replacen(
@@ -1289,4 +1322,32 @@ fn the_actions_descriptions_hold_no_expression() {
         .filter(|l| l.contains("${{") && !l.trim_start().starts_with("value:"))
         .collect();
     assert_eq!(expressions, Vec::<&str>::new(), "{inputs}");
+}
+
+#[test]
+fn a_scheduled_check_keeps_its_floor() {
+    let scheduled = CHECKS.replacen(
+        "stage = \"working\"",
+        "stage = \"working\"\nschedule = true",
+        1,
+    );
+    let repo = repo_with(&format!("{NO_PROOF}{scheduled}"));
+    repo.branch("feat/x");
+    repo.write("src/lib.rs", "fn b() {}\n");
+    repo.write(
+        "fearlezz.toml",
+        &full(&format!(
+            "{NO_PROOF}{}",
+            scheduled.replace("test ! -e src/broken", "true")
+        )),
+    );
+    repo.commit("change");
+    let out = ci(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("weakens tests: it runs another command"),
+        "{}",
+        out.stdout
+    );
 }
