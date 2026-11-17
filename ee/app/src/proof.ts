@@ -737,9 +737,14 @@ name: string,
  */
 file?: string | null, 
 /**
- * It failed.
+ * It failed: a failure, or a pass only on a rerun that the check's `flaky_tests` does not
+ * name.
  */
-failed: boolean, };
+failed: boolean, 
+/**
+ * It failed, then passed when the runner ran it again.
+ */
+flaky?: boolean, };
 
 export type Finding = { 
 /**

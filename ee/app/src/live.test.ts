@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Feed, apply, applyWork, stateOf } from "./live";
+import { Feed, apply, applyWork, namedTests, stateOf } from "./live";
 import type { Check, Live, PictureVerdict, Review, Run, Snapshot } from "./proof";
 
 const run: Run = {
@@ -113,5 +113,37 @@ describe("review", () => {
     expect(feed.take({ kind: "work", seq: 4, change: { kind: "verdict", verdict: verdict("writer") } })).toBeUndefined();
     const state = feed.take({ kind: "snapshot", ...snapshot });
     expect(state?.verdicts?.length).toBe(1);
+  });
+});
+
+describe("namedTests", () => {
+  const ran = (cases: Check["cases"]): Check => ({ ...passed("tests"), outcome: "failed", cases });
+
+  test("failed tests come first, then those listed flaky; a pass is not named", () => {
+    const named = namedTests(
+      ran([
+        { name: "listed", failed: false, flaky: true },
+        { name: "adds", failed: false },
+        { name: "logs in", failed: true },
+        { name: "retried", failed: true, flaky: true },
+      ]),
+    );
+    expect(named.tests).toEqual([
+      { name: "logs in", state: "failed" },
+      { name: "retried", state: "flaky" },
+      { name: "listed", state: "listed" },
+    ]);
+    expect(named.more).toBe(0);
+  });
+
+  test("many failures are cut short with how many more", () => {
+    const cases = Array.from({ length: 13 }, (_, i) => ({ name: `t${i}`, failed: true }));
+    const named = namedTests(ran(cases));
+    expect(named.tests.length).toBe(10);
+    expect(named.more).toBe(3);
+  });
+
+  test("a check that has not ended names nothing", () => {
+    expect(namedTests(undefined)).toEqual({ tests: [], more: 0 });
   });
 });

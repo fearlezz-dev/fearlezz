@@ -32,6 +32,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Starting out | Without `fearlezz.toml`, every command leads to `fearlezz setup init`, which writes a starter from the languages at the root (Rust also from Cargo projects in folders) and `no_proof` for prose |
 | Findings | Only lines the change touched can block |
 | Test counts | A check's `tests` reader (JUnit reports, or a pattern in the output) counts what ran; zero tests fails it. Every language piece runs and counts its tests |
+| Failed and flaky tests | A failed check names each test that failed, from its JUnit reports or a `failed` pattern beside its `count` (the rust and go pieces set one), in `fearlezz run`, the job summary, `proof.json` and on the host page; a test named as failed fails the check even when the runner exits 0. The runner reruns, Fearlezz reads it: a test whose report holds `<flakyFailure>` or `<flakyError>` (Playwright with `includeRetries`, nextest, Maven) passed only on a rerun, which fails the check like a failure unless the check's `flaky_tests` names it; a listed one passes, shown apart, and listing it weakens the floor. Vitest and Jest write only the final result, and cargo test and go test do not rerun |
 | Rules | Paths, naming, companion files, ast-grep code rules |
 | Settings | One source written into each tool's own file, drift is a finding |
 | Agent skill | Embedded in the binary; `fearlezz setup sync` writes it for Claude Code (`.claude/skills`) and other agents (`.agents/skills`) in every project, unless it opts out. A missing or stale copy is led to by a `next:` line and is a finding of the `settings` check |
@@ -66,7 +67,6 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 ## Wishes
 
 - **Releases as a layer.** Help with product releases, so publishing to many places at once is easy: GitHub, Homebrew, Nix, package registries and release notes. It should fit the existing system as layers, with pieces per destination and proof that each place really got the release.
-- **Name the failing test.** A failed test check shows its last lines; naming the failures directly would be better.
 - **Faster film comparison.** A 94 second 1080p film took about 236 seconds. Timing from packets, a second read of state frames only, cheaper frame checks and comparing films at 720p at most cut the CPU time to less than half; on a 60 second 1080p film most of what is left is ffmpeg decoding it twice (the second read only picks state frames). Keeping state frames in memory would save that read at a cost in memory.
 
 ## Next
@@ -83,7 +83,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 - **Native Windows jobs stay outside the proof.** Fearlezz runs on Windows only inside WSL, so a project that must build or test on native Windows (GrammarGuard's `flutter build windows` and `flutter test -d windows`) keeps those as plain CI jobs that its proof does not see.
 - **CI pictures never ran in another project.** Fearlezz proves itself on GitHub's runners, but no other project uses the action's pictures yet.
 - **Red before green costs are measured for Rust and Go only.** What running the base commit costs for TypeScript, Python, Kotlin and Flutter projects is not known.
-- **A flaky test.** One test in `core` has failed twice on CI and not locally; its name is still unknown. Failed checks now show 12 lines, so the next failure should name it.
+- **A flaky test.** One test in `core` has failed twice on CI and not locally; its name is still unknown. A failed test check now names each failed test (`failed: <name>`), so the next failure names it.
 - **Any rebase needs a new comparison run.** A run's look and red before green verdict are kept per base commit (`AgainstBase`), though each depends only on the base run's inputs, so a rebase over a change outside a check's inputs (prose, for one) still makes the next run check out the base and compare again. Keying them by the base inputs, hashed from git blobs without a checkout, would remove that; its cost is not measured.
 - **The default reuse key reads the whole tree.** A check without `inputs` hashes every file outside `no_proof` on each command (once per file, however many checks); the cost in a large repository is not measured. Git's blob ids for unchanged files would avoid reading them.
 - **Part of the hosted review has met only the fake GitHub.** The device flow of `setup login`, notes and verdicts on real pictures, and an accept running a job again are proven under `wrangler dev --local` against a fake GitHub, not yet on GitHub itself.

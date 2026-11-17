@@ -13,6 +13,23 @@ export function stateOf(check: RunCheck): CheckState {
   return "planned";
 }
 
+/** How a named test of a check came out: it failed, it passed only on a rerun (which fails
+ * the check), or it passed only on a rerun the check lists as flaky. */
+export type TestState = "failed" | "flaky" | "listed";
+
+/** The tests a check names, failed ones first: at most `shown` of them, and how many more
+ * failed. A plain pass is not named. */
+export function namedTests(check: Check | undefined, shown = 10): { tests: { name: string; state: TestState }[]; more: number } {
+  const cases = check?.cases ?? [];
+  const failed = cases.filter((c) => c.failed);
+  const state = (c: (typeof cases)[number]): TestState => (c.failed ? (c.flaky ? "flaky" : "failed") : "listed");
+  const tests = [...failed.slice(0, shown), ...cases.filter((c) => c.flaky && !c.failed)].map((c) => ({
+    name: c.name,
+    state: state(c),
+  }));
+  return { tests, more: Math.max(0, failed.length - shown) };
+}
+
 /** The snapshot with the event `seq` of run `run` applied, or the same snapshot when it holds
  * that event already. */
 export function apply(state: Snapshot, seq: number, run: string, change: Change): Snapshot {

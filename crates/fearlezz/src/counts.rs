@@ -16,8 +16,9 @@ use regex::Regex;
 pub(crate) enum Reader {
     /// The test cases, not skipped, in the JUnit reports matching the glob that this run wrote.
     Junit { glob: String, matcher: GlobMatcher },
-    /// The tests a pattern finds in the output: the numbers it captures, or one per match.
-    Count(Regex),
+    /// The tests a pattern finds in the output: the numbers it captures, or one per match;
+    /// and the failed tests another pattern names, by its first capture.
+    Count { count: Regex, failed: Option<Regex> },
 }
 
 /// Only what was written, since this is part of a check's key: the compiled matcher's form
@@ -26,7 +27,14 @@ impl std::fmt::Debug for Reader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Reader::Junit { glob, .. } => f.debug_tuple("Junit").field(glob).finish(),
-            Reader::Count(re) => f.debug_tuple("Count").field(&re.as_str()).finish(),
+            Reader::Count { count, failed } => {
+                let mut tuple = f.debug_tuple("Count");
+                tuple.field(&count.as_str());
+                if let Some(failed) = failed {
+                    tuple.field(&failed.as_str());
+                }
+                tuple.finish()
+            }
         }
     }
 }
@@ -36,21 +44,26 @@ const OUT_REPORT: &str = "$FEARLEZZ_OUT/junit.xml";
 
 impl Reader {
     /// From `tests = "junit"`, `tests = { junit = "<glob>" }` or
-    /// `tests = { count = "<pattern>" }`.
+    /// `tests = { count = "<pattern>", failed = "<pattern>" }`, `failed` optional.
     pub(crate) fn parse(raw: &toml::Value) -> Result<Reader> {
-        let one = raw
-            .as_table()
-            .filter(|t| t.len() == 1)
-            .and_then(|t| t.iter().next());
-        match (raw.as_str(), one) {
-            (Some("junit"), _) => Reader::junit(OUT_REPORT),
-            (_, Some((key, toml::Value::String(glob)))) if key == "junit" => Reader::junit(glob),
-            (_, Some((key, toml::Value::String(count)))) if key == "count" => Ok(Reader::Count(
-                Regex::new(count).with_context(|| format!("tests count \"{count}\""))?,
-            )),
+        let table = raw.as_table();
+        let text = |key: &str| table.and_then(|t| t.get(key)).and_then(toml::Value::as_str);
+        let regex = |key: &str, pattern: &str| {
+            Regex::new(pattern).with_context(|| format!("tests {key} \"{pattern}\""))
+        };
+        let len = table.map_or(0, toml::Table::len);
+        match (raw.as_str(), text("junit"), text("count"), text("failed")) {
+            (Some("junit"), ..) => Reader::junit(OUT_REPORT),
+            (_, Some(glob), None, None) if len == 1 => Reader::junit(glob),
+            (_, None, Some(count), failed) if len == 1 + usize::from(failed.is_some()) => {
+                Ok(Reader::Count {
+                    count: regex("count", count)?,
+                    failed: failed.map(|f| regex("failed", f)).transpose()?,
+                })
+            }
             _ => bail!(
                 "tests = {raw}: no such reader; use \"junit\", {{ junit = \"<glob>\" }} or \
-                 {{ count = \"<pattern>\" }}"
+                 {{ count = \"<pattern>\" }}, with failed = \"<pattern>\" to name the failed tests"
             ),
         }
     }
@@ -68,8 +81,8 @@ impl Reader {
         })
     }
 
-    /// How many tests ran and, from JUnit reports, each case that ran, or why there is no
-    /// count. `outputs` are the files the check's output went to, `out` its `$FEARLEZZ_OUT`,
+    /// How many tests ran and the cases it names (from JUnit reports each case that ran, from
+    /// a `failed` pattern each failed test once), or why there is no count. `outputs` are the files the check's output went to, `out` its `$FEARLEZZ_OUT`,
     /// `root` the checkout, and `since` when the run started.
     pub(crate) fn count(
         &self,
@@ -79,7 +92,7 @@ impl Reader {
         since: SystemTime,
     ) -> Result<(u64, Vec<Case>), String> {
         match self {
-            Reader::Count(re) => {
+            Reader::Count { count: re, failed } => {
                 let text: String = outputs
                     .iter()
                     .filter_map(|p| std::fs::read(p).ok())
@@ -100,7 +113,21 @@ impl Reader {
                     };
                     *found.get_or_insert(0) += n;
                 }
-                found.map(|n| (n, Vec::new())).ok_or_else(|| {
+                let mut cases: Vec<Case> = Vec::new();
+                for caps in failed.iter().flat_map(|f| f.captures_iter(&text)) {
+                    let Some(name) = caps.get(1).map(|m| m.as_str()) else {
+                        continue;
+                    };
+                    if !cases.iter().any(|c| c.name == name) {
+                        cases.push(Case {
+                            name: name.to_string(),
+                            file: None,
+                            failed: true,
+                            flaky: false,
+                        });
+                    }
+                }
+                found.map(|n| (n, cases)).ok_or_else(|| {
                     format!(
                         "no line of its output matches {}; a runner that prints another summary \
                          needs its own tests reader",
@@ -181,7 +208,10 @@ pub(crate) fn is_from(case: &Case, path: &str) -> bool {
 }
 
 /// The test cases of one report that were not skipped: those with a `<failure` or `<error`
-/// inside failed.
+/// inside failed, and those with a `<flakyFailure` or `<flakyError` (Surefire's word for a
+/// failed attempt before a pass, which Playwright and nextest write too) passed only on a
+/// rerun. A `<rerunFailure` comes after a `<failure`, so a test that failed its reruns too is
+/// a failure.
 fn junit_cases(text: &str) -> Vec<Case> {
     let mut cases = Vec::new();
     let mut rest = text;
@@ -207,10 +237,14 @@ fn junit_cases(text: &str) -> Vec<Case> {
             Some(class) => format!("{class}::{name}"),
             None => name,
         };
+        let flaky = body.contains("<flakyFailure") || body.contains("<flakyError");
         cases.push(Case {
             name,
             file: attr(attrs, "file"),
-            failed: body.contains("<failure") || body.contains("<error"),
+            // nextest, by default, writes a `<failure` beside the flaky attempts as well (and
+            // exits non zero, which fails the check on its own).
+            failed: !flaky && (body.contains("<failure") || body.contains("<error")),
+            flaky,
         });
     }
     cases

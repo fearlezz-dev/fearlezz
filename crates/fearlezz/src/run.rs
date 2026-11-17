@@ -95,7 +95,11 @@ pub(crate) fn execute(
             }
         }
     });
-    if tests == Some(0) {
+    // A test that passed only on a rerun counts as failed unless the check lists it in `flaky_tests`.
+    for case in cases.iter_mut().filter(|c| c.flaky) {
+        case.failed = !check.flaky_tests.is_match(&case.name);
+    }
+    if tests == Some(0) || cases.iter().any(|c| c.failed) {
         passed = false;
     }
     let result = RunResult {

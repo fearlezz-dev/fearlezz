@@ -14,7 +14,7 @@ stage = "working"
 [check.go-test]
 run = "go test -v ./..."
 stage = "working"
-tests = { count = '(?m)^\s*--- (?:PASS|FAIL):' }
+tests = { count = '(?m)^\s*--- (?:PASS|FAIL):', failed = '(?m)^\s*--- FAIL: (\S+)' }
 test_files = ["**/*_test.go"]
 
 # Every rule, decided once on the maintainer's Lint Desk: gate means it must never happen, flag

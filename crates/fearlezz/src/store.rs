@@ -174,6 +174,13 @@ impl Hasher {
         }
         if let Some(reader) = &check.tests {
             parts.insert("(tests)".into(), definition(reader));
+            // Which tests may pass only on a rerun decides whether a run passed.
+            if !check.flaky_tests.patterns().is_empty() {
+                parts.insert(
+                    "(flaky tests)".into(),
+                    definition(&check.flaky_tests.patterns()),
+                );
+            }
         }
         if let Some(pictures) = check.pictures.taken() {
             parts.insert("(pictures)".into(), definition(&pictures));

@@ -1,0 +1,37 @@
+# The working state of naming failed tests and judging flaky ones.
+goal: Name the failing test from what the check already reports, in the CLI, job summary, proof bundle and host page; and decide what a rerun means for proof (a test that passes only on rerun is evidence, not a pass to hide).
+
+pieces:
+  - id: name-failures
+    status: done
+  - id: flaky-tests
+    status: done
+
+decided:
+  - id: failed-pattern
+    what: "A. failed pattern: a failed = '<regex>' beside count; pieces set it. No new tools."
+    why: Rust and Go print each failed test's name; JUnit pieces already parse failed cases.
+  - id: runner-reruns
+    what: The runner reruns; Fearlezz reads what its report says about each attempt (flakyFailure, flakyError).
+    why: No rerun logic in Fearlezz; it reads the tool's own output. cargo test and go test do not rerun, so they only get names.
+  - id: flaky-blocks-unless-listed
+    what: A test that passes only on rerun blocks like a failure, unless the check's flaky list names it; it is then shown apart, and listing it weakens the floor.
+    why: Same model as flaky pictures and the quarantine of TypewriterV1 (xtask/src/results.rs).
+  - id: own-list
+    what: "Two lists: flaky for pictures, flaky_tests for tests."
+    why: One shared list would let an existing flaky = ["*"] for pictures silently excuse every test, unseen by the floor (found by the fresh review).
+  - id: red-ignores-flaky-base
+    what: A test that passed only on a rerun on the base commit passes there for red before green, so it does not show the change.
+
+research:
+  - Surefire's convention (flakyFailure, flakyError inside a passing testcase; rerunFailure after a hard failure) is written by Playwright's junit reporter with includeRetries, cargo-nextest and Maven. Vitest and Jest junit write only the final result. Flutter's JSON reporter says retried true.
+
+slices:
+  - id: failed-pattern-and-names
+    tests: [crates/fearlezz/tests/failed_tests.rs]
+    status: done
+  - id: flaky-verdict
+    tests: [crates/fearlezz/tests/failed_tests.rs]
+    status: done
+
+next: Prove with fearlezz, commit, push, open a pull request.

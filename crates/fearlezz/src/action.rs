@@ -213,6 +213,7 @@ pub(crate) fn summary(
     if ran == 0 {
         writeln!(text, "\nNo check reads what this commit changed.")?;
     }
+    tests(proof, &mut text)?;
     for check in proof.checks.iter().filter(|c| c.outcome == Ran::Failed) {
         let Some(log) = &check.log else { continue };
         writeln!(
@@ -226,6 +227,36 @@ pub(crate) fn summary(
         writeln!(text, "```\n\n</details>")?;
     }
     Ok(text)
+}
+
+/// Each test a check names as failed or flaky, the failed ones first and cut short.
+fn tests(proof: &Proof, text: &mut String) -> std::fmt::Result {
+    const SHOWN: usize = 20;
+    for check in proof.ran_here() {
+        let failed: Vec<&fearlezz_proof::Case> = check.cases.iter().filter(|c| c.failed).collect();
+        let flaky = check.cases.iter().filter(|c| c.flaky && !c.failed);
+        let mut lines: Vec<String> = failed
+            .iter()
+            .take(SHOWN)
+            .map(|c| match c.flaky {
+                true => format!("`{}` passed only on a rerun", code(&c.name)),
+                false => format!("`{}` failed", code(&c.name)),
+            })
+            .collect();
+        if failed.len() > SHOWN {
+            lines.push(format!("{} more failed", failed.len() - SHOWN));
+        }
+        lines.extend(flaky.map(|c| {
+            format!(
+                "`{}` passed only on a rerun (listed in flaky_tests)",
+                code(&c.name)
+            )
+        }));
+        if !lines.is_empty() {
+            writeln!(text, "\n**{}**: {}", cell(&check.id), lines.join(", "))?;
+        }
+    }
+    Ok(())
 }
 
 /// Each weakened part that names itself as it was and is now, as one diff of the config.

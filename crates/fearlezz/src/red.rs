@@ -94,20 +94,17 @@ pub(crate) fn run(
     }
     base.reread(config)?;
     let result = on_base(store, check, &mut base, stage, env)?;
-    let red = if result.outcome == Outcome::Passed {
-        let tests = names(
-            result
-                .cases
-                .iter()
-                .filter(|c| !c.failed && files.iter().any(|f| crate::counts::is_from(c, f))),
-        );
+    let red = if passed_on_base(&result) {
+        let tests = names(result.cases.iter().filter(|c| {
+            (!c.failed || c.flaky) && files.iter().any(|f| crate::counts::is_from(c, f))
+        }));
         shown(files, Verdict::NotRed, tests, None)
     } else {
         let mut tests: Vec<String> = names(
             result
                 .cases
                 .iter()
-                .filter(|c| c.failed && passes(head, &c.name)),
+                .filter(|c| c.failed && !c.flaky && passes(head, &c.name)),
         );
         let mut plain = Base::at(git, config, wt.base.clone(), "")?;
         let plain = on_base(store, check, &mut plain, stage, env)?;
@@ -176,9 +173,23 @@ fn passes(run: &RunResult, name: &str) -> bool {
     same.peek().is_some() && same.all(|c| !c.failed)
 }
 
-/// Whether the test `name` failed in `run`.
+/// Whether the test `name` failed in `run`, not only before a rerun.
 fn fails(run: &RunResult, name: &str) -> bool {
-    run.cases.iter().any(|c| c.name == name && c.failed)
+    run.cases
+        .iter()
+        .any(|c| c.name == name && c.failed && !c.flaky)
+}
+
+/// Whether the check passed on the base commit for red before green: it passed, or its runner
+/// exited 0 and it failed only for tests that passed on a rerun. Such a test passes there too,
+/// so it does not show the change.
+fn passed_on_base(run: &RunResult) -> bool {
+    let mut failed = run.cases.iter().filter(|c| c.failed).peekable();
+    run.outcome == Outcome::Passed
+        || (run.exit_code == Some(0)
+            && run.tests.is_some_and(|n| n > 0)
+            && failed.peek().is_some()
+            && failed.all(|c| c.flaky))
 }
 
 /// What red before green found for a check's passing run against one base commit, kept with

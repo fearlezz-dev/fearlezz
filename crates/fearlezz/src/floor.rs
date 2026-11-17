@@ -176,6 +176,9 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
         for how in b.pictures.weakenings(&h.pictures) {
             say(how);
         }
+        if let Some(how) = h.flaky_tests.widened(&b.flaky_tests, "tests") {
+            say(how);
+        }
         if b.tests.is_some() && h.tests.is_none() {
             say("it no longer counts its tests".into());
         }
