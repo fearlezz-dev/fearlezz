@@ -3,12 +3,11 @@ goal: A preview deploy becomes proof (a check against the deployed preview, its 
 
 pieces:
   - id: deploy
-    status: figuring-out
-    open: How the deploy command learns its name, and when a deploy is reused.
+    status: done
   - id: checks-against-preview
-    status: figuring-out
+    status: done
   - id: link
-    status: figuring-out
+    status: done
 
 decided:
   - id: shape
@@ -16,12 +15,25 @@ decided:
     why: Same shape as needs = ["services"]; checks run against the real deploy.
   - id: link
     what: The link shows in the job summary, and with the host in its existing pull request comment and on the page. No new write to GitHub.
+  - id: name
+    what: FEARLEZZ_PREVIEW_NAME is the branch made safe for a URL (a pull request's head branch in CI), commit-<sha> when detached, base-<sha> for the base checkout.
+    why: One preview per branch that each push updates, as aarnoudse/website does with its preview alias.
+  - id: url
+    what: The URL is the last http(s) URL the deploy prints; deployed once per tree per checkout.
+  - id: one-field
+    what: The host takes the URL from the head's proof into Review.preview, which feeds both the comment and the page.
+    why: The comment is written from the stored review and the page already receives it; one field, one source.
 
 open: []
 
-notes:
-  - The look of a check against the preview runs on the base checkout like any look, so the base deploys its own preview the same way; before and after need no extra design.
-  - The deploy needs a token (CLOUDFLARE_API_TOKEN), so [env] needs secrets too, through the fetch the secrets change built (run.rs fetch_secrets).
-  - Services are mirrored in main.rs run_checks (ensure_up before a check that needs them) and look.rs run_on_base.
+slices:
+  - id: core
+    tests: [tests/preview.rs (15 tests), env::tests (URL and name)]
+    status: done
+  - id: host
+    tests:
+      - fearlezz-proof review::the_review_names_the_preview_its_proof_deployed
+      - host-tests host::the_comment_and_the_page_name_the_preview_the_proof_deployed
+    status: done
 
-next: Once scheduled proof is in a PR, build deploy (env.rs, config.rs) with failing tests in a new tests/preview.rs.
+next: Fresh review, proof, PR stacked on scheduled proof.
