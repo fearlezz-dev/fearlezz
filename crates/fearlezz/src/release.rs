@@ -42,7 +42,7 @@ pub(crate) struct Place {
     /// file in `dir`.
     pub version: Option<String>,
     /// Built files the release carries (globs from the root), for a place such as GitHub
-    /// Releases. They reach the publish command as `FEARLEZZ_FILES`.
+    /// Releases. They reach the publish command as its arguments (`"$@"`).
     pub files: Vec<String>,
     /// The tag the release is known by, `{version}` replaced: `v{version}` by default.
     pub tag: String,
@@ -265,6 +265,13 @@ impl Release {
 pub(crate) struct At<'a> {
     pub root: &'a Path,
     pub shell: Option<&'a str>,
+    pub github: GitHub,
+}
+
+/// The repository on GitHub, from the workflow or the origin remote, and its API.
+pub(crate) struct GitHub {
+    pub repository: Option<String>,
+    pub api: String,
 }
 
 /// Publishes every place that does not have its version yet, each after the other, and says
@@ -363,21 +370,23 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
 /// A command of the place run as a check runs, with the variables it names and the release's
 /// version, tag and files.
 fn command(place: &Place, script: &str, release: &Release, at: &At<'_>) -> std::process::Command {
-    let mut cmd =
-        crate::run::clean_command(at.root, at.shell, place.dir.as_deref(), script, &place.env);
+    // Absolute, so a command that runs in the place's folder finds them too.
+    let files: Vec<String> = release
+        .files
+        .iter()
+        .map(|f| at.root.join(f).display().to_string())
+        .collect();
+    let mut cmd = crate::run::clean_command(
+        at.root,
+        at.shell,
+        place.dir.as_deref(),
+        script,
+        &place.env,
+        &files,
+    );
     cmd.stdin(Stdio::null())
         .env("FEARLEZZ_VERSION", &release.package.version)
-        .env("FEARLEZZ_TAG", &release.tag)
-        // Absolute, so a command that runs in the place's folder finds them too.
-        .env(
-            "FEARLEZZ_FILES",
-            release
-                .files
-                .iter()
-                .map(|f| at.root.join(f).display().to_string())
-                .collect::<Vec<_>>()
-                .join(" "),
-        );
+        .env("FEARLEZZ_TAG", &release.tag);
     cmd
 }
 
@@ -405,7 +414,7 @@ fn landed(place: &Place, release: &Release, at: &At<'_>) -> Result<Result<(), Op
                         p.name, p.version
                     ))
                 }
-                Reader::Github => github_has(url, release, at.root),
+                Reader::Github => github_has(url, release, at),
             }
         }
     }
@@ -484,13 +493,13 @@ fn crates_has(index: &str, p: &Package) -> Result<Result<(), Option<String>>> {
 fn github_has(
     url: Option<&str>,
     release: &Release,
-    root: &Path,
+    at: &At<'_>,
 ) -> Result<Result<(), Option<String>>> {
-    let api = match url {
-        Some(u) => u.to_string(),
-        None => std::env::var("GITHUB_API_URL").unwrap_or_else(|_| "https://api.github.com".into()),
-    };
-    let repository = repository(root)?;
+    let root = at.root;
+    let api = url.unwrap_or(&at.github.api);
+    let repository = at.github.repository.as_deref().context(
+        "no GitHub repository: set GITHUB_REPOSITORY, or give the checkout a github.com origin remote",
+    )?;
     let token = ["GITHUB_TOKEN", "GH_TOKEN"]
         .iter()
         .find_map(|n| std::env::var(n).ok().filter(|v| !v.is_empty()))
@@ -540,28 +549,6 @@ fn github_has(
     Ok(Ok(()))
 }
 
-/// The `owner/name` of the repository on GitHub: GITHUB_REPOSITORY in a workflow, otherwise
-/// from the origin remote.
-fn repository(root: &Path) -> Result<String> {
-    if let Ok(repo) = std::env::var("GITHUB_REPOSITORY")
-        && !repo.is_empty()
-    {
-        return Ok(repo);
-    }
-    let out = std::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(root)
-        .output()
-        .context("asking git for the origin remote")?;
-    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let path = url
-        .strip_prefix("git@github.com:")
-        .or_else(|| url.split_once("github.com/").map(|(_, p)| p))
-        .map(|p| p.trim_end_matches(".git").to_string());
-    path.filter(|p| p.contains('/'))
-        .context("no GitHub repository: set GITHUB_REPOSITORY, or give the checkout a github.com origin remote")
-}
-
 /// The file the place's version comes from, relative to the root.
 fn manifest_path(place: &Place) -> PathBuf {
     if let Some(file) = &place.version {
@@ -604,7 +591,7 @@ fn cargo_package(text: &str, path: &Path, root: &Path) -> Result<Package> {
     let package = table
         .get("package")
         .and_then(toml::Value::as_table)
-        .context("it has no [package]; for a crate in a folder, set dir in its [release] place")?;
+        .context("it has no [package]; name the crate's own Cargo.toml with dir or version in its [release] place")?;
     let name = package
         .get("name")
         .and_then(toml::Value::as_str)
@@ -627,9 +614,8 @@ fn workspace_version(path: &Path, root: &Path) -> Result<String> {
     let mut dir = path.parent();
     while let Some(d) = dir {
         let manifest = d.join("Cargo.toml");
-        if manifest != path
-            && let Ok(text) = std::fs::read_to_string(&manifest)
-        {
+        // The package's own file comes first: a root Cargo.toml can hold both.
+        if let Ok(text) = std::fs::read_to_string(&manifest) {
             let table: toml::Table = toml::from_str(&text)?;
             if let Some(ws) = table.get("workspace") {
                 return ws

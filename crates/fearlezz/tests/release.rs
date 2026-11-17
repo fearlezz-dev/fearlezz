@@ -344,21 +344,21 @@ fn a_github_release_has_landed_when_every_file_is_there_with_its_digest() {
 }
 
 #[test]
-fn a_github_file_with_other_bytes_is_published_again() {
+fn a_github_file_with_other_bytes_is_published_again_with_its_path_whole() {
     let reg = FakeRegistry::start();
     let tar = "the binary";
     reg.put(
         RELEASE_PATH,
-        &github_release(&[("widget.tar.gz", &sha256(b"an old build"))]),
+        &github_release(&[("my widget.tar.gz", &sha256(b"an old build"))]),
     );
     let good = reg.dir.join("good.json");
     std::fs::write(
         &good,
-        github_release(&[("widget.tar.gz", &sha256(tar.as_bytes()))]),
+        github_release(&[("my widget.tar.gz", &sha256(tar.as_bytes()))]),
     )
     .unwrap();
     let publish = format!(
-        "echo \"$FEARLEZZ_TAG $FEARLEZZ_FILES\" > .uploaded && cp '{}' '{}'",
+        "printf '%s\\n' \"$FEARLEZZ_TAG\" \"$@\" > .uploaded && cp '{}' '{}'",
         good.display(),
         reg.dir.join(RELEASE_PATH).display()
     );
@@ -366,7 +366,8 @@ fn a_github_file_with_other_bytes_is_published_again() {
         &github_place(&reg, &publish),
         &[
             ("Cargo.toml", CARGO),
-            ("dist/widget.tar.gz", tar),
+            // A space in a file name reaches the command whole.
+            ("dist/my widget.tar.gz", tar),
             (".gitignore", ".uploaded\n"),
         ],
     );
@@ -382,7 +383,7 @@ fn a_github_file_with_other_bytes_is_published_again() {
     );
     assert_eq!(
         std::fs::read_to_string(repo.path(".uploaded")).unwrap(),
-        format!("v1.2.0 {}\n", repo.path("dist/widget.tar.gz").display())
+        format!("v1.2.0\n{}\n", repo.path("dist/my widget.tar.gz").display())
     );
 }
 
@@ -508,4 +509,94 @@ fn a_dry_run_is_tuned_under_its_check_name() {
     assert!(plan.ok, "{}", plan.stderr);
     let working = plan.stdout.split("look").next().unwrap_or_default();
     assert!(working.contains("release/crates"), "{}", plan.stdout);
+}
+
+#[test]
+fn a_registry_that_stumbles_while_waiting_is_asked_again() {
+    let reg = FakeRegistry::start();
+    let file = reg.dir.join(INDEX_PATH);
+    let status = reg.dir.join(format!("{INDEX_PATH}.status"));
+    // The publish works, but the registry answers 502 for a moment before it lists it.
+    let publish = format!(
+        "mkdir -p '{dir}' && echo 502 > '{status}' && (sleep 1; echo '{INDEX_LINE}' > '{file}'; rm '{status}') &",
+        dir = file.parent().unwrap().display(),
+        status = status.display(),
+        file = file.display(),
+    );
+    let config = crates_place(&reg, &publish).replace("wait = 2", "wait = 10");
+    let repo = Repo::new(&config, &[("Cargo.toml", CARGO)]);
+    let out = repo.fz(&["run", "--release"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("crates: widget 1.2.0 landed"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn two_files_of_one_name_are_refused() {
+    let reg = FakeRegistry::start();
+    let config =
+        github_place(&reg, "echo ran > .uploaded").replace("dist/*.tar.gz", "dist/**/*.tar.gz");
+    let repo = Repo::new(
+        &config,
+        &[
+            ("Cargo.toml", CARGO),
+            ("dist/linux/widget.tar.gz", "a"),
+            ("dist/macos/widget.tar.gz", "b"),
+            (".gitignore", ".uploaded\n"),
+        ],
+    );
+    let out = repo.fz_env(
+        &["run", "--release"],
+        &[("GITHUB_REPOSITORY", "acme/widget")],
+    );
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("two files are called widget.tar.gz"),
+        "{}",
+        out.stdout
+    );
+    assert!(!repo.path(".uploaded").exists());
+}
+
+#[test]
+fn a_root_package_reads_its_workspace_version_from_its_own_file() {
+    let reg = FakeRegistry::start();
+    reg.put(INDEX_PATH, INDEX_LINE);
+    let config = format!(
+        "[release.crates]\npublish = \"false\"\nlanded = {{ read = \"crates\", url = \"{}\" }}\n",
+        reg.url
+    );
+    let repo = Repo::new(
+        &config,
+        &[(
+            "Cargo.toml",
+            "[package]\nname = \"widget\"\nversion.workspace = true\n\n[workspace]\n\n[workspace.package]\nversion = \"1.2.0\"\n",
+        )],
+    );
+    let out = repo.fz(&["run", "--release"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("crates: widget 1.2.0 is already there"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_workspace_root_without_a_package_says_how_to_name_the_crate() {
+    let reg = FakeRegistry::start();
+    let config = format!(
+        "[release.crates]\npublish = \"false\"\nlanded = {{ read = \"crates\", url = \"{}\" }}\n",
+        reg.url
+    );
+    let repo = Repo::new(
+        &config,
+        &[("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n")],
+    );
+    let out = repo.fz(&["run", "--release"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stdout.contains("with dir or version"), "{}", out.stdout);
 }

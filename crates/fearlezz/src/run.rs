@@ -149,7 +149,14 @@ fn command(
     log: &File,
     at: &Where<'_>,
 ) -> Result<Command> {
-    let mut cmd = clean_command(at.root, at.shell, check.dir.as_deref(), step, &check.env);
+    let mut cmd = clean_command(
+        at.root,
+        at.shell,
+        check.dir.as_deref(),
+        step,
+        &check.env,
+        &[],
+    );
     cmd.stdin(Stdio::null())
         .stdout(stdout)
         .stderr(log.try_clone()?);
@@ -259,28 +266,32 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
 
 /// `script` run the way a check runs it: through `sh -c` inside the `[env]` `shell`, in the
 /// folder `dir` of `root`, with only the base variables and the ones `env` names from
-/// Fearlezz's own, and the project's tool folders in front of PATH.
+/// Fearlezz's own, and the project's tool folders in front of PATH. `args` reach the script
+/// as its arguments (`"$@"`), whole, whatever they hold.
 pub(crate) fn clean_command(
     root: &Path,
     shell: Option<&str>,
     dir: Option<&str>,
     script: &str,
     env: &[String],
+    args: &[String],
 ) -> Command {
     // Inside a shell the command travels in a variable, so no quoting can break it. A command
     // with a folder starts there; the shell itself starts at the root, where it finds its own
     // files, and moves into the folder before the command.
     let folder = dir.map(|d| root.join(d));
     let line = match (shell, &folder) {
-        (Some(shell), None) => format!("{shell} sh -c \"$FEARLEZZ_RUN\""),
+        (Some(shell), None) => format!("{shell} sh -c \"$FEARLEZZ_RUN\" sh \"$@\""),
         (Some(shell), Some(_)) => {
-            format!("{shell} sh -c 'cd \"$FEARLEZZ_DIR\" && eval \"$FEARLEZZ_RUN\"'")
+            format!("{shell} sh -c 'cd \"$FEARLEZZ_DIR\" && eval \"$FEARLEZZ_RUN\"' sh \"$@\"")
         }
         (None, _) => script.to_string(),
     };
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(&line)
+        .arg("sh")
+        .args(args)
         .current_dir(match (shell, &folder) {
             (None, Some(folder)) => folder,
             _ => root,

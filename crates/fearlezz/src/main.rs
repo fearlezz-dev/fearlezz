@@ -331,6 +331,7 @@ fn ci_run(proof: Option<PathBuf>) -> Result<bool> {
 /// Publishes the release to every place that does not have it yet, inside the checkout's
 /// environment.
 fn release_run() -> Result<bool> {
+    let workflow = action::Workflow::read();
     let ctx = prepared()?;
     let env = ctx.env();
     if !ctx.config.releases.is_empty()
@@ -343,6 +344,16 @@ fn release_run() -> Result<bool> {
         &release::At {
             root: &ctx.git.root,
             shell: ctx.config.env.shell.as_deref(),
+            github: release::GitHub {
+                repository: workflow
+                    .repository
+                    .clone()
+                    .or_else(|| ctx.git.github_repository()),
+                api: workflow
+                    .api_url
+                    .clone()
+                    .unwrap_or_else(|| "https://api.github.com".into()),
+            },
         },
     ))
 }

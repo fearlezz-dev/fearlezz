@@ -264,7 +264,7 @@ files = ["dist/*.tar.gz"]      # built before the release; landed when each is t
 
 [release.shop]                 # a place of your own
 dry = "shop check"
-publish = "shop push"          # sees FEARLEZZ_VERSION, FEARLEZZ_TAG, FEARLEZZ_FILES and env
+publish = "shop push"          # sees FEARLEZZ_VERSION, FEARLEZZ_TAG and env; the files are its arguments ("$@")
 landed = "shop has \"$FEARLEZZ_VERSION\""   # exits 0 once the place has it
 version = "package.json"
 env = ["SHOP_TOKEN"]

@@ -60,9 +60,15 @@ fn serve(stream: &TcpStream, dir: &Path) {
         }
     }
     let file = dir.join(path.trim_start_matches('/'));
-    let (status, body) = match std::fs::read(&file) {
-        Ok(body) if file.is_file() => ("200 OK", body),
-        _ => ("404 Not Found", b"{}".to_vec()),
+    // A `<path>.status` file beside it makes the path answer with that status instead, as a
+    // registry that stumbles does.
+    let stumble = std::fs::read_to_string(format!("{}.status", file.display()))
+        .ok()
+        .map(|s| format!("{} Stumbled", s.trim()));
+    let (status, body) = match (stumble, std::fs::read(&file)) {
+        (Some(status), _) => (status, b"{}".to_vec()),
+        (None, Ok(body)) if file.is_file() => ("200 OK".to_string(), body),
+        _ => ("404 Not Found".to_string(), b"{}".to_vec()),
     };
     let mut stream = stream;
     let head = format!(

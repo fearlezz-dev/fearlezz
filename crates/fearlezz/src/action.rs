@@ -27,6 +27,8 @@ pub(crate) struct Workflow {
     pub actions: bool,
     /// `owner/name`.
     pub repository: Option<String>,
+    /// GitHub's REST API, `GITHUB_API_URL` (another host on GitHub Enterprise Server).
+    pub api_url: Option<String>,
     /// The run's page.
     pub run_url: Option<String>,
     /// The job's id in its workflow.
@@ -77,6 +79,7 @@ impl Workflow {
         Workflow {
             actions: var("GITHUB_ACTIONS").as_deref() == Some("true"),
             repository,
+            api_url: var("GITHUB_API_URL"),
             run_url,
             job: var("GITHUB_JOB"),
             ci_job: CiJob::read(&var),
