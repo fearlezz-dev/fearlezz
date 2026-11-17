@@ -385,3 +385,22 @@ needs = ["preview"]
         out.stdout
     );
 }
+
+#[test]
+fn a_pull_request_in_ci_names_its_preview_for_its_head_branch() {
+    let s = Setup::new(PREVIEW, CHECKS, "feat/site");
+    // GitHub checks out the merge commit with no branch.
+    s.repo.git(&["switch", "-q", "--detach"]);
+    let event = s.repo.path(".runs/event.json");
+    std::fs::write(
+        &event,
+        r#"{"pull_request": {"number": 7, "title": "feat: site", "head": {"ref": "feat/site", "sha": "abc"}}}"#,
+    )
+    .unwrap();
+    let out = s.fz_env(
+        &["run", "--ci"],
+        &[("GITHUB_EVENT_PATH", event.to_str().unwrap())],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(s.deploys(), ["deploy feat-site"]);
+}
