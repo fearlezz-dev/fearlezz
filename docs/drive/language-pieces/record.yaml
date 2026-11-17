@@ -59,4 +59,4 @@ decided:
 evidence:
   survey: Svelte sites (aarnoudse/website, guia/guia-website) use ESLint, Prettier and svelte-check, no Biome; Agora runs bare oxlint per package with one root oxlint.json; Winston runs node --test on .ts with type stripping, HomeLabbing with --import tsx; arcleaf runs go test -race; surrealdb-credential-operator runs envtest through setup-envtest and KUBEBUILDER_ASSETS; jar.yazi runs stylua --check; skir-dart-client runs dart analyze --fatal-infos and dart test (vm, plus chrome and dart2wasm for one file); GrammarGuard runs convco on the commit message; TypewriterV1 checks base..head in CI.
 
-next: full test suite and the wasm probe, then a check-in with the oxlint levels for review, then fresh review and PR
+next: PR 34 open; CI proves it (local self-proof stalled at devenv prepare while other threads built their shells); waiting on the developer for the oxlint levels and the merge
