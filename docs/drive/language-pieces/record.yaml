@@ -53,6 +53,8 @@ decided:
     what: 'Svelte warnings all flag (A); the check runs svelte-kit sync first (A). Errors block anywhere.'
   - id: oxlint-levels
     what: '"I think you can look at all the rules we decided and infer from that what they should be." 432 of 872 map onto decided ESLint and Biome rules (Biome rule sources); the rest follow the decided levels of the same plugin and category, hand corrected for clashes and rules that ban modern syntax.'
+  - id: oxlint-version
+    what: 'A. The rules target oxlint 1.89, the version devenv pins (CI failed: 1.89 rejects the whole config over typescript/no-unsafe-enum-assignment, new in 1.91); that one rule is dropped until the pin moves.'
   - id: oxlint-frameworks
     what: 'A. Framework pieces hold both tools rules; a tool file is written only when a check reads that tool; setup init adds a framework piece with biome or oxlint.'
 

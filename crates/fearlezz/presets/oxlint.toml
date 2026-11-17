@@ -1,7 +1,8 @@
 # oxlint lints TypeScript and JavaScript, with type information (`--type-aware`, which needs
 # tsgolint beside it; nixpkgs' oxlint has it). Fearlezz writes .oxlintrc.json: every rule below
 # with its level and every category off, so a rule a newer oxlint adds runs only once it has a
-# level. The rules of a framework come with its own piece (react, next, vue).
+# level. The rules of a framework come with its own piece (react, next, vue). The rules are those
+# of oxlint 1.89, the one devenv gives; an older oxlint rejects a rule it does not know.
 
 # Findings get the level [lints.oxlint] gives them. Only lines the change touched count.
 [check.oxlint]
@@ -473,7 +474,6 @@ findings = { read = "sarif", lints = ["oxlint"] }
 "typescript/no-unsafe-assignment" = "gate"
 "typescript/no-unsafe-call" = "gate"
 "typescript/no-unsafe-declaration-merging" = "gate"
-"typescript/no-unsafe-enum-assignment" = "gate"
 "typescript/no-unsafe-enum-comparison" = "gate"
 "typescript/no-unsafe-function-type" = "gate"
 "typescript/no-unsafe-member-access" = "gate"
