@@ -13,7 +13,8 @@ no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
 # read the embedded agent skill and pieces, the fixtures, the proof workflow and README.md,
 # which no_proof leaves out of the default key. They leave out ee/, which has checks of its own.
 [check.tests]
-inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**", "README.md", ".github/workflows/proof.yml"]
+on = ["linux", "macos"]
+inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**", "README.md", ".github/workflows/proof.yml", "action.yml"]
 
 # The proof host in ee/ is a Cargo workspace of its own, built to wasm, so the rust piece runs
 # its checks there too (`fmt/ee`, `clippy/ee`, `tests/ee`). These read ee/ and the proof bundle
@@ -22,13 +23,18 @@ inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", 
 [check."fmt/ee"]
 inputs = ["ee/**", "crates/fearlezz-proof/**", "crates/**/*.rs"]
 
+[check.clippy]
+on = ["linux", "macos"]
+
 # All features, so the routes only the tests build in are linted too.
 [check."clippy/ee"]
+on = ["linux"]
 run = "cargo clippy --all-targets --all-features --quiet --message-format=json"
 inputs = ["ee/**", "crates/fearlezz-proof/**"]
 
 # Builds the worker and drives it under wrangler dev against a fake GitHub.
 [check."tests/ee"]
+on = ["linux"]
 inputs = ["ee/**", "crates/fearlezz-proof/**"]
 
 # The proof host's page: its types, and its tests of how a live connection becomes what the
@@ -54,3 +60,14 @@ stage = "working"
 [check.packaging]
 run = "jq empty release-please-config.json .release-please-manifest.json && yq '.' action.yml > /dev/null && shellcheck install.sh"
 stage = "working"
+
+# CI proves the commit in legs: Linux runs every check, and macOS builds, lints and tests the
+# code only macOS has (recording, copy on write clones). Locally the developer's machine stands
+# in for both.
+[platform.linux]
+runs-on = "ubuntu-latest"
+default = true
+
+[platform.macos]
+runs-on = "macos-latest"
+os = "macos"

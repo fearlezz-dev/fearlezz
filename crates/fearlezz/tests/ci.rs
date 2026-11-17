@@ -1270,3 +1270,17 @@ fn checks_that_record_pictures_get_ffmpeg_on_the_runner() {
     let out = pushed(&plain);
     assert!(!out.stdout.contains("ffmpeg"), "{}", out.stdout);
 }
+
+/// GitHub evaluates an expression anywhere in an action's metadata, so one in a description
+/// fails every job that loads the action.
+#[test]
+fn the_actions_descriptions_hold_no_expression() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let action = std::fs::read_to_string(root.join("action.yml")).unwrap();
+    let inputs = action.split("\nruns:").next().unwrap();
+    let expressions: Vec<&str> = inputs
+        .lines()
+        .filter(|l| l.contains("${{") && !l.trim_start().starts_with("value:"))
+        .collect();
+    assert_eq!(expressions, Vec::<&str>::new(), "{inputs}");
+}

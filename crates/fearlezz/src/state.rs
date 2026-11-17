@@ -221,7 +221,12 @@ pub(crate) fn view(
         // Asked once, and only when a check's red before green is in question.
         let mut fix: Option<bool> = None;
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
-        for check in &config.checks {
+        // A check this machine cannot stand in for is left to CI: it never holds the work.
+        let here = config
+            .checks
+            .iter()
+            .filter(|c| crate::legs::left_to_ci(config, c).is_none());
+        for check in here {
             let latest = latest_ran(journal, &check.id);
             // Any change needs every check; its inputs only say whether a pass still holds.
             if wt.changed.is_empty() && latest.is_none() {

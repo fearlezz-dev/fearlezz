@@ -4,7 +4,7 @@
 use std::fs::{self, File};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
 use jiff::Timestamp;
@@ -191,10 +191,36 @@ fn spawn(check: &Check, dir: &Path, out: File, at: &Where<'_>) -> Result<(bool, 
     }
     let mut cmd = command(check, last, dir, stdout, &out, at)?;
     let Some(record) = &check.pictures.record else {
-        let status = cmd
-            .status()
+        let Some(budget) = &check.timeout else {
+            let status = cmd
+                .status()
+                .with_context(|| format!("starting check {}", check.id))?;
+            return Ok((status.success(), status.code()));
+        };
+        // Its own process group, so stopping it stops what it started too.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        let mut child = cmd
+            .spawn()
             .with_context(|| format!("starting check {}", check.id))?;
-        return Ok((status.success(), status.code()));
+        let until = Instant::now() + budget.time;
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Ok((status.success(), status.code()));
+            }
+            if Instant::now() >= until {
+                crate::record::stop(&mut child)?;
+                use std::io::Write as _;
+                let mut log = out;
+                writeln!(
+                    log,
+                    "fearlezz: {} exceeded its {budget} budget and was stopped",
+                    check.id
+                )?;
+                return Ok((false, None));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     };
     // Its own process group, so stopping it after `seconds` stops the app it started too.
     #[cfg(unix)]

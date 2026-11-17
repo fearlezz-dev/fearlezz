@@ -302,6 +302,22 @@ async fn writable(
     writer: &Writer,
     id: &str,
 ) -> Result<RunRow, Refusal> {
+    let row = owned(env, config, db, writer, id).await?;
+    if work::state(&row.state) != RunState::Running {
+        return Err(Refusal::new(409, "the run is closed; open another"));
+    }
+    Ok(row)
+}
+
+/// The run `id`, when the writer may write it, open or closed: what `writable` finds before it
+/// asks whether the run still takes writes.
+async fn owned(
+    env: &Env,
+    config: &Config,
+    db: &D1Database,
+    writer: &Writer,
+    id: &str,
+) -> Result<RunRow, Refusal> {
     let select = "SELECT r.work, r.head, r.git_ref, r.state, w.repo, w.repository, w.branch, w.pull FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1";
     let row: Option<RunRow> = match writer {
         Writer::Ci(token) => {
@@ -330,9 +346,6 @@ async fn writable(
         }
         Writer::Ci(_) => {}
         Writer::Local(person) => may_write(env, config, person, &row.repository).await?,
-    }
-    if work::state(&row.state) != RunState::Running {
-        return Err(Refusal::new(409, "the run is closed; open another"));
     }
     Ok(row)
 }
@@ -436,7 +449,8 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
 
 /// `POST /api/v2/runs/<run>/weakenings`: a CI run asks, before it judges what its change
 /// weakens, whether an admin accepted exactly that at its head. `200 {"accepted": <accept> |
-/// null}`; a local run is refused, since it is never reviewed.
+/// null}`; a local run is refused, since it is never reviewed. It only reads, so a closed run
+/// answers too: the gate of a split proof asks through a leg's run, which said done.
 pub async fn weakenings(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
     let writer = Writer::of(&req, env, config).await?;
     let ask: Weakened = req
@@ -444,7 +458,7 @@ pub async fn weakenings(mut req: Request, env: &Env, config: &Config, id: &str) 
         .await
         .map_err(|e| Refusal::new(400, format!("send {{\"weakened\": [...]}}: {e}")))?;
     let db = env.d1("DB")?;
-    let run = writable(env, config, &db, &writer, id).await?;
+    let run = owned(env, config, &db, &writer, id).await?;
     if run.local() {
         return Err(Refusal::new(
             409,

@@ -264,6 +264,28 @@ pub async fn rerun_job(token: &str, config: &Config, repo: &str, id: u64) -> Res
     }
 }
 
+/// Runs the failed jobs of Actions workflow run `run` of `repo` again, as the app (Actions
+/// write).
+pub(crate) async fn rerun_failed_jobs(
+    token: &str,
+    config: &Config,
+    repo: &str,
+    run: u64,
+) -> Result<()> {
+    let url = format!(
+        "{}/repos/{repo}/actions/runs/{run}/rerun-failed-jobs",
+        config.github_api
+    );
+    let reply = call(Method::Post, &url, Some(token), Some(&json!({}))).await?;
+    match reply.status {
+        200..=299 => Ok(()),
+        status => Err(worker::Error::RustError(format!(
+            "GitHub answered {status} to running the failed jobs of {run} again: {}",
+            reply.body["message"].as_str().unwrap_or_default()
+        ))),
+    }
+}
+
 /// Starts GitHub's device flow for the app: the codes a person enters on GitHub, as GitHub
 /// answers them (`device_code`, `user_code`, `verification_uri`, `expires_in`, `interval`); None
 /// when GitHub refuses, as it does while the app's device flow is off.

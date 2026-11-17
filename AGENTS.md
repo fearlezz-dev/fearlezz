@@ -19,6 +19,7 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 - `git.rs`: the facts read from git (root, common dir, changed files, tree id, worktrees).
 - `store.rs`: results keyed by inputs hash, shared by every worktree, and what each passing run showed against a base commit (its look and red before green).
 - `journal.rs`: the append-only events of one piece of work.
+- `legs.rs`: a proof split over several CI jobs: `[platform.<name>]`, a check's `on`, `job` and `timeout`, the legs a plan prints, reusing a pass the base commit's CI proof shows for the same inputs, and the gate combining the legs' bundles.
 - `state.rs`: everything shown, derived from journal, store and worktree. Nothing derived is stored.
 - `presets.rs`: `use`, pulling pieces of config in by name, path or pinned repository and merging them; built in pieces live in `crates/fearlezz/presets/`.
 - `run.rs`: running one check in a clean env, or a built in check in process; for a check that `needs = ["envtest"]`, the Kubernetes binaries of its go.mod's version first.
@@ -60,4 +61,4 @@ Fearlezz helps coding agents prove their work. It is a Rust CLI in `crates/fearl
 ## Style
 
 - No dashes as punctuation in prose, comments or commit messages.
-- Every command prints a `next:` line as its last line, except output meant for programs (`--check`, `setup compare --json`, `setup hook`) and errors, whose message says what to do.
+- Every command prints a `next:` line as its last line, except output meant for programs (`--check`, `setup compare --json`, `setup hook`, `run --ci --plan`) and errors, whose message says what to do.

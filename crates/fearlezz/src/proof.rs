@@ -23,6 +23,9 @@ pub(crate) fn ran(
     let seconds = result.duration_ms as f64 / 1000.0;
     Check {
         id: check.id.clone(),
+        platform: None,
+        key: Some(result.key.clone()),
+        reused: None,
         run: check.run.trim().to_string(),
         stage: stage.to_string(),
         outcome: match result.outcome {
@@ -48,6 +51,9 @@ pub(crate) fn ran(
 pub(crate) fn not_run(check: &crate::config::Check, stage: &str, why: &str) -> Check {
     Check {
         id: check.id.clone(),
+        platform: None,
+        key: None,
+        reused: None,
         run: check.run.trim().to_string(),
         stage: stage.to_string(),
         outcome: Ran::NotRun,
@@ -66,9 +72,13 @@ pub(crate) fn not_run(check: &crate::config::Check, stage: &str, why: &str) -> C
     }
 }
 
-/// Where a check's output lives in the bundle, relative to it.
-pub(crate) fn output_path(id: &str) -> String {
-    format!("outputs/{id}.log")
+/// Where a check's output lives in the bundle, relative to it: under its platform when it
+/// names one, as the gate's bundle holds the same check from several.
+pub(crate) fn output_path(check: &Check) -> String {
+    match &check.platform {
+        Some(platform) => format!("outputs/{platform}/{}.log", check.id),
+        None => format!("outputs/{}.log", check.id),
+    }
 }
 
 /// Writes `proof.json` into `dir` with every check's output and every picture's media beside
@@ -78,7 +88,7 @@ pub(crate) fn write(proof: &Proof, dir: &Path) -> Result<()> {
     let mut out = proof.clone();
     for check in &mut out.checks {
         let Some(log) = &check.log else { continue };
-        let rel = output_path(&check.id);
+        let rel = output_path(check);
         copy(log, &dir.join(&rel))?;
         check.output = Some(rel);
     }

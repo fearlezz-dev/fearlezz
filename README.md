@@ -93,6 +93,102 @@ A change that weakens the proof the base branch requires (a check turned off, an
 
 The proof host is where hosted review happens. Its page of a work is live: it fills in as CI runs, with every changed picture compared with the base. People with write access say per picture that it looks right, or leave a note on its before, its after or both; an admin accepts what a change weakens there, which runs the proof job again. The host writes where review stands to the pull request as the `Fearlezz review` check run and one comment. An agent signs in with `fearlezz setup login` and reads the open notes, with their pictures, through `fearlezz --notes`. Once signed in, a local `fearlezz run` shows on the page too, marked unproven: it is the agent's word, so it never moves the review. How it works is in [`ee/README.md`](ee/README.md).
 
+### Several platforms, several jobs
+
+A check that must pass on more than one machine names its platforms, and Fearlezz splits the proof over jobs: one leg per platform, and per `job` a check names on it.
+
+```toml
+[platform.linux]
+runs-on = "ubuntu-latest"
+default = true                  # where a check without `on` runs
+
+[platform.windows]
+runs-on = "windows-latest"
+os = "windows"                  # needs that OS; locally it is left to CI
+
+[platform.py310]
+runs-on = "ubuntu-latest"
+matrix = { python = "3.10" }    # read by the leg's setup steps as matrix.python
+
+[check.integration]
+run = "..."
+stage = "merge"
+on = ["linux", "windows"]
+job = "integration"             # its own leg on each platform: linux/integration, ...
+timeout = "30m"                 # stopped and failed past it
+```
+
+Call the reusable workflow, and require its `gate` job:
+
+```yaml
+jobs:
+  proof:
+    uses: fearlezz-dev/fearlezz/.github/workflows/prove.yml@v0
+    with:
+      devenv: true
+```
+
+A leg that needs its own setup steps uses the action in the project's own three jobs:
+
+```yaml
+permissions:
+  contents: read
+  actions: read     # a pull request reuses passes from its base commit's proof
+  id-token: write
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      legs: ${{ steps.plan.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: plan
+        uses: fearlezz-dev/fearlezz@v0
+        with:
+          plan: true
+  leg:
+    needs: plan
+    if: needs.plan.outputs.legs != '[]'
+    name: leg ${{ matrix.leg }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.legs) }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - if: matrix.python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: fearlezz-dev/fearlezz@v0
+        with:
+          leg: ${{ toJSON(matrix) }}
+  gate:
+    needs: [plan, leg]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: fearlezz-dev/fearlezz@v0
+        with:
+          gate: true
+```
+
+The plan (`fearlezz run --ci --plan`) prints the legs for `matrix.include`. Each leg (`--leg`) runs its own checks and keeps its bundle. The gate (`--gate`) combines them into one proof with one job summary: a leg that failed, was cancelled or never ran leaves the commit not proven, and the gate alone judges what the change weakens. Dropping a platform from a check's `on`, or giving a platform another runner, weakens the proof.
+
+A pull request reuses a check's pass from the proof its base commit's push kept, when the check read the same inputs on the same platform, so a change runs only the checks its inputs reach; the summary marks those `reused`. A push proves everything fresh, so a check whose `inputs` leave out a file it reads is caught on the base branch. Locally a check runs once, unless every platform it is on names another `os`.
+
 ## License
 
 The code in `crates/` is available under either the [MIT](LICENSE-MIT) or the [Apache 2.0](LICENSE-APACHE) license, at your option.

@@ -13,6 +13,7 @@ mod hooks;
 mod host;
 mod init;
 mod journal;
+mod legs;
 mod lints;
 mod look;
 mod media;
@@ -106,7 +107,7 @@ enum Cmd {
         /// Prove this commit, for CI: every check, fresh, with no journal. It writes nothing
         /// to GitHub; on GitHub Actions it writes the job summary, and sends the proof to the
         /// proof host when the job may ask for an OIDC token.
-        #[arg(long, conflicts_with_all = ["checks", "stage"])]
+        #[arg(long, conflicts_with = "stage")]
         ci: bool,
         /// With --ci: also write everything the run showed into this folder: `proof.json`
         /// with each check's output and every picture beside it, before and after.
@@ -117,6 +118,23 @@ enum Cmd {
         /// a half done release.
         #[arg(long, conflicts_with_all = ["checks", "stage", "ci", "fresh"])]
         release: bool,
+        /// With --ci: print the legs a matrix runs, one per platform and job, as JSON for
+        /// GitHub's `matrix.include`; a pull request leaves out what --reuse shows still holds.
+        #[arg(long, requires = "ci", conflicts_with_all = ["leg", "gate", "proof", "checks"])]
+        plan: bool,
+        /// With --ci: run one leg of the plan, by id or by its plan entry (`toJSON(matrix)`),
+        /// only the named checks of it when checks are named. The gate judges what the change
+        /// weakens.
+        #[arg(long, value_name = "LEG", requires = "ci", conflicts_with = "gate")]
+        leg: Option<String>,
+        /// With --ci: combine the bundles of every leg (each a folder in DIR) into one proof,
+        /// the required check: a leg that did not finish is not proven.
+        #[arg(long, value_name = "DIR", requires = "ci", conflicts_with = "checks")]
+        gate: Option<PathBuf>,
+        /// With --plan or --gate: the bundle of the base commit's CI proof, whose passes a pull
+        /// request reuses for checks that read the same inputs on the same platform.
+        #[arg(long, value_name = "DIR", requires = "ci", conflicts_with = "leg")]
+        reuse: Option<PathBuf>,
     },
     /// Tell: record what only you know, such as a note or a question.
     Say {
@@ -302,7 +320,7 @@ fn prepared() -> Result<Ctx> {
 
 /// Proves this commit for CI. On GitHub Actions it installs ffmpeg when checks take pictures
 /// and names the pull request the event is for; it writes nothing to GitHub.
-fn ci_run(proof: Option<PathBuf>) -> Result<bool> {
+fn ci_run(proof: Option<PathBuf>, leg: Option<legs::Asked>) -> Result<bool> {
     let workflow = action::Workflow::read();
     let ctx = prepared()?;
     if workflow.actions
@@ -325,7 +343,165 @@ fn ci_run(proof: Option<PathBuf>) -> Result<bool> {
     let mut journal = Journal::in_memory("ci");
     let to = ctx.config.stages.name(ctx.config.stages.last()).to_string();
     journal.append(ctx.now, Event::Stage { to, reason: None })?;
-    run_checks(&ctx, journal, &[], true, Some(CiOut { proof, workflow }))
+    run_checks(
+        &ctx,
+        journal,
+        &[],
+        true,
+        Some(CiOut {
+            proof,
+            workflow,
+            leg,
+        }),
+    )
+}
+
+/// Prints the legs a matrix runs, as JSON for GitHub's `matrix.include`. A pull request leaves
+/// out each check whose pass the base commit's CI proof shows for the same inputs on the same
+/// platform, and every leg left with nothing to run.
+fn ci_plan(reuse: Option<&Path>) -> Result<bool> {
+    let workflow = action::Workflow::read();
+    let ctx = ctx()?;
+    let mut wt = ctx.worktree()?;
+    let reuse = legs::Reuse::read(reuse, workflow.pull().is_some())?;
+    let mut planned = Vec::new();
+    for mut leg in legs::legs(&ctx.config) {
+        if let Some(reuse) = &reuse {
+            let platform = leg.platform_name();
+            let mut keep = Vec::new();
+            for check in leg.checks {
+                let key = wt.inputs(check)?.key;
+                if reuse.pass(&check.id, platform.as_deref(), &key).is_none() {
+                    keep.push(check);
+                }
+            }
+            leg.checks = keep;
+        }
+        if !leg.checks.is_empty() {
+            planned.push(leg);
+        }
+    }
+    let ids: Vec<String> = planned.iter().map(|l| l.id.clone()).collect();
+    let entries: Vec<serde_json::Value> = planned.iter().map(|l| legs::entry(l, &ids)).collect();
+    // Output for a program: the JSON alone, with no next: line.
+    println!("{}", serde_json::to_string(&entries)?);
+    Ok(true)
+}
+
+/// Combines the bundles of every leg in `dir` into one proof of the commit: each check on each
+/// of its platforms from its leg, or reused from the base commit's CI proof by a pull request,
+/// and otherwise not proven. Judges what the change weakens, writes the bundle when asked and
+/// the job summary GitHub Actions names.
+fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<bool> {
+    use std::io::Write as _;
+    let workflow = action::Workflow::read();
+    let ctx = ctx()?;
+    let mut wt = ctx.worktree()?;
+    let reuse = legs::Reuse::read(reuse, workflow.pull().is_some())?;
+    let found = legs::read_legs(dir)?;
+    let mut proof = ci_proof(&ctx, &workflow)?;
+    println!(
+        "commit {}: the gate over {} legs in {}",
+        proof.commit,
+        found.len(),
+        dir.display()
+    );
+    for leg in legs::legs(&ctx.config) {
+        let platform = leg.platform_name();
+        for check in &leg.checks {
+            let from_leg = found.iter().find_map(|l| {
+                l.proof
+                    .checks
+                    .iter()
+                    .find(|c| c.id == check.id && c.platform == platform)
+                    .map(|c| legs::from_leg(l, c))
+            });
+            let entry = match from_leg {
+                Some(entry) => entry,
+                None => {
+                    let key = wt.inputs(check)?.key;
+                    match reuse
+                        .as_ref()
+                        .and_then(|r| r.pass(&check.id, platform.as_deref(), &key))
+                    {
+                        Some(entry) => entry,
+                        None => legs::missing(
+                            check,
+                            platform.as_deref(),
+                            ctx.config.stages.name(check.stage),
+                            &leg.id,
+                        ),
+                    }
+                }
+            };
+            println!("{} {}", entry.word(), entry.name());
+            proof.checks.push(entry);
+        }
+    }
+    for leg in &found {
+        proof.looks.extend(legs::looks_of(leg));
+    }
+    let floor = floor::Floor::read(&ctx.config, &wt)?;
+    proof.weakened.clone_from(&floor.weakened);
+    let gate = if floor.holds() {
+        floor::Gate::Job
+    } else {
+        gate_accept(&ctx, &found, &mut proof, &floor)
+    };
+    if let Some(dir) = &bundle {
+        proof::write(&proof, dir)?;
+    }
+    if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+        let summary = action::summary(&proof, None, &gate)?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(Path::new(&path))?
+            .write_all(summary.as_bytes())?;
+    }
+    let blockers = proof.blockers();
+    // What weakens is said below, with how it gets past.
+    let weakened: Vec<String> = proof.weakened.iter().map(|w| w.what()).collect();
+    for item in blockers.iter().filter(|i| !weakened.contains(&i.what)) {
+        println!("blocked: {}: {}", item.what, item.why);
+        println!("  fix: {}", item.fix);
+    }
+    for line in floor.lines(&gate) {
+        println!("{line}");
+    }
+    println!("next: {}", state::COMMIT_PROVEN);
+    Ok(blockers.is_empty())
+}
+
+/// Where what a split proof weakens gets past: an admin's accept of exactly it at the head, as
+/// the host answers it through the run of a leg that streamed to it. Without such a leg the
+/// gate fails as without a host.
+fn gate_accept(
+    ctx: &Ctx,
+    found: &[legs::LegProof],
+    proof: &mut proof::Proof,
+    floor: &floor::Floor,
+) -> floor::Gate {
+    let run = found
+        .iter()
+        .find_map(|l| std::fs::read_to_string(l.dir.join(legs::HOST_RUN)).ok());
+    let (Some(run), Some(host)) = (run, host::Host::from_actions(ctx.config.host.as_deref()))
+    else {
+        return floor::Gate::Job;
+    };
+    match host.resume(run.trim()).accepted(&floor.weakened) {
+        Ok(accepted) => match accepted.filter(|a| a.covers(&proof.head, &floor.weakened)) {
+            Some(accept) => {
+                proof.accepted = Some(accept.clone());
+                floor::Gate::Accepted(accept)
+            }
+            None => floor::Gate::Host,
+        },
+        Err(e) => {
+            println!("proof host not asked: {e:#}");
+            floor::Gate::Unasked
+        }
+    }
 }
 
 /// Publishes the release to every place that does not have it yet, inside the checkout's
@@ -374,9 +550,26 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
             ci,
             proof,
             release,
+            plan,
+            leg,
+            gate,
+            reuse,
         } => {
+            if plan {
+                return ci_plan(reuse.as_deref());
+            }
+            if let Some(dir) = gate {
+                return ci_gate(&dir, proof, reuse.as_deref());
+            }
             if ci {
-                return ci_run(proof);
+                let leg = match leg {
+                    Some(arg) => Some(legs::Asked::read(&arg, checks)?),
+                    None if checks.is_empty() => None,
+                    None => bail!(
+                        "--ci proves every check; to run some of them, name the leg they are in                          with --leg"
+                    ),
+                };
+                return ci_run(proof, leg);
             }
             if release {
                 return release_run();
@@ -831,6 +1024,8 @@ struct Report {
     bundle: Option<PathBuf>,
     /// Proving a commit for CI, not a local run.
     ci: bool,
+    /// The platform of the leg it runs, which names each of its checks.
+    platform: Option<String>,
 }
 
 /// What proving a commit for CI takes besides the checks.
@@ -839,50 +1034,72 @@ struct CiOut {
     proof: Option<PathBuf>,
     /// What GitHub Actions says of the run: the pull request and pages the proof names.
     workflow: action::Workflow,
+    /// The leg of a plan it runs, for a commit proven in several jobs.
+    leg: Option<legs::Asked>,
+}
+
+/// The proof of the commit CI checked out, before any check: the pull request's head merged
+/// into the base branch, or HEAD.
+fn ci_proof(ctx: &Ctx, workflow: &action::Workflow) -> Result<proof::Proof> {
+    let merge = ctx.git.head_short()?;
+    // A pull request's run proves the merge GitHub made of its head into the base branch;
+    // the head is the commit people know.
+    let full = workflow.head().map(str::to_string);
+    let short = full.as_ref().map(|sha| {
+        // A shallow checkout may lack the head itself.
+        ctx.git
+            .short(sha)
+            .unwrap_or_else(|_| sha.chars().take(7).collect())
+    });
+    let head = match full {
+        Some(sha) => sha,
+        None => ctx.git.head()?,
+    };
+    let commit = match short {
+        Some(head) if head != merge => {
+            format!("{head} (merged with {} as {merge})", ctx.config.base)
+        }
+        _ => merge,
+    };
+    Ok(proof::Proof {
+        repository: workflow.repository.clone(),
+        pull: workflow.pull(),
+        run_url: workflow.run_url.clone(),
+        ..proof::Proof::new(commit, head, ctx.config.base.clone())
+    })
 }
 
 impl Report {
-    fn start(ctx: &Ctx, wt: &Worktree, targets: &[&config::Check], out: CiOut) -> Result<Report> {
+    fn start(
+        ctx: &Ctx,
+        wt: &Worktree,
+        targets: &[&config::Check],
+        out: CiOut,
+        leg: Option<&legs::Leg<'_>>,
+    ) -> Result<Report> {
         let to_run = targets.len();
-        let merge = ctx.git.head_short()?;
-        // A pull request's run proves the merge GitHub made of its head into the base branch;
-        // the head is the commit people know.
-        let full = out.workflow.head().map(str::to_string);
-        let short = full.as_ref().map(|sha| {
-            // A shallow checkout may lack the head itself.
-            ctx.git
-                .short(sha)
-                .unwrap_or_else(|_| sha.chars().take(7).collect())
-        });
-        let head = match full {
-            Some(sha) => sha,
-            None => ctx.git.head()?,
-        };
-        let commit = match short {
-            Some(head) if head != merge => {
-                format!("{head} (merged with {} as {merge})", ctx.config.base)
-            }
-            _ => merge,
+        let mut proof = ci_proof(ctx, &out.workflow)?;
+        let of = match leg {
+            Some(leg) => format!("leg {}: ", leg.id),
+            None => String::new(),
         };
         println!(
-            "commit {commit}: {} changed files, {to_run} of {} checks to run",
+            "commit {}: {} changed files, {of}{to_run} of {} checks to run",
+            proof.commit,
             wt.changed.len(),
             ctx.config.checks.len()
         );
-        let proof = proof::Proof {
-            repository: out.workflow.repository.clone(),
-            pull: out.workflow.pull(),
-            run_url: out.workflow.run_url.clone(),
-            ..proof::Proof::new(commit, head, ctx.config.base.clone())
-        };
+        proof.leg = leg.map(|l| l.id.clone());
+        let planned = out.leg.map(|a| a.planned).unwrap_or_default();
         let stream = host::Host::from_actions(ctx.config.host.as_deref())
-            .and_then(|host| open_run(host, &proof, &out.workflow, targets));
+            .and_then(|host| open_run(host, &proof, &out.workflow, targets, &planned));
         Ok(Report {
             page: stream.as_ref().map(|s| s.url.clone()),
             stream,
             proof,
             bundle: out.proof,
             ci: true,
+            platform: leg.and_then(legs::Leg::platform_name),
         })
     }
 
@@ -938,6 +1155,7 @@ impl Report {
             proof,
             bundle: None,
             ci: false,
+            platform: None,
         }))
     }
 
@@ -948,7 +1166,8 @@ impl Report {
 
     /// A check could not run here.
     fn not_run(&mut self, check: &config::Check, stage: &str, why: &str) {
-        let entry = proof::not_run(check, stage, why);
+        let mut entry = proof::not_run(check, stage, why);
+        entry.platform.clone_from(&self.platform);
         self.stream_step(|s| s.finished(&entry, None));
         self.proof.checks.push(entry);
     }
@@ -991,7 +1210,8 @@ impl Report {
             println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
         }
         let failure = (result.outcome == Outcome::Failed).then(|| failure_item(result));
-        let entry = proof::ran(check, stage, result, failure);
+        let mut entry = proof::ran(check, stage, result, failure);
+        entry.platform.clone_from(&self.platform);
         self.stream_step(|s| s.finished(&entry, look));
         self.proof.checks.push(entry);
     }
@@ -1031,6 +1251,10 @@ impl Report {
         if let Some(dir) = &bundle {
             self.stream_step(|s| s.done(dir));
         }
+        // The gate of a split proof streams nothing; it asks the host through a leg's run.
+        if let (Some(dir), Some(stream), Some(_)) = (&self.bundle, &self.stream, &self.proof.leg) {
+            std::fs::write(dir.join(legs::HOST_RUN), stream.run())?;
+        }
         let gate = match self.proof.accepted.clone() {
             Some(accept) => floor::Gate::Accepted(accept),
             None if hosted && self.stream.is_some() => floor::Gate::Host,
@@ -1056,6 +1280,7 @@ fn open_run(
     proof: &proof::Proof,
     workflow: &action::Workflow,
     targets: &[&config::Check],
+    planned: &[String],
 ) -> Option<host::Stream> {
     let (Some(repository), Some(branch)) = (&workflow.repository, workflow.branch()) else {
         println!(
@@ -1083,6 +1308,8 @@ fn open_run(
             run_id: ci_job.run_id,
             run_attempt: ci_job.run_attempt,
             runner_name: ci_job.runner_name.clone(),
+            leg: proof.leg.clone(),
+            planned: planned.to_vec(),
         },
         checks: targets.iter().map(|c| c.id.clone()).collect(),
     };
@@ -1176,14 +1403,64 @@ fn run_checks(
     let stage = stages.name(before.stage).to_string();
     let final_stage = stages.name(stages.last()).to_string();
     let in_memory = j.is_in_memory();
-    let targets = targets(ctx, &before, ids, in_memory)?;
+    let leg = match out.as_ref().and_then(|o| o.leg.as_ref()) {
+        Some(asked) => Some(legs::leg(&ctx.config, &asked.id, &asked.checks)?),
+        None => None,
+    };
+    // A leg proves its platform only on a machine that fits it.
+    if let Some(p) = leg
+        .as_ref()
+        .and_then(|l| l.platform)
+        .filter(|p| !p.fits_here())
+        && let Some(os) = &p.os
+    {
+        bail!(
+            "leg {} needs {os}, and this machine runs {}; give platform {} a runner of {os} \
+             (runs-on)",
+            leg.as_ref().map_or("", |l| l.id.as_str()),
+            std::env::consts::OS,
+            p.name
+        );
+    }
+    let mut targets = match &leg {
+        Some(leg) => leg.checks.clone(),
+        None => targets(ctx, &before, ids, in_memory)?,
+    };
+    // Outside a leg, a check this machine can stand in for none of the platforms of is left
+    // to CI, where its leg proves it.
+    // CI without a leg cannot prove them: each is not proven.
+    let mut left_out = Vec::new();
+    if leg.is_none() {
+        targets.retain(|check| legs::left_to_ci(&ctx.config, check).is_none());
+        let due = ctx.config.checks.iter().filter(|c| {
+            (in_memory || c.stage <= before.stage) && (ids.is_empty() || ids.contains(&c.id))
+        });
+        for check in due {
+            if let Some(on) = legs::left_to_ci(&ctx.config, check) {
+                if out.is_some() {
+                    for platform in &on {
+                        let entry = legs::left_out(check, platform, stages.name(check.stage));
+                        if let Some(item) = &entry.failure {
+                            println!("blocked: {}: {}", item.what, item.why);
+                            println!("  fix: {}", item.fix);
+                        }
+                        left_out.push(entry);
+                    }
+                } else {
+                    println!("left to CI {}: runs on {}", check.id, on.join(", "));
+                }
+            }
+        }
+    }
+    let proven_here = left_out.is_empty();
     // A full run at the final stage answers for the whole work, and for what the base
-    // branch requires, not only for its checks.
+    // branch requires, not only for its checks; for a leg, the gate does.
     let floor = if ids.is_empty() && stage == final_stage {
         floor::Floor::read(&ctx.config, &wt)?
     } else {
         floor::Floor::default()
     };
+    let in_leg = leg.is_some();
     let answers_for_work = !in_memory && ids.is_empty() && stage == final_stage;
     // The floor holds when nothing weakens, or when an admin accepted on the proof host
     // exactly what weakens at this head (the gate the commit report answers).
@@ -1201,16 +1478,26 @@ fn run_checks(
     };
     let finish = |report: Option<Report>| -> Result<bool> {
         let gate = report.map_or(Ok(floor::Gate::Job), |r| r.finish(&floor))?;
+        // A leg's proof names what the change weakens, so the host shows it; the gate judges.
+        if in_leg {
+            if !floor.holds() {
+                println!("the gate judges what the change weakens");
+            }
+            return Ok(true);
+        }
         for line in floor.lines(&gate) {
             println!("{line}");
         }
         Ok(floor.holds_at(&gate))
     };
     let mut report = match out {
-        Some(out) => Some(Report::start(ctx, &wt, &targets, out)?),
+        Some(out) => Some(Report::start(ctx, &wt, &targets, out, leg.as_ref())?),
         None if targets.is_empty() => None,
         None => Report::local(ctx, &targets)?,
     };
+    if let Some(r) = report.as_mut() {
+        r.proof.checks.extend(left_out);
+    }
     if targets.is_empty() {
         // Every check waits in a later stage: say where.
         let later = (ids.is_empty() && !in_memory)
@@ -1239,7 +1526,7 @@ fn run_checks(
             }
             _ => println!("next: {}", next_line(&before, floor_holds)),
         }
-        return Ok(settled(&before, floor_holds));
+        return Ok(proven_here && settled(&before, floor_holds));
     }
 
     let clock = std::time::Instant::now();
@@ -1420,7 +1707,11 @@ fn run_checks(
     } else {
         println!("next: {}", next_line(&after, floor_holds));
     }
-    Ok(failures.is_empty() && cannot_record == 0 && !red_blocks && settled(&after, floor_holds))
+    Ok(proven_here
+        && failures.is_empty()
+        && cannot_record == 0
+        && !red_blocks
+        && settled(&after, floor_holds))
 }
 
 /// Runs each green check that reads changed test files on the base commit with those files,
