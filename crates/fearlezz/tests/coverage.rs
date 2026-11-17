@@ -1,5 +1,7 @@
-//! Coverage: a test check that reads its coverage report flags each line the change touched
-//! that no test ran, judged like any finding. Old untested code never counts.
+//! Coverage: a test check that reads its coverage report finds each line the change touched
+//! that no test ran, judged like any finding. Old untested code never counts. How strict it is
+//! follows the project's coverage: under the target (80%) a change must test that share of its
+//! lines or it blocks; at or above it more tests add little, so untested lines are only hints.
 
 // Clippy applies its test allowances (unwrap, expect, panic) only to cfg(test) code.
 #![cfg(test)]
@@ -35,7 +37,13 @@ tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }
 coverage = "lcov"
 "#;
 
+/// A project at 67%: two of its three lines ran.
 const OLD: &str = "one\nmiss from long ago\nthree\n";
+
+/// The same runner, with a fixed level for every uncovered line, for tests of what is read.
+fn flagged() -> String {
+    format!("{LCOV}\n[lints.coverage]\nuncovered = \"flag\"\n")
+}
 
 fn feature(config: &str, files: &[(&str, &str)]) -> Repo {
     let repo = Repo::new(config, files);
@@ -45,8 +53,8 @@ fn feature(config: &str, files: &[(&str, &str)]) -> Repo {
 }
 
 #[test]
-fn changed_lines_no_test_ran_are_flagged() {
-    let repo = feature(LCOV, &[("src/a.txt", OLD)]);
+fn changed_lines_no_test_ran_are_found_in_runs() {
+    let repo = feature(&flagged(), &[("src/a.txt", OLD)]);
     repo.write(
         "src/a.txt",
         &format!("{OLD}four\nmiss one\nskip\nmiss two\nfive\nmiss three\n"),
@@ -128,6 +136,7 @@ fn a_report_left_by_an_earlier_run_is_not_read() {
             "stage = \"working\"",
             "stage = \"working\"\nenv = [\"COVER\"]",
         );
+    let config = format!("{config}\n[lints.coverage]\nuncovered = \"flag\"\n");
     let repo = feature(&config, &[("src/a.txt", OLD), ("coverage/.keep", "")]);
     repo.write("src/a.txt", &format!("{OLD}miss new\n"));
     let first = repo.fz(&["run", "tests"]);
@@ -163,7 +172,7 @@ fn reading_coverage_another_way_runs_the_check_again() {
 
 #[test]
 fn a_report_from_a_project_folder_names_files_from_there() {
-    let config = LCOV
+    let config = flagged()
         .replace("for f in src/*.txt", "for f in lib/*.txt")
         .replace("test ! -e src/fail", "true")
         .replace(
@@ -198,6 +207,9 @@ echo "--- PASS: TestA"
 stage = "working"
 tests = { count = '(?m)^\s*--- (?:PASS|FAIL):' }
 coverage = "go"
+
+[lints.coverage]
+uncovered = "flag"
 "#;
     let old = "package pkg\n\nfunc A() {\n}\n";
     let repo = feature(
@@ -242,6 +254,9 @@ echo "--- PASS: FooTest"
 stage = "working"
 tests = { count = '(?m)^\s*--- (?:PASS|FAIL):' }
 coverage = "jacoco"
+
+[lints.coverage]
+uncovered = "flag"
 "#;
 
 /// JaCoCo names source files by package, found under any source folder.
@@ -357,4 +372,130 @@ off = true
     repo.write("a.go", "package a\n\nfunc A() {}\n");
     let out = repo.fz(&["run", "go-test"]);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+}
+
+#[test]
+fn under_the_target_a_mostly_untested_change_blocks() {
+    let repo = feature(LCOV, &[("src/a.txt", OLD)]);
+    repo.write("src/a.txt", &format!("{OLD}four\nmiss one\nmiss two\n"));
+    let out = repo.fz(&["run", "tests"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("gate src/a.txt:5  uncovered  changed lines 5 to 6 ran in no test"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains(
+            "why: the project is at 50% and this change tests 1 of its 3 lines; under 80%, a \
+             change must test 80% of its lines"
+        ),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn under_the_target_a_mostly_tested_change_is_flagged() {
+    // Two of seven lines ran; with the change, eleven of seventeen.
+    let low = format!("{OLD}{}", "miss old\n".repeat(4));
+    let repo = feature(LCOV, &[("src/a.txt", &low)]);
+    let tested = "ran\n".repeat(9);
+    repo.write("src/a.txt", &format!("{low}{tested}miss new\n"));
+    let out = repo.fz(&["run", "tests"]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("flag src/a.txt:17  uncovered"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn at_the_target_untested_lines_are_only_hints() {
+    let high = format!("{}miss from long ago\n", "ran\n".repeat(20));
+    let repo = feature(LCOV, &[("src/a.txt", &high)]);
+    repo.write("src/a.txt", &format!("{high}miss new\nmiss two\n"));
+    let out = repo.fz(&["run", "tests"]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("hint src/a.txt:22  uncovered"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("why: the project is at 86%; above 80% more tests add little"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_check_sets_its_own_target() {
+    let config = LCOV.replace(
+        "coverage = \"lcov\"",
+        "coverage = { read = \"lcov\", target = 50 }",
+    );
+    let repo = feature(&config, &[("src/a.txt", OLD)]);
+    repo.write("src/a.txt", &format!("{OLD}miss new\n"));
+    let out = repo.fz(&["run", "tests"]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("hint src/a.txt:4  uncovered"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_changed_test_file_is_not_measured() {
+    let config = LCOV.replace(
+        "coverage = \"lcov\"",
+        "coverage = \"lcov\"\ntest_files = [\"src/*_test.txt\"]",
+    );
+    let repo = feature(&config, &[("src/a.txt", OLD), ("src/a_test.txt", "ran\n")]);
+    repo.write("src/a_test.txt", "ran\nmiss helper\n");
+    let out = repo.fz(&["run", "tests"]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains("uncovered"), "{}", out.stdout);
+}
+
+#[test]
+fn lowering_the_target_weakens_the_proof() {
+    let repo = Repo::new(LCOV, &[("src/a.txt", OLD)]);
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace(
+            "coverage = \"lcov\"",
+            "coverage = { read = \"lcov\", target = 60 }",
+        ),
+    );
+    repo.commit("lower the target");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("weakens tests: its coverage target is lower (80%, now 60%)"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn ci_shows_what_was_measured() {
+    let repo = Repo::new(LCOV, &[("src/a.txt", OLD)]);
+    repo.branch("feat/x");
+    repo.write("src/a.txt", &format!("{OLD}four\nmiss one\nmiss two\n"));
+    repo.commit("feat: more");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(
+        out.stdout
+            .contains("  1 test  coverage 50%, 1 of 3 changed lines  "),
+        "{}",
+        out.stdout
+    );
 }

@@ -102,9 +102,17 @@ pub(crate) fn execute(
         findings_elsewhere = verdict.elsewhere;
     }
     // Coverage adds findings but never excuses a failed run: only a gate of its own fails it.
+    let mut measured = None;
     if let Some(coverage) = &check.coverage {
-        match coverage.findings(&dir, at.root, check.dir.as_deref(), started, at.changed) {
-            Ok(found) => {
+        let report = crate::coverage::At {
+            out: &dir,
+            root: at.root,
+            folder: check.dir.as_deref(),
+            since: started,
+        };
+        match coverage.findings(&report, at.changed, |p| check.is_test(p)) {
+            Ok((found, m)) => {
+                measured = Some(m);
                 passed &= !found
                     .iter()
                     .any(|f| f.level == crate::findings::Level::Gate);
@@ -159,6 +167,7 @@ pub(crate) fn execute(
         proof_errors,
         findings,
         findings_elsewhere,
+        coverage: measured,
         tests,
         cases,
         missing_secret,

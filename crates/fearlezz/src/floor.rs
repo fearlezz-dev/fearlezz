@@ -258,7 +258,7 @@ fn names_diff(base: &[String], head: &[String]) -> String {
 }
 
 /// What the head's check measures of coverage less than the base's: none at all, another
-/// report format, or a lower level for `[lints.coverage]`.
+/// report format, a lower target, or a lower level for `[lints.coverage]`.
 fn coverage(b: &config::Check, h: &config::Check) -> Vec<(Part, String)> {
     let part = || Part::Check(b.id.clone());
     match (&b.coverage, &h.coverage) {
@@ -271,11 +271,20 @@ fn coverage(b: &config::Check, h: &config::Check) -> Vec<(Part, String)> {
                 bc.read.name()
             ),
         )],
-        (Some(bc), Some(hc)) => settings(
-            bc.levels
-                .weakenings(&hc.levels, crate::lints::Tool::Coverage),
-        )
-        .collect(),
+        (Some(bc), Some(hc)) => (hc.target < bc.target)
+            .then(|| {
+                let how = format!(
+                    "its coverage target is lower ({}%, now {}%)",
+                    bc.target, hc.target
+                );
+                (part(), how)
+            })
+            .into_iter()
+            .chain(settings(
+                bc.levels
+                    .weakenings(&hc.levels, crate::lints::Tool::Coverage),
+            ))
+            .collect(),
         (None, _) => Vec::new(),
     }
 }

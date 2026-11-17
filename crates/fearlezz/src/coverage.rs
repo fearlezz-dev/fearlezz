@@ -1,8 +1,13 @@
 //! Coverage: which lines the change touched ran in no test, read from the report a test
 //! runner writes while it tests. Each run of such lines is a finding of the rule `uncovered`,
-//! a flag unless `[lints.coverage]` says otherwise, so old untested code never counts and new
-//! untested code is always shown. A test check declares it with `coverage`; it never decides
-//! whether the tests passed.
+//! so old untested code never counts and new untested code is always shown. A test check
+//! declares it with `coverage`; it never makes a failed test run pass.
+//!
+//! How strict it is follows the project's coverage, against a target (80% unless the check
+//! says otherwise): more tests add little above it, and tests written only to reach a number
+//! prove nothing. At or above the target untested lines are hints. Under it, a change that
+//! tests the target's share of its lines gets flags; one that does not is blocked. A level in
+//! `[lints.coverage]` replaces this. Test files are never measured.
 //!
 //! Three report formats cover every language piece: lcov (Rust through cargo-llvm-cov,
 //! Vitest, Bun, Flutter, coverage.py), JaCoCo XML (Kotlin through Kover) and Go's
@@ -15,40 +20,145 @@ use std::time::SystemTime;
 use anyhow::{Context as _, Result, bail};
 use globset::{GlobBuilder, GlobMatcher};
 
+use serde::{Deserialize, Serialize};
+
 use crate::findings::{Changed, Finding, Level};
 use crate::lints::{Lints, Tool};
 
-/// A check's coverage: where its report is, and the `[lints.coverage]` table.
+/// The share of lines, in percent, past which more tests add little.
+const TARGET: u8 = 80;
+
+/// A check's coverage: where its report is, its target, and the `[lints.coverage]` table.
 #[derive(Clone, Debug)]
 pub(crate) struct Coverage {
     pub read: Reader,
+    pub target: u8,
     pub levels: Lints,
 }
 
-impl Coverage {
-    /// From the check's `coverage`, if any; `false` turns off what a piece measures.
-    pub(crate) fn parse(raw: Option<&toml::Value>, lints: &Lints) -> Result<Option<Coverage>> {
-        match raw {
-            None | Some(toml::Value::Boolean(false)) => Ok(None),
-            Some(raw) => Ok(Some(Coverage {
-                read: Reader::parse(raw)?,
-                levels: lints.only(&[Tool::Coverage]),
-            })),
-        }
+/// Lines a test could run, and how many of them ran: of the project, and of the lines the
+/// change added or modified. Test files count in neither.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Measured {
+    pub lines: u64,
+    pub covered: u64,
+    pub changed_lines: u64,
+    pub changed_covered: u64,
+}
+
+impl Measured {
+    /// The project's share, rounded down, so it is never shown above what it is.
+    pub(crate) fn percent(self) -> u64 {
+        (self.covered * 100).checked_div(self.lines).unwrap_or(100)
     }
 
-    /// The changed lines no test ran, at the level `[lints.coverage]` gives them.
+    /// `coverage 62%, 9 of 12 changed lines`, as a run's line shows it.
+    pub(crate) fn summary(self) -> String {
+        format!(
+            "coverage {}%, {} of {} changed lines",
+            self.percent(),
+            self.changed_covered,
+            self.changed_lines
+        )
+    }
+
+    /// The level of an untested changed line, and why.
+    fn level(self, target: u8) -> (Level, String) {
+        let target = u64::from(target);
+        let meets = |covered: u64, lines: u64| covered * 100 >= target * lines;
+        let project = self.percent();
+        let (covered, lines) = (self.changed_covered, self.changed_lines);
+        if meets(self.covered, self.lines) {
+            (
+                Level::Hint,
+                format!(
+                    "the project is at {project}%; above {target}% more tests add little, so test \
+                     this only when it matters"
+                ),
+            )
+        } else if meets(covered, lines) {
+            (
+                Level::Flag,
+                format!(
+                    "the project is at {project}% and this change tests {covered} of its {lines} \
+                     lines; it meets {target}%, which the project does not yet"
+                ),
+            )
+        } else {
+            (
+                Level::Gate,
+                format!(
+                    "the project is at {project}% and this change tests {covered} of its {lines} \
+                     lines; under {target}%, a change must test {target}% of its lines"
+                ),
+            )
+        }
+    }
+}
+
+impl Coverage {
+    /// From the check's `coverage`, if any: a reader (`"lcov"`, `{ lcov = "<glob>" }`), or
+    /// a table with `read` or a reader's glob and a `target`. `false` turns off what a piece
+    /// measures.
+    pub(crate) fn parse(raw: Option<&toml::Value>, lints: &Lints) -> Result<Option<Coverage>> {
+        let (read, target) = match raw {
+            None | Some(toml::Value::Boolean(false)) => return Ok(None),
+            Some(toml::Value::Table(t)) => {
+                let mut t = t.clone();
+                let target = match t.remove("target") {
+                    None => TARGET,
+                    Some(toml::Value::Integer(n)) => u8::try_from(n)
+                        .ok()
+                        .filter(|n| *n <= 100)
+                        .with_context(|| format!("coverage target = {n}: a share from 0 to 100"))?,
+                    Some(v) => bail!("coverage target = {v}: a share from 0 to 100"),
+                };
+                let read = match t.remove("read") {
+                    Some(read) if t.is_empty() => read,
+                    Some(_) => {
+                        bail!("coverage: name the reader with read or with its glob, not both")
+                    }
+                    None => toml::Value::Table(t),
+                };
+                (read, target)
+            }
+            Some(raw) => (raw.clone(), TARGET),
+        };
+        Ok(Some(Coverage {
+            read: Reader::parse(&read)?,
+            target,
+            levels: lints.only(&[Tool::Coverage]),
+        }))
+    }
+
+    /// The changed lines no test ran, at the level the project's coverage gives them (or
+    /// `[lints.coverage]` does), and what was measured. `tests` says which files are tests.
     pub(crate) fn findings(
         &self,
-        out: &Path,
-        root: &Path,
-        folder: Option<&str>,
-        since: SystemTime,
+        at: &At<'_>,
         changed: &Changed,
-    ) -> Result<Vec<Finding>, String> {
-        let found = self.read.uncovered(out, root, folder, since, changed)?;
-        Ok(self.levels.apply(&[Tool::Coverage], found))
+        tests: impl Fn(&str) -> bool,
+    ) -> Result<(Vec<Finding>, Measured), String> {
+        let mut hits = self.read.hits(at, changed)?;
+        hits.retain(|file, _| !tests(file));
+        let measured = measure(&hits, changed);
+        let (level, why) = measured.level(self.target);
+        let mut found = findings(&hits, changed);
+        for f in &mut found {
+            f.level = level;
+            f.why = Some(why.clone());
+        }
+        Ok((self.levels.apply(&[Tool::Coverage], found), measured))
     }
+}
+
+/// Where a run left its report: its `$FEARLEZZ_OUT`, the checkout, the folder the check ran
+/// in if not the root, and when the run started, since a report from an earlier run is stale.
+pub(crate) struct At<'a> {
+    pub out: &'a Path,
+    pub root: &'a Path,
+    pub folder: Option<&'a str>,
+    pub since: SystemTime,
 }
 
 /// The rule every coverage finding has, as `[lints.coverage]` names it.
@@ -85,7 +195,9 @@ impl std::fmt::Debug for Reader {
     }
 }
 
-/// Covered lines per repository path: how often each measured line ran.
+/// Covered lines per repository path: how often each measured line ran. A JaCoCo source file
+/// the change did not touch is kept under its package path after a NUL, so it counts toward
+/// the project but never names a file.
 type Hits = BTreeMap<String, BTreeMap<u32, u64>>;
 
 impl Reader {
@@ -129,17 +241,14 @@ impl Reader {
             .map_or("", |(n, ..)| n)
     }
 
-    /// The changed lines no test ran, as flag findings, or why there is no coverage. `out` is
-    /// the run's `$FEARLEZZ_OUT`, `root` the checkout, `folder` the one the check ran in, if
-    /// not the root, and `since` when the run started: a report from an earlier run is stale.
-    pub(crate) fn uncovered(
-        &self,
-        out: &Path,
-        root: &Path,
-        folder: Option<&str>,
-        since: SystemTime,
-        changed: &Changed,
-    ) -> Result<Vec<Finding>, String> {
+    /// How often each measured line ran, or why there is no coverage.
+    fn hits(&self, at: &At<'_>, changed: &Changed) -> Result<Hits, String> {
+        let At {
+            out,
+            root,
+            folder,
+            since,
+        } = *at;
         // A check in a project folder looks there, so a sibling's report is never read.
         let folder_root = folder.map(|f| root.join(f));
         let base = if self.glob.starts_with("$FEARLEZZ_OUT/") {
@@ -179,7 +288,7 @@ impl Reader {
                 self.name()
             ));
         }
-        Ok(findings(&hits, changed))
+        Ok(hits)
     }
 }
 
@@ -327,7 +436,7 @@ fn jacoco(text: &str, report: &Path, root: &Path, changed: &Changed, hits: &mut 
             } else {
                 format!("{package}/{name}")
             };
-            file = source(&suffix, report, root, changed);
+            file = Some(source(&suffix, report, root, changed).unwrap_or(format!("\0{suffix}")));
         } else if tag == "/sourcefile" {
             file = None;
         } else if let (Some(f), true) = (&file, tag.starts_with("line ")) {
@@ -377,6 +486,23 @@ fn source(suffix: &str, report: &Path, root: &Path, changed: &Changed) -> Option
         .map(|p| (*p).to_string())
 }
 
+/// What a report measured of the project and of the change.
+fn measure(hits: &Hits, changed: &Changed) -> Measured {
+    let mut m = Measured::default();
+    for (file, lines) in hits {
+        for (&n, &count) in lines {
+            let ran = u64::from(count > 0);
+            m.lines += 1;
+            m.covered += ran;
+            if changed.has_line(file, n) {
+                m.changed_lines += 1;
+                m.changed_covered += ran;
+            }
+        }
+    }
+    m
+}
+
 /// A finding per run of changed lines no test ran. Lines that are not code (blank, a
 /// comment) neither break a run nor join one; a covered or unchanged line ends it.
 fn findings(hits: &Hits, changed: &Changed) -> Vec<Finding> {
@@ -402,7 +528,7 @@ fn uncovered(file: &str, from: u32, to: u32) -> Finding {
         file: file.to_string(),
         line: from,
         end_line: (to > from).then_some(to),
-        level: Level::Flag,
+        level: Level::Gate,
         rule: RULE.into(),
         message: if to > from {
             format!("changed lines {from} to {to} ran in no test")

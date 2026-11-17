@@ -218,18 +218,26 @@ A failed check names each test that failed, from its JUnit reports or its `faile
 
 ## Coverage
 
-A test check that measures coverage names its report with `coverage`. Each run of lines this change added or changed that no test ran is a finding of the rule `uncovered`, a flag: add a test that reaches the code through what it should do, or delete the code. Old untested code never counts, and coverage never makes a failing test run pass. A run that writes no report fails. The go, bun and flutter pieces measure it; the rust, vitest, python and kotlin pieces show the line that turns it on.
+A test check that measures coverage names its report with `coverage`. Each run of lines this change added or changed that no test ran is a finding of the rule `uncovered`. Old untested code never counts, test files are never measured, coverage never makes a failing test run pass, and a run that writes no report fails. The go, bun and flutter pieces measure it; the rust, vitest, python and kotlin pieces show the line that turns it on.
+
+How strict it is follows the project's coverage against a target, 80% unless the check sets one, since more tests add little above it:
+
+- project at or above the target: untested lines are hints
+- project under it, the change tests at least the target's share of its lines: flags
+- project under it, the change tests less: gates
+
+Never write a test only to reach a number: test what the code should do, or delete code nothing needs.
 
 ```toml
-coverage = "lcov"                                          # $FEARLEZZ_OUT/lcov.info (cargo llvm-cov, Vitest, Bun, Flutter, pytest-cov)
-coverage = "go"                                            # $FEARLEZZ_OUT/cover.out (go test -coverprofile)
-coverage = { jacoco = "**/build/reports/kover/report.xml" } # JaCoCo XML anywhere this run wrote it (Kover)
+coverage = "lcov"                                           # $FEARLEZZ_OUT/lcov.info (cargo llvm-cov, Vitest, Bun, Flutter, pytest-cov)
+coverage = "go"                                             # $FEARLEZZ_OUT/cover.out (go test -coverprofile)
+coverage = { jacoco = "**/build/reports/kover/report.xml" }  # JaCoCo XML anywhere this run wrote it (Kover)
+coverage = { read = "lcov", target = 70 }                   # another target
+coverage = false                                            # turn off what a piece measures
 
 [lints.coverage]
-uncovered = "gate"   # to make untested changes block
+uncovered = "flag"   # one level, whatever the coverage
 ```
-
-`coverage = false` turns off what a piece measures, for a check whose command writes no report.
 
 ## Red before green
 

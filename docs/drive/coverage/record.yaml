@@ -23,6 +23,11 @@ pieces:
 decided:
   - id: flag-by-default
     what: uncovered changed code is flagged, not gated; a project raises it with [lints.coverage] uncovered = "gate"
+    why: replaced by tiered-by-target
+  - id: tiered-by-target
+    what: above 80% more coverage has diminishing returns, so be stricter at low coverage and relaxed at high coverage, without bullshit tests; project at or above the target hints, under it a change that tests 80% of its lines flags, else gates
+  - id: test-files-unmeasured
+    what: test files count in neither number and get no findings, so red before green on the base never gates on a test helper
   - id: on-where-free
     what: go, bun and flutter measure coverage by default; rust, vitest, python and kotlin show the opt in line
   - id: off-switch

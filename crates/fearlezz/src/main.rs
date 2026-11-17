@@ -1242,8 +1242,12 @@ impl Report {
             Some(n) => format!("  {n} tests"),
             None => String::new(),
         };
+        let coverage = result
+            .coverage
+            .map(|m| format!("  {}", m.summary()))
+            .unwrap_or_default();
         if self.ci {
-            println!("{word} {}  {secs:.1} s{tests}  {run}", check.id);
+            println!("{word} {}  {secs:.1} s{tests}{coverage}  {run}", check.id);
         }
         let failure = (result.outcome == Outcome::Failed).then(|| failure_item(result));
         let mut entry = proof::ran(check, stage, result, failure);
