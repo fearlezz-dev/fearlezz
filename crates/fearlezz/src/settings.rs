@@ -1510,7 +1510,7 @@ avoid_print = false
     #[test]
     fn an_unknown_tool_says_which_exist() {
         let table: Table = toml::from_str("[clipy]\npedantic = \"warn\"\n").unwrap();
-        let e = Settings::parse(table, Lints::default(), &std::collections::BTreeSet::new())
+        let e = Settings::parse(table, Lints::default(), &BTreeSet::new())
             .unwrap_err()
             .to_string();
         assert!(

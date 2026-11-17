@@ -479,12 +479,12 @@ fn svelte(text: &str) -> (Vec<Finding>, Vec<String>) {
             }
         };
         let error = d["type"] == "ERROR";
-        let line_of = |at: &Value| at["line"].as_u64().and_then(|n| u32::try_from(n + 1).ok());
+        let line_of = |at: &Value| u32::try_from(at["line"].as_u64()? + 1).ok();
         // A TypeScript error's code is a number, a Svelte warning's a name.
         let code = match &d["code"] {
             Value::String(s) => s.clone(),
             Value::Number(n) => format!("ts{n}"),
-            _ => String::new(),
+            Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => String::new(),
         };
         found.push(Finding {
             file: d["filename"].as_str().unwrap_or("").to_string(),

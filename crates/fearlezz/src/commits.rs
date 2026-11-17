@@ -70,17 +70,13 @@ impl Commits {
     /// The messages judged, as one text: they are inputs too, since rewording a commit keeps
     /// its tree.
     pub(crate) fn messages_text(&self, root: &Path) -> Result<String> {
-        Ok(self
-            .messages(root)?
-            .iter()
-            .map(|m| {
-                format!(
-                    "{}\n{}\n",
-                    m.commit.as_deref().unwrap_or("title"),
-                    m.subject
-                )
-            })
-            .collect())
+        use std::fmt::Write as _;
+        let mut text = String::new();
+        for m in self.messages(root)? {
+            let what = m.commit.as_deref().unwrap_or("title");
+            writeln!(text, "{what}\n{}", m.subject)?;
+        }
+        Ok(text)
     }
 
     fn messages(&self, root: &Path) -> Result<Vec<Message>> {
