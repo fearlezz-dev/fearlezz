@@ -810,3 +810,49 @@ fn the_oxlint_piece_writes_every_rule_and_gates_a_finding_on_a_changed_line() {
         out.stdout
     );
 }
+
+/// A folder with executable `scripts` (name, body), and PATH with that folder first.
+fn scripts(scripts: &[(&str, &str)]) -> (tempfile::TempDir, String) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    for (name, body) in scripts {
+        let path = dir.path().join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!("{}:{}", dir.path().display(), std::env::var("PATH").unwrap());
+    (dir, path)
+}
+
+#[test]
+fn the_envtest_piece_gives_go_test_the_binaries_of_the_kubernetes_version_in_go_mod() {
+    let go_mod = "module op\n\ngo 1.24\n\nrequire (\n\tk8s.io/api v0.31.2\n\tsigs.k8s.io/controller-runtime v0.19.0\n)\n";
+    let repo = on_branch("use = [\"go\", \"envtest\"]\n", &[("go.mod", go_mod)]);
+    // setup-envtest prints the folder of the binaries it fetched for the version it is asked;
+    // go passes only when the tests find them there.
+    let (_bin, path) = scripts(&[
+        (
+            "setup-envtest",
+            "[ \"$1 $2\" = \"use 1.31\" ] || { echo \"asked for $*\" >&2; exit 1; }\necho /assets/k8s/1.31.4",
+        ),
+        (
+            "go",
+            "[ \"$KUBEBUILDER_ASSETS\" = /assets/k8s/1.31.4 ] || { echo \"no assets: '$KUBEBUILDER_ASSETS'\"; exit 1; }\necho '--- PASS: TestReconcile (0.10s)'",
+        ),
+    ]);
+    repo.write("controller.go", "package op\n");
+    let out = repo.fz_env(&["run", "go-test"], &[("PATH", &path)]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+
+    // Without setup-envtest the check fails and says how to get it.
+    let (_bin, path) = scripts(&[("go", "echo '--- PASS: TestReconcile (0.10s)'")]);
+    let path = path
+        .split(':')
+        .filter(|p| !std::path::Path::new(p).join("setup-envtest").exists())
+        .collect::<Vec<_>>()
+        .join(":");
+    repo.write("controller.go", "package op\n\n// changed\n");
+    let out = repo.fz_env(&["run", "go-test"], &[("PATH", &path)]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("setup-envtest"), "{}", out.stdout);
+}

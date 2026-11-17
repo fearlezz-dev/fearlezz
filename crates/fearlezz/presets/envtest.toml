@@ -1,0 +1,7 @@
+# A Kubernetes operator's Go tests against a real API server: Fearlezz fetches the envtest
+# binaries (etcd, kube-apiserver) of the Kubernetes version go.mod requires (`k8s.io/api v0.31.x`
+# is 1.31) with setup-envtest, once into the user cache, and gives go-test their folder as
+# KUBEBUILDER_ASSETS. With `go`; `setup init` adds it when go.mod requires controller-runtime.
+
+[check.go-test]
+needs = ["envtest"]

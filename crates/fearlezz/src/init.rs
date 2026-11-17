@@ -128,6 +128,16 @@ fn refine(root: &Path, piece: &'static str) -> &'static str {
     }
 }
 
+/// Whether go.mod in `root` requires `module`.
+fn go_requires(root: &Path, module: &str) -> bool {
+    std::fs::read_to_string(root.join("go.mod")).is_ok_and(|text| {
+        text.lines().any(|line| {
+            let line = line.trim().trim_start_matches("require").trim();
+            line.split_whitespace().next() == Some(module)
+        })
+    })
+}
+
 /// Whether package.json's test script runs Node's own test runner (`node --test`, also with
 /// options such as a loader before `--test`).
 fn node_test(root: &Path) -> bool {
@@ -221,9 +231,13 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
             Some((*piece, file))
         })
         .flat_map(|(piece, file)| {
-            // A TypeScript project also gets its linters', formatters' and test runner's pieces.
+            // A TypeScript project also gets its linters', formatters' and test runner's pieces,
+            // a Go operator envtest.
             let more = if piece == "typescript" {
                 javascript(root)
+            } else if piece == "go" && go_requires(root, "sigs.k8s.io/controller-runtime") {
+                // An operator's controller tests run against envtest's API server.
+                vec!["envtest"]
             } else {
                 Vec::new()
             };

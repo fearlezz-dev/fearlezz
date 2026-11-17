@@ -88,6 +88,9 @@ enum RawPorts {
 pub(crate) enum Need {
     /// The services `[env] up` starts; their ports reach the check as env vars.
     Services,
+    /// The envtest binaries (etcd, kube-apiserver) of the Kubernetes version its go.mod
+    /// requires, fetched by setup-envtest; their folder reaches it as `KUBEBUILDER_ASSETS`.
+    Envtest,
 }
 
 /// The ordered stages of a change. The last one is the merge gate, where every check runs
@@ -1035,6 +1038,10 @@ impl Check {
 
     pub(crate) fn needs_services(&self) -> bool {
         self.needs.contains(&Need::Services)
+    }
+
+    pub(crate) fn needs_envtest(&self) -> bool {
+        self.needs.contains(&Need::Envtest)
     }
 }
 

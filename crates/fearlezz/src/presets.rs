@@ -28,6 +28,7 @@ pub(crate) const BUILTIN: &[(&str, &str)] = &[
     ("bun", include_str!("../presets/bun.toml")),
     ("dart", include_str!("../presets/dart.toml")),
     ("devenv", include_str!("../presets/devenv.toml")),
+    ("envtest", include_str!("../presets/envtest.toml")),
     ("eslint", include_str!("../presets/eslint.toml")),
     ("flutter", include_str!("../presets/flutter.toml")),
     ("flutter-look", include_str!("../presets/flutter-look.toml")),

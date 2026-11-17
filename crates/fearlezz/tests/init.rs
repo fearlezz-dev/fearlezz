@@ -267,6 +267,18 @@ fn init_tells_a_dart_package_from_a_flutter_app_by_its_sdk() {
 }
 
 #[test]
+fn init_adds_envtest_to_a_go_module_that_requires_controller_runtime() {
+    let repo = project(&[(
+        "go.mod",
+        "module op\n\nrequire (\n\tk8s.io/api v0.31.2\n\tsigs.k8s.io/controller-runtime v0.19.0\n)\n",
+    )]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(config.contains(r#"use = ["go", "envtest", "safety"]"#), "{config}");
+}
+
+#[test]
 fn init_finds_cargo_projects_below_the_root_and_the_rust_checks_run_in_each() {
     let manifest = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n";
     let repo = project(&[
