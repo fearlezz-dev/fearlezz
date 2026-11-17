@@ -19,7 +19,7 @@ export type TestState = "failed" | "flaky" | "listed";
 
 /** The tests a check names, failed ones first: at most `shown` of them, and how many more
  * failed. A plain pass is not named. */
-export function namedTests(check: Check | undefined, shown = 10): { tests: { name: string; state: TestState }[]; more: number } {
+export function namedTests(check: Check | null | undefined, shown = 10): { tests: { name: string; state: TestState }[]; more: number } {
   const cases = check?.cases ?? [];
   const failed = cases.filter((c) => c.failed);
   const state = (c: (typeof cases)[number]): TestState => (c.failed ? (c.flaky ? "flaky" : "failed") : "listed");

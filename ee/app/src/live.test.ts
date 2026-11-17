@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Feed, apply, applyWork, namedTests, stateOf } from "./live";
-import type { Check, Live, PictureVerdict, Review, Run, Snapshot } from "./proof";
+import type { Case, Check, Live, PictureVerdict, Review, Run, Snapshot } from "./proof";
 
 const run: Run = {
   id: "r1",
@@ -117,7 +117,7 @@ describe("review", () => {
 });
 
 describe("namedTests", () => {
-  const ran = (cases: Check["cases"]): Check => ({ ...passed("tests"), outcome: "failed", cases });
+  const ran = (cases: Case[]): Check => ({ ...passed("tests"), outcome: "failed", cases });
 
   test("failed tests come first, then those listed flaky; a pass is not named", () => {
     const named = namedTests(
