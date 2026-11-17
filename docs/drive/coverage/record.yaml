@@ -30,8 +30,6 @@ decided:
   - id: own-key
     what: a `coverage` key on the check, not a findings reader, so coverage findings never excuse a failing test run
 
-open: []
-
 slices:
   - id: lcov-core
     tests: [crates/fearlezz/tests/coverage.rs]
@@ -41,4 +39,8 @@ slices:
   - id: pieces
     status: done
 
-next: prove with fearlezz run --stage working, then the final stage, commit, push, open the PR
+open:
+  - id: merge-stage
+    ask: the merge stage waits on tests/ee, unstable from another branch's run with the same inputs; the flaky tests thread owns it
+
+next: once tests/ee is stable, rerun fearlezz run --stage merge and mark PR 32 ready
