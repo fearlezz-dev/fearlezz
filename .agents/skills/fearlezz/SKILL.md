@@ -29,6 +29,7 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 
 - Only `fearlezz run` on your journal is proof. Raw commands (`cargo test`, `bun test`, a project's `check` script) are quick feedback; running them proves nothing.
 - `fearlezz run --ci` proves a commit for CI. They say nothing about the work and keep no journal. On the base branch itself it runs every check not on a schedule (`--scheduled` runs only those). On GitHub Actions it writes the job summary: proven or not, each blocker with why and what to do, each weakening as a diff of the config, every check, and the changed pictures for a person to review on the pull request, with a link to the proof page when the repository sends the proof to the proof host. It writes nothing to the pull request; a person reviews it there as usual. Only CI writes these; the developer reads them, not your output.
+- A check whose `on` names only platforms with another `os` than this machine's is `left to CI`: its leg in CI proves it, and it never holds the work here. Dropping a platform from a check's `on` weakens the proof.
 - The base branch's `fearlezz.toml` is the floor. At the final stage and in CI, a change that turns a check off, changes its command or env list, moves it to a later stage, stops counting its tests or findings or reads them another way, takes or records fewer pictures or calls more of them flaky, calls more tests flaky, lowers or unsets a lint, turns off, lowers, narrows or changes a rule, changes the `[settings]` of a tool that judges code or anything in `[env]` but its inputs, or widens `no_proof`, `flaky` or `flaky_tests` (a new glob, a `!` glob dropped, or a new order that lets a glob win over a `!` glob) fails with `weakens ...`, on a pull request too; only a person with admin rights can merge past it, after reading why. With the proof host, it fails the CI job just the same until an admin accepts exactly that weakening of the head on the proof page, which runs the job again, and then it passes. Proof is about behaviour (checks pass, red before green, test counts, pictures), so no file is ever judged unproven. Never weaken proof to get green; when it must change, ask the developer.
 - Do not open a pull request before `fearlezz` says ready to merge. When you report proof, report that line from the journal.
 - Hooks hold you to this. A pull request needs ready, unless it is a draft (`--draft`); merging past the required checks (`gh pr merge --admin`) is for the developer; stopping with unproven work is blocked once, unless you asked the developer with `fearlezz say ask`. When a hook refuses, do what its message says; never work around it.
@@ -90,6 +91,8 @@ env = ["DATABASE_URL"]
 # inputs = ["src/**", "Cargo.toml", "Cargo.lock"]   only to rerun less often
 ```
 
+A check that needs two commands lists them as steps, each a plain command, never joined with `&&` or a pipe: `run = ["terraform init -backend=false", "terraform validate -json"]` runs them in order, the first that fails ends the check, and a reader of stdout reads only the last one's.
+
 A check runs at the repository root. `dir = "shell"` runs it in that folder; `each = "Cargo.toml"` makes it one check per project folder holding that file (outside `no_proof`, and not inside another such folder; for Cargo.toml, any manifest no workspace above names a member, as Cargo decides): the root's keeps the check's name, one in a folder is `<check>/<folder>`, and `[check."clippy/shell"]` tunes that one alone. A folder's check reads every file until its own table names `inputs`, since the check's own `inputs` name the root project's files. The rust piece's checks have `each = "Cargo.toml"`, so a repository with several separate Cargo projects gets fmt, clippy and tests for each, and `setup sync` writes the lint tables into each project's Cargo.toml. A project folder that goes takes its checks with it; moving a check to another `dir` weakens the proof.
 
 A check that needs a secret names it: `secrets = ["EVAL_API_KEY"]`. Fearlezz asks SecretSpec for each name (in the `[env] shell` and the check's folder, so the project's `secretspec.toml` and provider apply) and hands only those values to the check; the provider's own token never reaches it. Never put a secret in `env` or a `.env` file. A value never shows in the check's log or files, where it reads `***` (also as JSON escapes it and line by line; pictures and values under 4 characters are left as they are). A secret may not be named like a variable every check gets (`PATH`, `FEARLEZZ_*`). A secret SecretSpec cannot give fails the check with the fix, without running it; in CI, give the job the provider's token (for 1Password, `OP_SERVICE_ACCOUNT_TOKEN`). Changing a check's `secrets` weakens the proof, as changing its `env` does.
@@ -145,6 +148,10 @@ level = "hint"
 files = "lib/widgets/*.dart"
 needs = "test/widgets/{stem}_test.dart"  # also {name} and {dir}
 
+[rule.sops]
+level = "gate"
+encrypted = "sops"                       # every file a .sops.yaml path_regex names is encrypted, every value sops encrypts ciphertext
+
 [rule.silent-fallback]
 level = "gate"
 message = "A failure becomes a default value."
@@ -189,7 +196,7 @@ A check with `findings` reports problems at file and line. Only findings on line
 [check.clippy]
 run = "cargo clippy --all-targets --quiet --message-format=json"
 stage = "working"
-findings = "cargo"     # or "dart" (dart analyze --format=machine), "eslint" (eslint --format json), "sarif" (stdout or $FEARLEZZ_OUT/findings.sarif), or "jsonl"
+findings = "cargo"     # or "dart" (dart analyze --format=machine), "eslint" (eslint --format json), "terraform" (terraform or tofu validate -json), "yamllint" (yamllint -f parsable), "sarif" (stdout or $FEARLEZZ_OUT/findings.sarif), or "jsonl"
 # findings = { read = "sarif", on = "everywhere" }   to count old findings too
 # findings = { read = "sarif", level = "gate", fix = "..." }   for a tool whose results carry no level or fix
 ```
@@ -261,4 +268,25 @@ secrets = ["CLOUDFLARE_API_TOKEN"]
 run = "playwright test"
 stage = "look"
 needs = ["preview"]
+```
+
+## Releases
+
+`[release.<place>]` names a place a release goes to. Its `dry` run becomes the check `release/<place>` at the last stage, so a release pull request proves the bumped version will publish. `fearlezz run --release` (CI, after the release is tagged) publishes to every place that does not have its version yet and waits until each shows it; places that have it are skipped, so running it again finishes a half done release. The version is the one in the place's own file (`Cargo.toml`, `package.json`, `pubspec.yaml`), which release-please bumps.
+
+```toml
+use = ["crates", "github"]     # built in: crates, npm, pub (dry run, publish, landed), github (files on the release)
+
+[release.github]
+version = "Cargo.toml"         # the file the version comes from
+files = ["dist/*.tar.gz"]      # built before the release; landed when each is there with the same digest
+# tag = "v{version}"           the default
+
+[release.shop]                 # a place of your own
+dry = "shop check"
+publish = "shop push"          # sees FEARLEZZ_VERSION, FEARLEZZ_TAG and env; the files are its arguments ("$@")
+landed = "shop has \"$FEARLEZZ_VERSION\""   # exits 0 once the place has it
+version = "package.json"
+env = ["SHOP_TOKEN"]
+# wait = 600                   seconds it may take to show the version
 ```

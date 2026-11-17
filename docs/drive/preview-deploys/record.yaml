@@ -29,7 +29,7 @@ open: []
 
 slices:
   - id: core
-    tests: [tests/preview.rs (16 tests), env::tests (URL and name)]
+    tests: [tests/preview.rs (17 tests), env::tests (URL and name)]
     status: done
   - id: host
     tests:

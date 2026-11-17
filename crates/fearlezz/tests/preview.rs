@@ -333,6 +333,48 @@ fn ci_names_the_preview_in_the_job_summary_and_the_proof() {
 }
 
 #[test]
+fn a_proof_split_over_jobs_names_the_preview_a_leg_deployed() {
+    let s = Setup::new(PREVIEW, CHECKS, "feat/x");
+    let plan = s.fz(&["run", "--ci", "--plan"]);
+    assert!(plan.ok, "{}\n{}", plan.stdout, plan.stderr);
+    let legs: serde_json::Value = serde_json::from_str(plan.stdout.trim()).unwrap();
+    let id = legs[0]["leg"].as_str().unwrap().to_string();
+    let leg = s.repo.path(".runs/legs/one");
+    let out = s.fz(&[
+        "run",
+        "--ci",
+        "--leg",
+        &id,
+        "--proof",
+        leg.to_str().unwrap(),
+    ]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let summary = s.repo.path(".runs/summary.md");
+    let bundle = s.repo.path(".runs/proof");
+    let legs = s.repo.path(".runs/legs");
+    let out = s.fz_env(
+        &[
+            "run",
+            "--ci",
+            "--gate",
+            legs.to_str().unwrap(),
+            "--proof",
+            bundle.to_str().unwrap(),
+        ],
+        &[("GITHUB_STEP_SUMMARY", summary.to_str().unwrap())],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let proof: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(bundle.join("proof.json")).unwrap()).unwrap();
+    assert_eq!(proof["preview"], "https://feat-x.example.dev/");
+    let text = std::fs::read_to_string(&summary).unwrap();
+    assert!(
+        text.contains("Preview: https://feat-x.example.dev/"),
+        "{text}"
+    );
+}
+
+#[test]
 fn changing_the_preview_or_its_secrets_weakens_the_proof() {
     let s = Setup::new(PREVIEW, CHECKS, "feat/x");
     let config = std::fs::read_to_string(s.repo.path("fearlezz.toml")).unwrap();

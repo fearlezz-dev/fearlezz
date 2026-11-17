@@ -456,6 +456,8 @@ fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<
     for leg in &found {
         proof.looks.extend(legs::looks_of(leg));
     }
+    // Each leg that needs the preview deploys the same tree; the first one found names it.
+    proof.preview = found.iter().find_map(|l| l.proof.preview.clone());
     let floor = floor::Floor::read(&ctx.config, &wt)?;
     proof.weakened.clone_from(&floor.weakened);
     let gate = if floor.holds() {
