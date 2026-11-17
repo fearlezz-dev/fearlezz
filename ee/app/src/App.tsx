@@ -217,6 +217,14 @@ function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer 
     <p class={`standing ${kind()}`} data-standing={kind()} title={text()}>
       <span class="pill">{word()}</span>
       <code class="head">{head()}</code>
+      {/* The deploy its proof made of this head, which a person can open and try. */}
+      <Show when={props.review?.head === props.run.head && props.review?.preview}>
+        {(url) => (
+          <a class="preview" data-preview href={url()} target="_blank" rel="noopener noreferrer">
+            Preview
+          </a>
+        )}
+      </Show>
     </p>
   );
 }

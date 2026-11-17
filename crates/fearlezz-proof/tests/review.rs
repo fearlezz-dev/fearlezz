@@ -631,3 +631,24 @@ fn a_leg_the_run_names_replaces_its_older_run_without_a_job_name() {
         State::Approved
     );
 }
+
+#[test]
+fn the_review_names_the_preview_its_proof_deployed() {
+    let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
+    let mut proof = proof.unwrap();
+    proof.preview = Some("https://feat-site.example.dev/".into());
+    let review = review::review("aaa", &[(r, Some(proof))], &BTreeMap::new(), &[], &[], None);
+    assert_eq!(
+        review.preview.as_deref(),
+        Some("https://feat-site.example.dev/")
+    );
+    let none = review::review(
+        "aaa",
+        &[run("r1", "aaa", RunState::Done, &[])],
+        &BTreeMap::new(),
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(none.preview, None);
+}

@@ -215,8 +215,13 @@ async fn write(
             format!("/repos/{}/check-runs", row.repository),
         )),
     };
+    let preview = review
+        .preview
+        .as_ref()
+        .map(|url| format!(" Preview: {url}"))
+        .unwrap_or_default();
     let body = format!(
-        "**{NAME}**: {}. See [the work's page]({page}).",
+        "**{NAME}**: {}. See [the work's page]({page}).{preview}",
         review.title()
     );
     let comment_write = match last.comment {

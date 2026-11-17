@@ -200,7 +200,11 @@ accept?: Accept | null,
 /**
  * The work's open notes, oldest first: they follow the work, not the head.
  */
-notes?: Array<Note>, };
+notes?: Array<Note>, 
+/**
+ * Where the preview deploy of the head lives, as its proof names it.
+ */
+preview?: string | null, };
 
 export type ReviewState = "ci" | "running" | "failed" | "cancelled" | "needs_change" | "waits" | "approved";
 

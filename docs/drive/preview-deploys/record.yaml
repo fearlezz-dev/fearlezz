@@ -1,0 +1,27 @@
+# docs/drive/preview-deploys/record.yaml: the working state of one piece of work.
+goal: A preview deploy becomes proof (a check against the deployed preview, its pictures, its URL on the host page).
+
+pieces:
+  - id: deploy
+    status: figuring-out
+    open: How the deploy command learns its name, and when a deploy is reused.
+  - id: checks-against-preview
+    status: figuring-out
+  - id: link
+    status: figuring-out
+
+decided:
+  - id: shape
+    what: "A preview is a service that lives remotely: [env] preview runs the deploy; checks with needs = [\"preview\"] get FEARLEZZ_PREVIEW_URL."
+    why: Same shape as needs = ["services"]; checks run against the real deploy.
+  - id: link
+    what: The link shows in the job summary, and with the host in its existing pull request comment and on the page. No new write to GitHub.
+
+open: []
+
+notes:
+  - The look of a check against the preview runs on the base checkout like any look, so the base deploys its own preview the same way; before and after need no extra design.
+  - The deploy needs a token (CLOUDFLARE_API_TOKEN), so [env] needs secrets too, through the fetch the secrets change built (run.rs fetch_secrets).
+  - Services are mirrored in main.rs run_checks (ensure_up before a check that needs them) and look.rs run_on_base.
+
+next: Once scheduled proof is in a PR, build deploy (env.rs, config.rs) with failing tests in a new tests/preview.rs.

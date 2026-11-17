@@ -179,6 +179,9 @@ pub struct Review {
     /// The work's open notes, oldest first: they follow the work, not the head.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
+    /// Where the preview deploy of the head lives, as its proof names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 /// A CI job that waits for a runner, before Fearlezz in it opens a run.
@@ -315,6 +318,9 @@ pub fn review(
             }
         }
     }
+    let preview = live
+        .iter()
+        .find_map(|(_, proof)| proof.as_ref()?.preview.clone());
     let accept = accept
         .filter(|a| !weakened.is_empty() && a.covers(head, &weakened))
         .cloned();
@@ -351,6 +357,7 @@ pub fn review(
         weakened,
         accept,
         notes: open.into_iter().cloned().collect(),
+        preview,
     }
 }
 

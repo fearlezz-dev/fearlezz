@@ -348,6 +348,10 @@ fn main() {
             one_comment_is_created_then_edited,
         ),
         (
+            "the_comment_and_the_page_name_the_preview_the_proof_deployed",
+            the_comment_and_the_page_name_the_preview_the_proof_deployed,
+        ),
+        (
             "a_webhook_with_a_wrong_signature_is_refused",
             a_webhook_with_a_wrong_signature_is_refused,
         ),
@@ -2581,6 +2585,30 @@ fn the_check_run_follows_the_review_through_a_whole_flow() {
         "success",
         "the first head keeps its own"
     );
+}
+
+fn the_comment_and_the_page_name_the_preview_the_proof_deployed() {
+    let first = commit("a109");
+    webhook(
+        "pull_request",
+        &pull_request("opened", 109, "review/preview", &first),
+    );
+    let job = Job::pull("owner/review", 109, "review/preview").at(&first, 1109);
+    let run = job.open(&["tests"]);
+    let mut body = job.closing(&[entry("tests", "passed")], &[], &[]);
+    body["proof"]["preview"] = json!("https://review-preview.example.dev/");
+    let path = format!("/api/v2/runs/{}/done", run.id);
+    let answer = api("POST", &path, &job.token(), Some(body.to_string().into()));
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    published(109);
+    let comments = world().github.comments("owner/review", 109);
+    let last = comments[0].bodies.last().unwrap();
+    assert!(
+        last.contains("Preview: https://review-preview.example.dev/"),
+        "{comments:?}"
+    );
+    let review = &live("/owner/review/pull/109", &[]).json()["review"];
+    assert_eq!(review["preview"], "https://review-preview.example.dev/", "{review}");
 }
 
 fn one_comment_is_created_then_edited() {
