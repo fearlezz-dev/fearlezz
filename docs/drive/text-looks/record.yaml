@@ -40,4 +40,4 @@ slices:
     tests: [ee/host-tests]
     status: done
 
-next: prove with fearlezz, open the pull request
+next: "final stage blocked: tests/ee unstable from an unrelated host test flake (github_hanging_or_failing_never_fails_a_write_nor_drops_a_page), sent to the Flaky and failing tests thread; rebase on its fix, rerun the final stage, open the pull request"
