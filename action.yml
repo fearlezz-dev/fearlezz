@@ -1,10 +1,12 @@
 name: Fearlezz proof
 description: Prove a change with the checks in fearlezz.toml, with the result in the job summary and the proof bundle as an artifact.
 
-# Installs Fearlezz and runs `fearlezz run --ci`, which proves the commit: every check, fresh,
-# against the base branch's config. It writes nothing to GitHub. The job summary lists each
-# check and the changed pictures, which a person reviews on the pull request; the proof bundle
-# (every check's output and every picture, before and after) is kept as an artifact.
+# Installs Fearlezz and runs `fearlezz run --ci`, which proves the commit: every check not on a
+# schedule (with `scheduled`, only those), fresh, against the base branch's config. It writes
+# nothing to GitHub, unless `issue-on-failure` asks it to open an issue when the proof fails.
+# The job summary lists each check and the changed pictures, which a person reviews on the pull
+# request; the proof bundle (every check's output and every picture, before and after) is kept
+# as an artifact.
 inputs:
   version:
     description: >-
@@ -31,6 +33,17 @@ inputs:
     description: >-
       For a proof split over several jobs: combine every leg's bundle into one proof, the
       required check, and keep it for the next pull request to reuse (needs `actions: read`).
+    default: "false"
+  scheduled:
+    description: >-
+      Prove the checks with `schedule = true` instead of those of each change (`fearlezz run
+      --ci --scheduled`), from a workflow that runs `on: schedule`.
+    default: "false"
+  issue-on-failure:
+    description: >-
+      When the proof fails on a push, a schedule or a manual run (never a pull request, which
+      shows its own red check), open an issue that links the run, or comment on the one still
+      open. The job needs `issues: write`. The only thing the action ever writes to GitHub.
     default: "false"
 
 outputs:
@@ -105,6 +118,7 @@ runs:
         pattern: fearlezz-leg-*
         path: ${{ runner.temp }}/fearlezz-legs
     - name: Gate
+      id: gate
       if: inputs.gate == 'true'
       shell: bash
       run: |
@@ -123,17 +137,45 @@ runs:
       shell: bash
       env:
         LEG: ${{ inputs.leg }}
+        SCHEDULED: ${{ inputs.scheduled }}
       run: |
         if [ -z "$LEG" ]; then
           echo "bundle=fearlezz-proof-${GITHUB_JOB}" >> "$GITHUB_OUTPUT"
           echo "logs=proof-logs-${GITHUB_JOB}" >> "$GITHUB_OUTPUT"
-          fearlezz run --ci --proof "$RUNNER_TEMP/fearlezz-proof"
+          args=(--ci --proof "$RUNNER_TEMP/fearlezz-proof")
+          if [ "$SCHEDULED" = true ]; then args+=(--scheduled); fi
+          fearlezz run "${args[@]}"
         else
           # An artifact's name has no slash.
           name=$(jq -r '.leg' <<< "$LEG" | tr '/' '-')
           echo "bundle=fearlezz-leg-${name}" >> "$GITHUB_OUTPUT"
           echo "logs=proof-logs-leg-${name}" >> "$GITHUB_OUTPUT"
           fearlezz run --ci --leg "$LEG" --proof "$RUNNER_TEMP/fearlezz-proof"
+        fi
+    - name: Open an issue for the failed proof
+      # Only for the proof itself, in one job or a split proof's gate: an install that failed
+      # has no summary to point to, and a leg's failure reaches its gate.
+      if: >-
+        failure() && (steps.run.outcome == 'failure' || steps.gate.outcome == 'failure')
+        && inputs.issue-on-failure == 'true' && inputs.leg == ''
+        && !startsWith(github.event_name, 'pull_request')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TITLE: ${{ inputs.scheduled == 'true' && 'Scheduled proof failed' || 'Proof failed' }}
+        RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        REF: ${{ github.ref_name }}
+        SHA: ${{ github.sha }}
+      run: |
+        # One open issue at a time: a later failure comments on it instead of opening another.
+        # Listed, not searched: the search index lags, which could open a second issue.
+        number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 500 \
+          --json number,title --jq 'map(select(.title == $ENV.TITLE))[0].number // empty')
+        body="The proof of $REF at $SHA failed: $RUN. Its job summary names each failing check with what to do."
+        if [ -n "$number" ]; then
+          gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+        else
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body"
         fi
     - name: Keep the proof bundle
       if: always() && inputs.plan != 'true'

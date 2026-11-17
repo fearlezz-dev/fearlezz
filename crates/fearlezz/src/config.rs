@@ -21,7 +21,11 @@ const DEFAULT_STAGES: [&str; 4] = ["exploring", "working", "look", "merge"];
 
 pub(crate) struct Config {
     pub stages: Stages,
+    /// The checks this run proves: those of each change, or with [`Config::on_schedule`]
+    /// the scheduled ones.
     pub checks: Vec<Check>,
+    /// The other checks, which this run leaves out unless one is named.
+    pub set_aside: Vec<Check>,
     /// The branch a change is compared against.
     pub base: String,
     pub env: Env,
@@ -121,6 +125,9 @@ pub(crate) struct Check {
     inputs: Globs,
     /// Environment variables the check may see. Their values are part of its inputs.
     pub env: Vec<String>,
+    /// Too slow, costly or reliant on real infrastructure to run for each change: only a
+    /// scheduled run (`fearlezz run --ci --scheduled`) or naming it runs it.
+    pub schedule: bool,
     /// Secrets it gets from SecretSpec, by name. Their names are part of its inputs, never
     /// their values.
     pub secrets: Vec<String>,
@@ -412,6 +419,8 @@ struct RawCheck {
     #[serde(default)]
     secrets: Vec<String>,
     #[serde(default)]
+    schedule: bool,
+    #[serde(default)]
     needs: Vec<Need>,
     findings: Option<RawFindings>,
     tests: Option<toml::Value>,
@@ -652,6 +661,7 @@ impl Config {
                 stage,
                 env: c.env,
                 secrets: c.secrets,
+                schedule: c.schedule,
                 needs: c.needs,
                 services: if needs_services {
                     services.clone()
@@ -748,11 +758,13 @@ impl Config {
             ));
         }
         checks.sort_by(|a, b| a.id.cmp(&b.id));
+        let (set_aside, checks) = checks.into_iter().partition(|c| c.schedule);
         Ok(Config {
             no_proof: globs(&raw.no_proof).context("no_proof")?,
             settings,
             stages,
             checks,
+            set_aside,
             base,
             env,
             host: raw.host.map(|h| h.url),
@@ -800,11 +812,22 @@ impl Config {
         check.pictures.named() || self.stages.name(check.stage) == "look"
     }
 
+    /// The check called `id`, set aside or not: naming a check runs it.
     pub(crate) fn check(&self, id: &str) -> Result<&Check> {
-        self.checks.iter().find(|c| c.id == id).with_context(|| {
-            let ids: Vec<&str> = self.checks.iter().map(|c| c.id.as_str()).collect();
+        self.every_check().find(|c| c.id == id).with_context(|| {
+            let ids: Vec<&str> = self.every_check().map(|c| c.id.as_str()).collect();
             format!("no check \"{id}\"; checks are {}", ids.join(", "))
         })
+    }
+
+    /// Every check, scheduled or not, whichever this run proves.
+    pub(crate) fn every_check(&self) -> impl Iterator<Item = &Check> {
+        self.checks.iter().chain(&self.set_aside)
+    }
+
+    /// Makes this run prove the scheduled checks instead of those of each change.
+    pub(crate) fn on_schedule(&mut self) {
+        std::mem::swap(&mut self.checks, &mut self.set_aside);
     }
 }
 
@@ -833,6 +856,7 @@ fn builtin_check(
         inputs,
         env: Vec::new(),
         secrets: Vec::new(),
+        schedule: false,
         needs: Vec::new(),
         services: None,
         findings: Some(FindingsSpec {

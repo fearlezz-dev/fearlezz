@@ -809,3 +809,28 @@ fn the_base_commit_runs_in_its_own_shell() {
         out.stdout
     );
 }
+
+#[test]
+fn a_scheduled_check_runs_red_before_green_like_any_other() {
+    let repo = Repo::new(
+        &CHECKS.replace(
+            "stage = \"working\"",
+            "stage = \"working\"\nschedule = true",
+        ),
+        &[
+            (".gitignore", ".runs/\n"),
+            ("src/value", "1\n"),
+            ("tests/old.sh", "test -e src/value\n"),
+        ],
+    );
+    repo.branch("change");
+    change(&repo, SHOWS_IT, "fix: the value is two");
+    let out = repo.fz(&["run", "--ci", "--scheduled"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("red before green tests: tests/new.sh fails on the base commit"),
+        "{}",
+        out.stdout
+    );
+}

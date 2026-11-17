@@ -128,9 +128,10 @@ fn gone_with_its_folder(base: &Config, head: &Config, check: &config::Check) -> 
 /// reads is only a speed hint, so it never weakens.
 fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, String)> {
     let mut found = Vec::new();
-    for b in &base.checks {
+    // A scheduled check has a floor too: its run proves the default branch on a schedule.
+    for b in base.every_check() {
         let mut say = |how: String| found.push((Part::Check(b.id.clone()), how));
-        let Some(h) = head.checks.iter().find(|h| h.id == b.id) else {
+        let Some(h) = head.every_check().find(|h| h.id == b.id) else {
             if !gone_with_its_folder(base, head, b) {
                 say("it is gone".into());
             }
@@ -141,6 +142,9 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
         }
         for platform in b.on.iter().filter(|p| !h.on.contains(p)) {
             say(format!("it no longer runs on {platform}"));
+        }
+        if h.schedule && !b.schedule {
+            say("it runs on a schedule instead of for each change".into());
         }
         if h.dir != b.dir {
             let at = |dir: &Option<String>| dir.clone().unwrap_or_else(|| "the root".into());

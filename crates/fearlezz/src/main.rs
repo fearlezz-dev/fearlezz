@@ -104,7 +104,7 @@ enum Cmd {
         /// Only move the stage, such as going back to fix something first.
         #[arg(long, requires = "stage")]
         no_run: bool,
-        /// Prove this commit, for CI: every check, fresh, with no journal. It writes nothing
+        /// Prove this commit, for CI: every check not on a schedule, fresh, with no journal. It writes nothing
         /// to GitHub; on GitHub Actions it writes the job summary, and sends the proof to the
         /// proof host when the job may ask for an OIDC token.
         #[arg(long, conflicts_with = "stage")]
@@ -135,6 +135,11 @@ enum Cmd {
         /// request reuses for checks that read the same inputs on the same platform.
         #[arg(long, value_name = "DIR", requires = "ci", conflicts_with = "leg")]
         reuse: Option<PathBuf>,
+        /// With --ci: prove the checks with `schedule = true` instead, the ones too slow,
+        /// costly or reliant on real infrastructure to run for each change, from a scheduled
+        /// workflow, in one job.
+        #[arg(long, requires = "ci", conflicts_with_all = ["plan", "leg", "gate"])]
+        scheduled: bool,
     },
     /// Tell: record what only you know, such as a note or a question.
     Say {
@@ -320,9 +325,19 @@ fn prepared() -> Result<Ctx> {
 
 /// Proves this commit for CI. On GitHub Actions it installs ffmpeg when checks take pictures
 /// and names the pull request the event is for; it writes nothing to GitHub.
-fn ci_run(proof: Option<PathBuf>, leg: Option<legs::Asked>) -> Result<bool> {
+fn ci_run(proof: Option<PathBuf>, leg: Option<legs::Asked>, scheduled: bool) -> Result<bool> {
     let workflow = action::Workflow::read();
-    let ctx = prepared()?;
+    let mut ctx = prepared()?;
+    if scheduled {
+        ctx.config.on_schedule();
+        // A scheduled workflow that proves nothing must not stay green.
+        if ctx.config.checks.is_empty() {
+            bail!(
+                "no check has schedule = true, so a scheduled run proves nothing; give the slow \
+                 checks schedule = true, or remove the scheduled workflow"
+            );
+        }
+    }
     if workflow.actions
         && needs_ffmpeg(&ctx.config)
         && let Some(dir) = action::install_ffmpeg()?
@@ -554,6 +569,7 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
             leg,
             gate,
             reuse,
+            scheduled,
         } => {
             if plan {
                 return ci_plan(reuse.as_deref());
@@ -569,7 +585,7 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
                         "--ci proves every check; to run some of them, name the leg they are in                          with --leg"
                     ),
                 };
-                return ci_run(proof, leg);
+                return ci_run(proof, leg, scheduled);
             }
             if release {
                 return release_run();
@@ -923,11 +939,18 @@ fn plan(ctx: &Ctx) -> Result<()> {
     if !any {
         println!("  nothing touched yet");
     }
+    let scheduled: Vec<&str> = ctx.config.set_aside.iter().map(|c| c.id.as_str()).collect();
+    if !scheduled.is_empty() {
+        println!(
+            "  scheduled {}: never needed by a change; fearlezz run --ci --scheduled proves them",
+            scheduled.join(", ")
+        );
+    }
     println!("next: {}", v.next);
     Ok(())
 }
 
-/// The checks a run takes on: the named ones, every check when proving a commit, and otherwise
+/// The checks a run takes on: the named ones, every check of this run when proving a commit, and otherwise
 /// every check of the current stage and earlier ones.
 fn targets<'a>(
     ctx: &'a Ctx,

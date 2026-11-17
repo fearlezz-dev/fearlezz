@@ -1,0 +1,34 @@
+# docs/drive/scheduled-proof/record.yaml: the working state of one piece of work.
+goal: Scheduled full proof, for checks that are too slow or need real infra per change.
+
+pieces:
+  - id: scheduled-checks
+    status: done
+  - id: issue-on-failure
+    status: done
+
+decided:
+  - id: shape
+    what: "A scheduled check: schedule = true on a check; run --ci --scheduled from a nightly workflow."
+    why: A stage after merge would break "the last stage is the merge gate"; the final stage only would still run per change.
+  - id: issue
+    what: The action opens the issue (issue-on-failure input, needs issues write).
+    why: Chosen by the developer over a workflow snippet, knowing it makes the action write to GitHub when asked.
+  - id: only-scheduled
+    what: A scheduled run proves only the scheduled checks; one without any fails.
+  - id: floor
+    what: Putting an existing check on a schedule weakens the proof; scheduled checks keep their own floor and red before green.
+
+open: []
+
+slices:
+  - id: scheduled
+    tests:
+      - schedule (7 tests)
+      - ci::putting_a_check_on_a_schedule_is_red_and_named
+      - ci::a_new_scheduled_check_is_fine
+      - ci::a_scheduled_check_keeps_its_floor
+      - red_green::a_scheduled_check_runs_red_before_green_like_any_other
+    status: done
+
+next: Prove, PR. The issue step is checked by actionlint and zizmor only; first real use will be a project's nightly run.

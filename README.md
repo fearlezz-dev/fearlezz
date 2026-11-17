@@ -85,7 +85,38 @@ jobs:
 
 The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. `edited` runs the proof again when the pull request is edited, since a title starting with `fix:` makes the change a fix that needs red before green, and another base is another comparison. Do not skip description edits with a job `if`: a required job that is skipped counts as passed. The action installs the release of its own tag (`version: v0.2.0` pins one), runs `fearlezz run --ci --proof <dir>`, and keeps the proof bundle (every check's output and every picture, before and after) and the check logs as artifacts of the run. Set `devenv: true` when the checks run in a devenv shell. A workflow can also run `fearlezz run --ci` without the action: when a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg into the runner's tool cache.
 
-Free CI only proves. It writes nothing to GitHub: the job summary shows whether the commit is proven, each blocker with why and what to do, every check with its tests and time, the end of each failing output, and the changed pictures. Changed pictures never fail the proof and never wait; a person reviews them on the pull request, through GitHub's own review. Require the proof check on the base branch to hold merging to it.
+Free CI only proves. Unless asked to open an issue (below), it writes nothing to GitHub: the job summary shows whether the commit is proven, each blocker with why and what to do, every check with its tests and time, the end of each failing output, and the changed pictures. Changed pictures never fail the proof and never wait; a person reviews them on the pull request, through GitHub's own review. Require the proof check on the base branch to hold merging to it.
+
+A check too slow, costly or reliant on real infrastructure to run for each change (an end to end run against a real cluster, an eval against a paid model) gets `schedule = true`. No change needs it, and a second workflow proves the default branch with it on a schedule. Its one write to GitHub, asked for with `issue-on-failure`, opens an issue that links the failed run, or comments on the one still open:
+
+```yaml
+# .github/workflows/scheduled.yml
+name: scheduled proof
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: fearlezz-dev/fearlezz@v0
+        with:
+          scheduled: true
+          issue-on-failure: true
+        env:
+          # When scheduled checks name secrets: SecretSpec reads them from 1Password with it.
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+```
+
+Putting an existing check on a schedule weakens the proof, so a person with admin rights merges that change.
 
 A change that weakens the proof the base branch requires (a check turned off, another command, a lint lowered; see the floor below) fails the proof everywhere: locally, on any CI, and on every pull request, from the repository or a fork. When it must change, a person with admin rights reads why and merges past the required check.
 
