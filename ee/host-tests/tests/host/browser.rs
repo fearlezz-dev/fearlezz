@@ -100,8 +100,13 @@ impl Browser {
     /// Sends one command, to the page when `on_page`, and waits for its answer, passing over
     /// the events Chrome sends meanwhile.
     fn send(&mut self, method: &str, params: Value, on_page: bool) -> Value {
-        self.call(method, params, on_page)
-            .unwrap_or_else(|error| panic!("{method} failed: {error}"))
+        let answer = self.call(method, params, on_page);
+        assert!(
+            answer.is_ok(),
+            "{method} failed: {}",
+            answer.as_ref().err().unwrap_or(&Value::Null)
+        );
+        answer.unwrap_or_default()
     }
 
     /// Sends one command like `send`, and its answer or Chrome's error.
