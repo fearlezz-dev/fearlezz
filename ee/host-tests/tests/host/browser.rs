@@ -100,6 +100,17 @@ impl Browser {
     /// Sends one command, to the page when `on_page`, and waits for its answer, passing over
     /// the events Chrome sends meanwhile.
     fn send(&mut self, method: &str, params: Value, on_page: bool) -> Value {
+        let answer = self.call(method, params, on_page);
+        assert!(
+            answer.is_ok(),
+            "{method} failed: {}",
+            answer.as_ref().err().unwrap_or(&Value::Null)
+        );
+        answer.unwrap_or_default()
+    }
+
+    /// Sends one command like `send`, and its answer or Chrome's error.
+    fn call(&mut self, method: &str, params: Value, on_page: bool) -> Result<Value, Value> {
         self.next += 1;
         let id = self.next;
         let mut message = json!({"id": id, "method": method, "params": params});
@@ -116,12 +127,10 @@ impl Browser {
             raw.pop();
             let answer: Value = serde_json::from_slice(&raw).unwrap();
             if answer["id"] == id {
-                assert!(
-                    answer.get("error").is_none(),
-                    "{method} failed: {}",
-                    answer["error"]
-                );
-                return answer["result"].clone();
+                return match answer.get("error") {
+                    Some(error) => Err(error.clone()),
+                    None => Ok(answer["result"].clone()),
+                };
             }
         }
     }
@@ -137,6 +146,24 @@ impl Browser {
         );
         let page = attached["sessionId"].as_str().unwrap().to_owned();
         self.page = Some(page.clone());
+        // A new page starts as about:blank, whose document is already complete, and `url`
+        // replaces it a moment later, destroying whatever script runs in it then. So wait for
+        // the document of `url` itself, asking again when the swap cuts a question short.
+        let loaded = json!({
+            "expression": "location.href !== 'about:blank' && document.readyState === 'complete'",
+            "returnByValue": true,
+        });
+        let started = Instant::now();
+        while self
+            .call("Runtime.evaluate", loaded.clone(), true)
+            .map_or(true, |r| r["result"]["value"] != json!(true))
+        {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "{url} never loaded"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
         page
     }
 

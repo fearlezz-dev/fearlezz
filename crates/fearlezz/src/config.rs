@@ -123,6 +123,9 @@ pub(crate) struct Check {
     test_globs: Globs,
     /// The stills and films it takes, and which of them are flaky.
     pub pictures: Pictures,
+    /// Tests (names or globs, as written) that may pass only on a rerun. Listing more weakens
+    /// the proof.
+    pub flaky_tests: Globs,
     /// Work Fearlezz does itself instead of running a command.
     pub builtin: Option<Builtin>,
 }
@@ -201,22 +204,7 @@ impl Pictures {
                 Some(h) => found.extend(record_weakenings(b, h)),
             }
         }
-        let flaky: Vec<String> = head
-            .flaky
-            .widenings(&self.flaky)
-            .into_iter()
-            .map(|w| match w {
-                Widening::Added(p) => format!("+{p}"),
-                Widening::Dropped(p) => format!("-{p}"),
-                Widening::Reordered => "reordered".into(),
-            })
-            .collect();
-        if !flaky.is_empty() {
-            found.push(format!(
-                "it calls more pictures flaky ({})",
-                flaky.join(", ")
-            ));
-        }
+        found.extend(head.flaky.widened(&self.flaky, "pictures"));
         found
     }
 }
@@ -402,6 +390,8 @@ struct RawCheck {
     films: Option<String>,
     #[serde(default)]
     flaky: Vec<String>,
+    #[serde(default)]
+    flaky_tests: Vec<String>,
     record: Option<toml::Value>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
@@ -578,6 +568,8 @@ impl Config {
                         .with_context(|| format!("check {id}"))?,
                     flaky: globs(&c.flaky).with_context(|| format!("check {id}: flaky"))?,
                 },
+                flaky_tests: globs(&c.flaky_tests)
+                    .with_context(|| format!("check {id}: flaky_tests"))?,
                 dir: match c.dir {
                     Some(dir) => Some(folder(&dir).with_context(|| format!("check {id}: dir"))?),
                     None => None,
@@ -739,6 +731,7 @@ fn builtin_check(id: &str, stages: &Stages, inputs: Globs, on: Scope, builtin: B
         test_files: Vec::new(),
         test_globs: Globs::default(),
         pictures: Pictures::default(),
+        flaky_tests: Globs::default(),
     }
 }
 
@@ -787,6 +780,21 @@ impl Globs {
     /// written: dropping a positive glob or putting in a `!` glob anywhere never matches more,
     /// and globs of one kind side by side mean the same in any order. Anything else may match
     /// more, and is named.
+    /// How these globs, a list of flaky `what`, call more of them flaky than `base`, the base
+    /// branch's: one line naming each glob added or `!` glob dropped, or the new order.
+    pub(crate) fn widened(&self, base: &Globs, what: &str) -> Option<String> {
+        let how: Vec<String> = self
+            .widenings(base)
+            .into_iter()
+            .map(|w| match w {
+                Widening::Added(p) => format!("+{p}"),
+                Widening::Dropped(p) => format!("-{p}"),
+                Widening::Reordered => "reordered".into(),
+            })
+            .collect();
+        (!how.is_empty()).then(|| format!("it calls more {what} flaky ({})", how.join(", ")))
+    }
+
     pub(crate) fn widenings(&self, base: &Globs) -> Vec<Widening> {
         let (b, h) = (&base.patterns, &self.patterns);
         if narrows_to(b, h) {

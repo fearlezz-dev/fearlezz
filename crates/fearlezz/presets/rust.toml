@@ -18,8 +18,9 @@ findings = { read = "cargo", lints = ["clippy", "rustc"] }
 run = "cargo test --quiet"
 stage = "working"
 each = "Cargo.toml"
-# Each test binary prints "test result: ok. N passed; M failed; ...".
-tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed' }
+# Each test binary prints "test result: ok. N passed; M failed; ...", and a block
+# "---- <name> stdout ----" per failed test.
+tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed', failed = '(?m)^---- (.+?) stdout ----$' }
 # Integration tests live in tests folders; unit tests inside src cannot be told apart
 # from the code, so only the former show red before green.
 test_files = ["**/tests/**"]

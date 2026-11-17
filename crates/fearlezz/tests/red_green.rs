@@ -210,7 +210,8 @@ fn changing_which_files_are_tests_weakens_the_proof() {
 // Naming the tests
 
 /// The same tests, through a stand in runner that writes a JUnit report with one case per
-/// script, and first "builds": every file a script names on a `# needs` line must exist.
+/// script, and first "builds": every file a script names on a `# needs` line must exist. A
+/// script that exits 3 failed, then passed on the runner's rerun.
 const JUNIT: &str = r#"
 [check.tests]
 run = '''
@@ -221,7 +222,9 @@ r=0
 {
   echo '<testsuite>'
   for t in tests/*.sh; do
-    if sh "$t"; then echo "<testcase classname=\"$t\" name=\"works\"/>"
+    sh "$t"; c=$?
+    if [ "$c" = 0 ]; then echo "<testcase classname=\"$t\" name=\"works\"/>"
+    elif [ "$c" = 3 ]; then echo "<testcase classname=\"$t\" name=\"works\"><flakyFailure/></testcase>"
     else r=1; echo "<testcase classname=\"$t\" name=\"works\"><failure/></testcase>"; fi
   done
   echo '</testsuite>'
@@ -284,6 +287,23 @@ fn a_junit_check_names_the_new_tests_that_pass_on_both() {
     );
     assert!(
         !out.stdout.contains("tests/old.sh::works"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_test_that_passes_only_on_a_rerun_on_the_base_commit_is_not_red() {
+    let repo = junit_repo();
+    change(
+        &repo,
+        "test \"$(cat src/value)\" = 2 || exit 3\n",
+        "fix: the value is two",
+    );
+    let (out, _) = ci(&repo);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("not red before green tests"),
         "{}",
         out.stdout
     );

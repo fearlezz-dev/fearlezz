@@ -158,8 +158,32 @@ pub struct Case {
     /// The `file` attribute, which some runners write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
-    /// It failed.
+    /// It failed: a failure, or a pass only on a rerun that the check's `flaky_tests` does not
+    /// name.
     pub failed: bool,
+    /// It failed, then passed when the runner ran it again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flaky: bool,
+}
+
+impl Case {
+    /// What its check prints about it: why it failed, or that it passed only on a rerun. A
+    /// plain pass says nothing.
+    #[must_use]
+    pub fn line(&self) -> Option<String> {
+        match (self.failed, self.flaky) {
+            (true, false) => Some(format!("failed: {}", self.name)),
+            (true, true) => Some(format!(
+                "flaky: {} (failed, then passed on a rerun)",
+                self.name
+            )),
+            (false, true) => Some(format!(
+                "flaky: {} (failed, then passed on a rerun; listed in flaky_tests)",
+                self.name
+            )),
+            (false, false) => None,
+        }
+    }
 }
 
 /// One thing that keeps a commit from being proven: what, why, and what to do about it.

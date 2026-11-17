@@ -747,7 +747,31 @@ fn print_failure(f: &store::RunResult) {
         }
         println!("  log: {}", f.log.display());
     }
+    print_cases(f);
     print_findings(f);
+}
+
+/// Each test a run names as failed or flaky, the failed ones first and cut short, and what to
+/// do about a flaky one its check does not list.
+fn print_cases(r: &store::RunResult) {
+    const SHOWN: usize = 10;
+    let failed: Vec<&counts::Case> = r.cases.iter().filter(|c| c.failed).collect();
+    for case in failed.iter().take(SHOWN) {
+        println!("  {}", case.line().unwrap_or_default());
+    }
+    if failed.len() > SHOWN {
+        println!("  and {} more failed", failed.len() - SHOWN);
+    }
+    for case in r.cases.iter().filter(|c| c.flaky && !c.failed) {
+        println!("  {}", case.line().unwrap_or_default());
+    }
+    if let Some(case) = failed.iter().find(|c| c.flaky) {
+        println!(
+            "  fix: make it pass every time; only with the developer's OK, flaky_tests = [\"{}\"] on \
+             check {} lets it pass on a rerun, which weakens the proof",
+            case.name, r.check
+        );
+    }
 }
 
 /// A run's proof as it is built, and the run on the proof host while it takes it. Proving a
@@ -1308,6 +1332,7 @@ fn run_checks(
     }
     failures.iter().for_each(print_failure);
     for (_, r) in &green {
+        print_cases(r);
         print_findings(r);
     }
     if let Some(r) = report.as_mut() {

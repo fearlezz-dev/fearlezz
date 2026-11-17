@@ -235,6 +235,12 @@ h1 { font-size: clamp(1.45rem, 3.2vw, 1.9rem); font-weight: 700; letter-spacing:
 .checks .id { overflow-wrap: anywhere; }
 .checks .seconds { color: var(--quiet); font-variant-numeric: tabular-nums; font-size: 0.8rem; }
 .checks li[data-state="failed"] .id { color: var(--bad); font-weight: 700; }
+.checks .tests { grid-column: 2 / -1; list-style: none; margin: 0 0 2px; padding: 0; }
+.checks .tests li { display: flex; gap: 8px; justify-content: space-between; padding: 1px 0; font-size: 0.8rem; }
+.checks .test-name { font-family: var(--mono); overflow-wrap: anywhere; }
+.checks .test-state { color: var(--quiet); white-space: nowrap; }
+.checks .tests li[data-test="failed"] .test-state, .checks .tests li[data-test="flaky"] .test-state { color: var(--bad); }
+.checks .tests .more { color: var(--quiet); }
 .job { display: inline-block; margin: 0 10px 10px; font-size: 0.82rem; color: var(--quiet); }
 .earlier { margin-top: 6px; }
 .earlier > summary { cursor: pointer; list-style: none; font-size: 0.84rem; color: var(--quiet); padding: 6px 10px; border-radius: 8px; }

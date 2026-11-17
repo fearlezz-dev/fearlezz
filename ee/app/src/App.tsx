@@ -3,7 +3,7 @@
 
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { type CheckState, Feed, type Status, connect, stateOf } from "./live";
+import { type CheckState, Feed, type Status, type TestState, connect, namedTests, stateOf } from "./live";
 import { PicturesPanel } from "./PicturesPanel";
 import { picturesOf } from "./pictures";
 import type { Job, Review, Run, RunCheck, Snapshot, Weakening } from "./proof";
@@ -434,6 +434,13 @@ function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => v
   );
 }
 
+const TEST_SHORT: Record<TestState, string> = { failed: "failed", flaky: "flaky", listed: "flaky, listed" };
+const TEST_WORDS: Record<TestState, string> = {
+  failed: "It failed.",
+  flaky: "It failed, then passed on a rerun. That fails the check: a pass only on a rerun is not a pass.",
+  listed: "It failed, then passed on a rerun. The check lists it in flaky_tests, so it passes.",
+};
+
 function CheckView(props: { check: RunCheck; now: number }) {
   const state = () => stateOf(props.check);
   // Seconds it took, or, while it runs, how long it has run so far.
@@ -443,11 +450,25 @@ function CheckView(props: { check: RunCheck; now: number }) {
     const started = props.check.started;
     return started == null ? "" : `${Math.max(0, props.now - started).toFixed(0)} s`;
   };
+  const named = () => namedTests(props.check.entry);
   return (
     <li data-check={props.check.id} data-state={state()}>
       <span class={`dot ${state()}`} role="img" aria-label={WORDS[state()]} title={WORDS[state()]} />
       <span class="id">{props.check.id}</span>
       <span class="seconds">{seconds()}</span>
+      <Show when={named().tests.length}>
+        <ul class="tests">
+          <For each={named().tests}>
+            {(test) => (
+              <li data-test={test.state} title={TEST_WORDS[test.state]}>
+                <span class="test-name">{test.name}</span>
+                <span class="test-state">{TEST_SHORT[test.state]}</span>
+              </li>
+            )}
+          </For>
+          <Show when={named().more}>{(more) => <li class="more">and {more()} more failed</li>}</Show>
+        </ul>
+      </Show>
     </li>
   );
 }
