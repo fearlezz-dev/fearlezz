@@ -1,0 +1,31 @@
+# docs/drive/infra-pieces/record.yaml: the working state of this piece of work.
+goal: "Infra pieces in crates/fearlezz/presets/ (Kubernetes, Terraform/OpenTofu, Nix, yamllint, SOPS), with setup init detection and findings read natively, no shell glue."
+
+pieces:
+  - id: split
+    status: done
+  - id: steps
+    status: building
+  - id: sops
+    status: figuring-out
+    open: how the sops piece knows which files must be encrypted, without reading secrets
+  - id: readers
+    status: figuring-out
+    open: native readers for terraform validate -json and yamllint parsable
+  - id: init
+    status: figuring-out
+    open: markers per piece
+
+decided:
+  - id: split
+    what: "Per tool family: kustomize, helm, flux, terraform, opentofu, nix, yamllint, sops; init adds each from its marker."
+    why: "A check with each but no project folder fails at the root, so bundling breaks repos without that tool."
+  - id: steps
+    what: "Steps list: run takes a list of plain commands run in order; the last one's output is read."
+    why: "terraform init then validate, and render then kubeconform, without shell glue or a pipe that hides a failed build."
+
+open: []
+
+slices: []
+
+next: Ask how the sops piece decides which files must be encrypted.

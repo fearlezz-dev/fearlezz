@@ -49,6 +49,28 @@ fn reading_findings_another_way_runs_the_check_again() {
 }
 
 #[test]
+fn findings_on_stdout_come_from_the_last_step_alone() {
+    let config = r#"
+[check.lint]
+run = ["echo preparing", 'printf "{\"runs\":[{\"results\":[{\"ruleId\":\"r\",\"level\":\"error\",\"message\":{\"text\":\"bad\"},\"locations\":[{\"physicalLocation\":{\"artifactLocation\":{\"uri\":\"src/a.txt\"},\"region\":{\"startLine\":2}}}]}]}]}"']
+stage = "working"
+findings = "sarif"
+"#;
+    let repo = Repo::new(config, &[("src/a.txt", "one\n")]);
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo.write("src/a.txt", "one\ntwo\n");
+    let out = repo.fz(&["run", "lint"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("gate src/a.txt:2  r  bad"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("SARIF:"), "{}", out.stdout);
+}
+
+#[test]
 fn old_findings_do_not_block_new_work() {
     let repo = feature();
     repo.write("src/a.txt", &format!("{OLD}five\n"));

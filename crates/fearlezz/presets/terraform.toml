@@ -1,0 +1,18 @@
+# Terraform: formatting, and every configuration validates. Validation runs in every folder
+# with a `.terraform.lock.hcl` (`each`), the configurations Terraform has been initialised in,
+# after `init` without the backend, so it never touches state or needs credentials; init
+# fetches the providers, so it needs the network. A validation error blocks wherever it is: a
+# configuration that does not hold together breaks as a whole. A warning counts on lines the
+# change touched.
+#
+# For OpenTofu, `use` the `opentofu` piece instead.
+
+[check.terraform-fmt]
+run = "terraform fmt -check -recursive -diff"
+stage = "working"
+
+[check.terraform-validate]
+run = ["terraform init -backend=false -input=false", "terraform validate -json -no-color"]
+stage = "working"
+each = ".terraform.lock.hcl"
+findings = "terraform"

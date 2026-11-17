@@ -1,0 +1,15 @@
+# Kustomize: every kustomization builds, and what it builds is valid Kubernetes. The check runs
+# in every kustomization folder that is not inside another (`each`); an overlay beside its base
+# is its own. kubeconform checks the built manifests against the Kubernetes schemas and, for
+# custom resources, the CRDs catalog; a kind with no schema in either is let through. It
+# fetches schemas, so it needs the network.
+#
+# A kustomization that inflates Helm charts needs `--enable-helm` on the first step.
+
+[check.kustomize]
+run = [
+  'kustomize build . -o "$FEARLEZZ_OUT/manifests.yaml"',
+  "kubeconform -summary -ignore-missing-schemas -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \"$FEARLEZZ_OUT/manifests.yaml\"",
+]
+stage = "working"
+each = "kustomization.yaml"

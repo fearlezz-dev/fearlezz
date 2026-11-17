@@ -1,0 +1,16 @@
+# Flux: flate renders every cluster the repository holds, as Flux would reconcile it, and
+# reports each Kustomization and HelmRelease that does not; kubeconform then checks what it
+# rendered against the Kubernetes schemas and the CRDs catalog. flate fetches sources and
+# charts, and kubeconform schemas, so the check needs the network. It never decrypts a secret:
+# flate leaves encrypted values out.
+#
+# Something only the cluster provides (a Secret an operator makes) fails the render: name its
+# kind in `--allow-missing-kinds` on the first two steps.
+
+[check.flate]
+run = [
+  "flate test all --no-progress",
+  'flate build all --no-progress > "$FEARLEZZ_OUT/manifests.yaml"',
+  "kubeconform -summary -ignore-missing-schemas -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \"$FEARLEZZ_OUT/manifests.yaml\"",
+]
+stage = "working"

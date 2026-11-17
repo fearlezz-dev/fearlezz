@@ -214,7 +214,11 @@ impl Hasher {
         let mut key = Sha256::new();
         key.update(RESULT_FORMAT.as_bytes());
         key.update(b"\0");
+        // Steps apart, so they never key like one script of the same lines.
         key.update(check.run.as_bytes());
+        if check.steps.len() > 1 {
+            key.update(format!("\0{} steps", check.steps.len()).as_bytes());
+        }
         for (name, hash) in &parts {
             key.update(b"\0");
             key.update(name.as_bytes());

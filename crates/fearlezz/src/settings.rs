@@ -53,6 +53,8 @@ pub(crate) enum Tool {
     Oxlint,
     /// `tsconfig.json`; its `compilerOptions`.
     Tsconfig,
+    /// `.yamllint.yaml` (or the `.yamllint` or `.yamllint.yml` the project has).
+    Yamllint,
     /// The Fearlezz agent skill, in each agent's skills folder.
     Skill,
     /// The helpers of the `flutter-look` piece's widget tests in `look_test/`: real fonts,
@@ -63,7 +65,7 @@ pub(crate) enum Tool {
     Hooks,
 }
 
-const TOOLS: [(&str, Tool); 15] = [
+const TOOLS: [(&str, Tool); 16] = [
     ("cargo-lints", Tool::CargoLints),
     ("dart-analysis", Tool::DartAnalysis),
     ("clippy", Tool::Clippy),
@@ -76,6 +78,7 @@ const TOOLS: [(&str, Tool); 15] = [
     ("golangci", Tool::Golangci),
     ("oxlint", Tool::Oxlint),
     ("tsconfig", Tool::Tsconfig),
+    ("yamllint", Tool::Yamllint),
     ("flutter-look", Tool::FlutterLook),
     ("skill", Tool::Skill),
     ("hooks", Tool::Hooks),
@@ -172,9 +175,12 @@ impl Settings {
             Tool::Golangci => golangci_lint_table(&self.lints),
             Tool::Oxlint => oxlint_lint_table(&self.lints),
             Tool::Claude => self.claude_hooks(),
-            Tool::Clippy | Tool::Tsconfig | Tool::Skill | Tool::Hooks | Tool::FlutterLook => {
-                Table::new()
-            }
+            Tool::Clippy
+            | Tool::Tsconfig
+            | Tool::Yamllint
+            | Tool::Skill
+            | Tool::Hooks
+            | Tool::FlutterLook => Table::new(),
         };
         if let Some(own) = self.tools.get(&tool) {
             crate::presets::merge(&mut out, own.clone());
@@ -336,7 +342,9 @@ impl Settings {
                     body.push('\n');
                     vec![(path, body)]
                 }
-                Tool::DartAnalysis | Tool::Detekt | Tool::Golangci => vec![(path, whole(&table)?)],
+                Tool::DartAnalysis | Tool::Detekt | Tool::Golangci | Tool::Yamllint => {
+                    vec![(path, whole(&table)?)]
+                }
                 Tool::FlutterLook => {
                     if let Some(key) = table.keys().next() {
                         bail!("[settings.flutter-look]: no field \"{key}\"; it has none");
@@ -543,6 +551,10 @@ impl Tool {
             ),
             Tool::Tsconfig => (&["tsconfig.json"], "tsconfig.json"),
             Tool::Oxlint => (&[".oxlintrc.json"], ".oxlintrc.json"),
+            Tool::Yamllint => (
+                &[".yamllint", ".yamllint.yaml", ".yamllint.yml"],
+                ".yamllint.yaml",
+            ),
             // Every file is written, like the skill.
             Tool::FlutterLook => (&[FLUTTER_LOOK[0].0, FLUTTER_LOOK[1].0], FLUTTER_LOOK[0].0),
             // Unlike the others, every file is written; `skill_files` picks which.

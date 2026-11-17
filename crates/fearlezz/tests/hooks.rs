@@ -21,6 +21,10 @@ stage = "working"
 run = "cargo test --quiet || true"
 stage = "working"
 
+[check.validate]
+run = ["terraform init -backend=false", "terraform validate -json"]
+stage = "working"
+
 [settings.skill]
 agents = []
 "#;
@@ -284,6 +288,21 @@ fn a_checks_command_run_by_hand_is_not_proof() {
         .unwrap();
     assert!(context.contains("not proof"), "{context}");
     assert!(context.contains("fearlezz run unit"), "{context}");
+}
+
+#[test]
+fn any_step_of_a_check_run_by_hand_is_not_proof() {
+    let repo = changed();
+    let input = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": "terraform validate" },
+    });
+    let answer = hook(&repo, "claude", "after-shell", &input.to_string());
+    let context = answer["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("fearlezz run validate"), "{context}");
 }
 
 // When the agent wants to stop

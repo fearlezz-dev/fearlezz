@@ -23,6 +23,7 @@ mod red;
 mod rules;
 mod run;
 mod settings;
+mod sops;
 mod state;
 mod store;
 

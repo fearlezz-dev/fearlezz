@@ -1,0 +1,12 @@
+# SOPS: every file a `.sops.yaml` creation rule names by `path_regex` is encrypted. Fearlezz
+# sees that from the metadata sops writes into each file it encrypts; it never decrypts, and
+# never shows or keeps what a file holds. A plain file counts when the change touched it, so
+# one from before the piece never blocks new work.
+#
+# A file the regex names that is no secret (a kustomization.yaml beside the secrets): narrow
+# `path_regex`, or list it in `skip` of this rule.
+
+[rule.sops]
+encrypted = "sops"
+level = "gate"
+fix = "encrypt it in place with `sops --encrypt --in-place <file>`; if the plain value was ever pushed, rotate it"
