@@ -52,6 +52,9 @@ pub(crate) struct RunResult {
     /// For a check with a tests reader: how many tests ran; zero when there is no count.
     #[serde(default)]
     pub tests: Option<u64>,
+    /// For a check that measures coverage: what its report measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::coverage::Measured>,
     /// For a check with a JUnit reader: each test case that ran, and whether it failed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cases: Vec<crate::counts::Case>,
@@ -204,6 +207,11 @@ impl Hasher {
                     definition(&check.flaky_tests.patterns()),
                 );
             }
+        }
+        if let Some(coverage) = &check.coverage {
+            parts.insert("(coverage)".into(), definition(coverage));
+            // Coverage never counts a test file, so which files are tests changes its verdict.
+            parts.insert("(test files)".into(), definition(&check.test_files));
         }
         if let Some(pictures) = check.pictures.taken() {
             parts.insert("(pictures)".into(), definition(&pictures));

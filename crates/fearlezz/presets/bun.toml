@@ -7,8 +7,10 @@
 #   [check.bun-test]
 #   run = "bun test src --reporter=junit --reporter-outfile=\"$FEARLEZZ_OUT/junit.xml\""
 
+# Its lcov report flags each changed line no test ran.
 [check.bun-test]
-run = "bun test --reporter=junit --reporter-outfile=\"$FEARLEZZ_OUT/junit.xml\""
+run = "bun test --reporter=junit --reporter-outfile=\"$FEARLEZZ_OUT/junit.xml\" --coverage --coverage-reporter=lcov --coverage-dir=\"$FEARLEZZ_OUT\""
 stage = "working"
 tests = "junit"
+coverage = "lcov"
 test_files = ["**/*.test.*", "**/*_test.*", "**/*.spec.*", "**/*_spec.*"]

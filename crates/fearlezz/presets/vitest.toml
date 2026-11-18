@@ -1,5 +1,11 @@
 # Tests run by Vitest, counted from its JUnit report.
 
+# To flag each changed line no test ran, add @vitest/coverage-v8 and write in fearlezz.toml:
+#
+#   [check.vitest]
+#   run = "vitest run --reporter=default --reporter=junit --outputFile.junit=\"$FEARLEZZ_OUT/junit.xml\" --coverage.enabled --coverage.reporter=lcov --coverage.reportsDirectory=\"$FEARLEZZ_OUT\""
+#   coverage = "lcov"
+
 [check.vitest]
 run = "vitest run --reporter=default --reporter=junit --outputFile.junit=\"$FEARLEZZ_OUT/junit.xml\""
 stage = "working"

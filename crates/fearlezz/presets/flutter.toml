@@ -7,10 +7,12 @@ use = ["dart"]
 off = true
 
 # The last line says "+12: All tests passed!" or "+10 -2: Some tests failed.".
+# Its lcov report flags each changed line no test ran.
 [check.flutter-test]
-run = "flutter test"
+run = "flutter test --coverage --coverage-path=\"$FEARLEZZ_OUT/lcov.info\""
 stage = "working"
 tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
+coverage = "lcov"
 test_files = ["test/**"]
 
 # Flutter's own excludes come too: every flutter command appends build/** and each platform

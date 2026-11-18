@@ -14,7 +14,12 @@ stage = "working"
 findings = { read = "sarif", lints = ["detekt"] }
 
 # --rerun runs the tests even when Gradle thinks they are up to date, so this run writes the
-# reports it is judged on.
+# reports it is judged on. To flag each changed line no test ran, apply the Kover plugin and
+# write in fearlezz.toml:
+#
+#   [check.gradle-test]
+#   run = "./gradlew test koverXmlReport --rerun"
+#   coverage = { jacoco = "**/build/reports/kover/report.xml" }
 [check.gradle-test]
 run = "./gradlew test --rerun"
 stage = "working"

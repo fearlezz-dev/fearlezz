@@ -207,6 +207,15 @@ impl Changed {
         self.files.keys().map(String::as_str)
     }
 
+    /// Whether the change added or modified line `line` of `path`.
+    pub(crate) fn has_line(&self, path: &str, line: u32) -> bool {
+        match self.files.get(path) {
+            None => false,
+            Some(Lines::All) => true,
+            Some(Lines::Ranges(r)) => r.iter().any(|&(a, b)| a <= line && line <= b),
+        }
+    }
+
     fn touches(&self, f: &Finding) -> bool {
         let end = f.end_line.unwrap_or(f.line).max(f.line);
         match self.files.get(&f.file) {

@@ -4,7 +4,7 @@
 //! Two readers cover every runner: JUnit reports, which most runners write, and a pattern for
 //! the summary line a runner prints. The language pieces set the right one.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context as _, Result, bail};
@@ -149,16 +149,25 @@ impl Reader {
                          none, or wrote it elsewhere"
                     ));
                 }
-                let cases: Vec<Case> = reports.iter().flat_map(|text| junit_cases(text)).collect();
+                let cases: Vec<Case> = reports
+                    .iter()
+                    .flat_map(|(_, text)| junit_cases(text))
+                    .collect();
                 Ok((u64::try_from(cases.len()).unwrap_or(u64::MAX), cases))
             }
         }
     }
 }
 
-/// The text of every file under `dir` matching `matcher` (from `base`) and changed after
+/// The path and text of every file under `dir` matching `matcher` (from `base`) and changed after
 /// `since`. Hidden folders and installed packages are skipped.
-fn find(base: &Path, dir: &Path, matcher: &GlobMatcher, since: SystemTime, out: &mut Vec<String>) {
+pub(crate) fn find(
+    base: &Path,
+    dir: &Path,
+    matcher: &GlobMatcher,
+    since: SystemTime,
+    out: &mut Vec<(PathBuf, String)>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -181,7 +190,7 @@ fn find(base: &Path, dir: &Path, matcher: &GlobMatcher, since: SystemTime, out: 
             && matcher.is_match(rel)
             && let Ok(text) = std::fs::read_to_string(&path)
         {
-            out.push(text);
+            out.push((path, text));
         }
     }
 }
@@ -268,7 +277,7 @@ fn start_tag(text: &str) -> (&str, &str) {
 }
 
 /// The unescaped value of the attribute `name` in a start tag's attributes.
-fn attr(attrs: &str, name: &str) -> Option<String> {
+pub(crate) fn attr(attrs: &str, name: &str) -> Option<String> {
     let mut rest = attrs;
     loop {
         let (before, after) = rest.split_once(name)?;

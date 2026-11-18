@@ -190,8 +190,10 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
             say("it no longer counts its tests".into());
         }
         // Which files are tests decides what runs on the base commit, so any change to it
-        // could hide a fix whose tests do not fail there. Naming them the first time is fine.
-        if !b.test_files.is_empty() && h.test_files != b.test_files {
+        // could hide a fix whose tests do not fail there. Naming them the first time is fine,
+        // unless the check measures coverage, which never counts a test file.
+        let measured = b.coverage.is_some() && h.coverage.is_some();
+        if (measured || !b.test_files.is_empty()) && h.test_files != b.test_files {
             say("it names other test files".into());
         }
         // What a check sees can change what it proves (a variable that skips the slow tests,
@@ -209,6 +211,7 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
                 found.extend(settings(bf.levels.weakenings(&hf.levels, *tool)));
             }
         }
+        found.extend(coverage(b, h));
         if let (Some(Builtin::Rules(br)), Some(Builtin::Rules(hr))) = (&b.builtin, &h.builtin) {
             found.extend(settings(br.weakenings(hr, files)));
         }
@@ -254,6 +257,38 @@ fn names_diff(base: &[String], head: &[String]) -> String {
         .filter(|v| !head.contains(v))
         .map(|v| format!("-{v}"));
     added.chain(dropped).collect::<Vec<_>>().join(", ")
+}
+
+/// What the head's check measures of coverage less than the base's: none at all, another
+/// report format, a lower target, or a lower level for `[lints.coverage]`.
+fn coverage(b: &config::Check, h: &config::Check) -> Vec<(Part, String)> {
+    let part = || Part::Check(b.id.clone());
+    match (&b.coverage, &h.coverage) {
+        (Some(_), None) => vec![(part(), "it no longer measures coverage".into())],
+        (Some(bc), Some(hc)) if bc.read.name() != hc.read.name() => vec![(
+            part(),
+            format!(
+                "it reads its coverage as {} instead of {}",
+                hc.read.name(),
+                bc.read.name()
+            ),
+        )],
+        (Some(bc), Some(hc)) => (hc.target < bc.target)
+            .then(|| {
+                let how = format!(
+                    "its coverage target is lower ({}%, now {}%)",
+                    bc.target, hc.target
+                );
+                (part(), how)
+            })
+            .into_iter()
+            .chain(settings(
+                bc.levels
+                    .weakenings(&hc.levels, crate::lints::Tool::Coverage),
+            ))
+            .collect(),
+        (None, _) => Vec::new(),
+    }
 }
 
 /// Weakenings of parts of the config other than a check, each as its path and how.

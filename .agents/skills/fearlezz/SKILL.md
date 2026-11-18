@@ -178,7 +178,7 @@ unwrap_used = "warn"       # tools: cargo-lints, dart-analysis, claude
 
 ## Lint levels
 
-Pieces decide every lint rule once under `[lints.<tool>]` (tools: clippy, rustc, dart, biome, eslint, ruff, ktlint, detekt, golangci) as `gate`, `flag`, `hint` or `off`; the project overrides any rule. A check names the tables its findings use, and each finding gets its rule's level; an off rule is never reported. `fearlezz setup sync` turns the rules on or off in the tool's own file: Cargo.toml, analysis_options.yaml, biome.json, eslint.fearlezz.mjs (spread it into eslint.config.* after the plugin configs), ruff.toml, a marked block in .editorconfig (ktlint), config/detekt/detekt.yml, .golangci.yml. When the project already keeps a tool's config in another file that tool reads first (biome.jsonc, .ruff.toml, pyproject.toml with `[tool.ruff]`, .golangci.yaml), sync writes into that file instead of adding one that shadows it.
+Pieces decide every lint rule once under `[lints.<tool>]` (tools: clippy, rustc, dart, biome, eslint, ruff, ktlint, detekt, golangci, coverage) as `gate`, `flag`, `hint` or `off`; the project overrides any rule. A check names the tables its findings use, and each finding gets its rule's level; an off rule is never reported. `fearlezz setup sync` turns the rules on or off in the tool's own file: Cargo.toml, analysis_options.yaml, biome.json, eslint.fearlezz.mjs (spread it into eslint.config.* after the plugin configs), ruff.toml, a marked block in .editorconfig (ktlint), config/detekt/detekt.yml, .golangci.yml. When the project already keeps a tool's config in another file that tool reads first (biome.jsonc, .ruff.toml, pyproject.toml with `[tool.ruff]`, .golangci.yaml), sync writes into that file instead of adding one that shadows it.
 
 ```toml
 [check.clippy]
@@ -217,6 +217,29 @@ tests = { count = '...', failed = '(?m)^---- (.+?) stdout ----$' }    # and each
 Only reports written by the run count, so an old report never passes for a new run.
 
 A failed check names each test that failed, from its JUnit reports or its `failed` pattern, in `fearlezz run` (`failed: <name>`), the job summary and on the proof host; a test named as failed fails the check even when the runner exits 0. A runner that reruns a failed test (Playwright with `includeRetries` on its junit reporter, cargo nextest, Maven) writes each failed attempt as `<flakyFailure>` or `<flakyError>`. A test that passed only on a rerun fails the check like a failure (`flaky: <name> (failed, then passed on a rerun)`): find why it is flaky and fix it. Only with the developer's OK, `flaky_tests = ["<name or glob>"]` on the check (a glob's `*` stops at `/`) lets it pass on a rerun, shown apart; it weakens the proof.
+
+## Coverage
+
+A test check that measures coverage names its report with `coverage`. Each run of lines this change added or changed that no test ran is a finding of the rule `uncovered`. Old untested code never counts, test files are never measured, coverage never makes a failing test run pass, and a run that writes no report fails. The go, bun and flutter pieces measure it; the rust, vitest, python and kotlin pieces show the line that turns it on.
+
+How strict it is follows the project's coverage against a target, 80% unless the check sets one, since more tests add little above it:
+
+- project at or above the target: untested lines are hints
+- project under it, the change tests at least the target's share of its lines: flags
+- project under it, the change tests less: gates
+
+Never write a test only to reach a number: test what the code should do, or delete code nothing needs.
+
+```toml
+coverage = "lcov"                                           # $FEARLEZZ_OUT/lcov.info (cargo llvm-cov, Vitest, Bun, Flutter, pytest-cov)
+coverage = "go"                                             # $FEARLEZZ_OUT/cover.out (go test -coverprofile)
+coverage = { jacoco = "**/build/reports/kover/report.xml" }  # JaCoCo XML anywhere this run wrote it (Kover)
+coverage = { read = "lcov", target = 70 }                   # another target
+coverage = false                                            # turn off what a piece measures
+
+[lints.coverage]
+uncovered = "flag"   # one level, whatever the coverage
+```
 
 ## Red before green
 

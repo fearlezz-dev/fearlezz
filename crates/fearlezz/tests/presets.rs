@@ -831,7 +831,11 @@ fn scripts(scripts: &[(&str, &str)]) -> (tempfile::TempDir, String) {
 #[test]
 fn the_envtest_piece_gives_go_test_the_binaries_of_the_kubernetes_version_in_go_mod() {
     let go_mod = "module op\n\ngo 1.24\n\nrequire (\n\tk8s.io/api v0.31.2\n\tsigs.k8s.io/controller-runtime v0.19.0\n)\n";
-    let repo = on_branch("use = [\"go\", \"envtest\"]\n", &[("go.mod", go_mod)]);
+    // The stand in go writes no coverage profile.
+    let repo = on_branch(
+        "use = [\"go\", \"envtest\"]\n\n[check.go-test]\ncoverage = false\n",
+        &[("go.mod", go_mod)],
+    );
     // setup-envtest prints the folder of the binaries it fetched for the version it is asked;
     // go passes only when the tests find them there.
     let (_bin, path) = scripts(&[

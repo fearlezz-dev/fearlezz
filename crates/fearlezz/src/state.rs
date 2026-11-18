@@ -54,11 +54,12 @@ impl Worktree {
 
     pub(crate) fn inputs(&mut self, check: &crate::config::Check) -> Result<Inputs> {
         // A check judged on changed lines gives another verdict when those lines change.
-        let scope = check
+        let judged = check
             .findings
             .as_ref()
-            .filter(|f| f.on == crate::findings::Scope::Changed)
-            .map(|_| self.lines.digest(|p| check.reads(p)));
+            .is_some_and(|f| f.on == crate::findings::Scope::Changed);
+        let scope =
+            (judged || check.coverage.is_some()).then(|| self.lines.digest(|p| check.reads(p)));
         self.hasher.inputs(
             &self.git.root,
             check,

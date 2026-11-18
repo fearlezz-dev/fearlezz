@@ -10,6 +10,11 @@ findings = { read = "sarif", lints = ["ruff"] }
 run = "ruff format --check ."
 stage = "working"
 
+# To flag each changed line no test ran, add pytest-cov and write in fearlezz.toml:
+#
+#   [check.pytest]
+#   run = "pytest -q --junitxml=\"$FEARLEZZ_OUT/junit.xml\" --cov --cov-report=lcov:\"$FEARLEZZ_OUT/lcov.info\""
+#   coverage = "lcov"
 [check.pytest]
 run = "pytest -q --junitxml=\"$FEARLEZZ_OUT/junit.xml\""
 stage = "working"

@@ -101,6 +101,44 @@ pub(crate) fn execute(
         findings = verdict.counted;
         findings_elsewhere = verdict.elsewhere;
     }
+    // Coverage adds findings but never excuses a failed run: only a gate of its own fails it.
+    let mut measured = None;
+    if let Some(coverage) = &check.coverage {
+        let report = crate::coverage::At {
+            out: &dir,
+            root: at.root,
+            folder: check.dir.as_deref(),
+            since: started,
+        };
+        // The project's code: files git keeps that the check reads, tests aside.
+        let code = crate::git::Git::discover(at.root)
+            .and_then(|git| git.files())
+            .map(|files| {
+                files
+                    .into_iter()
+                    .filter(|p| check.reads(p) && !check.is_test(p))
+                    .collect()
+            })
+            .map_err(|e| {
+                format!("could not list the repository's files to measure coverage: {e:#}")
+            });
+        match code.and_then(|code| coverage.findings(&report, at.changed, &code)) {
+            Ok((found, m)) => {
+                measured = Some(m);
+                passed &= !found
+                    .iter()
+                    .any(|f| f.level == crate::findings::Level::Gate);
+                findings.extend(found);
+                findings
+                    .sort_by(|a, b| (b.level, &a.file, a.line).cmp(&(a.level, &b.file, b.line)));
+            }
+            // First, as it is why the run failed.
+            Err(why) => {
+                proof_errors.insert(0, why);
+                passed = false;
+            }
+        }
+    }
     let mut cases = Vec::new();
     let tests = check.tests.as_ref().map(|reader| {
         match reader.count(&[&log, &stdout_path], &dir, at.root, started) {
@@ -141,6 +179,7 @@ pub(crate) fn execute(
         proof_errors,
         findings,
         findings_elsewhere,
+        coverage: measured,
         tests,
         cases,
         missing_secret,
