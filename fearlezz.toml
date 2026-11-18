@@ -59,8 +59,8 @@ stage = "working"
 
 # macOS proves only what Linux cannot: it lints the code only macOS compiles (recording, window
 # parking, copy on write clones) and runs the tests that reach it. Their inputs are the files
-# that code lives in and the pinned toolchain, so a change elsewhere reuses the base commit's macOS pass and has no macOS
-# leg. They show no red before green: the same tests run on Linux, which shows it.
+# that code lives in and the pinned toolchain, so a change elsewhere reuses the base commit's
+# macOS pass and has no macOS leg. They show no red before green: the same tests run on Linux, which shows it.
 [check."clippy/macos"]
 on = ["macos"]
 run = "cargo clippy --all-targets --quiet --message-format=json"
@@ -68,14 +68,15 @@ stage = "working"
 findings = { read = "cargo", lints = ["clippy", "rustc"] }
 inputs = ["crates/fearlezz/src/record.rs", "crates/fearlezz/src/record/**", "crates/fearlezz/src/env.rs", "Cargo.toml", "crates/fearlezz/Cargo.toml", "Cargo.lock", "clippy.toml", "devenv.nix", "devenv.lock"]
 
-# The window parking units, and the env tests whose fresh checkout clones folders (clonefile).
-# A filter that matches no test fails the check, since it then counts zero.
+# The window parking units, the env tests whose fresh checkout clones folders (clonefile), the
+# recording on an iOS simulator CI must prove, and the left to CI test whose screen differs by
+# OS. A filter that matches no test fails the check, since it then counts zero.
 [check."tests/macos"]
 on = ["macos"]
-run = "cargo test --quiet -p fearlezz --bin fearlezz --test env -- record::place:: cloned prepare"
+run = "cargo test --quiet -p fearlezz --bin fearlezz --test env --test record -- record::place:: cloned prepare ios_simulator screen_this_machine_never_has"
 stage = "working"
 tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed', failed = '(?m)^---- (.+?) stdout ----$' }
-inputs = ["crates/fearlezz/src/record.rs", "crates/fearlezz/src/record/**", "crates/fearlezz/src/env.rs", "crates/fearlezz/tests/env.rs", "crates/fearlezz/tests/common/**", "Cargo.toml", "crates/fearlezz/Cargo.toml", "Cargo.lock", "devenv.nix", "devenv.lock"]
+inputs = ["crates/fearlezz/src/record.rs", "crates/fearlezz/src/record/**", "crates/fearlezz/src/env.rs", "crates/fearlezz/tests/env.rs", "crates/fearlezz/tests/record.rs", "crates/fearlezz/tests/common/**", "Cargo.toml", "crates/fearlezz/Cargo.toml", "Cargo.lock", "devenv.nix", "devenv.lock"]
 
 # CI proves the commit in legs, Linux every check but the two above. Locally the developer's
 # machine stands in for both.
