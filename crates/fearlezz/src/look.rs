@@ -83,11 +83,11 @@ fn compare_texts(before: &Path, after: &Path) -> Result<(Change, String, Option<
     }
     let (b, a) = (crate::text::readable(&b), crate::text::readable(&a));
     let (added, removed) = crate::text::counts(&b, &a);
-    let lines = |n: usize| if n == 1 { "line" } else { "lines" };
+    let lines = |n: usize| fearlezz_proof::plural(n, "line");
     let summary = match (added, removed) {
-        (0, r) => format!("{r} {} removed", lines(r)),
-        (a, 0) => format!("{a} {} added", lines(a)),
-        (a, r) => format!("{a} {} added, {r} removed", lines(a)),
+        (0, r) => format!("{} removed", lines(r)),
+        (a, 0) => format!("{} added", lines(a)),
+        (a, r) => format!("{} added, {r} removed", lines(a)),
     };
     Ok((
         Change::Changed,

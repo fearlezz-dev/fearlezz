@@ -1019,7 +1019,7 @@ fn print_status(ctx: &Ctx, v: &View, host: (Vec<String>, usize)) {
     }
     for c in v.checks.iter().filter(|c| !c.findings.is_empty()) {
         println!("findings {}:", c.id);
-        for f in c.findings.iter().take(10) {
+        for f in c.findings.iter().take(report::SHOWN) {
             println!("  {f}");
         }
     }

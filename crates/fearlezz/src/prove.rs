@@ -198,7 +198,7 @@ fn run_at(
                 None,
             ),
             Of::Base => (
-                format!("base-{}", site.wt.tree.get(..7).unwrap_or(&site.wt.tree)),
+                format!("base-{}", fearlezz_proof::short(&site.wt.tree)),
                 Some(env.state.hold(root)?),
             ),
         };

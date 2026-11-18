@@ -142,10 +142,10 @@ impl View {
             .collect();
         let count: usize = looks.iter().map(|l| l.to_look_at()).sum();
         let checks: Vec<&str> = looks.iter().map(|l| l.check.as_str()).collect();
-        let noun = if count == 1 { "picture" } else { "pictures" };
         (count > 0).then(|| {
             format!(
-                "{count} {noun} changed ({}): a person reviews them on the pull request",
+                "{} changed ({}): a person reviews them on the pull request",
+                fearlezz_proof::plural(count, "picture"),
                 checks.join(", ")
             )
         })

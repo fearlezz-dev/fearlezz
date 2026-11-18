@@ -471,15 +471,6 @@ impl<'a> Leg<'a> {
     }
 }
 
-/// `1 picture` or `3 pictures`.
-fn pictures(n: usize) -> String {
-    if n == 1 {
-        "1 picture".into()
-    } else {
-        format!("{n} pictures")
-    }
-}
-
 impl Review {
     /// The pictures that wait for a look.
     pub fn waiting(&self) -> impl Iterator<Item = &Picture> {
@@ -544,7 +535,7 @@ impl Review {
             State::NeedsChange => {
                 let n = self.noted().len();
                 let verb = if n == 1 { "needs" } else { "need" };
-                format!("{} {verb} change at {head}", pictures(n))
+                format!("{} {verb} change at {head}", crate::plural(n, "picture"))
             }
             State::Waits => {
                 let whose = if role >= Role::Write { "your" } else { "a" };

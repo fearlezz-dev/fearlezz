@@ -541,6 +541,15 @@ pub fn test_names(names: &[String], quote: &str) -> String {
     }
 }
 
+/// A count with its word, `1 note` or `3 notes`.
+pub fn plural<N>(n: N, word: &str) -> String
+where
+    N: std::fmt::Display + PartialEq + From<u8>,
+{
+    let s = if n == N::from(1) { "" } else { "s" };
+    format!("{n} {word}{s}")
+}
+
 /// The first seven characters of a commit, as people read it.
 pub fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)

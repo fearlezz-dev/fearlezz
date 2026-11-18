@@ -123,9 +123,9 @@ fn queue<T>(what: &str, shown: &str, done: impl Fn() -> Option<T>) -> Result<Tur
                 .iter()
                 .map(|path| behind(Holder::read(path), now))
                 .collect();
-            let plural = if slots == 1 { "slot" } else { "slots" };
             eprintln!(
-                "wait {what}: the heavy queue is full ({slots} {plural}, {VAR}={slots}); {}",
+                "wait {what}: the heavy queue is full ({}, {VAR}={slots}); {}",
+                fearlezz_proof::plural(slots, "slot"),
                 behind.join("; ")
             );
             eprintln!(

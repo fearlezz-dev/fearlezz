@@ -15,7 +15,8 @@ use serde_json::Value;
 use crate::look::{Change, Item as Picture};
 use crate::proof::{Proof, Ran};
 
-/// Pictures listed in the job summary at most, so it stays readable.
+/// The items of one list the job summary shows at most, so it stays readable: pictures,
+/// failed tests.
 const SHOWN: usize = 20;
 
 /// What GitHub Actions tells every step of a run, read once from its environment and event
@@ -253,7 +254,6 @@ fn failing_logs(proof: &Proof, text: &mut String) -> std::fmt::Result {
 
 /// Each test a check names as failed or flaky, the failed ones first and cut short.
 fn tests(proof: &Proof, text: &mut String) -> std::fmt::Result {
-    const SHOWN: usize = 20;
     for check in proof.ran_here() {
         let failed: Vec<&fearlezz_proof::Case> = check.cases.iter().filter(|c| c.failed).collect();
         let flaky = check.cases.iter().filter(|c| c.flaky && !c.failed);

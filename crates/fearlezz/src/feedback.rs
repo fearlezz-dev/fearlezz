@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 use fearlezz_proof::notes::{Feedback, Noted, Side};
+use fearlezz_proof::plural;
 use fearlezz_proof::review::Standing;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -247,14 +248,6 @@ pub(crate) fn open_notes(git: &Git, url: &str) -> usize {
     }
 }
 
-fn plural(n: usize, one: &str) -> String {
-    if n == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{n} {one}s")
-    }
-}
-
 /// The work, then each picture to look at with its verdict and open notes, then notes on other
 /// pictures.
 fn lines(feedback: &Feedback) -> Vec<String> {
@@ -401,7 +394,7 @@ fn show(url: &str, login: &Login, dir: &Path, n: usize, noted: &Noted) {
     println!(
         "  by {}, on the run of {}",
         note.by,
-        note.head.get(..7).unwrap_or(&note.head)
+        fearlezz_proof::short(&note.head)
     );
     // A note on a text is about the whole text, saved as it is.
     let text = noted.kind == crate::look::TEXT;
