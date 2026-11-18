@@ -816,8 +816,7 @@ pub(crate) fn shown(
     }
 }
 
-/// The exit code a shell gives when it cannot find the command.
-pub(crate) const NOT_FOUND: i32 = 127;
+pub(crate) use fearlezz_proof::why::NOT_FOUND;
 
 /// The command the shell could not find, from the end of a check's log.
 pub(crate) fn missing_command(log: &Path) -> Option<String> {

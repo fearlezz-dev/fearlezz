@@ -65,14 +65,21 @@ pub enum Generated {
     NamesNoFile(Vec<String>),
 }
 
+/// The shell's exit code for a command it could not find or start.
+pub const NOT_FOUND: i32 = 127;
+
 /// How to make a missing tool reachable, which only the CLI knows: where it looks for tools.
 pub type Install = fn(&str) -> String;
 
 impl Why {
     /// It never got to say anything about its inputs: SecretSpec could not give it a secret,
-    /// its preview could not be deployed, or the shell could not find its command.
+    /// its preview could not be deployed, or the shell could not find its command (even when
+    /// what it printed names no tool, as a script whose interpreter is missing does).
     pub fn proves_nothing(&self) -> bool {
-        matches!(self, Why::Secret(_) | Why::Preview(_) | Why::MissingTool(_))
+        matches!(
+            self,
+            Why::Secret(_) | Why::Preview(_) | Why::MissingTool(_) | Why::Exit(Some(NOT_FOUND))
+        )
     }
 
     /// The line after `fail <check>` in the terminal, which lists findings and the end of the
