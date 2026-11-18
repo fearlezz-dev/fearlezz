@@ -2,10 +2,7 @@
 // one. The host keeps only a token's HMAC, so a link is shown once, when it is made.
 
 import { post, refusal } from "./api";
-import type { Work } from "./proof";
-
-/** A live link, as the list shows it: who made it and when, never the link itself. */
-export type Share = { id: string; made_by: string; made_at: number };
+import type { Share, Work } from "./proof";
 
 const query = (work: Work) =>
   `repository=${encodeURIComponent(work.repository)}&branch=${encodeURIComponent(work.branch)}`;

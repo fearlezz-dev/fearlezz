@@ -1,6 +1,8 @@
 // What changed between two texts, for a person to see at a glance: the lines of each, kept,
 // taken out or put in, and inside a line that was replaced, the words that differ.
 
+import type { DiffLine } from "./proof";
+
 /** A piece of a line: a word or the space between words, marked when it differs. */
 export type Piece = { text: string; differs: boolean };
 
@@ -114,24 +116,54 @@ export function folded(lines: Line[], context: number): (Line | Fold)[] {
   return out;
 }
 
+/** A run of lines taken out followed by lines put in, where a taken out line and the put in
+ * line at the same place in the run show the words that differ. */
+function replaced(out: string[], into: string[]): Line[] {
+  const paired = Math.min(out.length, into.length);
+  return [
+    ...out.map((l, k): Line => ({ kind: "was", pieces: k < paired ? pieces(l, into[k]!)[0] : whole(l, false) })),
+    ...into.map((l, k): Line => ({ kind: "now", pieces: k < paired ? pieces(out[k]!, l)[1] : whole(l, false) })),
+  ];
+}
+
+/** A text's diff as the CLI wrote it into the bundle, already folded, with the words that
+ * differ marked in each run of lines taken out and put in. */
+export function sent(diff: DiffLine[]): (Line | Fold)[] {
+  const lines: (Line | Fold)[] = [];
+  let out: string[] = [];
+  let into: string[] = [];
+  const flush = () => {
+    lines.push(...replaced(out, into));
+    out = [];
+    into = [];
+  };
+  for (const line of diff) {
+    if (line.kind === "was") {
+      if (into.length) flush();
+      out.push(line.text);
+    } else if (line.kind === "now") {
+      into.push(line.text);
+    } else {
+      flush();
+      lines.push(line.kind === "fold" ? { count: line.count } : { kind: "same", pieces: whole(line.text, false) });
+    }
+  }
+  flush();
+  return lines;
+}
+
 /** The lines of `now` against `was` (either may be absent): kept lines, and each run of lines
- * taken out followed by lines put in, where a taken out line and the put in line at the same
- * place in the run show the words that differ. */
+ * taken out followed by lines put in, the words that differ marked. A text's diff comes from
+ * the bundle (`sent`); this compares a part of the config, and a text of a bundle from a CLI
+ * that did not write its diff. */
 export function diff(was: string | undefined | null, now: string | undefined | null): Line[] {
   const a = was ? was.replace(/\n$/, "").split("\n") : [];
   const b = now ? now.replace(/\n$/, "").split("\n") : [];
   const lines: Line[] = [];
-  const flush = (out: string[], into: string[]) => {
-    const paired = Math.min(out.length, into.length);
-    const outPieces = out.map((l, k) => (k < paired ? pieces(l, into[k]!)[0] : whole(l, false)));
-    const intoPieces = into.map((l, k) => (k < paired ? pieces(out[k]!, l)[1] : whole(l, false)));
-    for (const p of outPieces) lines.push({ kind: "was", pieces: p });
-    for (const p of intoPieces) lines.push({ kind: "now", pieces: p });
-  };
   let i = 0;
   let j = 0;
   for (const [ki, kj] of [...common(a, b), [a.length, b.length] as [number, number]]) {
-    flush(a.slice(i, ki), b.slice(j, kj));
+    lines.push(...replaced(a.slice(i, ki), b.slice(j, kj)));
     if (ki < a.length) lines.push({ kind: "same", pieces: whole(a[ki]!, false) });
     i = ki + 1;
     j = kj + 1;

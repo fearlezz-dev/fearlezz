@@ -9,6 +9,7 @@ import { fileUrl } from "./grant";
 import { type Draft, type Shown as Noted, meant, onSide, regionBetween } from "./notes";
 import { type Box, type Shown, WORDS, isFilm, isText, lanes, marksAt, plainSummary, stillMarks, title } from "./pictures";
 import type { Comparison } from "./proof";
+import { short } from "./short";
 
 export const MODES = [
   ["side", "Side by side"],
@@ -504,7 +505,8 @@ function Timeline(props: { film: Comparison; clock: Clock }) {
   );
 }
 
-/** A text of a look: its before and after read from the files origin, line by line. */
+/** A text of a look from a CLI that did not write its diff into the bundle: its before and
+ * after read from the files origin, line by line. */
 function TextDiff(props: { before: string; after: string }) {
   const read = async (url: string) => {
     if (!url) return "";
@@ -549,9 +551,9 @@ export function Stage(props: {
     return w > 0 && h > 0 ? [w, h] : undefined;
   });
   const both = () => picture().before != null && picture().after != null;
-  const base = () => props.shown.look.base_commit.slice(0, 7);
+  const base = () => short(props.shown.look.base_commit);
   const beforeLabel = () => `Before, ${base()}`;
-  const afterLabel = () => `After, ${props.head.slice(0, 7)}`;
+  const afterLabel = () => `After, ${short(props.head)}`;
   return (
     <article
       class="stage"
@@ -599,7 +601,14 @@ export function Stage(props: {
       <Show when={props.shown.look.no_before}>
         {(why) => <p class="look-note" title="Every picture of this check counts as new">No before: {why()}</p>}
       </Show>
-      <Show when={!text()} fallback={<TextDiff before={url(picture().before)} after={url(picture().after)} />}>
+      <Show
+        when={!text()}
+        fallback={
+          <Show when={picture().diff} fallback={<TextDiff before={url(picture().before)} after={url(picture().after)} />}>
+            {(lines) => <DiffLines lines={lines()} />}
+          </Show>
+        }
+      >
       <Show
         when={both()}
         fallback={

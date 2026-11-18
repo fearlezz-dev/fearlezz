@@ -18,9 +18,12 @@ use crate::{Proof, Ran, short};
 
 /// What a person may do on a repository, as GitHub's collaborator permission says it. Which
 /// act needs which role is the host's one rule (`Act` in its `say.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     /// Read, or nothing.
+    #[serde(rename = "read")]
     Less,
     /// Write or maintain.
     Write,
@@ -47,6 +50,25 @@ impl Role {
             Role::Less => "read",
         }
     }
+}
+
+/// Who looks at a work's page, as the host answers `GET /api/v2/viewer/<owner>/<name>`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(untagged)]
+pub enum Viewer {
+    /// A signed in person, and what GitHub lets them do on the repository.
+    Signed {
+        /// Their GitHub login.
+        login: String,
+        /// Their role on the repository.
+        role: Role,
+    },
+    /// Nobody signed in.
+    Out {
+        /// Always null.
+        login: (),
+    },
 }
 
 /// A person's word that one picture looks right, as its content was when they gave it. What
@@ -182,6 +204,24 @@ pub struct Review {
     /// Where the preview deploy of the head lives, as its proof names it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+    /// Where it stands in one line, as [`Review::title_for`] says it to each role; empty in a
+    /// review stored before the host sent it, until [`Review::titled`].
+    #[serde(default)]
+    pub title: Title,
+}
+
+/// Where review of a head stands in one line, said to a person of each role, so a page shows
+/// the line its viewer can act on without wording it again.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ReviewTitle"))]
+pub struct Title {
+    /// To someone who may only read: signed out, through a share link, or read access. GitHub's
+    /// check run and comment say this one.
+    pub read: String,
+    /// To someone with write access, who gives verdicts.
+    pub write: String,
+    /// To an admin, who also accepts weakenings.
+    pub admin: String,
 }
 
 /// A CI job that waits for a runner, before Fearlezz in it opens a run.
@@ -365,7 +405,9 @@ pub fn review(
         accept,
         notes: open.into_iter().cloned().collect(),
         preview,
+        title: Title::default(),
     }
+    .titled()
 }
 
 /// Whether `url` is a plain `http://` or `https://` address with a host: nothing that runs
@@ -460,14 +502,35 @@ impl Review {
         !self.weakened.is_empty() && self.accept.is_none()
     }
 
+    /// The review with its [`Title`] derived from where it stands.
+    pub fn titled(self) -> Review {
+        let title = Title {
+            read: self.title_for(Role::Less),
+            write: self.title_for(Role::Write),
+            admin: self.title_for(Role::Admin),
+        };
+        Review { title, ..self }
+    }
+
     /// Where it stands in one line, as the check run's title and the comment say it.
     pub fn title(&self) -> String {
+        self.title_for(Role::Less)
+    }
+
+    /// Where it stands in one line, said to a person of `role`: what waits for their look or
+    /// their accept says so, when they may give it.
+    pub fn title_for(&self, role: Role) -> String {
         let head = short(&self.head);
         match self.state {
             State::Ci => format!("Waiting for CI to prove {head}"),
             State::Running => format!("CI is proving {head}"),
             State::Failed if self.weakenings_wait() => {
-                format!("The proof of {head} failed: what it weakens waits for an admin's accept")
+                let whose = if role == Role::Admin {
+                    "your"
+                } else {
+                    "an admin's"
+                };
+                format!("The proof of {head} failed: what it weakens waits for {whose} accept")
             }
             State::Failed => format!("The proof of {head} failed"),
             State::Cancelled => format!("A CI job of {head} ended without its proof: run it again"),
@@ -476,10 +539,13 @@ impl Review {
                 let verb = if n == 1 { "needs" } else { "need" };
                 format!("{} {verb} change at {head}", pictures(n))
             }
-            State::Waits => match self.waiting().count() {
-                1 => format!("1 picture waits for a look at {head}"),
-                n => format!("{n} pictures wait for a look at {head}"),
-            },
+            State::Waits => {
+                let whose = if role >= Role::Write { "your" } else { "a" };
+                match self.waiting().count() {
+                    1 => format!("1 picture waits for {whose} look at {head}"),
+                    n => format!("{n} pictures wait for {whose} look at {head}"),
+                }
+            }
             State::Approved if self.pictures.is_empty() && self.weakened.is_empty() => {
                 format!("Proven at {head}, with nothing to review")
             }

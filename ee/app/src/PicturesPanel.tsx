@@ -20,7 +20,7 @@ import {
 } from "./pictures";
 import { type Draft, type Shown as Noted, fromWhere, makeNote, notesOn, resolveNote, sidesOf } from "./notes";
 import type { PictureChange, Run, Snapshot } from "./proof";
-import { type Viewer, canSay, carried, localBy, maySignIn, onlyViews, signIn, standingOf, toLookAt, verdict as say, verdictOf } from "./review";
+import { type Looker, canSay, carried, localBy, maySignIn, onlyViews, signIn, signedIn, standingOf, toLookAt, verdict as say, verdictOf } from "./review";
 import { MODES, type Mode, type Noting, Stage } from "./Stage";
 import { ago } from "./ago";
 
@@ -28,7 +28,7 @@ import { ago } from "./ago";
 const [mode, setMode] = createSignal<Mode>("side");
 const [by, setBy] = createSignal<GroupBy>("change");
 
-export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Viewer | undefined }) {
+export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker | undefined }) {
   const files = grantOf(() => props.run.id);
   const pictures = createMemo(() => picturesOf(props.run));
   const [filter, setFilter] = createSignal<PictureChange | null>(null);
@@ -307,7 +307,7 @@ function ReviewBar(props: {
   shown: Shown;
   run: Run;
   state: Snapshot;
-  viewer: Viewer | undefined;
+  viewer: Looker | undefined;
   repository: string;
   notes: Noted[];
   canNote: boolean;
@@ -400,7 +400,7 @@ function ReviewBar(props: {
               Looks right
             </button>
           </Match>
-          <Match when={props.viewer?.login}>
+          <Match when={signedIn(props.viewer)}>
             <p class="hint" data-cannot title={`Giving a verdict needs write access to ${props.repository}`}>
               Needs write access
             </p>

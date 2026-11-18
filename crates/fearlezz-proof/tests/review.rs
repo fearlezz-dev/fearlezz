@@ -21,6 +21,7 @@ fn still(name: &str, change: Change) -> Item {
         after: (change != Change::Gone).then(|| format!("looks/s/after/{name}")),
         comparison: None,
         flaky: false,
+        diff: None,
     }
 }
 
@@ -62,6 +63,7 @@ fn film(changed: &[usize]) -> Item {
                 .collect(),
         }),
         flaky: false,
+        diff: None,
     }
 }
 
@@ -224,6 +226,40 @@ fn every_picture_looking_right_approves_the_head() {
     );
     assert_eq!(review.state, State::Approved);
     assert_eq!(review.pictures[0].verdict.as_ref().unwrap().by, "writer");
+    assert_eq!(review.title.read, "Everything looks right at aaa");
+}
+
+#[test]
+fn an_approved_head_with_nothing_to_review_says_so_and_a_stored_review_gets_its_title() {
+    let runs = [run("r1", "aaa", RunState::Done, &[])];
+    let review = review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None);
+    assert_eq!(review.state, State::Approved);
+    assert_eq!(review.title.read, "Proven at aaa, with nothing to review");
+    assert_eq!(review.title.admin, review.title.read);
+    // A review stored before the host sent its title reads without one, and gets it again.
+    let mut stored = serde_json::to_value(&review).unwrap();
+    stored.as_object_mut().unwrap().remove("title");
+    let read: review::Review = serde_json::from_value(stored).unwrap();
+    assert_eq!(read.title.read, "");
+    assert_eq!(read.titled(), review);
+}
+
+#[test]
+fn the_viewer_reads_as_the_host_answers_it() {
+    use fearlezz_proof::review::{Role, Viewer};
+    let signed = Viewer::Signed {
+        login: "writer".into(),
+        role: Role::Write,
+    };
+    assert_eq!(
+        serde_json::to_value(&signed).unwrap(),
+        serde_json::json!({"login": "writer", "role": "write"})
+    );
+    let out: Viewer = serde_json::from_value(serde_json::json!({"login": null})).unwrap();
+    assert_eq!(out, Viewer::Out { login: () });
+    for role in [Role::Less, Role::Write, Role::Admin] {
+        assert_eq!(serde_json::to_value(role).unwrap(), role.word());
+    }
 }
 
 #[test]
@@ -333,6 +369,13 @@ fn a_weakening_fails_the_review_until_the_hosts_accept_covers_it() {
         review.title(),
         "The proof of aaa failed: what it weakens waits for an admin's accept"
     );
+    // The page shows the line its viewer can act on: an admin's accept is theirs to give.
+    assert_eq!(review.title.read, review.title());
+    assert_eq!(review.title.write, review.title());
+    assert_eq!(
+        review.title.admin,
+        "The proof of aaa failed: what it weakens waits for your accept"
+    );
     assert!(
         review.summary().contains("until an admin accepts it"),
         "{}",
@@ -419,6 +462,15 @@ fn the_summary_lists_what_waits() {
     )];
     let review = review::review("aaa1234", &runs, &BTreeMap::new(), &[], &[], None);
     assert_eq!(review.title(), "1 picture waits for a look at aaa1234");
+    assert_eq!(review.title.read, "1 picture waits for a look at aaa1234");
+    assert_eq!(
+        review.title.write,
+        "1 picture waits for your look at aaa1234"
+    );
+    assert_eq!(
+        review.title.admin,
+        "1 picture waits for your look at aaa1234"
+    );
     assert!(
         review.summary().contains("`screens` card.png"),
         "{}",

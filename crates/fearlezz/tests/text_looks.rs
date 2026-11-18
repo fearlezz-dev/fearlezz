@@ -137,6 +137,19 @@ fn ci_shows_changed_texts_in_the_job_summary_and_the_bundle() {
     let kept = std::path::Path::new(app["after"].as_str().unwrap());
     assert_eq!(kept.extension().unwrap(), "txt", "{app:#}");
     assert_eq!(app["change"], "changed", "{app:#}");
+    // Its lines against the before, as the CLI compared them, for the proof host to show.
+    assert_eq!(
+        app["diff"],
+        serde_json::json!([
+            {"kind": "same", "text": "kind: ConfigMap"},
+            {"kind": "same", "text": "name: app"},
+            {"kind": "was", "text": "color: red"},
+            {"kind": "now", "text": "color: blue"},
+        ]),
+        "{app:#}"
+    );
+    let extra = items.iter().find(|i| i["name"] == "extra").unwrap();
+    assert!(extra.get("diff").is_none(), "{extra:#}");
     let after = bundle.join(app["after"].as_str().unwrap());
     assert!(
         std::fs::read_to_string(after)

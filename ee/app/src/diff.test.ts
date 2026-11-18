@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { diff, folded } from "./diff";
+import { type Fold, type Line, diff, folded, sent } from "./diff";
 
 /** A line as a person reads it: its sign, and the words that differ in brackets. */
 const show = (was: string | undefined, now: string | undefined) =>
@@ -69,3 +69,30 @@ describe("folded", () => {
   });
 });
 
+describe("a diff the bundle carries", () => {
+  const read = (lines: (Line | Fold)[]) =>
+    lines.map((l) =>
+      "kind" in l
+        ? (l.kind === "same" ? " " : l.kind === "was" ? "-" : "+") + l.pieces.map((p) => (p.differs ? `[${p.text}]` : p.text)).join("")
+        : `(${l.count})`,
+    );
+
+  test("shows as the CLI folded it, with the words that differ marked", () => {
+    expect(
+      read(
+        sent([
+          { kind: "fold", count: 4 },
+          { kind: "same", text: "kind: ConfigMap" },
+          { kind: "was", text: "color: red" },
+          { kind: "now", text: "color: blue" },
+          { kind: "now", text: "size: 2" },
+          { kind: "same", text: "name: app" },
+        ]),
+      ),
+    ).toEqual(["(4)", " kind: ConfigMap", "-color: [red]", "+color: [blue]", "+size: 2", " name: app"]);
+  });
+
+  test("a line put in before one taken out starts a new run", () => {
+    expect(read(sent([{ kind: "now", text: "a" }, { kind: "was", text: "b" }]))).toEqual(["+a", "-b"]);
+  });
+});
