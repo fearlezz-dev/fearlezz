@@ -601,6 +601,17 @@ fn findings_that_count_only_on_changed_lines_again_are_red() {
 }
 
 #[test]
+fn a_check_that_no_longer_reports_findings_is_red() {
+    let out = ci_after(|c| {
+        c.replace(
+            "findings = { read = \"jsonl\", on = \"everywhere\", lints = [\"ruff\"] }\n",
+            "",
+        )
+    });
+    assert_weakens(&out, "weakens lint: it no longer reports findings");
+}
+
+#[test]
 fn reading_findings_another_way_is_red() {
     let out = ci_after(|c| c.replace("read = \"jsonl\"", "read = \"sarif\""));
     assert_weakens(
