@@ -8,7 +8,7 @@
 
 use std::io::{BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
@@ -40,8 +40,20 @@ fn simctl_path() -> Result<&'static Path> {
 const FILM_START: Duration = Duration::from_secs(15);
 /// How long the simulator gets to finish writing a film once it stopped.
 const FILM_WRITE: Duration = Duration::from_secs(30);
-/// Long enough for a first boot of a new device, which took 76 s on a developer's Mac.
+/// How long `recordVideo` gets to end once interrupted. On CI's runners it sometimes never
+/// does, which held a run for an hour.
+const FILM_END: Duration = Duration::from_secs(30);
+/// How long a film records before it is interrupted. In its first second after saying
+/// "Recording started", recordVideo on a busy Mac often dies of the interrupt without writing
+/// the film, or never ends and leaves the device refusing every new recording (5 of 20 tries
+/// under full load); after a second it ended well in 40 of 40.
+const FILM_SETTLE: Duration = Duration::from_secs(2);
+/// Long enough for a first boot of a new device, which took 76 s on a developer's Mac and
+/// up to 274 s on CI's runners.
 const BOOT: Duration = Duration::from_mins(5);
+/// How long any other simctl command gets. On CI's runners `simctl terminate` sometimes
+/// never returns.
+const SIMCTL: Duration = Duration::from_mins(2);
 
 /// None when this Mac has an iOS simulator runtime.
 pub(crate) fn unavailable() -> Option<Unavailable> {
@@ -175,11 +187,13 @@ fn version(text: &str) -> (u32, u32, u32) {
 }
 
 fn simctl(args: &[&str]) -> Result<String> {
-    let out = Command::new(simctl_path()?)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .context("running xcrun simctl")?;
+    simctl_within(args, SIMCTL)
+}
+
+fn simctl_within(args: &[&str], limit: Duration) -> Result<String> {
+    let mut cmd = Command::new(simctl_path()?);
+    cmd.args(args);
+    let out = finish(cmd, limit, &format!("simctl {}", args.join(" ")))?;
     if !out.status.success() {
         bail!(
             "simctl {}: {}",
@@ -256,7 +270,7 @@ impl Simulator {
         if !booted {
             let clock = std::time::Instant::now();
             writeln!(log, "record: booting {}", sim.name)?;
-            match simctl(&["boot", &sim.udid]) {
+            match simctl_within(&["boot", &sim.udid], BOOT) {
                 // Another tool booted it meanwhile.
                 Err(e) if !format!("{e:#}").contains("current state: Booted") => {
                     return Err(e.context(format!("booting the simulator {}", sim.name)));
@@ -345,14 +359,18 @@ impl Simulator {
         let mut film = Film {
             child,
             path: path.to_path_buf(),
+            started: std::time::Instant::now(),
         };
         loop {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             match rx.recv_timeout(left) {
-                Ok(Some(line)) if line.contains("Recording started") => return Ok(film),
+                Ok(Some(line)) if line.contains("Recording started") => {
+                    film.started = std::time::Instant::now();
+                    return Ok(film);
+                }
                 Ok(Some(line)) => said.push(line),
                 Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    drop(film.child.wait());
+                    drop(end(&mut film.child, film.started, FILM_END));
                     bail!(
                         "simctl recordVideo ended before recording: {}",
                         said.join(" ")
@@ -388,7 +406,7 @@ impl Simulator {
                     self.name
                 )?;
                 simctl(&["shutdown", &self.udid])?;
-                simctl(&["boot", &self.udid])?;
+                simctl_within(&["boot", &self.udid], BOOT)?;
                 self.boot_status()
             }
             Err(e) => Err(e),
@@ -594,16 +612,86 @@ impl super::Screen for Simulator {
 pub(crate) struct Film {
     child: Child,
     path: PathBuf,
+    /// When recordVideo said it started recording.
+    started: std::time::Instant,
 }
 
 /// A film dropped without [`Filming::stop`] (the recorder failed) still ends, so no
 /// recording runs on into the device's next lease.
 impl Drop for Film {
     fn drop(&mut self) {
-        if matches!(self.child.try_wait(), Ok(None)) {
-            interrupt(&self.child);
-            drop(self.child.wait());
+        drop(end(&mut self.child, self.started, FILM_END));
+    }
+}
+
+/// Runs `cmd` to its end with its output read, or kills it once it has run `limit` and says
+/// `what` did not end.
+fn finish(mut cmd: Command, limit: Duration, what: &str) -> Result<Output> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("running {what}"))?;
+    // Both pipes read while it runs, so a full one never holds it.
+    let stdout = read_all(child.stdout.take());
+    let stderr = read_all(child.stderr.take());
+    let Some(status) = wait_within(&mut child, limit)? else {
+        drop(child.kill());
+        drop(child.wait());
+        bail!("{what} did not end in {} s", limit.as_secs());
+    };
+    Ok(Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
+/// Everything `pipe` says until it closes, read on a thread of its own.
+fn read_all<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut p) = pipe {
+            drop(p.read_to_end(&mut bytes));
         }
+        bytes
+    })
+}
+
+/// Interrupts a recording that still runs, once it has recorded [`FILM_SETTLE`] since it
+/// `started`, and waits up to `limit` for it to end, killing it when it does not: a recording
+/// that ignores its interrupt never holds a run.
+fn end(child: &mut Child, started: std::time::Instant, limit: Duration) -> Result<ExitStatus> {
+    let settled = FILM_SETTLE.saturating_sub(started.elapsed());
+    if let Some(status) = wait_within(child, settled)? {
+        return Ok(status);
+    }
+    interrupt(child);
+    if let Some(status) = wait_within(child, limit)? {
+        return Ok(status);
+    }
+    drop(child.kill());
+    drop(child.wait());
+    bail!(
+        "simctl recordVideo did not end in {} s after its interrupt",
+        limit.as_secs()
+    );
+}
+
+/// The child's status once it ends, or None when it still runs after `limit`.
+fn wait_within(child: &mut Child, limit: Duration) -> Result<Option<ExitStatus>> {
+    let clock = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        if clock.elapsed() >= limit {
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -621,10 +709,7 @@ impl super::Filming for Film {
     }
 
     fn stop(mut self) -> Result<()> {
-        if self.child.try_wait()?.is_none() {
-            interrupt(&self.child);
-        }
-        let status = self.child.wait()?;
+        let status = end(&mut self.child, self.started, FILM_END)?;
         // The simulator writes the film beside it under a temporary name and moves it in,
         // sometimes after simctl has ended.
         let clock = std::time::Instant::now();
@@ -675,6 +760,76 @@ mod tests {
         assert!(!written(&film), "still being written");
         std::fs::remove_file(dir.path().join("home.mp4.sb-c5fd9852-R18j5j")).unwrap();
         assert!(written(&film));
+    }
+
+    #[test]
+    fn a_command_past_its_limit_is_stopped_and_named() {
+        let clock = std::time::Instant::now();
+        let mut sleep = Command::new("sleep");
+        sleep.arg("30");
+        let e = finish(sleep, Duration::from_secs(1), "sleep 30").unwrap_err();
+        assert!(
+            format!("{e:#}").contains("sleep 30 did not end in 1 s"),
+            "{e:#}"
+        );
+        assert!(clock.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_command_within_its_limit_gives_its_output() {
+        let mut echo = Command::new("sh");
+        echo.args(["-c", "echo said; echo why >&2"]);
+        let out = finish(echo, Duration::from_secs(10), "echo").unwrap();
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "said\n");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), "why\n");
+    }
+
+    #[test]
+    fn a_recording_that_ignores_its_interrupt_is_killed_after_its_limit() {
+        let clock = std::time::Instant::now();
+        let mut deaf = Command::new("sh")
+            .args(["-c", "trap '' INT; echo deaf; exec sleep 30"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // Interrupted only once it ignores interrupts.
+        let mut ready = String::new();
+        BufReader::new(deaf.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        let e = end(&mut deaf, std::time::Instant::now(), Duration::from_secs(1)).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("did not end in 1 s after its interrupt"),
+            "{e:#}"
+        );
+        assert!(deaf.try_wait().unwrap().is_some(), "killed");
+        assert!(clock.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_recording_stopped_as_it_starts_is_interrupted_once_it_handles_interrupts() {
+        // Like recordVideo: it says it started, dies of an interrupt in its first second,
+        // and ends well on one after that.
+        let mut recorder = Command::new("/usr/bin/perl")
+            .args([
+                "-e",
+                r#"$| = 1; print "started\n"; select(undef, undef, undef, 1); $SIG{INT} = sub { exit 0 }; sleep 30"#,
+            ])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut started = String::new();
+        BufReader::new(recorder.stdout.take().unwrap())
+            .read_line(&mut started)
+            .unwrap();
+        let status = end(
+            &mut recorder,
+            std::time::Instant::now(),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(status.success(), "{status}");
     }
 
     #[test]

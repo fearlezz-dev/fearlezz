@@ -13,7 +13,6 @@ no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
 # read the embedded agent skill and pieces, the fixtures, the proof workflow and README.md,
 # which no_proof leaves out of the default key. They leave out ee/, which has checks of its own.
 [check.tests]
-on = ["linux", "macos"]
 inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**", "README.md", ".github/workflows/proof.yml", "action.yml"]
 
 # The proof host in ee/ is a Cargo workspace of its own, built to wasm, so the rust piece runs
@@ -22,9 +21,6 @@ inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", 
 # sources too, since `--all` checks them through the path dependency on the proof bundle crate.
 [check."fmt/ee"]
 inputs = ["ee/**", "crates/fearlezz-proof/**", "crates/**/*.rs"]
-
-[check.clippy]
-on = ["linux", "macos"]
 
 # All features, so the routes only the tests build in are linted too.
 [check."clippy/ee"]
@@ -61,9 +57,34 @@ stage = "working"
 run = "jq empty release-please-config.json .release-please-manifest.json && yq '.' action.yml > /dev/null && shellcheck install.sh"
 stage = "working"
 
-# CI proves the commit in legs: Linux runs every check, and macOS builds, lints and tests the
-# code only macOS has (recording, copy on write clones). Locally the developer's machine stands
-# in for both.
+# macOS proves only what Linux cannot: it lints the code only macOS compiles (recording, window
+# parking, copy on write clones) and runs the tests that reach it. Their inputs are the files
+# that code lives in and the pinned toolchain, so a change elsewhere reuses the base commit's
+# macOS pass and has no macOS leg. They show no red before green: the same tests run on Linux, which shows it.
+[check."clippy/macos"]
+on = ["macos"]
+run = "cargo clippy --all-targets --quiet --message-format=json"
+stage = "working"
+findings = { read = "cargo", lints = ["clippy", "rustc"] }
+# With the budget of tests/macos, it bounds the whole macOS leg.
+timeout = "10m"
+inputs = ["crates/fearlezz/src/record.rs", "crates/fearlezz/src/record/**", "crates/fearlezz/src/env.rs", "Cargo.toml", "crates/fearlezz/Cargo.toml", "Cargo.lock", "clippy.toml", "devenv.nix", "devenv.lock"]
+
+# The window parking units, the env tests whose fresh checkout clones folders (clonefile), the
+# recording on an iOS simulator CI must prove, and the left to CI test whose screen differs by
+# OS. A filter that matches no test fails the check, since it then counts zero.
+[check."tests/macos"]
+on = ["macos"]
+run = "cargo test --quiet -p fearlezz --bin fearlezz --test env --test record -- record::place:: cloned prepare ios_simulator screen_this_machine_never_has"
+stage = "working"
+# A cold boot on CI takes up to 5 minutes and the whole check passed in 7; a hung simulator
+# fails it instead of holding the leg.
+timeout = "20m"
+tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed', failed = '(?m)^---- (.+?) stdout ----$' }
+inputs = ["crates/fearlezz/src/record.rs", "crates/fearlezz/src/record/**", "crates/fearlezz/src/env.rs", "crates/fearlezz/tests/env.rs", "crates/fearlezz/tests/record.rs", "crates/fearlezz/tests/common/**", "Cargo.toml", "crates/fearlezz/Cargo.toml", "Cargo.lock", "devenv.nix", "devenv.lock"]
+
+# CI proves the commit in legs, Linux every check but the two above. Locally the developer's
+# machine stands in for both.
 [platform.linux]
 runs-on = "ubuntu-latest"
 default = true

@@ -8,3 +8,7 @@ inputs:
       nixpkgs:
         follows: nixpkgs
 require_version: ">=2.2"
+nixpkgs:
+  # The 1Password CLI (`op`, devenv.nix) is the only unfree package.
+  permitted_unfree_packages:
+    - 1password-cli
