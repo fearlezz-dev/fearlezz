@@ -768,9 +768,17 @@ async fn show_completed_looks(
         entry: String,
         look: String,
     }
+    // Starts from the runs that name these bytes (`files_by_blob`), so it reads only those runs
+    // and their checks. CROSS JOIN keeps that order: started from the repository instead, it
+    // read every check of every run the repository ever had.
     let rows = db
         .prepare(
-            "SELECT c.run, r.work, r.git_ref, c.entry, c.look FROM checks c JOIN runs r ON r.id = c.run JOIN works w ON w.id = r.work WHERE w.repo = ?1 AND c.look IS NOT NULL AND c.entry IS NOT NULL AND EXISTS (SELECT 1 FROM files f WHERE f.run = c.run AND f.sha256 = ?2)",
+            "SELECT c.run, r.work, r.git_ref, c.entry, c.look \
+             FROM (SELECT DISTINCT run FROM files WHERE sha256 = ?2) f \
+             CROSS JOIN runs r ON r.id = f.run \
+             CROSS JOIN works w ON w.id = r.work \
+             CROSS JOIN checks c ON c.run = f.run \
+             WHERE w.repo = ?1 AND c.look IS NOT NULL AND c.entry IS NOT NULL",
         )
         .bind(&[repo.into(), sha256.into()])?
         .all()
