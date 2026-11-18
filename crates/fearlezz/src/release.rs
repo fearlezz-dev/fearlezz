@@ -119,9 +119,6 @@ struct RawPlace {
     files: Vec<String>,
     tag: Option<String>,
     wait: Option<u64>,
-    /// Turns off a place a piece from `use` brings in.
-    #[serde(default)]
-    off: bool,
 }
 
 #[derive(Deserialize)]
@@ -131,7 +128,7 @@ enum RawLanded {
     Read { read: String, url: Option<String> },
 }
 
-/// The places `[release]` names, in order of name, those turned off left out.
+/// The places `[release]` names, in order of name.
 pub(crate) fn parse(table: Option<&toml::Value>) -> Result<Vec<Place>> {
     let Some(table) = table else {
         return Ok(Vec::new());
@@ -139,9 +136,6 @@ pub(crate) fn parse(table: Option<&toml::Value>) -> Result<Vec<Place>> {
     let raw: BTreeMap<String, RawPlace> = table.clone().try_into()?;
     let mut places = Vec::new();
     for (name, p) in raw {
-        if p.off {
-            continue;
-        }
         let at = || format!("release.{name}");
         let landed = match p.landed {
             RawLanded::Command(cmd) => Landed::Command(cmd),
@@ -171,9 +165,14 @@ pub(crate) fn parse(table: Option<&toml::Value>) -> Result<Vec<Place>> {
 
 /// Turns each place's dry run into the check `release/<place>` at stage `last`, so it is
 /// proven before merge like any check, and the base branch's floor holds it. A project
-/// tunes that check under its own name (`[check."release/crates"]`), or turns it off.
-/// `default_last` is the last stage when the table orders none of its own.
-pub(crate) fn add_dry_checks(table: &mut toml::Table, default_last: Option<&str>) {
+/// tunes that check under its own name (`[check."release/crates"]`), or turns it off: `off`
+/// holds the checks turned off. `default_last` is the last stage when the table orders none of
+/// its own.
+pub(crate) fn add_dry_checks(
+    table: &mut toml::Table,
+    default_last: Option<&str>,
+    off: &std::collections::BTreeSet<String>,
+) {
     let Some(toml::Value::Table(release)) = table.get("release") else {
         return;
     };
@@ -190,13 +189,11 @@ pub(crate) fn add_dry_checks(table: &mut toml::Table, default_last: Option<&str>
     };
     let mut dry = Vec::new();
     for (name, place) in release {
-        let off = place.get("off").and_then(toml::Value::as_bool) == Some(true);
-        if let (Some(run), false) = (place.get("dry").and_then(toml::Value::as_str), off) {
-            dry.push((
-                format!("{CHECK_PREFIX}{name}"),
-                run.to_string(),
-                place.get("dir").cloned(),
-            ));
+        let id = format!("{CHECK_PREFIX}{name}");
+        if let Some(run) = place.get("dry").and_then(toml::Value::as_str)
+            && !off.contains(&id)
+        {
+            dry.push((id, run.to_string(), place.get("dir").cloned()));
         }
     }
     if dry.is_empty() {

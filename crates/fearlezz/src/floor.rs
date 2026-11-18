@@ -130,7 +130,8 @@ fn gone_with_its_folder(base: &Config, head: &Config, check: &config::Check) -> 
 fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Change)> {
     // A scheduled check has a floor too: its run proves the default branch on a schedule.
     let mut found: Vec<(Part, Change)> = base
-        .every_check()
+        .checks
+        .iter()
         .flat_map(|b| check_weakenings(base, head, b, files))
         .collect();
     // Checks that share a lints table would name its weakenings once each.
@@ -164,7 +165,7 @@ fn check_weakenings(
 ) -> Vec<(Part, Change)> {
     let mut found = Vec::new();
     let mut say = |how: Change| found.push((Part::Check(b.id.clone()), how));
-    let Some(h) = head.every_check().find(|h| h.id == b.id) else {
+    let Some(h) = head.checks.iter().find(|h| h.id == b.id) else {
         if !gone_with_its_folder(base, head, b) {
             say("it is gone".into());
         }
@@ -228,7 +229,9 @@ fn check_weakenings(
     // could hide a fix whose tests do not fail there. Naming them the first time is fine,
     // unless the check measures coverage, which never counts a test file.
     let measured = b.coverage.is_some() && h.coverage.is_some();
-    if (measured || !b.test_files.is_empty()) && h.test_files != b.test_files {
+    if (measured || !b.test_files.patterns().is_empty())
+        && h.test_files.patterns() != b.test_files.patterns()
+    {
         say("it names other test files".into());
     }
     // What a check sees can change what it proves (a variable that skips the slow tests,

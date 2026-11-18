@@ -358,7 +358,7 @@ pub(crate) fn run_on_base(
     }
     let at = run::Where {
         root: &root,
-        shell: base.wt.shell.as_deref(),
+        shell: base.wt.env.shell.as_deref(),
         tree: &base.wt.tree,
         journal: BASE_JOURNAL,
         stage,
