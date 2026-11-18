@@ -6,103 +6,28 @@
 
 use worker::{Env, Headers, Request, Response};
 
-use crate::room::Viewer;
-use crate::session::{self, Session, to_sign_in};
-use crate::work::{self, Place};
-use crate::{Answer, Config, Refusal, cache, files, github, repo_key, room, share};
+use crate::access::{self, Action, Viewer};
+use crate::room::Held;
+use crate::session::{self, to_sign_in};
+use crate::work::{self, Place, RunRow};
+use crate::{Answer, Config, Refusal, files, not_found, repo_key, room, share};
 
-/// How long the host trusts GitHub's word on who may see a repository.
-pub const SIGHT_SECONDS: i64 = 300;
-
-fn not_found() -> Refusal {
-    Refusal::new(404, "not found")
-}
-
-/// Whether the request may see the repository's pages: `false` means sign in first, and a
-/// person GitHub shows nothing of it gets `404`.
-pub async fn open(req: &Request, env: &Env, config: &Config, repo: &str) -> Result<bool, Refusal> {
-    let session = session::read(req, env).await?;
-    sees(env, config, session.as_ref(), repo).await
-}
-
-/// Whether the person of `session`, or anyone without one, may see the repository's pages, as
-/// `open` says it for a request. A live page asks it again while it stays open (`room.rs`).
-pub async fn sees(
+/// Whether a page of the repository `repo` (lowercased) is shown to the request: None when it
+/// is, and otherwise what it answers instead, sending to sign in first someone who may see it
+/// once signed in.
+pub(crate) async fn barred(
+    req: &Request,
     env: &Env,
     config: &Config,
-    session: Option<&Session>,
     repo: &str,
-) -> Result<bool, Refusal> {
-    if let Some(session) = session {
-        match reads(env, config, &session.login, &session.token, repo).await? {
-            Some(true) => return Ok(true),
-            Some(false) => return Err(not_found()),
-            None => {}
-        }
+) -> Result<Option<Answer>, Refusal> {
+    let person = session::read(req, env).await?;
+    let read = Action::Read { work: None };
+    match access::can(env, config, Viewer::of(person.as_ref()), read, repo).await {
+        Ok(()) => Ok(None),
+        Err(refusal) if refusal.asks_sign_in() => Ok(Some(to_sign_in(&req.path()))),
+        Err(refusal) => Err(refusal),
     }
-    let key = public_key(repo);
-    if let Some(public) = cache::get(env, &key).await? {
-        return Ok(public == "yes");
-    }
-    let public = github::public(config, repo).await?;
-    cache::put(env, &key, if public { "yes" } else { "no" }, SIGHT_SECONDS).await?;
-    Ok(public)
-}
-
-/// What `sees` would say from GitHub's word the host already holds, never asking GitHub: None
-/// when that word is not enough. A work's room asks this while it runs a write, which must not
-/// wait for GitHub (`room.rs`).
-pub async fn known(
-    env: &Env,
-    session: Option<&Session>,
-    repo: &str,
-) -> Result<Option<bool>, Refusal> {
-    if let Some(session) = session {
-        match cache::get(env, &reads_key(&session.login, repo)).await? {
-            Some(reads) if reads == "yes" => return Ok(Some(true)),
-            Some(_) => return Err(not_found()),
-            None => {}
-        }
-    }
-    Ok(match cache::get(env, &public_key(repo)).await? {
-        Some(public) if public == "yes" => Some(true),
-        Some(_) if session.is_none() => Some(false),
-        _ => None,
-    })
-}
-
-fn public_key(repo: &str) -> String {
-    format!("public:{repo}")
-}
-
-fn reads_key(login: &str, repo: &str) -> String {
-    format!("reads:{}:{repo}", login.to_lowercase())
-}
-
-/// Whether `login` may read the repository `repo` (lowercased), as their GitHub `token` sees
-/// it, kept for a few minutes; None when the token no longer works.
-pub async fn reads(
-    env: &Env,
-    config: &Config,
-    login: &str,
-    token: &str,
-    repo: &str,
-) -> worker::Result<Option<bool>> {
-    let key = reads_key(login, repo);
-    if let Some(cached) = cache::get(env, &key).await? {
-        return Ok(Some(cached == "yes"));
-    }
-    let reads = match github::sight(config, repo, token).await? {
-        github::Sight::Reads => Some(true),
-        github::Sight::Nothing => Some(false),
-        // An expired token is no session; a public repository still opens.
-        github::Sight::BadToken => None,
-    };
-    if let Some(reads) = reads {
-        let value = if reads { "yes" } else { "no" };
-        cache::put(env, &key, value, SIGHT_SECONDS).await?;
-    }
-    Ok(reads)
 }
 
 /// A work's page: the app, which draws the work from its live connection. Someone who may not
@@ -116,8 +41,8 @@ pub async fn page(
     place: &Place,
 ) -> Answer {
     let repo = repo_key(owner, name);
-    if !open(req, env, config, &repo).await? {
-        return to_sign_in(&req.path());
+    if let Some(answer) = barred(req, env, config, &repo).await? {
+        return answer;
     }
     let db = env.d1("DB")?;
     work::find(&db, &repo, place).await?.ok_or_else(not_found)?;
@@ -179,22 +104,17 @@ pub async fn live(
     place: &Place,
 ) -> Answer {
     let repo = repo_key(owner, name);
-    let session = session::read(req, env).await?;
-    if !sees(env, config, session.as_ref(), &repo).await? {
-        return Err(Refusal::new(401, "sign in to see this work"));
-    }
+    let person = session::read(req, env).await?;
+    let viewer = Viewer::of(person.as_ref());
+    access::can(env, config, viewer, Action::Read { work: None }, &repo).await?;
     let db = env.d1("DB")?;
     let id = work::find(&db, &repo, place).await?.ok_or_else(not_found)?;
-    let viewer = Viewer::Person {
-        session: session.map(|s| s.id),
-        repo,
-    };
-    connect(req, env, &id, &viewer).await
+    connect(req, env, &id, &Held::of(viewer, &repo)).await
 }
 
 /// The live connection to the work `id`, once the caller decided the request may see it, held
-/// for `viewer` as long as they still may.
-pub async fn connect(req: &Request, env: &Env, id: &str, viewer: &Viewer) -> Answer {
+/// as `held` says, as long as its viewer still may.
+pub(crate) async fn connect(req: &Request, env: &Env, id: &str, held: &Held) -> Answer {
     if !upgrades(req)? {
         let db = env.d1("DB")?;
         let snapshot = work::snapshot(&db, id).await?.ok_or_else(not_found)?;
@@ -203,7 +123,7 @@ pub async fn connect(req: &Request, env: &Env, id: &str, viewer: &Viewer) -> Ans
         headers.set("Cache-Control", "no-store")?;
         return Ok(Response::from_json(&live)?.with_headers(headers));
     }
-    Ok(room::connect(env, req, id, ("work", id), viewer).await?)
+    Ok(room::connect(env, req, id, ("work", id), held).await?)
 }
 
 /// A grant to the files of a run, for a page that shows it: the run's folder on the files
@@ -212,31 +132,23 @@ pub async fn connect(req: &Request, env: &Env, id: &str, viewer: &Viewer) -> Ans
 /// Through a share link (`?share=<token>`) it is given for the runs of the link's work alone,
 /// and a link that does not hold is `404`.
 pub async fn grant(req: &Request, env: &Env, config: &Config, run: &str) -> Answer {
-    #[derive(serde::Deserialize)]
-    struct Row {
-        repo: String,
-        work: String,
-    }
-    let row: Option<Row> = env
-        .d1("DB")?
-        .prepare("SELECT w.repo, r.work FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1")
-        .bind(&[run.into()])?
-        .first(None)
-        .await?;
-    let row = row.ok_or_else(not_found)?;
+    let row = RunRow::find(&env.d1("DB")?, run)
+        .await?
+        .ok_or_else(not_found)?;
     let url = req.url()?;
-    let shared = url.query_pairs().find(|(name, _)| name == "share");
-    match shared {
+    let read = Action::Read {
+        work: Some(&row.work),
+    };
+    match url.query_pairs().find(|(name, _)| name == "share") {
         Some((_, token)) => {
-            let link = share::find(env, config, &token).await?;
-            if link.is_none_or(|link| link.work != row.work) {
-                return Err(not_found());
-            }
+            let link = share::find(env, config, &token)
+                .await?
+                .ok_or_else(not_found)?;
+            access::can(env, config, Viewer::Share(&link), read, &row.repo).await?;
         }
         None => {
-            if !open(req, env, config, &row.repo).await? {
-                return Err(Refusal::new(401, "sign in to see this work"));
-            }
+            let person = session::read(req, env).await?;
+            access::can(env, config, Viewer::of(person.as_ref()), read, &row.repo).await?;
         }
     }
     let granted = files::grant(config, &row.repo, run).await?;

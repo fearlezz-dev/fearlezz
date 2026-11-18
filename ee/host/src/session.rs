@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use worker::{Env, Headers, Request, Response, Url};
 
+use crate::access::{Person, Via};
 use crate::{Answer, Config, Refusal, crypto, github, now};
 
 const SESSION: &str = "session";
@@ -14,14 +15,6 @@ const SIGNIN: &str = "signin";
 const SESSION_SECONDS: i64 = 8 * 3600;
 const SIGNIN_SECONDS: i64 = 600;
 
-#[derive(Deserialize)]
-pub struct Session {
-    /// The row's id, which the cookie holds.
-    pub id: String,
-    pub login: String,
-    pub token: String,
-}
-
 #[derive(Serialize, Deserialize)]
 struct Signin {
     state: String,
@@ -30,20 +23,31 @@ struct Signin {
 }
 
 /// The signed in person, if the request carries the id of a session that has not expired.
-pub async fn read(req: &Request, env: &Env) -> worker::Result<Option<Session>> {
+pub(crate) async fn read(req: &Request, env: &Env) -> worker::Result<Option<Person>> {
     match cookie(req, SESSION)? {
         Some(id) => find(env, &id).await,
         None => Ok(None),
     }
 }
 
-/// The session `id`, unless it ended: logged out of or expired.
-pub async fn find(env: &Env, id: &str) -> worker::Result<Option<Session>> {
-    env.d1("DB")?
-        .prepare("SELECT id, login, token FROM sessions WHERE id = ?1 AND expires > ?2")
+/// The person of session `id`, unless it ended: logged out of or expired.
+pub(crate) async fn find(env: &Env, id: &str) -> worker::Result<Option<Person>> {
+    #[derive(Deserialize)]
+    struct Row {
+        login: String,
+        token: String,
+    }
+    let row: Option<Row> = env
+        .d1("DB")?
+        .prepare("SELECT login, token FROM sessions WHERE id = ?1 AND expires > ?2")
         .bind(&[id.into(), (now() as f64).into()])?
         .first(None)
-        .await
+        .await?;
+    Ok(row.map(|row| Person {
+        login: row.login,
+        token: row.token,
+        via: Via::Session(id.to_owned()),
+    }))
 }
 
 pub async fn login(req: &Request, config: &Config) -> Answer {

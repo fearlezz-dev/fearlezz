@@ -356,13 +356,20 @@ access to the repository. Anyone else gets `404`, so a private repository's name
 confirmed. A person without a session is sent to sign in first. A work's page, and the repository page, follow
 this rule alike; a share link opens one work's page to anyone holding it (Share links).
 
+The host decides who asks and what they may do in one place, `access.rs`. Each request
+resolves one viewer from its one door: someone anonymous, a share link, or a person signed in
+by session or by CLI token (a page only ever reads the session cookie, the CLI's API only its
+token). Every endpoint then asks one policy, `can(viewer, action, repository)`, which reads
+GitHub's word through one cached lookup: whether a repository is public, whether a person may
+read it, and their role on it.
+
 - **Sessions** live in D1 (`sessions`): the person's login, GitHub user token and expiry (eight
   hours, as long as the token). The token stays on the server; it reads who may see a
   repository. The `session` cookie (HttpOnly, Secure, SameSite=Lax) holds
   only the row's random 128 bit id. Logging out deletes the row, so an old cookie signs in
   no one.
-- **GitHub's answers are cached** in D1 (`cache`): who may read a repository, per login and
-  repository, and whether a repository is public, each for 5 minutes; GitHub's OIDC keys for
+- **GitHub's answers are cached** in D1 (`cache`): who may read a repository and their role
+  there, per login and repository, and whether a repository is public, each for 5 minutes; GitHub's OIDC keys for
   an hour, fetched again once when a token names a key id the cached set lacks. So a change
   of access on GitHub shows here within 5 minutes.
 - **A live page follows the same rule while it stays open.** Its room asks again for each page

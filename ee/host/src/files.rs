@@ -7,9 +7,9 @@
 //! could reach nothing of the signed in app anyway.
 
 use serde::{Deserialize, Serialize};
-use worker::{Env, Headers, Range, Request, Response};
+use worker::{Env, Headers, Range, Request, Response, ResponseBody};
 
-use crate::{Answer, Config, Refusal, crypto, now};
+use crate::{Answer, Config, Refusal, crypto, not_found, now};
 
 const GRANT: &str = "grant";
 
@@ -22,10 +22,6 @@ struct Grant {
     repo: String,
     run: String,
     exp: i64,
-}
-
-fn not_found() -> Refusal {
-    Refusal::new(404, "not found")
 }
 
 /// What the page reads to show a run's files: the run's folder on the files origin, under a
@@ -64,33 +60,11 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
         .await?
         .filter(|grant: &Grant| grant.exp > now())
         .ok_or_else(not_found)?;
-    let path = percent_encoding::percent_decode_str(rest)
-        .decode_utf8()
-        .map_err(|_| not_found())?
-        .into_owned();
-    let kind = content_type(&path).ok_or_else(not_found)?;
-    #[derive(Deserialize)]
-    struct Row {
-        sha256: String,
-        size: f64,
-    }
-    let row: Option<Row> = env
-        .d1("DB")?
-        .prepare(
-            "SELECT f.sha256, f.size FROM files f JOIN runs r ON r.id = f.run JOIN works w ON w.id = r.work WHERE r.id = ?1 AND w.repo = ?2 AND f.path = ?3",
-        )
-        .bind(&[
-            grant.run.as_str().into(),
-            grant.repo.as_str().into(),
-            path.as_str().into(),
-        ])?
-        .first(None)
-        .await?;
-    let row = row.ok_or_else(not_found)?;
-    let size = row.size as u64;
+    let stored = stored(env, &grant.repo, &grant.run, rest).await?;
+    let size = stored.size;
 
     let headers = Headers::new();
-    headers.set("Content-Type", kind)?;
+    headers.set("Content-Type", stored.kind)?;
     headers.set("Accept-Ranges", "bytes")?;
     headers.set("X-Content-Type-Options", "nosniff")?;
     // The grant is in every URL here; a link out of the page must not carry it along.
@@ -110,9 +84,7 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
         .headers()
         .get("Range")?
         .and_then(|r| byte_range(&r, size));
-    let key = format!("blobs/{}/{}", grant.repo, row.sha256);
-    let bucket = env.bucket("BLOBS")?;
-    let (status, object) = match range {
+    let (status, range) = match range {
         Some(Err(())) => {
             headers.set("Content-Range", &format!("bytes */{size}"))?;
             return Ok(Response::empty()?.with_status(416).with_headers(headers));
@@ -123,15 +95,78 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
                 offset: start,
                 length: end - start + 1,
             };
-            (206, bucket.get(key).range(range).execute().await?)
+            (206, Some(range))
         }
-        None => (200, bucket.get(key).execute().await?),
+        None => (200, None),
     };
-    let object = object.ok_or_else(not_found)?;
-    let body = object.body().ok_or_else(not_found)?.response_body()?;
+    let body = body(env, &stored.key, range).await?;
     Ok(Response::from_body(body)?
         .with_status(status)
         .with_headers(headers))
+}
+
+/// Where R2 keeps the bytes `sha256` of the repository `repo` (lowercased): each repository
+/// keeps its own, so a blob is only ever served for runs of its repository.
+pub(crate) fn blob_key(repo: &str, sha256: &str) -> String {
+    format!("blobs/{repo}/{sha256}")
+}
+
+/// A run's file, as both origins serve it: the type its name pins, where its bytes are kept,
+/// and their size.
+pub(crate) struct Stored {
+    pub kind: &'static str,
+    pub key: String,
+    pub size: u64,
+}
+
+/// The file at `path` (escaped, as a URL holds it) of the run `run` of `repo` (lowercased):
+/// `404` for a path that does not decode, a type never served, or a file the run lacks.
+pub(crate) async fn stored(
+    env: &Env,
+    repo: &str,
+    run: &str,
+    path: &str,
+) -> Result<Stored, Refusal> {
+    let path = percent_encoding::percent_decode_str(path)
+        .decode_utf8()
+        .map_err(|_| not_found())?
+        .into_owned();
+    let kind = content_type(&path).ok_or_else(not_found)?;
+    #[derive(Deserialize)]
+    struct Row {
+        sha256: String,
+        size: f64,
+    }
+    let row: Option<Row> = env
+        .d1("DB")?
+        .prepare(
+            "SELECT f.sha256, f.size FROM files f JOIN runs r ON r.id = f.run JOIN works w ON w.id = r.work WHERE r.id = ?1 AND w.repo = ?2 AND f.path = ?3",
+        )
+        .bind(&[run.into(), repo.into(), path.as_str().into()])?
+        .first(None)
+        .await?;
+    let row = row.ok_or_else(not_found)?;
+    Ok(Stored {
+        kind,
+        key: blob_key(repo, &row.sha256),
+        size: row.size as u64,
+    })
+}
+
+/// The bytes kept at `key`, whole or the `range` of them: `404` when R2 holds none.
+pub(crate) async fn body(
+    env: &Env,
+    key: &str,
+    range: Option<Range>,
+) -> Result<ResponseBody, Refusal> {
+    let bucket = env.bucket("BLOBS")?;
+    let get = bucket.get(key);
+    let object = match range {
+        Some(range) => get.range(range).execute().await?,
+        None => get.execute().await?,
+    };
+    let object = object.ok_or_else(not_found)?;
+    Ok(object.body().ok_or_else(not_found)?.response_body()?)
 }
 
 /// One range of a `Range: bytes=` header as first and last byte, `Err` when it lies past the
