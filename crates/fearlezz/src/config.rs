@@ -467,6 +467,7 @@ struct RawCheck {
     on: Vec<String>,
     job: Option<String>,
     timeout: Option<String>,
+    #[serde(default)]
     generates: Vec<String>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
