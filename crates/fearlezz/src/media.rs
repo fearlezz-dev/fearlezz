@@ -549,7 +549,9 @@ fn weights(from: usize, to: usize) -> Vec<(usize, Vec<f32>)> {
                 .collect();
             let sum: f32 = ws.iter().sum();
             if sum > 0.0 {
-                ws.iter_mut().for_each(|v| *v /= sum);
+                for v in &mut ws {
+                    *v /= sum;
+                }
             }
             (lo, ws)
         })
@@ -737,7 +739,9 @@ fn blur(px: &[f32], w: usize, h: usize) -> Vec<f32> {
         .map(|x| (-0.5 * ((x as f32 - r as f32) / BLUR_SIGMA).powi(2)).exp())
         .collect();
     let sum: f32 = k.iter().sum();
-    k.iter_mut().for_each(|v| *v /= sum);
+    for v in &mut k {
+        *v /= sum;
+    }
     let reflect = |i: isize, n: usize| -> usize {
         let n = n as isize;
         let mut i = i;

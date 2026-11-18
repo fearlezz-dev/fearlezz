@@ -248,10 +248,11 @@ pub(crate) fn without_before(
 fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf {
     let flaky = check.pictures.flaky.patterns().join("\0");
     let pair = crate::files::sha256_hex(format!("{before}\0{after}\0{flaky}"));
-    common
-        .join("fearlezz")
-        .join("looks")
-        .join(format!("{}-{}", check.id, &pair[..10]))
+    common.join("fearlezz").join("looks").join(format!(
+        "{}-{}",
+        check.id,
+        pair.get(..10).unwrap_or(&pair)
+    ))
 }
 
 fn build(

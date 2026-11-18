@@ -990,8 +990,8 @@ fn read_proofs(path: &Path) -> (Vec<serde_json::Value>, Vec<String>) {
 pub(crate) fn tail(log: &Path, lines: usize) -> Vec<String> {
     let text = fs::read_to_string(log).unwrap_or_default();
     let all: Vec<&str> = text.lines().collect();
-    all[all.len().saturating_sub(lines)..]
-        .iter()
+    all.iter()
+        .skip(all.len().saturating_sub(lines))
         .map(ToString::to_string)
         .collect()
 }

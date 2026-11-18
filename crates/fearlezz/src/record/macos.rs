@@ -124,20 +124,19 @@ pub(crate) fn windows(apps: &mut HashMap<i32, String>) -> Result<Vec<super::Wind
             continue;
         };
         // An app that just started may not be one yet, so only an app is remembered.
-        let bundle = match apps.get(&pid) {
-            Some(bundle) => bundle.clone(),
-            None => {
-                let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
-                else {
-                    continue;
-                };
-                let bundle = app
-                    .bundleIdentifier()
-                    .map(|b| b.to_string())
-                    .unwrap_or_default();
-                apps.insert(pid, bundle.clone());
-                bundle
-            }
+        let bundle = if let Some(bundle) = apps.get(&pid) {
+            bundle.clone()
+        } else {
+            let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            else {
+                continue;
+            };
+            let bundle = app
+                .bundleIdentifier()
+                .map(|b| b.to_string())
+                .unwrap_or_default();
+            apps.insert(pid, bundle.clone());
+            bundle
         };
         out.push(super::WindowInfo {
             id,

@@ -367,7 +367,9 @@ pub(crate) fn print_failure(f: &RunResult) {
     let why = f.failure();
     println!("fail {}{}", f.check, why.line());
     if let Why::NoTests(said) = &why {
-        said.iter().for_each(|line| println!("  {line}"));
+        for line in said {
+            println!("  {line}");
+        }
     } else if let Why::Generated(_) = &why {
         let path = f.dir.join(generated::DIFF);
         if let Ok(diff) = std::fs::read_to_string(&path) {

@@ -448,7 +448,7 @@ fn ci_plan(reuse: Option<&Path>) -> Result<bool> {
 /// of its platforms from its leg, or reused from the base commit's CI proof by a pull request,
 /// and otherwise not proven. Judges what the change weakens, writes the bundle when asked and
 /// the job summary GitHub Actions names.
-fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<bool> {
+fn ci_gate(dir: &Path, bundle: Option<&Path>, reuse: Option<&Path>) -> Result<bool> {
     let workflow = action::Workflow::read();
     let ctx = ctx()?;
     let mut wt = ctx.worktree()?;
@@ -471,29 +471,22 @@ fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<
                     .find(|c| c.id == check.id && c.platform == platform)
                     .map(|c| legs::from_leg(l, c))
             });
-            let entry = match from_leg {
-                Some(entry) => entry,
-                None => {
-                    let key = wt.inputs(check)?.key;
-                    match reuse
-                        .as_ref()
-                        .and_then(|r| r.pass(&check.id, platform.as_deref(), &key))
-                    {
-                        Some(entry) => entry,
-                        None => {
-                            let away = proof::Away::Unproven(legs::missing(
-                                check,
-                                platform.as_deref(),
-                                &leg.id,
-                            ));
-                            let stage = ctx.config.stages.name(check.stage);
-                            proof::Check {
-                                platform: platform.clone(),
-                                ..proof::not_run(check, stage, &away)
-                            }
-                        }
+            let entry = if let Some(entry) = from_leg {
+                entry
+            } else {
+                let key = wt.inputs(check)?.key;
+                let reused = reuse
+                    .as_ref()
+                    .and_then(|r| r.pass(&check.id, platform.as_deref(), &key));
+                reused.unwrap_or_else(|| {
+                    let away =
+                        proof::Away::Unproven(legs::missing(check, platform.as_deref(), &leg.id));
+                    let stage = ctx.config.stages.name(check.stage);
+                    proof::Check {
+                        platform: platform.clone(),
+                        ..proof::not_run(check, stage, &away)
                     }
-                }
+                })
             };
             println!("{} {}", entry.word(), entry.name());
             proof.checks.push(entry);
@@ -511,13 +504,17 @@ fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<
     } else {
         gate_accept(&ctx, &found, &mut proof, &floor)
     };
-    if let Some(dir) = &bundle {
+    if let Some(dir) = bundle {
         proof::write(&proof, dir)?;
     }
     report::summary(&proof, None, &gate)?;
     let blockers = proof.blockers();
     // What weakens is said below, with how it gets past.
-    let weakened: Vec<String> = proof.weakened.iter().map(|w| w.what()).collect();
+    let weakened: Vec<String> = proof
+        .weakened
+        .iter()
+        .map(fearlezz_proof::floor::Weakening::what)
+        .collect();
     for item in blockers.iter().filter(|i| !weakened.contains(&i.what)) {
         println!("blocked: {}: {}", item.what, item.why);
         println!("  fix: {}", item.fix);
@@ -614,7 +611,7 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
                 return ci_plan(reuse.as_deref());
             }
             if let Some(dir) = gate {
-                return ci_gate(&dir, proof, reuse.as_deref());
+                return ci_gate(&dir, proof.as_deref(), reuse.as_deref());
             }
             if ci {
                 let leg = match leg {
@@ -916,14 +913,19 @@ fn see(see: &See) -> Result<bool> {
         since(&ctx, when)?;
     } else if let Some(check) = &see.check {
         let j = ctx.journal()?;
-        let ran = j.entries.iter().rev().find_map(|e| match &e.event {
-            Event::Ran {
+        let ran = j.entries.iter().rev().find_map(|e| {
+            if let Event::Ran {
                 check: c,
                 key,
                 result,
                 ..
-            } if c == check => Some((key, result)),
-            _ => None,
+            } = &e.event
+                && c == check
+            {
+                Some((key, result))
+            } else {
+                None
+            }
         });
         let (key, id) =
             ran.with_context(|| format!("no run of {check} in journal {} yet", j.name))?;
@@ -1034,9 +1036,12 @@ fn print_status(ctx: &Ctx, v: &View, host: (Vec<String>, usize)) {
     if let Some(line) = v.pictures_to_review(&ctx.config) {
         println!("{line}");
     }
-    let stale = v.checks.iter().filter_map(|c| match &c.state {
-        CheckState::Stale(why) => Some((&c.id, why)),
-        _ => None,
+    let stale = v.checks.iter().filter_map(|c| {
+        if let CheckState::Stale(why) = &c.state {
+            Some((&c.id, why))
+        } else {
+            None
+        }
     });
     for (id, why) in stale.take(2) {
         let shown: Vec<&str> = why.iter().take(3).map(String::as_str).collect();

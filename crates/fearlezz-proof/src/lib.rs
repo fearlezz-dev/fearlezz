@@ -544,7 +544,7 @@ pub fn test_names(names: &[String], quote: &str) -> String {
 /// A count with its word, `1 note` or `3 notes`.
 pub fn plural<N>(n: N, word: &str) -> String
 where
-    N: std::fmt::Display + PartialEq + From<u8>,
+    N: std::fmt::Display + PartialEq + From<u8> + Copy,
 {
     let s = if n == N::from(1) { "" } else { "s" };
     format!("{n} {word}{s}")

@@ -482,10 +482,12 @@ fn responsible_app() -> Option<String> {
 #[cfg(target_os = "macos")]
 #[expect(unsafe_code, reason = "libproc has no safe wrapper in libc")]
 fn process_path(pid: i32) -> Option<String> {
-    let mut buf = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let mut buf = vec![0_u8; usize::try_from(libc::PROC_PIDPATHINFO_MAXSIZE).ok()?];
+    let size = u32::try_from(buf.len()).ok()?;
     // SAFETY: the buffer is as large as the size passed.
-    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
-    (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), size) };
+    let path = buf.get(..usize::try_from(n).ok().filter(|n| *n > 0)?)?;
+    Some(String::from_utf8_lossy(path).into_owned())
 }
 
 #[cfg(target_os = "macos")]
@@ -493,11 +495,11 @@ fn process_path(pid: i32) -> Option<String> {
 fn parent(pid: i32) -> Option<i32> {
     // SAFETY: proc_bsdinfo is plain data, so zeroed is a valid value.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = size_of::<libc::proc_bsdinfo>() as i32;
+    let size = i32::try_from(size_of::<libc::proc_bsdinfo>()).ok()?;
     // SAFETY: the buffer is a proc_bsdinfo of the size passed.
     let n =
         unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
-    (n == size).then_some(info.pbi_ppid as i32)
+    i32::try_from(info.pbi_ppid).ok().filter(|_| n == size)
 }
 
 /// Every process below `root`, and `root` itself.
@@ -508,10 +510,10 @@ fn descendants(root: i32) -> BTreeSet<i32> {
     let mut todo = vec![root];
     while let Some(pid) = todo.pop() {
         let mut buf = vec![0_i32; 256];
-        let bytes = (buf.len() * size_of::<i32>()) as i32;
+        let bytes = i32::try_from(buf.len() * size_of::<i32>()).unwrap_or(i32::MAX);
         // SAFETY: the buffer holds as many bytes as passed.
         let n = unsafe { libc::proc_listchildpids(pid, buf.as_mut_ptr().cast(), bytes) };
-        for child in buf.iter().take(n.max(0) as usize) {
+        for child in buf.iter().take(usize::try_from(n).unwrap_or(0)) {
             if *child > 0 && all.insert(*child) {
                 todo.push(*child);
             }
@@ -883,7 +885,9 @@ impl<'a, S: Screen> Recorder<'a, S> {
             });
         }
         self.pause(SETTLE, log)?;
-        let since = Instant::now() - SETTLE;
+        let since = Instant::now()
+            .checked_sub(SETTLE)
+            .unwrap_or_else(Instant::now);
         while self.parking() && since.elapsed() < PARK_WAIT {
             self.pause(FOCUS_POLL, log)?;
         }

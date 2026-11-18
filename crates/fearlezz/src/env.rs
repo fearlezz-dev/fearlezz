@@ -740,7 +740,7 @@ pub(crate) fn parse_devenv_list(text: &str) -> BTreeMap<String, String> {
         let Some(at) = rest.iter().position(|w| *w == "ports:") else {
             continue;
         };
-        for spec in rest[at + 1..].iter().flat_map(|w| w.split(',')) {
+        for spec in rest.iter().skip(at + 1).flat_map(|w| w.split(',')) {
             if let Some((port_name, port)) = spec.split_once(':')
                 && port.chars().all(|c| c.is_ascii_digit())
                 && !port.is_empty()

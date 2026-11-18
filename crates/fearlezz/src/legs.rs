@@ -92,7 +92,11 @@ impl Platform {
         let defaults = platforms.iter().filter(|p| p.default).count();
         match (platforms.len(), defaults) {
             (0, _) | (_, 1) => {}
-            (1, 0) => platforms[0].default = true,
+            (1, 0) => {
+                if let Some(only) = platforms.first_mut() {
+                    only.default = true;
+                }
+            }
             (_, 0) => bail!(
                 "platforms {}: mark the one a check without `on` runs on with default = true",
                 names(&platforms)
@@ -504,10 +508,7 @@ mod tests {
     #[test]
     fn a_budget_reads_friendly_durations() {
         assert_eq!(Budget::parse("90s").unwrap().time, Duration::from_secs(90));
-        assert_eq!(
-            Budget::parse("20m").unwrap().time,
-            Duration::from_secs(1200)
-        );
+        assert_eq!(Budget::parse("20m").unwrap().time, Duration::from_mins(20));
         assert_eq!(Budget::parse("1h").unwrap().time, Duration::from_secs(3600));
         Budget::parse("soon").unwrap_err();
         Budget::parse("0s").unwrap_err();

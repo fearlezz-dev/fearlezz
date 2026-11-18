@@ -419,6 +419,7 @@ fn live_check(
     }))
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Ran<'a> {
     pub key: &'a str,
     pub result: &'a str,
@@ -426,19 +427,24 @@ pub(crate) struct Ran<'a> {
 }
 
 fn latest_ran<'a>(journal: &'a Journal, check: &str) -> Option<Ran<'a>> {
-    journal.entries.iter().rev().find_map(|e| match &e.event {
-        Event::Ran {
+    journal.entries.iter().rev().find_map(|e| {
+        if let Event::Ran {
             check: c,
             key,
             result,
             outcome,
             ..
-        } if c == check => Some(Ran {
-            key,
-            result,
-            outcome: *outcome,
-        }),
-        _ => None,
+        } = &e.event
+            && c == check
+        {
+            Some(Ran {
+                key,
+                result,
+                outcome: *outcome,
+            })
+        } else {
+            None
+        }
     })
 }
 
@@ -589,7 +595,11 @@ fn now_line(config: &Config, v: &View) -> String {
         .filter_map(|c| match c.state {
             CheckState::Failed => Some(format!("{} failed", c.id)),
             CheckState::Unstable => Some(format!("{} unstable", c.id)),
-            _ => None,
+            CheckState::Ok
+            | CheckState::Stale(_)
+            | CheckState::NeedsFresh
+            | CheckState::Uncompared
+            | CheckState::Never => None,
         })
         .collect();
     if !bad.is_empty() {

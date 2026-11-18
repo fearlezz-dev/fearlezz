@@ -260,9 +260,12 @@ fn tests(proof: &Proof, text: &mut String) -> std::fmt::Result {
         let mut lines: Vec<String> = failed
             .iter()
             .take(SHOWN)
-            .map(|c| match c.flaky {
-                true => format!("`{}` passed only on a rerun", code(&c.name)),
-                false => format!("`{}` failed", code(&c.name)),
+            .map(|c| {
+                if c.flaky {
+                    format!("`{}` passed only on a rerun", code(&c.name))
+                } else {
+                    format!("`{}` failed", code(&c.name))
+                }
             })
             .collect();
         if failed.len() > SHOWN {
