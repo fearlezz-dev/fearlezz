@@ -43,6 +43,11 @@ const FILM_WRITE: Duration = Duration::from_secs(30);
 /// How long `recordVideo` gets to end once interrupted. On CI's runners it sometimes never
 /// does, which held a run for an hour.
 const FILM_END: Duration = Duration::from_secs(30);
+/// How long a film records before it is interrupted. In its first second after saying
+/// "Recording started", recordVideo on a busy Mac often dies of the interrupt without writing
+/// the film, or never ends and leaves the device refusing every new recording (5 of 20 tries
+/// under full load); after a second it ended well in 40 of 40.
+const FILM_SETTLE: Duration = Duration::from_secs(2);
 /// Long enough for a first boot of a new device, which took 76 s on a developer's Mac and
 /// up to 274 s on CI's runners.
 const BOOT: Duration = Duration::from_mins(5);
@@ -354,14 +359,18 @@ impl Simulator {
         let mut film = Film {
             child,
             path: path.to_path_buf(),
+            started: std::time::Instant::now(),
         };
         loop {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             match rx.recv_timeout(left) {
-                Ok(Some(line)) if line.contains("Recording started") => return Ok(film),
+                Ok(Some(line)) if line.contains("Recording started") => {
+                    film.started = std::time::Instant::now();
+                    return Ok(film);
+                }
                 Ok(Some(line)) => said.push(line),
                 Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    drop(end(&mut film.child, FILM_END));
+                    drop(end(&mut film.child, film.started, FILM_END));
                     bail!(
                         "simctl recordVideo ended before recording: {}",
                         said.join(" ")
@@ -603,13 +612,15 @@ impl super::Screen for Simulator {
 pub(crate) struct Film {
     child: Child,
     path: PathBuf,
+    /// When recordVideo said it started recording.
+    started: std::time::Instant,
 }
 
 /// A film dropped without [`Filming::stop`] (the recorder failed) still ends, so no
 /// recording runs on into the device's next lease.
 impl Drop for Film {
     fn drop(&mut self) {
-        drop(end(&mut self.child, FILM_END));
+        drop(end(&mut self.child, self.started, FILM_END));
     }
 }
 
@@ -650,10 +661,12 @@ fn read_all<R: std::io::Read + Send + 'static>(
     })
 }
 
-/// Interrupts a recording that still runs and waits up to `limit` for it to end, killing it
-/// when it does not: a recording that ignores its interrupt never holds a run.
-fn end(child: &mut Child, limit: Duration) -> Result<ExitStatus> {
-    if let Some(status) = child.try_wait()? {
+/// Interrupts a recording that still runs, once it has recorded [`FILM_SETTLE`] since it
+/// `started`, and waits up to `limit` for it to end, killing it when it does not: a recording
+/// that ignores its interrupt never holds a run.
+fn end(child: &mut Child, started: std::time::Instant, limit: Duration) -> Result<ExitStatus> {
+    let settled = FILM_SETTLE.saturating_sub(started.elapsed());
+    if let Some(status) = wait_within(child, settled)? {
         return Ok(status);
     }
     interrupt(child);
@@ -696,7 +709,7 @@ impl super::Filming for Film {
     }
 
     fn stop(mut self) -> Result<()> {
-        let status = end(&mut self.child, FILM_END)?;
+        let status = end(&mut self.child, self.started, FILM_END)?;
         // The simulator writes the film beside it under a temporary name and moves it in,
         // sometimes after simctl has ended.
         let clock = std::time::Instant::now();
@@ -785,13 +798,38 @@ mod tests {
         BufReader::new(deaf.stdout.take().unwrap())
             .read_line(&mut ready)
             .unwrap();
-        let e = end(&mut deaf, Duration::from_secs(1)).unwrap_err();
+        let e = end(&mut deaf, std::time::Instant::now(), Duration::from_secs(1)).unwrap_err();
         assert!(
             format!("{e:#}").contains("did not end in 1 s after its interrupt"),
             "{e:#}"
         );
         assert!(deaf.try_wait().unwrap().is_some(), "killed");
         assert!(clock.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_recording_stopped_as_it_starts_is_interrupted_once_it_handles_interrupts() {
+        // Like recordVideo: it says it started, dies of an interrupt in its first second,
+        // and ends well on one after that.
+        let mut recorder = Command::new("/usr/bin/perl")
+            .args([
+                "-e",
+                r#"$| = 1; print "started\n"; select(undef, undef, undef, 1); $SIG{INT} = sub { exit 0 }; sleep 30"#,
+            ])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut started = String::new();
+        BufReader::new(recorder.stdout.take().unwrap())
+            .read_line(&mut started)
+            .unwrap();
+        let status = end(
+            &mut recorder,
+            std::time::Instant::now(),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(status.success(), "{status}");
     }
 
     #[test]
