@@ -121,6 +121,12 @@ fn a_run_that_writes_no_report_fails() {
         "{}",
         out.stdout
     );
+    assert!(
+        out.stdout
+            .contains("  fix: make its command leave what the check reads"),
+        "{}",
+        out.stdout
+    );
 }
 
 #[test]

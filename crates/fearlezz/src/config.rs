@@ -22,11 +22,10 @@ const DEFAULT_STAGES: [&str; 4] = ["exploring", "working", "look", "merge"];
 
 pub(crate) struct Config {
     pub stages: Stages,
-    /// The checks this run proves: those of each change, or with [`Config::on_schedule`]
-    /// the scheduled ones.
+    /// Every check, scheduled or not, by id. [`Config::due`] picks those this run proves.
     pub checks: Vec<Check>,
-    /// The other checks, which this run leaves out unless one is named.
-    pub set_aside: Vec<Check>,
+    /// Whether this run proves the scheduled checks instead of those of each change.
+    pub scheduled: bool,
     /// The branch a change is compared against.
     pub base: String,
     pub env: Env,
@@ -51,7 +50,8 @@ pub(crate) struct Config {
 
 /// What makes a checkout usable and runs its services. Every part is optional; a project
 /// without services needs none of it.
-#[derive(Default)]
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct Env {
     /// Makes a fresh checkout usable (installs, generated files, warming a Nix shell).
     pub prepare: Option<String>,
@@ -69,14 +69,56 @@ pub(crate) struct Env {
     pub down: Option<String>,
     /// Wipes service data, for the fresh run at the final stage.
     pub reset: Option<String>,
+    /// Read from `ports` once serde is done, so its error reads as Fearlezz words it.
+    #[serde(skip)]
     pub ports: Option<Ports>,
+    #[serde(rename = "ports")]
+    written_ports: Option<RawPorts>,
     /// Environment variables the commands above may see.
+    #[serde(rename = "env")]
     pub vars: Vec<String>,
     /// Deploys the checkout somewhere remote and prints its URL: a service that lives
     /// remotely, deployed once per tree.
     pub preview: Option<String>,
     /// Secrets the preview gets from SecretSpec, by name, as a check gets its own.
     pub secrets: Vec<String>,
+}
+
+impl Env {
+    /// What of it shapes a check's results besides its files, part of the inputs of each
+    /// check it touches.
+    pub(crate) fn key(&self) -> EnvKey {
+        let services = self.up.as_ref().map(|up| {
+            format!(
+                "{up}\0{}\0{}\0{:?}",
+                self.down.as_deref().unwrap_or(""),
+                self.reset.as_deref().unwrap_or(""),
+                self.ports
+            )
+        });
+        let preview = self.preview.as_ref().map(|preview| {
+            let mut names = self.secrets.clone();
+            names.sort();
+            format!("{preview}\0{}", names.join("\0"))
+        });
+        EnvKey {
+            shell: self.shell.clone(),
+            services,
+            preview,
+        }
+    }
+}
+
+/// What of an `[env]` shapes a check's results besides its files.
+#[derive(Clone, Default)]
+pub(crate) struct EnvKey {
+    /// The shell every check but a built in one runs inside.
+    pub shell: Option<String>,
+    /// The commands that make the services, for a check that needs them.
+    pub services: Option<String>,
+    /// The command that deploys the preview and the names of the secrets it gets, for a check
+    /// that needs it.
+    pub preview: Option<String>,
 }
 
 /// Where the ports of running services come from.
@@ -96,22 +138,44 @@ enum RawPorts {
     Read { read: String },
 }
 
-/// What a check needs besides its files.
+impl RawPorts {
+    fn read(self) -> Result<Ports> {
+        match self {
+            RawPorts::Command(cmd) => Ok(Ports::Command(cmd)),
+            RawPorts::Read { read } if read == "devenv" => Ok(Ports::Devenv),
+            RawPorts::Read { read } => {
+                bail!("[env] ports: no reader \"{read}\"; readers are devenv")
+            }
+        }
+    }
+}
+
+/// A word in a check's `needs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Need {
-    /// The services `[env] up` starts; their ports reach the check as env vars.
+enum Need {
     Services,
+    Envtest,
+    Preview,
+    Ios,
+    Linux,
+}
+
+/// What a check needs besides its files, read once from its `needs` with its `device` or
+/// `display`.
+#[derive(Default)]
+pub(crate) struct Needs {
+    /// The services `[env] up` starts; their ports reach the check as env vars.
+    pub services: bool,
     /// The envtest binaries (etcd, kube-apiserver) of the Kubernetes version its go.mod
     /// requires, fetched by setup-envtest; their folder reaches it as `KUBEBUILDER_ASSETS`.
-    Envtest,
+    pub envtest: bool,
     /// The deploy `[env] preview` makes of the checkout; its URL reaches the check as
     /// `FEARLEZZ_PREVIEW_URL`.
-    Preview,
-    /// An iOS simulator Fearlezz leases; its id reaches the check in `FEARLEZZ_DEVICE`.
-    Ios,
-    /// A Linux display Fearlezz starts (Xvfb); it reaches the check in `DISPLAY`.
-    Linux,
+    pub preview: bool,
+    /// Where its app shows: this machine's own screen, or the iOS simulator (`ios`) or Linux
+    /// display (`linux`) it names, with the device type or display size it asks for.
+    pub screen: crate::record::Target,
 }
 
 /// The ordered stages of a change. The last one is the merge gate, where every check runs
@@ -119,13 +183,12 @@ pub(crate) enum Need {
 pub(crate) struct Stages(Vec<String>);
 
 /// A position in [`Stages`]. Only [`Stages`] creates one, so it is always valid.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Stage(usize);
 
+#[derive(Default)]
 pub(crate) struct Check {
     pub id: String,
-    /// What it runs, as shown: its one command, or its steps one per line.
-    pub run: String,
     /// The plain commands it runs in order, the first that fails ending the check; a
     /// reader of stdout reads only the last one's. Empty for a built in check.
     pub steps: Vec<String>,
@@ -144,15 +207,7 @@ pub(crate) struct Check {
     /// Secrets it gets from SecretSpec, by name. Their names are part of its inputs, never
     /// their values.
     pub secrets: Vec<String>,
-    pub needs: Vec<Need>,
-    /// For a check that needs services: the commands that make them, part of its inputs.
-    pub services: Option<String>,
-    /// For a check that needs the preview: the command that deploys it and the names of the
-    /// secrets it gets, part of its inputs.
-    pub preview: Option<String>,
-    /// Where its app shows: this machine's own screen, or the simulator or Linux display its
-    /// `needs` names, with the device type or display size it asks for.
-    pub screen: crate::record::Target,
+    pub needs: Needs,
     /// For a check that reports findings: where they come from and which count.
     pub findings: Option<FindingsSpec>,
     /// For a check that runs tests: where it says how many ran. Zero tests fails it.
@@ -162,8 +217,7 @@ pub(crate) struct Check {
     pub coverage: Option<crate::coverage::Coverage>,
     /// Which of its inputs are tests, as written: CI runs the change's test files on the base
     /// commit to show they fail there (red before green).
-    pub test_files: Vec<String>,
-    test_globs: Globs,
+    pub test_files: Globs,
     /// The stills and films it takes, and which of them are flaky.
     pub pictures: Pictures,
     /// Tests (names or globs, as written) that may pass only on a rerun. Listing more weakens
@@ -337,50 +391,48 @@ fn record_weakenings(b: &crate::record::Spec, h: &crate::record::Spec) -> Vec<Ch
     found
 }
 
-/// The screen a check's `needs` names, with its `device` or `display`.
-fn screen(c: &RawCheck) -> Result<crate::record::Target> {
-    use crate::record::Target;
-    let ios = c.needs.contains(&Need::Ios);
-    let linux = c.needs.contains(&Need::Linux);
-    if ios && linux {
-        bail!("needs both ios and linux; a check runs on one machine, so split it in two");
-    }
-    if c.device.is_some() && !ios {
-        bail!("device is only for a check that needs = [\"ios\"]");
-    }
-    if c.display.is_some() && !linux {
-        bail!("display is only for a check that needs = [\"linux\"]");
-    }
-    let screen = if ios {
-        Target::Ios {
-            device: c.device.clone(),
+impl Needs {
+    /// What `c` needs, its screen with the `record` it takes there.
+    fn read(c: &RawCheck, record: Option<&crate::record::Spec>) -> Result<Needs> {
+        use crate::record::Target;
+        let has = |need| c.needs.contains(&need);
+        let (ios, linux) = (has(Need::Ios), has(Need::Linux));
+        if ios && linux {
+            bail!("needs both ios and linux; a check runs on one machine, so split it in two");
         }
-    } else if linux {
-        let size = match &c.display {
-            Some(text) => crate::record::parse_size(text).with_context(|| {
-                format!("display = \"{text}\" is not a width and height such as \"1280x720\"")
-            })?,
-            None => crate::record::DEFAULT_SIZE,
+        if c.device.is_some() && !ios {
+            bail!("device is only for a check that needs = [\"ios\"]");
+        }
+        if c.display.is_some() && !linux {
+            bail!("display is only for a check that needs = [\"linux\"]");
+        }
+        let screen = if ios {
+            Target::Ios {
+                device: c.device.clone(),
+            }
+        } else if linux {
+            let size = match &c.display {
+                Some(text) => crate::record::parse_size(text).with_context(|| {
+                    format!("display = \"{text}\" is not a width and height such as \"1280x720\"")
+                })?,
+                None => crate::record::DEFAULT_SIZE,
+            };
+            Target::Linux { size }
+        } else {
+            Target::Window
         };
-        Target::Linux { size }
-    } else {
-        Target::Window
-    };
-    let crops = c
-        .record
-        .as_ref()
-        .and_then(|r| r.get("crop_top"))
-        .and_then(|crop| {
-            crop.as_float()
-                .or_else(|| crop.as_integer().map(|i| i as f64))
+        if screen.owned() && record.is_some_and(|r| r.crop_top > 0.0) {
+            bail!(
+                "record: crop_top is only for a window; the simulator and a Linux display have no title bar"
+            );
+        }
+        Ok(Needs {
+            services: has(Need::Services),
+            envtest: has(Need::Envtest),
+            preview: has(Need::Preview),
+            screen,
         })
-        .is_some_and(|crop| crop > 0.0);
-    if crops && screen != Target::Window {
-        bail!(
-            "record: crop_top is only for a window; the simulator and a Linux display have no title bar"
-        );
     }
-    Ok(screen)
 }
 
 /// A check Fearlezz runs in process.
@@ -472,6 +524,35 @@ enum RawFindings {
     },
 }
 
+impl RawFindings {
+    /// The spec it says, its lint tables taken from `all`.
+    fn resolve(self, all: &Lints) -> Result<FindingsSpec> {
+        let (read, on, lints, level, fix) = match self {
+            RawFindings::Read(read) => (read, Scope::Changed, Vec::new(), None, None),
+            RawFindings::Spec {
+                read,
+                on,
+                lints,
+                level,
+                fix,
+            } => (read, on, lints, level, fix),
+        };
+        let tools = lints
+            .iter()
+            .map(|t| lints::Tool::parse(t))
+            .collect::<Result<Vec<_>>>()
+            .context("findings lints")?;
+        Ok(FindingsSpec {
+            read,
+            on,
+            levels: all.only(&tools),
+            tools,
+            level,
+            fix,
+        })
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
@@ -479,7 +560,7 @@ struct RawConfig {
     #[serde(default)]
     check: BTreeMap<String, RawCheck>,
     base: Option<String>,
-    env: Option<RawEnv>,
+    env: Option<Env>,
     settings: Option<toml::Table>,
     lints: Option<BTreeMap<String, BTreeMap<String, lints::Level>>>,
     rule: Option<BTreeMap<String, toml::Table>>,
@@ -545,14 +626,6 @@ struct RawCheck {
     timeout: Option<String>,
     #[serde(default)]
     generates: Vec<String>,
-    /// Turns off a check a piece from `use` brings in.
-    #[serde(default)]
-    #[expect(
-        dead_code,
-        reason = "pieces are merged as TOML and off checks are dropped there; the field only \
-                  lets serde accept the key"
-    )]
-    off: bool,
 }
 
 /// A check's `run`: one command, or steps run in order, so a check that needs two
@@ -564,59 +637,11 @@ enum RawRun {
     Steps(Vec<String>),
 }
 
-#[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct RawEnv {
-    prepare: Option<String>,
-    #[serde(default)]
-    inputs: Vec<String>,
-    shell: Option<String>,
-    #[serde(default)]
-    clone: Vec<String>,
-    #[serde(default)]
-    clone_when: Vec<String>,
-    up: Option<String>,
-    down: Option<String>,
-    reset: Option<String>,
-    ports: Option<RawPorts>,
-    #[serde(default)]
-    env: Vec<String>,
-    preview: Option<String>,
-    #[serde(default)]
-    secrets: Vec<String>,
-}
-
-impl RawEnv {
-    fn resolve(self) -> Result<Env> {
-        Ok(Env {
-            prepare: self.prepare,
-            inputs: self.inputs,
-            shell: self.shell,
-            clone: self.clone,
-            clone_when: self.clone_when,
-            up: self.up,
-            down: self.down,
-            reset: self.reset,
-            ports: match self.ports {
-                None => None,
-                Some(RawPorts::Command(cmd)) => Some(Ports::Command(cmd)),
-                Some(RawPorts::Read { read }) if read == "devenv" => Some(Ports::Devenv),
-                Some(RawPorts::Read { read }) => {
-                    bail!("[env] ports: no reader \"{read}\"; readers are devenv")
-                }
-            },
-            vars: self.env,
-            preview: self.preview,
-            secrets: self.secrets,
-        })
-    }
-}
-
 impl Config {
     /// Reads `fearlezz.toml` in `root`, with the pieces it uses merged in (cached under
     /// `common`, the git folder every worktree shares).
     pub(crate) fn load(root: &Path, common: &Path) -> Result<Config> {
-        let mut table = presets::resolve(root, common)?;
+        let table = presets::resolve(root, common)?;
         let at = || format!("in {}", root.join(FILE).display());
         let no_proof: Vec<String> = table
             .get("no_proof")
@@ -634,25 +659,16 @@ impl Config {
         }
         .files()?;
         let found = |marker: &str| projects(root, &files, marker, &no_proof);
-        let fanned = expand_each(&mut table, &found).with_context(at)?;
-        let mut config = Config::from_table(table, found("Cargo.toml")).with_context(at)?;
-        config.fanned = fanned;
-        Ok(config)
+        Config::from_table(table, &found).with_context(at)
     }
 
-    /// The config `table` says, with `cargo` the folders of the repository's Cargo projects.
-    fn from_table(mut table: toml::Table, cargo: Vec<String>) -> Result<Config> {
-        // The settings check is added below, so turning it off is read before the others go.
-        let settings_off = table
-            .get("check")
-            .and_then(|c| c.get(SETTINGS_CHECK))
-            .and_then(|c| c.get("off"))
-            .and_then(toml::Value::as_bool)
-            == Some(true);
-        crate::release::add_dry_checks(&mut table, DEFAULT_STAGES.last().copied());
-        if let Some(toml::Value::Table(checks)) = table.get_mut("check") {
-            checks.retain(|_, c| c.get("off").and_then(toml::Value::as_bool) != Some(true));
-        }
+    /// The config `table`, pieces merged in, says, with `found` the project folders of each
+    /// marker file. One pass expands the table first: `each` fans checks out, what is turned
+    /// off goes, and each release place adds its dry run.
+    fn from_table(mut table: toml::Table, found: &dyn Fn(&str) -> Vec<String>) -> Result<Config> {
+        let fanned = expand_each(&mut table, found)?;
+        let off = drop_off(&mut table)?;
+        crate::release::add_dry_checks(&mut table, DEFAULT_STAGES.last().copied(), &off);
 
         let raw: RawConfig = toml::Value::Table(table.clone()).try_into()?;
         let order = match raw.stages {
@@ -663,27 +679,15 @@ impl Config {
             bail!("[stages] order needs at least one stage");
         }
         let stages = Stages(order);
-        let env = raw.env.unwrap_or_default().resolve()?;
-        let services = env.up.as_ref().map(|up| {
-            format!(
-                "{up}\0{}\0{}\0{:?}",
-                env.down.as_deref().unwrap_or(""),
-                env.reset.as_deref().unwrap_or(""),
-                env.ports
-            )
-        });
+        let mut env = raw.env.unwrap_or_default();
+        env.ports = env.written_ports.take().map(RawPorts::read).transpose()?;
         if let Some(name) = env.secrets.iter().find(|n| replaces_given(n)) {
             bail!(
                 "[env] secrets: the secret {name} would replace a variable the preview gets; \
                  give it another name in secretspec.toml"
             );
         }
-        let preview = env.preview.as_ref().map(|preview| {
-            let mut names = env.secrets.clone();
-            names.sort();
-            format!("{preview}\0{}", names.join("\0"))
-        });
-        let all_lints = Lints::parse(raw.lints.unwrap_or_default())?;
+        let lints = Lints::parse(raw.lints.unwrap_or_default())?;
         // Without inputs of its own, a check reads every file outside `no_proof`, so an edit
         // to prose reruns nothing: `no_proof` taken back out of `**`, in its own order.
         let whole_tree: Vec<String> = std::iter::once("**".to_string())
@@ -693,224 +697,67 @@ impl Config {
             }))
             .collect();
         let platforms = crate::legs::Platform::parse(raw.platform)?;
+        let around = Around {
+            stages: &stages,
+            env: &env,
+            whole_tree: &whole_tree,
+            platforms: &platforms,
+            lints: &lints,
+        };
         let mut checks = Vec::new();
         for (id, c) in raw.check {
-            let stage = stages.find(&c.stage).with_context(|| {
-                format!(
-                    "check {id}: unknown stage \"{}\"; stages are {}",
-                    c.stage,
-                    stages.0.join(", ")
-                )
-            })?;
-            let screen = screen(&c).with_context(|| format!("check {id}"))?;
-            let steps = match c.run {
-                RawRun::One(command) => vec![command],
-                RawRun::Steps(steps) if steps.is_empty() => {
-                    bail!("check {id}: run names no command; give it one, or a list of steps")
-                }
-                RawRun::Steps(steps) => steps,
-            };
-            let needs_services = c.needs.contains(&Need::Services);
-            if needs_services && services.is_none() {
+            if c.needs.contains(&Need::Services) && env.up.is_none() {
                 bail!("check {id} needs services, but [env] has no up command to start them");
             }
-            let needs_preview = c.needs.contains(&Need::Preview);
-            if needs_preview && preview.is_none() {
+            if c.needs.contains(&Need::Preview) && env.preview.is_none() {
                 bail!(
                     "check {id} needs the preview, but [env] has no preview command to deploy it"
                 );
             }
-            if let Some(name) = c.secrets.iter().find(|n| replaces_given(n)) {
-                bail!(
-                    "check {id}: the secret {name} would replace a variable every check gets; \
-                     give it another name in secretspec.toml"
-                );
-            }
-            // Inside a shell, the environment's own files shape every result.
-            let shell_inputs = || env.shell.iter().flat_map(|_| &env.inputs);
-            let own = if c.inputs.is_empty() {
-                &whole_tree
-            } else {
-                &c.inputs
-            };
-            let inputs = globs(own.iter().chain(shell_inputs()))
-                .with_context(|| format!("check {id}: inputs"))?;
-            checks.push(Check {
-                on: crate::legs::Platform::on(&platforms, c.on, screen.os())
-                    .with_context(|| format!("check {id}"))?,
-                job: crate::legs::job(c.job).with_context(|| format!("check {id}"))?,
-                timeout: c
-                    .timeout
-                    .as_deref()
-                    .map(crate::legs::Budget::parse)
-                    .transpose()
-                    .with_context(|| format!("check {id}: timeout"))?,
-                inputs,
-                builtin: None,
-                tests: c
-                    .tests
-                    .as_ref()
-                    .map(crate::counts::Reader::parse)
-                    .transpose()
-                    .with_context(|| format!("check {id}"))?,
-                coverage: crate::coverage::Coverage::parse(c.coverage.as_ref(), &all_lints)
-                    .with_context(|| format!("check {id}"))?,
-                test_globs: globs(&c.test_files)
-                    .with_context(|| format!("check {id}: test_files"))?,
-                test_files: c.test_files,
-                pictures: Pictures {
-                    stills: c
-                        .stills
-                        .as_deref()
-                        .map(|g| MediaGlob::parse("still", g))
-                        .transpose()
-                        .with_context(|| format!("check {id}"))?,
-                    films: c
-                        .films
-                        .as_deref()
-                        .map(|g| MediaGlob::parse("film", g))
-                        .transpose()
-                        .with_context(|| format!("check {id}"))?,
-                    texts: c
-                        .texts
-                        .as_deref()
-                        .map(|g| MediaGlob::parse("text", g))
-                        .transpose()
-                        .with_context(|| format!("check {id}"))?,
-                    record: c
-                        .record
-                        .map(crate::record::Spec::parse)
-                        .transpose()
-                        .with_context(|| format!("check {id}"))?,
-                    flaky: globs(&c.flaky).with_context(|| format!("check {id}: flaky"))?,
-                },
-                flaky_tests: globs(&c.flaky_tests)
-                    .with_context(|| format!("check {id}: flaky_tests"))?,
-                generates: globs(&c.generates).with_context(|| format!("check {id}: generates"))?,
-                dir: match c.dir {
-                    Some(dir) => Some(folder(&dir).with_context(|| format!("check {id}: dir"))?),
-                    None => None,
-                },
-                light: c.light,
-                id: id.clone(),
-                run: steps.join("\n"),
-                steps,
-                stage,
-                env: c.env,
-                secrets: c.secrets,
-                schedule: c.schedule,
-                needs: c.needs,
-                screen,
-                services: if needs_services {
-                    services.clone()
-                } else {
-                    None
-                },
-                preview: if needs_preview { preview.clone() } else { None },
-                findings: match c.findings {
-                    None => None,
-                    Some(RawFindings::Read(read)) => Some(FindingsSpec {
-                        read,
-                        on: Scope::Changed,
-                        tools: Vec::new(),
-                        levels: Lints::default(),
-                        level: None,
-                        fix: None,
-                    }),
-                    Some(RawFindings::Spec {
-                        read,
-                        on,
-                        lints,
-                        level,
-                        fix,
-                    }) => {
-                        let tools = lints
-                            .iter()
-                            .map(|t| lints::Tool::parse(t))
-                            .collect::<Result<Vec<_>>>()
-                            .with_context(|| format!("check {id}: findings lints"))?;
-                        Some(FindingsSpec {
-                            read,
-                            on,
-                            levels: all_lints.only(&tools),
-                            tools,
-                            level,
-                            fix,
-                        })
-                    }
-                },
-            });
+            let check = c.resolve(&around).with_context(|| format!("check {id}"))?;
+            checks.push(Check { id, ..check });
         }
         let read: std::collections::BTreeSet<lints::Tool> = checks
             .iter()
             .filter_map(|c| c.findings.as_ref())
             .flat_map(|f| f.tools.iter().copied())
             .collect();
-        let mut settings = Settings::parse(raw.settings.unwrap_or_default(), all_lints, &read)?;
-        settings.cargo = cargo;
-        let own_settings_check = checks.iter().any(|c| c.id == SETTINGS_CHECK);
-        if !settings.is_empty() && !own_settings_check && !settings_off {
-            checks.push(builtin_check(
-                SETTINGS_CHECK,
-                &stages,
-                &platforms,
-                globs(&settings.globs())?,
-                Scope::Everywhere,
-                Builtin::Settings(settings.clone()),
-            ));
-        }
+        let mut settings = Settings::parse(raw.settings.unwrap_or_default(), lints, &read)?;
+        settings.cargo = found("Cargo.toml");
         let rules = Rules::parse(raw.rule.unwrap_or_default())?;
-        if !rules.is_empty() {
-            if checks.iter().any(|c| c.id == rules::CHECK) {
-                bail!(
-                    "check {} is the name of the check [rule] forms; rename it",
-                    rules::CHECK
-                );
-            }
-            // Names, companions and code can change with any file.
-            let inputs = globs(&["**".to_string()])?;
-            checks.push(builtin_check(
-                rules::CHECK,
-                &stages,
-                &platforms,
-                inputs,
-                Scope::Changed,
-                Builtin::Rules(rules),
-            ));
-        }
         let base = raw.base.unwrap_or_else(|| "main".into());
-        if let Some(commits) = raw.commits.filter(|c| !c.off()) {
-            if checks.iter().any(|c| c.id == crate::commits::CHECK) {
-                bail!(
+        let built_in = built_in(&settings, rules, raw.commits, &base, &stages, &platforms)?;
+        for check in built_in.into_iter().filter(|c| !off.contains(&c.id)) {
+            match &check.builtin {
+                _ if !checks.iter().any(|c| c.id == check.id) => checks.push(check),
+                // A project's own settings check stands in for the built in one.
+                Some(Builtin::Settings(_)) => {}
+                Some(Builtin::Rules(_)) => {
+                    bail!(
+                        "check {} is the name of the check [rule] forms; rename it",
+                        check.id
+                    )
+                }
+                _ => bail!(
                     "check {} is the name of the check [commits] forms; rename it",
-                    crate::commits::CHECK
-                );
+                    check.id
+                ),
             }
-            // What it reads is the messages, which its inputs hold; no file.
-            checks.push(builtin_check(
-                crate::commits::CHECK,
-                &stages,
-                &platforms,
-                globs(&[])?,
-                Scope::Everywhere,
-                Builtin::Commits(crate::commits::Commits::parse(commits, &base)),
-            ));
         }
         checks.sort_by(|a, b| a.id.cmp(&b.id));
-        let (set_aside, checks) = checks.into_iter().partition(|c| c.schedule);
         Ok(Config {
             no_proof: globs(&raw.no_proof).context("no_proof")?,
             settings,
             stages,
             checks,
-            set_aside,
+            scheduled: false,
             base,
             env,
             host: raw.host.map(|h| h.url),
             releases: crate::release::parse(raw.release.as_ref())?,
             platforms,
             table,
-            fanned: BTreeMap::new(),
+            fanned,
         })
     }
 
@@ -957,22 +804,18 @@ impl Config {
         check.pictures.names_media() || self.stages.name(check.stage) == "look"
     }
 
-    /// The check called `id`, set aside or not: naming a check runs it.
+    /// The check called `id`, scheduled or not: naming a check runs it.
     pub(crate) fn check(&self, id: &str) -> Result<&Check> {
-        self.every_check().find(|c| c.id == id).with_context(|| {
-            let ids: Vec<&str> = self.every_check().map(|c| c.id.as_str()).collect();
+        self.checks.iter().find(|c| c.id == id).with_context(|| {
+            let ids: Vec<&str> = self.checks.iter().map(|c| c.id.as_str()).collect();
             format!("no check \"{id}\"; checks are {}", ids.join(", "))
         })
     }
 
-    /// Every check, scheduled or not, whichever this run proves.
-    pub(crate) fn every_check(&self) -> impl Iterator<Item = &Check> {
-        self.checks.iter().chain(&self.set_aside)
-    }
-
-    /// Makes this run prove the scheduled checks instead of those of each change.
-    pub(crate) fn on_schedule(&mut self) {
-        std::mem::swap(&mut self.checks, &mut self.set_aside);
+    /// The checks this run proves: those of each change, or on a scheduled run the scheduled
+    /// ones.
+    pub(crate) fn due(&self) -> impl Iterator<Item = &Check> {
+        self.checks.iter().filter(|c| c.schedule == self.scheduled)
     }
 }
 
@@ -981,36 +824,26 @@ fn replaces_given(name: &str) -> bool {
     name.starts_with("FEARLEZZ_") || crate::process::BASE_ENV.contains(&name)
 }
 
-/// A check Fearlezz runs itself at the working stage, its findings judged in `on`.
-fn builtin_check(
-    id: &str,
+/// The checks Fearlezz runs itself, at the working stage: the shared settings', `[rule]`'s
+/// and `[commits]`'s, each where the config has them.
+fn built_in(
+    settings: &Settings,
+    rules: Rules,
+    commits: Option<crate::commits::RawCommits>,
+    base: &str,
     stages: &Stages,
     platforms: &[crate::legs::Platform],
-    inputs: Globs,
-    on: Scope,
-    builtin: Builtin,
-) -> Check {
-    Check {
+) -> Result<Vec<Check>> {
+    // Its findings judged in `on`.
+    let builtin = |id: &str, inputs: Globs, on: Scope, builtin: Builtin| Check {
         on: platforms
             .iter()
             .filter(|p| p.default)
             .map(|p| p.name.clone())
             .collect(),
-        job: None,
-        timeout: None,
         id: id.into(),
-        run: format!("(fearlezz {id})"),
-        steps: Vec::new(),
-        dir: None,
         stage: stages.find("working").unwrap_or(stages.first()),
         inputs,
-        env: Vec::new(),
-        secrets: Vec::new(),
-        schedule: false,
-        needs: Vec::new(),
-        screen: crate::record::Target::Window,
-        services: None,
-        preview: None,
         findings: Some(FindingsSpec {
             read: Reader::Jsonl,
             on,
@@ -1020,15 +853,173 @@ fn builtin_check(
             fix: None,
         }),
         builtin: Some(builtin),
-        tests: None,
-        coverage: None,
-        test_files: Vec::new(),
-        test_globs: Globs::default(),
-        pictures: Pictures::default(),
-        flaky_tests: Globs::default(),
-        generates: Globs::default(),
         light: true,
+        ..Check::default()
+    };
+    let mut built_in = Vec::new();
+    if !settings.is_empty() {
+        built_in.push(builtin(
+            SETTINGS_CHECK,
+            globs(&settings.globs())?,
+            Scope::Everywhere,
+            Builtin::Settings(settings.clone()),
+        ));
     }
+    if !rules.is_empty() {
+        // Names, companions and code can change with any file.
+        built_in.push(builtin(
+            rules::CHECK,
+            globs(&["**".to_string()])?,
+            Scope::Changed,
+            Builtin::Rules(rules),
+        ));
+    }
+    if let Some(commits) = commits {
+        // What it reads is the messages, which its inputs hold; no file.
+        built_in.push(builtin(
+            crate::commits::CHECK,
+            globs(&[])?,
+            Scope::Everywhere,
+            Builtin::Commits(crate::commits::Commits::parse(commits, base)),
+        ));
+    }
+    Ok(built_in)
+}
+
+/// What every check of a config is read against.
+struct Around<'a> {
+    stages: &'a Stages,
+    env: &'a Env,
+    /// The inputs of a check that names none.
+    whole_tree: &'a [String],
+    platforms: &'a [crate::legs::Platform],
+    lints: &'a Lints,
+}
+
+impl RawCheck {
+    /// The check this table says, its id left for the caller to set; an error names no
+    /// check, since the caller puts its id in front.
+    fn resolve(mut self, at: &Around<'_>) -> Result<Check> {
+        let stage = at.stages.find(&self.stage).with_context(|| {
+            format!(
+                "unknown stage \"{}\"; stages are {}",
+                self.stage,
+                at.stages.0.join(", ")
+            )
+        })?;
+        let record = self
+            .record
+            .take()
+            .map(crate::record::Spec::parse)
+            .transpose()?;
+        let needs = Needs::read(&self, record.as_ref())?;
+        let steps = match self.run {
+            RawRun::One(command) => vec![command],
+            RawRun::Steps(steps) if steps.is_empty() => {
+                bail!("run names no command; give it one, or a list of steps")
+            }
+            RawRun::Steps(steps) => steps,
+        };
+        if let Some(name) = self.secrets.iter().find(|n| replaces_given(n)) {
+            bail!(
+                "the secret {name} would replace a variable every check gets; give it another \
+                 name in secretspec.toml"
+            );
+        }
+        let own = if self.inputs.is_empty() {
+            at.whole_tree
+        } else {
+            &self.inputs
+        };
+        // Inside a shell, the environment's own files shape every result.
+        let shell_inputs = at.env.shell.iter().flat_map(|_| &at.env.inputs);
+        let media =
+            |kind, glob: Option<String>| glob.map(|g| MediaGlob::parse(kind, &g)).transpose();
+        Ok(Check {
+            inputs: globs(own.iter().chain(shell_inputs)).context("inputs")?,
+            on: crate::legs::Platform::on(at.platforms, self.on, needs.screen.os())?,
+            job: crate::legs::job(self.job)?,
+            timeout: self
+                .timeout
+                .as_deref()
+                .map(crate::legs::Budget::parse)
+                .transpose()
+                .context("timeout")?,
+            tests: self
+                .tests
+                .as_ref()
+                .map(crate::counts::Reader::parse)
+                .transpose()?,
+            coverage: crate::coverage::Coverage::parse(self.coverage.as_ref(), at.lints)?,
+            test_files: globs(&self.test_files).context("test_files")?,
+            pictures: Pictures {
+                stills: media("still", self.stills)?,
+                films: media("film", self.films)?,
+                texts: media("text", self.texts)?,
+                record,
+                flaky: globs(&self.flaky).context("flaky")?,
+            },
+            flaky_tests: globs(&self.flaky_tests).context("flaky_tests")?,
+            generates: globs(&self.generates).context("generates")?,
+            dir: self
+                .dir
+                .map(|dir| folder(&dir))
+                .transpose()
+                .context("dir")?,
+            findings: self.findings.map(|f| f.resolve(at.lints)).transpose()?,
+            light: self.light,
+            steps,
+            stage,
+            env: self.env,
+            secrets: self.secrets,
+            schedule: self.schedule,
+            needs,
+            ..Check::default()
+        })
+    }
+}
+
+/// Leaves out what the merged pieces turn off with `off = true`: checks, rules, release places
+/// and `[commits]`, and drops `off = false`, so nothing after reads the key. Returns the ids of
+/// the checks turned off, which a check added later (a release's dry run, a built in check)
+/// never comes back under.
+fn drop_off(table: &mut toml::Table) -> Result<std::collections::BTreeSet<String>> {
+    fn off(part: &mut toml::Value, at: &str) -> Result<bool> {
+        let Some(part) = part.as_table_mut() else {
+            return Ok(false);
+        };
+        match part.remove("off") {
+            None => Ok(false),
+            Some(toml::Value::Boolean(off)) => Ok(off),
+            Some(other) => bail!(
+                "in `{at}`: off is {}, expected true or false",
+                other.type_str()
+            ),
+        }
+    }
+    let mut dropped = std::collections::BTreeSet::new();
+    for kind in ["check", "rule", "release"] {
+        if let Some(toml::Value::Table(parts)) = table.get_mut(kind) {
+            let mut gone = Vec::new();
+            for (id, part) in parts.iter_mut() {
+                if off(part, &format!("{kind}.{id}"))? {
+                    gone.push(id.clone());
+                }
+            }
+            for id in gone {
+                parts.remove(&id);
+                if kind == "check" {
+                    dropped.insert(id);
+                }
+            }
+        }
+    }
+    if let Some(commits) = table.get_mut("commits")
+        && off(commits, "commits")?
+    {
+        table.remove("commits");
+    }
+    Ok(dropped)
 }
 
 /// Paths by a list of globs. `*` stays inside one path segment; `**` crosses segments. A
@@ -1299,6 +1290,16 @@ fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<Globs> {
 }
 
 impl Check {
+    /// What it runs, as shown: its one command, its steps one per line, or the work Fearlezz
+    /// does itself.
+    pub(crate) fn run(&self) -> String {
+        if self.builtin.is_some() {
+            format!("(fearlezz {})", self.id)
+        } else {
+            self.steps.join("\n")
+        }
+    }
+
     /// Whether its results depend on `path`: one of its inputs, or a file it generates,
     /// which it compares with what its command writes.
     pub(crate) fn reads(&self, path: &str) -> bool {
@@ -1318,19 +1319,7 @@ impl Check {
 
     /// Whether `path` is one of its tests, by `test_files`.
     pub(crate) fn is_test(&self, path: &str) -> bool {
-        self.test_globs.is_match(path)
-    }
-
-    pub(crate) fn needs_services(&self) -> bool {
-        self.needs.contains(&Need::Services)
-    }
-
-    pub(crate) fn needs_envtest(&self) -> bool {
-        self.needs.contains(&Need::Envtest)
-    }
-
-    pub(crate) fn needs_preview(&self) -> bool {
-        self.needs.contains(&Need::Preview)
+        self.test_files.is_match(path)
     }
 }
 
@@ -1373,7 +1362,7 @@ mod tests {
     #[test]
     fn the_devenv_piece_runs_services_and_reads_their_ports() {
         let table = toml::from_str(include_str!("../presets/devenv.toml")).unwrap();
-        let env = Config::from_table(table, Vec::new()).unwrap().env;
+        let env = Config::from_table(table, &|_| Vec::new()).unwrap().env;
         assert_eq!(env.up.as_deref(), Some("devenv up -d"));
         assert_eq!(env.ports, Some(Ports::Devenv));
         assert_eq!(env.inputs, ["devenv.nix", "devenv.yaml", "devenv.lock"]);
@@ -1401,14 +1390,9 @@ mod tests {
                 }
             }
             presets::merge(&mut table, own);
-            // Checks turned off are dropped when pieces merge.
-            if let Some(toml::Value::Table(checks)) = table.get_mut("check") {
-                checks.retain(|_, c| c.get("off").and_then(toml::Value::as_bool) != Some(true));
-            }
             // As in a project with a nested project of each marker, so `each` is read too.
             let found = |_: &str| vec![".".to_string(), "sub".to_string()];
-            expand_each(&mut table, &found).unwrap_or_else(|e| panic!("{name}: {e:#}"));
-            if let Err(e) = Config::from_table(table, Vec::new()) {
+            if let Err(e) = Config::from_table(table, &found) {
                 panic!("{name}: {e:#}");
             }
         }
@@ -1418,7 +1402,7 @@ mod tests {
     fn a_long_run_of_negations_is_compared_quickly() {
         let mut base = vec!["src/**".to_string()];
         base.extend((0..40).map(|i| format!("!src/x{i}/**")));
-        let globs = |list: &[String]| super::globs(list).unwrap();
+        let globs = |list: &[String]| globs(list).unwrap();
         let started = std::time::Instant::now();
         let dropped = &base[..base.len() - 1];
         assert_eq!(
@@ -1434,7 +1418,7 @@ mod tests {
     #[test]
     fn a_check_turned_off_is_gone() {
         let table = toml::from_str("[check.tests]\noff = true\n").unwrap();
-        let checks = Config::from_table(table, Vec::new()).unwrap().checks;
+        let checks = Config::from_table(table, &|_| Vec::new()).unwrap().checks;
         assert!(!checks.iter().any(|c| c.id == "tests"));
     }
 }

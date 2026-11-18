@@ -200,9 +200,9 @@ impl fmt::Display for Budget {
 /// The platforms a check is on that this machine cannot stand in for, when it can stand in for
 /// none of them: the check is left to CI. None when it runs here. A machine never stands in
 /// for a screen it can never have (a Linux display on a Mac); without platforms such a check
-/// is left to CI with none named, and [`Check::screen`] says what it needs.
+/// is left to CI with none named, and its `needs.screen` says what it needs.
 pub(crate) fn left_to_ci<'a>(config: &'a Config, check: &Check) -> Option<Vec<&'a str>> {
-    let screen_here = check.screen.never_here().is_none();
+    let screen_here = check.needs.screen.never_here().is_none();
     let on: Vec<&Platform> = config
         .platforms
         .iter()
@@ -242,7 +242,7 @@ fn leg_id(platform: Option<&str>, job: Option<&str>) -> String {
 /// Every leg of the config, by id, each check once on each of its platforms.
 pub(crate) fn legs(config: &Config) -> Vec<Leg<'_>> {
     let mut legs: Vec<Leg<'_>> = Vec::new();
-    for check in &config.checks {
+    for check in config.due() {
         let on: Vec<Option<&Platform>> = if check.on.is_empty() {
             vec![None]
         } else {
@@ -452,42 +452,27 @@ pub(crate) fn read_legs(dir: &Path) -> Result<Vec<LegProof>> {
     Ok(found)
 }
 
-/// The entry of a check the gate expected from a leg that never brought it.
-pub(crate) fn missing(
-    check: &Check,
-    platform: Option<&str>,
-    stage: &str,
-    leg: &str,
-) -> proof::Check {
-    let mut entry = proof::not_run(check, stage, "");
-    entry.not_run = None;
-    entry.platform = platform.map(str::to_string);
-    entry.outcome = Ran::Failed;
+/// Why a check the gate expected from a leg that never brought it is not proven.
+pub(crate) fn missing(check: &Check, platform: Option<&str>, leg: &str) -> proof::Item {
     let on = platform.map(|p| format!(" on {p}")).unwrap_or_default();
-    entry.failure = Some(proof::Item {
+    proof::Item {
         what: format!("check `{}`{on} did not run", check.id),
         why: format!("its leg {leg} did not finish"),
         fix: format!("run the job of leg {leg} again; its page on GitHub shows why it stopped"),
-    });
-    entry
+    }
 }
 
-/// The entry of a check CI without a leg cannot prove: this machine cannot stand in for
+/// Why a check CI without a leg cannot prove is not proven: this machine cannot stand in for
 /// `platform`.
-pub(crate) fn left_out(check: &Check, platform: &str, stage: &str) -> proof::Check {
-    let mut entry = proof::not_run(check, stage, "");
-    entry.not_run = None;
-    entry.platform = Some(platform.to_string());
-    entry.outcome = Ran::Failed;
-    entry.failure = Some(proof::Item {
+pub(crate) fn left_out(check: &Check, platform: &str) -> proof::Item {
+    proof::Item {
         what: format!("check `{}` on {platform} did not run", check.id),
         why: format!(
             "this machine cannot stand in for {platform}, and the run is not split into legs"
         ),
         fix: "prove the commit in legs: the action's plan, leg and gate, or its reusable workflow"
             .into(),
-    });
-    entry
+    }
 }
 
 /// A check of a leg's bundle as the gate's bundle holds it: its output and pictures named from

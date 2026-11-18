@@ -125,12 +125,6 @@ struct RawRule {
     encrypted: Option<String>,
     #[serde(default)]
     test: Vec<BTreeMap<String, Example>>,
-    #[serde(default)]
-    #[expect(
-        dead_code,
-        reason = "off rules are dropped before parsing; the field only lets serde accept the key"
-    )]
-    off: bool,
 }
 
 /// `pattern`, `any` (patterns, one must match) or `rule` (ast-grep's own rule object, with
@@ -146,14 +140,11 @@ struct RawMatch {
 }
 
 impl Rules {
-    /// From the `[rule]` table of the merged config. Rules turned off, or set to level
-    /// `off`, are left out.
+    /// From the `[rule]` table of the merged config, rules turned off already left out. Rules
+    /// set to level `off` are left out.
     pub(crate) fn parse(table: BTreeMap<String, toml::Table>) -> Result<Rules> {
         let mut rules = Vec::new();
         for (id, mut fields) in table {
-            if fields.get("off").and_then(toml::Value::as_bool) == Some(true) {
-                continue;
-            }
             // Language tables name the code a rule matches; everything else is a field.
             let mut code = BTreeMap::new();
             for key in fields.keys().cloned().collect::<Vec<_>>() {
@@ -226,9 +217,16 @@ impl Rules {
         for rule in &self.0 {
             match &rule.kind {
                 Kind::Changed(paths) => {
-                    for path in changed.paths().filter(|p| paths.set.is_match(p)) {
-                        found.push(rule.finding(path, 1, None, true, || {
-                            format!("this change touches {path}, which {} keeps as is", rule.id)
+                    let kept = |p: &&str| paths.set.is_match(p) && !rule.skip.set.is_match(p);
+                    for path in changed.paths().filter(kept) {
+                        // A deleted file has no line to name.
+                        let (line, how) = if root.join(path).is_file() {
+                            (1, "touches")
+                        } else {
+                            (0, "deletes")
+                        };
+                        found.push(rule.finding(path, line, None, true, || {
+                            format!("this change {how} {path}, which {} keeps as is", rule.id)
                         }));
                     }
                 }

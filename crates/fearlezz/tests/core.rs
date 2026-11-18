@@ -932,6 +932,22 @@ fn tools_in_the_project_folders_are_found() {
 }
 
 #[test]
+fn a_command_the_shell_could_not_start_never_makes_the_check_unstable() {
+    // A script whose interpreter is missing says so in its own words (`env: 'node': No such
+    // file or directory`), with the shell's code for a command it could not find.
+    let repo = Repo::new(
+        "[check.lint]\nstage = \"working\"\nrun = \"test -f .ok || { echo \\\"env: 'node': No such file or directory\\\" >&2; exit 127; }\"\n",
+        &[(".gitignore", ".ok\n")],
+    );
+    assert!(!repo.fz(&["run", "lint"]).ok);
+    std::fs::write(repo.path(".ok"), "").unwrap();
+    let out = repo.fz(&["run", "lint"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("unstable"), "{}", out.stdout);
+    assert!(!repo.fz(&[]).stdout.contains("unstable"));
+}
+
+#[test]
 fn installing_a_missing_tool_does_not_make_the_check_unstable() {
     let repo = missing_tool();
     assert!(!repo.fz(&["run", "lint"]).ok);

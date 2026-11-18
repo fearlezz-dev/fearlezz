@@ -10,6 +10,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use fearlezz_proof::why::{Generated, NoPreview, Why};
+
 use crate::config::Check;
 use crate::files::sha256_hex;
 
@@ -43,7 +45,6 @@ pub(crate) struct RunResult {
     pub started_at: Timestamp,
     pub duration_ms: u64,
     pub proofs: Vec<serde_json::Value>,
-    pub proof_errors: Vec<String>,
     /// For a check that reports findings: the ones in scope, worst first.
     #[serde(default)]
     pub findings: Vec<crate::findings::Finding>,
@@ -59,35 +60,71 @@ pub(crate) struct RunResult {
     /// For a check with a JUnit reader: each test case that ran, and whether it failed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cases: Vec<crate::counts::Case>,
-    /// A secret SecretSpec could not give the check, so its command never ran.
+    /// Why it failed, known where it failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub missing_secret: Option<String>,
-    /// Why the preview the check needs could not be deployed, so its command never ran.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub no_preview: Option<crate::env::NoPreview>,
-    /// For a check with `generates`: why its generated files fail the run, if they do.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generated: Option<crate::generated::Failed>,
+    pub why: Option<Why>,
+    /// What a result stored before `why` said instead, read only to derive it.
+    #[serde(flatten, skip_serializing)]
+    pub(crate) before_why: BeforeWhy,
     pub dir: PathBuf,
     pub log: PathBuf,
 }
 
 impl RunResult {
-    /// The shell could not find the check's command, so the run proves nothing either way.
-    pub(crate) fn not_found(&self) -> bool {
-        self.exit_code == Some(crate::run::NOT_FOUND)
+    /// Why this failed run failed.
+    pub(crate) fn failure(&self) -> Why {
+        self.why.clone().unwrap_or(Why::Exit(self.exit_code))
     }
 
-    /// It never got to say anything about its inputs: the shell could not find its command,
-    /// SecretSpec could not give it a secret, or its preview could not be deployed.
+    /// It never got to say anything about its inputs, so it proves nothing either way.
     pub(crate) fn proves_nothing(&self) -> bool {
-        self.not_found() || self.missing_secret.is_some() || self.no_preview.is_some()
+        self.why.as_ref().is_some_and(Why::proves_nothing)
     }
 
     /// Whether `journal` made this run at its final stage `final_stage`: the only kind of
     /// pass the final stage counts, so the proof before a merge is fresh.
     pub(crate) fn made_at_final(&self, journal: &str, final_stage: &str) -> bool {
         self.journal == journal && self.stage == final_stage
+    }
+}
+
+/// The fields a result stored before it kept its `why`, so results already on a machine still
+/// read as they did.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(crate) struct BeforeWhy {
+    #[serde(default)]
+    proof_errors: Vec<String>,
+    #[serde(default)]
+    missing_secret: Option<String>,
+    #[serde(default)]
+    no_preview: Option<NoPreview>,
+    #[serde(default)]
+    generated: Option<Generated>,
+}
+
+impl RunResult {
+    /// Fills in `why` for a failed result stored before it kept one, as it was read then.
+    fn with_why(mut self) -> RunResult {
+        if self.why.is_some() || self.outcome == Outcome::Passed {
+            return self;
+        }
+        let old = std::mem::take(&mut self.before_why);
+        let tool = (self.exit_code == Some(crate::run::NOT_FOUND))
+            .then(|| crate::run::missing_command(&self.log))
+            .flatten();
+        self.why = Some(match (old.missing_secret, old.no_preview, tool) {
+            (Some(name), _, _) => Why::Secret(name),
+            (_, Some(why), _) => Why::Preview(why),
+            (_, _, Some(tool)) => Why::MissingTool(tool),
+            _ => crate::run::shown(
+                &self.findings,
+                old.generated,
+                self.tests,
+                self.exit_code,
+                old.proof_errors,
+            ),
+        });
+        self
     }
 }
 
@@ -156,12 +193,12 @@ pub(crate) struct Hasher {
 
 impl Hasher {
     /// `changed_lines` is the digest of the lines a findings check is judged on, if any;
-    /// `shell` is the shell of the `[env]` the checkout at `root` runs its commands in.
+    /// `env` is what of the `[env]` the checkout at `root` runs its commands in shapes results.
     pub(crate) fn inputs(
         &mut self,
         root: &Path,
         check: &Check,
-        shell: Option<&str>,
+        env: &crate::config::EnvKey,
         files: &[String],
         changed_lines: Option<&str>,
     ) -> Result<Inputs> {
@@ -226,7 +263,7 @@ impl Hasher {
         if !check.generates.patterns().is_empty() {
             parts.insert("(generates)".into(), definition(&check.generates));
         }
-        if let Some(shell) = shell.filter(|_| check.builtin.is_none()) {
+        if let Some(shell) = env.shell.as_ref().filter(|_| check.builtin.is_none()) {
             parts.insert("(shell)".into(), sha256_hex(shell.as_bytes()));
         }
         // Each folder's copy of a check runs the same command on other files.
@@ -234,13 +271,13 @@ impl Hasher {
             parts.insert("(dir)".into(), sha256_hex(dir.as_bytes()));
         }
         // The simulator's device type or the display's size shape what the check sees.
-        if check.screen.owned() {
-            parts.insert("(screen)".into(), definition(&check.screen));
+        if check.needs.screen.owned() {
+            parts.insert("(screen)".into(), definition(&check.needs.screen));
         }
-        if let Some(services) = &check.services {
+        if let Some(services) = env.services.as_ref().filter(|_| check.needs.services) {
             parts.insert("(services)".into(), sha256_hex(services.as_bytes()));
         }
-        if let Some(preview) = &check.preview {
+        if let Some(preview) = env.preview.as_ref().filter(|_| check.needs.preview) {
             parts.insert("(preview)".into(), sha256_hex(preview.as_bytes()));
         }
         for path in files.iter().filter(|p| check.reads(p)) {
@@ -258,7 +295,7 @@ impl Hasher {
         key.update(RESULT_FORMAT.as_bytes());
         key.update(b"\0");
         // Steps apart, so they never key like one script of the same lines.
-        key.update(check.run.as_bytes());
+        key.update(check.run().as_bytes());
         if check.steps.len() > 1 {
             key.update(format!("\0{} steps", check.steps.len()).as_bytes());
         }
@@ -309,15 +346,6 @@ impl Store {
     }
 
     /// Every result for these inputs, oldest first.
-    /// The latest run for `key` that got going, for reusing a run on the base commit: one
-    /// that could not find its command or get a secret may go another way the next time.
-    pub(crate) fn latest_that_ran(&self, key: &str) -> Option<RunResult> {
-        self.for_key(key)
-            .into_iter()
-            .rev()
-            .find(|r| !r.proves_nothing())
-    }
-
     pub(crate) fn for_key(&self, key: &str) -> Vec<RunResult> {
         let Ok(entries) = fs::read_dir(self.root.join(key)) else {
             return Vec::new();
@@ -327,6 +355,7 @@ impl Store {
             .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
             .filter_map(|e| fs::read(e.path()).ok())
             .filter_map(|b| serde_json::from_slice(&b).ok())
+            .map(RunResult::with_why)
             .collect();
         results.sort_by(|a, b| a.id.cmp(&b.id));
         results
@@ -334,7 +363,7 @@ impl Store {
 
     pub(crate) fn get(&self, key: &str, id: &str) -> Option<RunResult> {
         let bytes = fs::read(self.root.join(key).join(format!("{id}.json"))).ok()?;
-        serde_json::from_slice(&bytes).ok()
+        serde_json::from_slice(&bytes).ok().map(RunResult::with_why)
     }
 
     /// Deletes the results nothing reads again. For each set of inputs it keeps the latest
@@ -425,5 +454,30 @@ impl Store {
             && results
                 .iter()
                 .any(|r| r.outcome == Outcome::Failed && !r.proves_nothing())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A failed result as Fearlezz stored it before results kept their `why`.
+    const BEFORE_WHY: &str = r#"{
+        "id": "1", "check": "deploy", "key": "k", "parts": {}, "tree": "t", "journal": "j",
+        "stage": "working", "outcome": "failed", "exit_code": null,
+        "started_at": "2026-11-01T00:00:00Z", "duration_ms": 1, "proofs": [],
+        "proof_errors": [], "missing_secret": "API_TOKEN", "dir": "/r", "log": "/r/log"
+    }"#;
+
+    #[test]
+    fn a_result_stored_before_why_reads_as_it_did() {
+        let read: RunResult = serde_json::from_str(BEFORE_WHY).unwrap();
+        let read = read.with_why();
+        assert_eq!(read.why, Some(Why::Secret("API_TOKEN".into())));
+        assert!(read.proves_nothing());
+        let written = serde_json::to_value(&read).unwrap();
+        assert_eq!(written["why"], serde_json::json!({ "secret": "API_TOKEN" }));
+        assert!(written.get("missing_secret").is_none(), "{written}");
+        assert!(written.get("proof_errors").is_none(), "{written}");
     }
 }

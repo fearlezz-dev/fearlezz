@@ -49,21 +49,7 @@ pub(crate) struct Preview {
     pub url: String,
 }
 
-/// Why a checkout has no preview, so the checks that need it fail without running.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum NoPreview {
-    /// The command failed, with its exit code (none when a signal stopped it).
-    Failed { code: Option<i32> },
-    /// The command passed but printed no URL.
-    NoUrl,
-    /// SecretSpec could not give it this secret; its reason is in the log.
-    Secret { name: String },
-    /// The shell found no `secretspec` to ask.
-    NoSecretSpec,
-    /// The checkout's `[env]` has no preview command, as on a base commit from before it.
-    Unset,
-}
+pub(crate) use fearlezz_proof::why::NoPreview;
 
 /// A preview that could not be deployed, and the log that says why.
 pub(crate) struct Undeployed {
@@ -299,7 +285,12 @@ impl EnvState {
             .env("FEARLEZZ_PREVIEW_NAME", name)
             .envs(secrets.iter().map(|(secret, value)| (secret, value)));
         let status = command.status().context("starting [env] preview")?;
-        run::mask_file(&log, &run::masked_forms(&secrets))?;
+        // Split before masking, which changes the length of what SecretSpec said.
+        let forms = run::masked_forms(&secrets);
+        let text = fs::read(&log)?;
+        let (asked, printed) = text.split_at(usize::try_from(asked_len)?.min(text.len()));
+        let printed = run::masked(printed, &forms);
+        fs::write(&log, [run::masked(asked, &forms), printed.clone()].concat())?;
         if !status.success() {
             return Ok(Err(Undeployed {
                 why: NoPreview::Failed {
@@ -308,11 +299,7 @@ impl EnvState {
                 log,
             }));
         }
-        let text = fs::read(&log).unwrap_or_default();
-        let printed = text
-            .get(usize::try_from(asked_len).unwrap_or(usize::MAX)..)
-            .unwrap_or_default();
-        let Some(url) = last_url(&String::from_utf8_lossy(printed)) else {
+        let Some(url) = last_url(&String::from_utf8_lossy(&printed)) else {
             return Ok(Err(Undeployed {
                 why: NoPreview::NoUrl,
                 log,

@@ -265,6 +265,31 @@ fn the_env_secrets_reach_the_preview_and_are_masked_in_its_log() {
     assert_eq!(logs, 1, "the preview's log, masked");
 }
 
+/// SecretSpec's own words may hold the value they give; masking them shortens the log
+/// before the deploy's part, which still holds its URL.
+#[test]
+fn a_secret_secretspec_echoes_leaves_the_url_the_preview_printed() {
+    let s = Setup::new(
+        "preview = 'echo https://x.example.dev/'\nsecrets = [\"CLOUDFLARE_API_TOKEN\"]",
+        CHECKS,
+        "feat/x",
+    );
+    let bin = s.repo.path(".runs/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join("secretspec");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\necho \"secretspec: $2 is $CLOUDFLARE_API_TOKEN\" >&2\nprintf %s \"$CLOUDFLARE_API_TOKEN\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let env = [("PATH", path.as_str()), ("CLOUDFLARE_API_TOKEN", TOKEN)];
+    let out = s.fz_env(&["run", "--stage", "working"], &env);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(s.url(), "https://x.example.dev/");
+}
+
 #[test]
 fn a_secret_the_preview_cannot_get_fails_the_check_with_the_fix() {
     let s = Setup::new(

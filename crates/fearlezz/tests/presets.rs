@@ -74,6 +74,19 @@ fn the_flutter_piece_never_asks_for_the_types_it_forbids() {
 }
 
 #[test]
+fn an_off_that_is_not_true_or_false_says_so() {
+    let repo = Repo::new("use = [\"rust\"]\n\n[check.clippy]\noff = \"yes\"\n", &[]);
+    let out = repo.fz(&["run", "clippy"]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr
+            .contains("in `check.clippy`: off is string, expected true or false"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
 fn the_project_tunes_a_field_and_turns_a_check_off() {
     let config = r#"
 use = ["rust"]

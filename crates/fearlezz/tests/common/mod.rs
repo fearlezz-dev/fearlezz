@@ -146,22 +146,7 @@ impl Repo {
 
     /// Runs `fearlezz` with `input` on stdin, as an agent runs a hook.
     pub(crate) fn fz_input(&self, args: &[&str], input: &str) -> Output {
-        let out = Command::cargo_bin("fearlezz")
-            .unwrap()
-            .args(args)
-            .current_dir(&self.root)
-            .env("XDG_CACHE_HOME", &self.cache)
-            .env("XDG_CONFIG_HOME", no_config())
-            .env_remove("CI")
-            .env_remove("FEARLEZZ_JOURNAL")
-            .write_stdin(input)
-            .output()
-            .unwrap();
-        Output {
-            ok: out.status.success(),
-            stdout: String::from_utf8(out.stdout).unwrap(),
-            stderr: String::from_utf8(out.stderr).unwrap(),
-        }
+        run(fearlezz(&self.root, Some(&self.cache), args, &[]).write_stdin(input))
     }
 }
 
@@ -208,9 +193,15 @@ pub(crate) fn git_in(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// The variables GitHub Actions sets for every step, which tests set only on purpose.
-pub(crate) const ACTIONS_ENV: [&str; 15] = [
+/// The variables GitHub Actions sets for a step that Fearlezz reads, which tests set only on
+/// purpose.
+pub(crate) const ACTIONS_ENV: [&str; 20] = [
     "GITHUB_ACTIONS",
+    "GITHUB_JOB",
+    "GITHUB_REF",
+    "RUNNER_NAME",
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
     "GITHUB_EVENT_NAME",
     "GITHUB_EVENT_PATH",
     "GITHUB_STEP_SUMMARY",
@@ -234,6 +225,12 @@ pub(crate) fn fz_at_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Outp
 }
 
 fn fz_in(dir: &Path, cache: Option<&Path>, args: &[&str], env: &[(&str, &str)]) -> Output {
+    run(&mut fearlezz(dir, cache, args, env))
+}
+
+/// `fearlezz` with `args` in `dir`, in an environment the developer's machine and a runner
+/// leave alike, then `env`.
+fn fearlezz(dir: &Path, cache: Option<&Path>, args: &[&str], env: &[(&str, &str)]) -> Command {
     let mut cmd = Command::cargo_bin("fearlezz").unwrap();
     if let Some(cache) = cache {
         cmd.env("XDG_CACHE_HOME", cache);
@@ -252,6 +249,10 @@ fn fz_in(dir: &Path, cache: Option<&Path>, args: &[&str], env: &[(&str, &str)]) 
     for (k, v) in env {
         cmd.env(k, v);
     }
+    cmd
+}
+
+fn run(cmd: &mut Command) -> Output {
     let out = cmd.output().unwrap();
     Output {
         ok: out.status.success(),

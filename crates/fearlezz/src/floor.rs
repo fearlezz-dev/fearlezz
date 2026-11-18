@@ -7,8 +7,10 @@ use anyhow::Result;
 use fearlezz_proof::floor::{Change, PAST, Part, Weakening, names_diff};
 use fearlezz_proof::review::Accept;
 
+use crate::base::Bases;
 use crate::config::{self, Builtin, Config, Env, Ports};
 use crate::findings::Scope;
+use crate::names::Named;
 use crate::state::Worktree;
 
 /// Where what a change weakens gets past the job that judges it.
@@ -34,15 +36,13 @@ pub(crate) struct Floor {
 impl Floor {
     /// Compares the change's config with the one on its base commit. Without a config there,
     /// there is no floor.
-    pub(crate) fn read(head: &Config, wt: &Worktree) -> Result<Floor> {
-        let git = &wt.git;
-        let (base, _hold) = git.base_worktree(&wt.base, "")?;
-        if !base.root.join(config::FILE).exists() {
+    pub(crate) fn read(head: &Config, wt: &Worktree, bases: &Bases) -> Result<Floor> {
+        let opened = bases.at(&wt.git, &wt.base)?;
+        let Some(base) = &opened.config else {
             return Ok(Floor::default());
-        }
-        let base = Config::load(&base.root, &git.common)?;
+        };
         let mut weakened: Vec<Weakening> = Vec::new();
-        for (part, change) in weakenings(&base, head, &wt.files) {
+        for (part, change) in weakenings(base, head, &wt.files) {
             let how = change.to_string();
             if let Some(w) = weakened.iter_mut().find(|w| w.part == part) {
                 if !w.hows.contains(&how) {
@@ -130,7 +130,8 @@ fn gone_with_its_folder(base: &Config, head: &Config, check: &config::Check) -> 
 fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Change)> {
     // A scheduled check has a floor too: its run proves the default branch on a schedule.
     let mut found: Vec<(Part, Change)> = base
-        .every_check()
+        .checks
+        .iter()
         .flat_map(|b| check_weakenings(base, head, b, files))
         .collect();
     // Checks that share a lints table would name its weakenings once each.
@@ -164,7 +165,7 @@ fn check_weakenings(
 ) -> Vec<(Part, Change)> {
     let mut found = Vec::new();
     let mut say = |how: Change| found.push((Part::Check(b.id.clone()), how));
-    let Some(h) = head.every_check().find(|h| h.id == b.id) else {
+    let Some(h) = head.checks.iter().find(|h| h.id == b.id) else {
         if !gone_with_its_folder(base, head, b) {
             say("it is gone".into());
         }
@@ -196,11 +197,13 @@ fn check_weakenings(
     }
     // Leaving the simulator or a Linux display moves the check to a screen CI cannot
     // record (this machine's window) or another system's runner.
-    if b.screen.owned() && std::mem::discriminant(&b.screen) != std::mem::discriminant(&h.screen) {
+    if b.needs.screen.owned()
+        && std::mem::discriminant(&b.needs.screen) != std::mem::discriminant(&h.needs.screen)
+    {
         say(Change::replaced(
             "it runs on another screen",
-            b.screen.describe(),
-            h.screen.describe(),
+            b.needs.screen.describe(),
+            h.needs.screen.describe(),
         ));
     }
     for how in b.pictures.weakenings(&h.pictures) {
@@ -228,7 +231,9 @@ fn check_weakenings(
     // could hide a fix whose tests do not fail there. Naming them the first time is fine,
     // unless the check measures coverage, which never counts a test file.
     let measured = b.coverage.is_some() && h.coverage.is_some();
-    if (measured || !b.test_files.is_empty()) && h.test_files != b.test_files {
+    if (measured || !b.test_files.patterns().is_empty())
+        && h.test_files.patterns() != b.test_files.patterns()
+    {
         say("it names other test files".into());
     }
     // What a check sees can change what it proves (a variable that skips the slow tests,

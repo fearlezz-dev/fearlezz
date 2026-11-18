@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::host::{self, Body, Limit};
+use crate::names::Named;
 
 /// The prefix of the check a place's dry run becomes: `release/<place>`.
 pub(crate) const CHECK_PREFIX: &str = "release/";
@@ -67,28 +68,16 @@ pub(crate) enum Reader {
     Github,
 }
 
-impl Reader {
-    const ALL: [(&'static str, Reader); 4] = [
+impl Named for Reader {
+    const NAMES: &'static [(&'static str, Reader)] = &[
         ("crates", Reader::Crates),
         ("npm", Reader::Npm),
         ("pub", Reader::Pub),
         ("github", Reader::Github),
     ];
+}
 
-    fn parse(name: &str) -> Result<Reader> {
-        Reader::ALL
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, r)| *r)
-            .with_context(|| {
-                let names: Vec<&str> = Reader::ALL.iter().map(|(n, _)| *n).collect();
-                format!(
-                    "no landed reader \"{name}\"; readers are {}",
-                    names.join(", ")
-                )
-            })
-    }
-
+impl Reader {
     /// The file a package of this registry names itself and its version in.
     fn manifest(self) -> Option<&'static str> {
         match self {
@@ -119,9 +108,6 @@ struct RawPlace {
     files: Vec<String>,
     tag: Option<String>,
     wait: Option<u64>,
-    /// Turns off a place a piece from `use` brings in.
-    #[serde(default)]
-    off: bool,
 }
 
 #[derive(Deserialize)]
@@ -131,7 +117,7 @@ enum RawLanded {
     Read { read: String, url: Option<String> },
 }
 
-/// The places `[release]` names, in order of name, those turned off left out.
+/// The places `[release]` names, in order of name.
 pub(crate) fn parse(table: Option<&toml::Value>) -> Result<Vec<Place>> {
     let Some(table) = table else {
         return Ok(Vec::new());
@@ -139,14 +125,15 @@ pub(crate) fn parse(table: Option<&toml::Value>) -> Result<Vec<Place>> {
     let raw: BTreeMap<String, RawPlace> = table.clone().try_into()?;
     let mut places = Vec::new();
     for (name, p) in raw {
-        if p.off {
-            continue;
-        }
         let at = || format!("release.{name}");
         let landed = match p.landed {
             RawLanded::Command(cmd) => Landed::Command(cmd),
             RawLanded::Read { read, url } => Landed::Read {
-                reader: Reader::parse(&read).with_context(at)?,
+                reader: Reader::named(&read)
+                    .map_err(|names| {
+                        anyhow::anyhow!("no landed reader \"{read}\"; readers are {names}")
+                    })
+                    .with_context(at)?,
                 url,
             },
         };
@@ -171,9 +158,14 @@ pub(crate) fn parse(table: Option<&toml::Value>) -> Result<Vec<Place>> {
 
 /// Turns each place's dry run into the check `release/<place>` at stage `last`, so it is
 /// proven before merge like any check, and the base branch's floor holds it. A project
-/// tunes that check under its own name (`[check."release/crates"]`), or turns it off.
-/// `default_last` is the last stage when the table orders none of its own.
-pub(crate) fn add_dry_checks(table: &mut toml::Table, default_last: Option<&str>) {
+/// tunes that check under its own name (`[check."release/crates"]`), or turns it off: `off`
+/// holds the checks turned off. `default_last` is the last stage when the table orders none of
+/// its own.
+pub(crate) fn add_dry_checks(
+    table: &mut toml::Table,
+    default_last: Option<&str>,
+    off: &std::collections::BTreeSet<String>,
+) {
     let Some(toml::Value::Table(release)) = table.get("release") else {
         return;
     };
@@ -190,13 +182,11 @@ pub(crate) fn add_dry_checks(table: &mut toml::Table, default_last: Option<&str>
     };
     let mut dry = Vec::new();
     for (name, place) in release {
-        let off = place.get("off").and_then(toml::Value::as_bool) == Some(true);
-        if let (Some(run), false) = (place.get("dry").and_then(toml::Value::as_str), off) {
-            dry.push((
-                format!("{CHECK_PREFIX}{name}"),
-                run.to_string(),
-                place.get("dir").cloned(),
-            ));
+        let id = format!("{CHECK_PREFIX}{name}");
+        if let Some(run) = place.get("dry").and_then(toml::Value::as_str)
+            && !off.contains(&id)
+        {
+            dry.push((id, run.to_string(), place.get("dir").cloned()));
         }
     }
     if dry.is_empty() {
@@ -340,9 +330,11 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
         return Ok(format!("{shown} is already there"));
     }
     println!("{}: publishing {shown}", place.name);
-    let status = command(place, &place.publish, &release, at)
-        .status()
-        .with_context(|| format!("starting the publish command of {}", place.name))?;
+    let status = shown_masked(
+        command(place, &place.publish, &release, at),
+        &env_values(&place.env),
+    )
+    .with_context(|| format!("starting the publish command of {}", place.name))?;
     if !status.success() {
         let code = status
             .code()
@@ -364,6 +356,75 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
         }
         std::thread::sleep(left.min(POLL));
     }
+}
+
+/// The values of the variables a place names, which may be tokens: a release cannot tell a
+/// token from a plain value, so every one is hidden in what its publish prints.
+fn env_values(names: &[String]) -> Vec<(String, String)> {
+    names
+        .iter()
+        .filter_map(|n| std::env::var(n).ok().map(|v| (n.clone(), v)))
+        .collect()
+}
+
+/// Runs `cmd`, printing each line it prints on its own stdout or stderr as it comes, with
+/// every form of `values` masked.
+fn shown_masked(
+    mut cmd: std::process::Command,
+    values: &[(String, String)],
+) -> std::io::Result<std::process::ExitStatus> {
+    let forms = crate::run::masked_forms(values);
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let out = pass_masked(child.stdout.take(), forms.clone(), std::io::stdout);
+    let err = pass_masked(child.stderr.take(), forms, std::io::stderr);
+    let status = child.wait();
+    drop(out.join());
+    drop(err.join());
+    status
+}
+
+/// Copies `pipe` into `to` as it comes, masked, on a thread of its own. Only an end that may
+/// be the start of a value waits for what follows, so a question without a newline shows.
+fn pass_masked<W: std::io::Write + 'static>(
+    pipe: Option<impl std::io::Read + Send + 'static>,
+    forms: Vec<Vec<u8>>,
+    to: fn() -> W,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let Some(mut pipe) = pipe else { return };
+        let (mut held, mut chunk) = (Vec::new(), [0u8; 8192]);
+        loop {
+            let n = pipe.read(&mut chunk).unwrap_or(0);
+            held.extend_from_slice(chunk.get(..n).unwrap_or_default());
+            let masked = crate::run::masked(&held, &forms);
+            let keep = if n == 0 {
+                0
+            } else {
+                open_start(&masked, &forms)
+            };
+            let (shown, open) = masked.split_at(masked.len().saturating_sub(keep));
+            let mut to = to();
+            drop(to.write_all(shown));
+            drop(to.flush());
+            if n == 0 {
+                return;
+            }
+            held = open.to_vec();
+        }
+    })
+}
+
+/// How many bytes at the end of `bytes` begin one of `forms` without completing it.
+fn open_start(bytes: &[u8], forms: &[Vec<u8>]) -> usize {
+    let longest = forms.iter().map(Vec::len).max().unwrap_or(0);
+    (1..longest.min(bytes.len() + 1))
+        .rev()
+        .find(|&k| {
+            forms
+                .iter()
+                .any(|f| f.len() > k && f.get(..k).is_some_and(|start| bytes.ends_with(start)))
+        })
+        .unwrap_or(0)
 }
 
 /// A command of the place run as a check runs, with the variables it names and the release's
@@ -709,6 +770,22 @@ fn files(globs: &[String], root: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_end_that_may_start_a_value_waits() {
+        let forms = vec![b"s3cret-token".to_vec()];
+        assert_eq!(open_start(b"Enter OTP: ", &forms), 0);
+        assert_eq!(open_start(b"token is s3cr", &forms), 4);
+        assert_eq!(open_start(b"token is s3cret-token", &forms), 0);
+        let (one, two) = (b"with s3cr".to_vec(), b"et-token done".to_vec());
+        let keep = open_start(&one, &forms);
+        let (shown, open) = one.split_at(one.len() - keep);
+        let mut rest = open.to_vec();
+        rest.extend_from_slice(&two);
+        let mut all = shown.to_vec();
+        all.extend(crate::run::masked(&rest, &forms));
+        assert_eq!(all, b"with *** done");
+    }
 
     #[test]
     fn the_sparse_index_folder_follows_the_length_of_the_name() {

@@ -15,47 +15,125 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use fearlezz_proof::floor::Change;
 use toml::{Table, Value};
 
 use crate::findings::{Finding, Level};
-use crate::hooks::{AGENTS, Agent};
+use crate::hooks::Agent;
 use crate::lints::{self, Lints};
+use crate::names::{self, Named};
 
 const MANAGED: &str = "Managed by Fearlezz from [settings] in fearlezz.toml; change it there.";
 
-/// A tool Fearlezz writes settings for.
+/// A tool Fearlezz writes settings for; its row in `TOOLS` says how.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Tool {
-    /// `[workspace.lints]` (or `[lints]`) in Cargo.toml; members inherit with
-    /// `lints.workspace = true`.
     CargoLints,
-    /// `analysis_options.yaml` for `dart analyze` and `flutter analyze`.
     DartAnalysis,
-    /// `clippy.toml`, clippy's own options (such as allowing `unwrap` in tests).
     Clippy,
-    /// `.claude/settings.json`, such as the commands an agent may run without asking.
     Claude,
-    /// `biome.json` (or the `biome.jsonc` the project has); its `linter.rules`.
     Biome,
-    /// `eslint.fearlezz.mjs`, a config the project's `eslint.config` spreads in.
     Eslint,
-    /// `ruff.toml` (or the `.ruff.toml` or `pyproject.toml` the project has); its
-    /// `lint.select`.
     Ruff,
-    /// `.editorconfig`; a block of `ktlint_standard_*` switches for Kotlin files.
     Ktlint,
-    /// `config/detekt/detekt.yml`.
     Detekt,
-    /// `.golangci.yml` (or the `.yaml`, `.toml` or `.json` the project has).
     Golangci,
-    /// `.oxlintrc.json`; its `plugins`, `categories` and `rules`.
     Oxlint,
-    /// `tsconfig.json`; its `compilerOptions`.
     Tsconfig,
-    /// `.yamllint.yaml` (or the `.yamllint` or `.yamllint.yml` the project has).
     Yamllint,
+}
+
+/// One tool: its name in `[settings.<name>]`, the files it reads its settings from in its own
+/// lookup order and the one Fearlezz creates when none exists, the lint tables written into
+/// it and how, and how the settings land in the file.
+struct Row {
+    tool: Tool,
+    name: &'static str,
+    files: &'static [&'static str],
+    default: &'static str,
+    lints: &'static [lints::Tool],
+    table: fn(&Lints) -> Table,
+    write: Write,
+}
+
+/// How a tool's settings land in its file.
+#[derive(Clone, Copy)]
+enum Write {
+    /// Into each Cargo project's Cargo.toml, its workspace members inheriting.
+    Cargo,
+    /// Field by field into a TOML file (under `[tool.<name>]` in pyproject.toml); the rest stays.
+    Toml,
+    /// Merged into a JSON file; the other keys stay. With `comments` the file may hold
+    /// comments; each of `owned`, a path of keys, is written whole from the settings.
+    Json {
+        comments: bool,
+        owned: &'static [&'static [&'static str]],
+    },
+    /// The whole file, as its extension says: YAML unless it is TOML or JSON.
+    Whole,
+    /// A config the project's `eslint.config` spreads in.
+    Eslint,
+    /// A block of `ktlint_standard_*` switches for Kotlin files in `.editorconfig`.
+    Editorconfig,
+}
+
+const fn row(
+    tool: Tool,
+    name: &'static str,
+    (files, default): (&'static [&'static str], &'static str),
+    lints: &'static [lints::Tool],
+    table: fn(&Lints) -> Table,
+    write: Write,
+) -> Row {
+    Row {
+        tool,
+        name,
+        files,
+        default,
+        lints,
+        table,
+        write,
+    }
+}
+
+const fn json(comments: bool, owned: &'static [&'static [&'static str]]) -> Write {
+    Write::Json { comments, owned }
+}
+
+/// Every tool, in `Tool`'s order. Cargo's lints go into `[workspace.lints]` (or `[lints]`),
+/// which members inherit with `lints.workspace = true`; `clippy` is clippy.toml, clippy's own
+/// options; `claude` holds such as the commands an agent may run without asking. Fearlezz
+/// decides every Biome rule ("preset": "none"), so a rule a piece dropped leaves biome.json
+/// instead of keeping the level Biome gives it, and every oxlint rule and the plugins they need.
+#[rustfmt::skip]
+const TOOLS: [Row; 13] = {
+    use lints::Tool as L;
+    [
+        row(Tool::CargoLints, "cargo-lints", (&["Cargo.toml"], "Cargo.toml"), &[L::Clippy, L::Rustc], cargo_lint_table, Write::Cargo),
+        row(Tool::DartAnalysis, "dart-analysis", (&["analysis_options.yaml"], "analysis_options.yaml"), &[L::Dart], dart_lint_table, Write::Whole),
+        row(Tool::Clippy, "clippy", (&[".clippy.toml", "clippy.toml"], "clippy.toml"), &[], no_lints, Write::Toml),
+        row(Tool::Claude, "claude", (&[".claude/settings.json"], ".claude/settings.json"), &[], no_lints, json(false, &[])),
+        row(Tool::Biome, "biome", (&["biome.json", "biome.jsonc", ".biome.json", ".biome.jsonc"], "biome.json"), &[L::Biome], biome_lint_table, json(true, &[&["linter", "rules"]])),
+        row(Tool::Eslint, "eslint", (&[ESLINT_FILE], ESLINT_FILE), &[L::Eslint], eslint_lint_table, Write::Eslint),
+        row(Tool::Ruff, "ruff", (&[".ruff.toml", "ruff.toml", "pyproject.toml"], "ruff.toml"), &[L::Ruff], ruff_lint_table, Write::Toml),
+        row(Tool::Ktlint, "ktlint", (&[".editorconfig"], ".editorconfig"), &[L::Ktlint], ktlint_lint_table, Write::Editorconfig),
+        row(Tool::Detekt, "detekt", (&[DETEKT_FILE], DETEKT_FILE), &[L::Detekt], detekt_lint_table, Write::Whole),
+        row(Tool::Golangci, "golangci", (&[".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"], ".golangci.yml"), &[L::Golangci], golangci_lint_table, Write::Whole),
+        row(Tool::Oxlint, "oxlint", (&[".oxlintrc.json"], ".oxlintrc.json"), &[L::Oxlint], oxlint_lint_table, json(true, &[&["rules"], &["plugins"], &["categories"]])),
+        row(Tool::Tsconfig, "tsconfig", (&["tsconfig.json"], "tsconfig.json"), &[], no_lints, json(true, &[])),
+        row(Tool::Yamllint, "yamllint", (&[".yamllint", ".yamllint.yaml", ".yamllint.yml"], ".yamllint.yaml"), &[], no_lints, Write::Whole),
+    ]
+};
+
+fn no_lints(_: &Lints) -> Table {
+    Table::new()
+}
+
+/// Files this binary ships, written whole: settings a project has without asking for them,
+/// not a tool's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Shipped {
     /// The Fearlezz agent skill, in each agent's skills folder.
     Skill,
     /// The helpers of the `flutter-look` piece's widget tests in `look_test/`: real fonts,
@@ -66,44 +144,61 @@ pub(crate) enum Tool {
     Hooks,
 }
 
-const TOOLS: [(&str, Tool); 16] = [
-    ("cargo-lints", Tool::CargoLints),
-    ("dart-analysis", Tool::DartAnalysis),
-    ("clippy", Tool::Clippy),
-    ("claude", Tool::Claude),
-    ("biome", Tool::Biome),
-    ("eslint", Tool::Eslint),
-    ("ruff", Tool::Ruff),
-    ("ktlint", Tool::Ktlint),
-    ("detekt", Tool::Detekt),
-    ("golangci", Tool::Golangci),
-    ("oxlint", Tool::Oxlint),
-    ("tsconfig", Tool::Tsconfig),
-    ("yamllint", Tool::Yamllint),
-    ("flutter-look", Tool::FlutterLook),
-    ("skill", Tool::Skill),
-    ("hooks", Tool::Hooks),
-];
+impl Named for Shipped {
+    const NAMES: &'static [(&'static str, Shipped)] = &[
+        ("flutter-look", Shipped::FlutterLook),
+        ("skill", Shipped::Skill),
+        ("hooks", Shipped::Hooks),
+    ];
+}
 
-/// Which file writer turns each lint table's rules on or off.
-const LINT_FILES: [(lints::Tool, Tool); 10] = [
-    (lints::Tool::Clippy, Tool::CargoLints),
-    (lints::Tool::Rustc, Tool::CargoLints),
-    (lints::Tool::Dart, Tool::DartAnalysis),
-    (lints::Tool::Biome, Tool::Biome),
-    (lints::Tool::Eslint, Tool::Eslint),
-    (lints::Tool::Ruff, Tool::Ruff),
-    (lints::Tool::Ktlint, Tool::Ktlint),
-    (lints::Tool::Detekt, Tool::Detekt),
-    (lints::Tool::Golangci, Tool::Golangci),
-    (lints::Tool::Oxlint, Tool::Oxlint),
-];
+impl Shipped {
+    /// Every file it may write; the table picks which.
+    fn files(self) -> &'static [&'static str] {
+        match self {
+            Shipped::Skill => &[CLAUDE_SKILL, AGENTS_SKILL],
+            Shipped::FlutterLook => &[FLUTTER_LOOK[0].0, FLUTTER_LOOK[1].0],
+            Shipped::Hooks => &[CODEX_HOOKS, CURSOR_HOOKS],
+        }
+    }
+
+    /// The files as they should be.
+    fn render(self, root: &Path, table: &Table) -> Result<Vec<(String, String)>> {
+        Ok(match self {
+            Shipped::FlutterLook => {
+                if let Some(key) = table.keys().next() {
+                    bail!("[settings.flutter-look]: no field \"{key}\"; it has none");
+                }
+                FLUTTER_LOOK
+                    .iter()
+                    .map(|(path, text)| ((*path).to_string(), dart_file(text)))
+                    .collect()
+            }
+            Shipped::Skill => skill_files(table)?
+                .into_iter()
+                .map(|path| (path.to_string(), skill_text()))
+                .collect(),
+            Shipped::Hooks => {
+                let agents = hook_agents(table)?.unwrap_or_else(|| agents_in_use(root));
+                agents
+                    .into_iter()
+                    .filter_map(|agent| hooks_file(agent).map(|file| (agent, file)))
+                    .map(|(agent, file)| {
+                        let hooks: Table = serde_json::from_value(agent.settings())?;
+                        json_file(root, file, &hooks, false, &[])
+                    })
+                    .collect::<Result<_>>()?
+            }
+        })
+    }
+}
 
 /// The settings of every tool, after merging pieces and overrides, and the lint tables
 /// whose rules they turn on or off.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Settings {
     tools: BTreeMap<Tool, Table>,
+    shipped: BTreeMap<Shipped, Table>,
     lints: Lints,
     /// The folders of the repository's Cargo projects (`.` for the root), which the Rust lint
     /// tables are written into.
@@ -119,40 +214,56 @@ impl Settings {
         lints: Lints,
         read: &BTreeSet<lints::Tool>,
     ) -> Result<Settings> {
-        let mut tools = BTreeMap::new();
+        let (mut tools, mut shipped) = (BTreeMap::new(), BTreeMap::new());
         for (name, value) in table {
-            let Some((_, tool)) = TOOLS.iter().find(|(n, _)| *n == name) else {
-                let names: Vec<&str> = TOOLS.iter().map(|(n, _)| *n).collect();
+            let tool = TOOLS
+                .iter()
+                .find(|row| row.name == name)
+                .map(|row| row.tool);
+            let file = Shipped::named(&name).ok();
+            if tool.is_none() && file.is_none() {
+                let names: Vec<&str> = TOOLS.iter().map(|row| row.name).collect();
+                let files: Vec<&str> = Shipped::NAMES.iter().map(|(n, _)| *n).collect();
                 bail!(
-                    "[settings.{name}]: no such tool; tools are {}",
-                    names.join(", ")
+                    "[settings.{name}]: no such tool; tools are {}, {}",
+                    names.join(", "),
+                    files.join(", ")
                 );
-            };
+            }
             let Value::Table(t) = value else {
                 bail!("[settings.{name}] must be a table");
             };
-            tools.insert(*tool, t);
+            if let Some(tool) = tool {
+                tools.insert(tool, t);
+            } else if let Some(file) = file {
+                shipped.insert(file, t);
+            }
         }
         // Every project gets the skill unless it lists no agent.
-        if skill_files(tools.entry(Tool::Skill).or_default())?.is_empty() {
-            tools.remove(&Tool::Skill);
+        if skill_files(shipped.entry(Shipped::Skill).or_default())?.is_empty() {
+            shipped.remove(&Shipped::Skill);
         }
         // And the hooks, for the agents it names or else the ones it uses.
-        let hooks = hook_agents(tools.entry(Tool::Hooks).or_default())?;
+        let hooks = hook_agents(shipped.entry(Shipped::Hooks).or_default())?;
         if hooks.as_ref().is_some_and(Vec::is_empty) {
-            tools.remove(&Tool::Hooks);
+            shipped.remove(&Shipped::Hooks);
         }
         if hooks.is_none_or(|agents| agents.contains(&Agent::Claude)) {
             tools.entry(Tool::Claude).or_default();
         }
         // A lint table a check reads is written into its tool's file.
-        for (lint, file) in LINT_FILES {
-            if lints.of(lint).is_some() && read.contains(&lint) {
-                tools.entry(file).or_default();
+        for row in &TOOLS {
+            if row
+                .lints
+                .iter()
+                .any(|lint| lints.of(*lint).is_some() && read.contains(lint))
+            {
+                tools.entry(row.tool).or_default();
             }
         }
         Ok(Settings {
             tools,
+            shipped,
             lints,
             // Config::load finds them in the repository.
             cargo: Vec::new(),
@@ -160,28 +271,15 @@ impl Settings {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+        self.tools.is_empty() && self.shipped.is_empty()
     }
 
     /// A tool's settings with its lint tables written in; the settings win.
     fn table(&self, tool: Tool) -> Table {
-        let mut out = match tool {
-            Tool::CargoLints => cargo_lint_table(&self.lints),
-            Tool::DartAnalysis => dart_lint_table(&self.lints),
-            Tool::Biome => biome_lint_table(&self.lints),
-            Tool::Eslint => eslint_lint_table(&self.lints),
-            Tool::Ruff => ruff_lint_table(&self.lints),
-            Tool::Ktlint => ktlint_lint_table(&self.lints),
-            Tool::Detekt => detekt_lint_table(&self.lints),
-            Tool::Golangci => golangci_lint_table(&self.lints),
-            Tool::Oxlint => oxlint_lint_table(&self.lints),
-            Tool::Claude => self.claude_hooks(),
-            Tool::Clippy
-            | Tool::Tsconfig
-            | Tool::Yamllint
-            | Tool::Skill
-            | Tool::Hooks
-            | Tool::FlutterLook => Table::new(),
+        let mut out = if tool == Tool::Claude {
+            self.claude_hooks()
+        } else {
+            (tool.row().table)(&self.lints)
         };
         if let Some(own) = self.tools.get(&tool) {
             crate::presets::merge(&mut out, own.clone());
@@ -191,7 +289,7 @@ impl Settings {
 
     /// Claude Code's proof hooks, when the project gives Claude Code hooks.
     fn claude_hooks(&self) -> Table {
-        let wanted = self.tools.get(&Tool::Hooks).is_some_and(|table| {
+        let wanted = self.shipped.get(&Shipped::Hooks).is_some_and(|table| {
             hook_agents(table)
                 .ok()
                 .flatten()
@@ -216,10 +314,9 @@ impl Settings {
     /// Every file a tool may read its settings from, by exact path. They are hashed from
     /// disk, so a managed file git ignores still counts.
     pub(crate) fn files(&self) -> Vec<String> {
-        self.tools
-            .keys()
-            .flat_map(|t| t.lookup().0.iter().map(|p| (*p).to_string()))
-            .collect()
+        let tools = self.tools.keys().flat_map(|t| t.row().files);
+        let shipped = self.shipped.keys().flat_map(|s| s.files());
+        tools.chain(shipped).map(|p| (*p).to_string()).collect()
     }
 
     /// How `head` tunes the tools that judge code differently: any setting added, removed or
@@ -233,7 +330,7 @@ impl Settings {
             .keys()
             .chain(head.tools.keys())
             .copied()
-            .filter(|t| !matches!(t, Tool::Claude | Tool::Skill | Tool::Hooks))
+            .filter(|t| *t != Tool::Claude)
             .collect();
         for tool in tools {
             let base = leaves(self.tools.get(&tool).unwrap_or(&empty));
@@ -241,7 +338,7 @@ impl Settings {
             let keys: BTreeSet<&String> = base.keys().chain(now.keys()).collect();
             for key in keys {
                 if let Some(how) = Change::set(base.get(key).cloned(), now.get(key).cloned()) {
-                    found.push((format!("settings.{}.{key}", tool.name()), how));
+                    found.push((format!("settings.{}.{key}", tool.row().name), how));
                 }
             }
         }
@@ -251,13 +348,13 @@ impl Settings {
     /// A stable text of the settings, part of the settings check's inputs. It holds the skill
     /// text, which can change between builds of one version.
     pub(crate) fn fingerprint(&self) -> String {
-        format!("{:?}{:?}{SKILL}", self.tools, self.lints)
+        format!("{:?}{:?}{:?}{SKILL}", self.tools, self.shipped, self.lints)
     }
 
     /// Whether an agent would miss the skill, or read another version's. Only the skill files
     /// are read, so this is cheap enough for every command.
     pub(crate) fn skill_out_of_date(&self, root: &Path) -> Result<bool> {
-        let Some(table) = self.tools.get(&Tool::Skill) else {
+        let Some(table) = self.shipped.get(&Shipped::Skill) else {
             return Ok(false);
         };
         let text = skill_text();
@@ -278,101 +375,72 @@ impl Settings {
             if *tool == Tool::CargoLints && self.cargo_lints_without_manifest() {
                 continue;
             }
-            let table = self.table(*tool);
-            let path = tool.resolve(root)?;
-            let whole = |table: &Table| -> Result<String> {
-                Ok(format!("# {MANAGED}\n{}", yaml(table, 0)?))
-            };
-            let ext = Path::new(&path)
-                .extension()
-                .map(|e| e.to_string_lossy().to_lowercase())
-                .unwrap_or_default();
-            let files = match tool {
-                Tool::CargoLints => {
-                    let mut files = Vec::new();
-                    for dir in &self.cargo {
-                        files.extend(cargo_lints(root, dir, &table)?);
-                    }
-                    files
-                }
-                Tool::Ruff if path == "pyproject.toml" => {
-                    let ruff = Table::from_iter([("ruff".to_string(), Value::Table(table))]);
-                    let tool = Table::from_iter([("tool".to_string(), Value::Table(ruff))]);
-                    vec![toml_file(root, &path, &tool)?]
-                }
-                Tool::Clippy | Tool::Ruff => vec![toml_file(root, &path, &table)?],
-                Tool::Claude => vec![json_file(root, &path, &table, false, &[])?],
-                // Fearlezz decides every rule and the plugins they need, as for Biome.
-                Tool::Oxlint => vec![json_file(
-                    root,
-                    &path,
-                    &table,
-                    true,
-                    &[&["rules"], &["plugins"], &["categories"]],
-                )?],
-                // Fearlezz decides every Biome rule ("preset": "none"), so a rule a piece
-                // dropped leaves biome.json instead of keeping the level Biome gives it.
-                Tool::Biome if table.get("linter").and_then(|l| l.get("rules")).is_some() => {
-                    vec![json_file(
-                        root,
-                        &path,
-                        &table,
-                        true,
-                        &[&["linter", "rules"]],
-                    )?]
-                }
-                Tool::Biome | Tool::Tsconfig => vec![json_file(root, &path, &table, true, &[])?],
-                Tool::Eslint => vec![(path, eslint_file(&table)?)],
-                Tool::Ktlint => vec![editorconfig(root, &table)?],
-                Tool::Golangci if ext == "toml" => {
-                    let body = format!("# {MANAGED}\n{}", toml::to_string(&table)?);
-                    vec![(path, body)]
-                }
-                Tool::Golangci if ext == "json" => {
-                    let mut body = String::new();
-                    let layout = Layout {
-                        indent: "  ",
-                        width: line_width(root)?,
-                    };
-                    pretty_json(&serde_json::to_value(&table)?, &layout, 0, 0, &mut body);
-                    body.push('\n');
-                    vec![(path, body)]
-                }
-                Tool::DartAnalysis | Tool::Detekt | Tool::Golangci | Tool::Yamllint => {
-                    vec![(path, whole(&table)?)]
-                }
-                Tool::FlutterLook => {
-                    if let Some(key) = table.keys().next() {
-                        bail!("[settings.flutter-look]: no field \"{key}\"; it has none");
-                    }
-                    FLUTTER_LOOK
-                        .iter()
-                        .map(|(path, text)| ((*path).to_string(), dart_file(text)))
-                        .collect()
-                }
-                Tool::Skill => skill_files(&table)?
-                    .into_iter()
-                    .map(|path| (path.to_string(), skill_text()))
-                    .collect(),
-                Tool::Hooks => {
-                    let agents = hook_agents(&table)?.unwrap_or_else(|| agents_in_use(root));
-                    agents
-                        .into_iter()
-                        .filter_map(|agent| hooks_file(agent).map(|file| (agent, file)))
-                        .map(|(agent, file)| {
-                            let hooks: Table = serde_json::from_value(agent.settings())?;
-                            json_file(root, file, &hooks, false, &[])
-                        })
-                        .collect::<Result<_>>()?
-                }
-            };
-            for (path, content) in files {
-                if read(root, &path)?.as_deref() != Some(content.as_str()) {
-                    out.push((path, content));
-                }
+            out.extend(self.write(root, *tool)?);
+        }
+        for (file, table) in &self.shipped {
+            out.extend(file.render(root, table)?);
+        }
+        let mut drifted = Vec::new();
+        for (path, content) in out {
+            if read(root, &path)?.as_deref() != Some(content.as_str()) {
+                drifted.push((path, content));
             }
         }
-        Ok(out)
+        Ok(drifted)
+    }
+
+    /// The files of one tool as they should be.
+    fn write(&self, root: &Path, tool: Tool) -> Result<Vec<(String, String)>> {
+        let row = tool.row();
+        let table = self.table(tool);
+        let path = tool.resolve(root)?;
+        Ok(match row.write {
+            Write::Cargo => {
+                let mut files = Vec::new();
+                for dir in &self.cargo {
+                    files.extend(cargo_lints(root, dir, &table)?);
+                }
+                files
+            }
+            Write::Toml if path == "pyproject.toml" => {
+                let own = Table::from_iter([(row.name.to_string(), Value::Table(table))]);
+                let tool = Table::from_iter([("tool".to_string(), Value::Table(own))]);
+                vec![toml_file(root, &path, &tool)?]
+            }
+            Write::Toml => vec![toml_file(root, &path, &table)?],
+            Write::Json { comments, owned } => {
+                // A project's own Biome rules stay until a piece gives Biome its rules.
+                let given = table.get("linter").and_then(|l| l.get("rules")).is_some();
+                let owned = if tool == Tool::Biome && !given {
+                    &[]
+                } else {
+                    owned
+                };
+                vec![json_file(root, &path, &table, comments, owned)?]
+            }
+            Write::Whole => {
+                let ext = Path::new(&path)
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                let body = match ext.as_str() {
+                    "toml" => format!("# {MANAGED}\n{}", toml::to_string(&table)?),
+                    "json" => {
+                        let mut body = String::new();
+                        let layout = Layout {
+                            indent: "  ",
+                            width: line_width(root)?,
+                        };
+                        pretty_json(&serde_json::to_value(&table)?, &layout, 0, 0, &mut body);
+                        body + "\n"
+                    }
+                    _ => format!("# {MANAGED}\n{}", yaml(&table, 0)?),
+                };
+                vec![(path, body)]
+            }
+            Write::Eslint => vec![(path, eslint_file(&table)?)],
+            Write::Editorconfig => vec![editorconfig(root, &path, &table)?],
+        })
     }
 
     /// Writes every file that drifted; returns their paths. Each file is written whole to a
@@ -429,13 +497,9 @@ impl Settings {
         // Biome and oxlint run a framework's rules only when its piece gives them, so a project
         // set up before the framework pieces existed would lose them without a word.
         // Only a linter a check runs counts (its file is written then).
-        let linters = [
-            (lints::Tool::Biome, Tool::Biome),
-            (lints::Tool::Oxlint, Tool::Oxlint),
-        ];
         let mut lacking: Vec<&str> = Vec::new();
-        for (lint, file) in linters {
-            if !self.tools.contains_key(&file) {
+        for lint in [lints::Tool::Biome, lints::Tool::Oxlint] {
+            if !self.tools.keys().any(|t| t.row().lints.contains(&lint)) {
                 continue;
             }
             let given = self.lints.of(lint);
@@ -504,73 +568,34 @@ fn leaves(table: &Table) -> BTreeMap<String, String> {
 }
 
 impl Tool {
-    fn name(self) -> &'static str {
-        TOOLS
-            .iter()
-            .find(|(_, t)| *t == self)
-            .map_or("", |(n, _)| *n)
-    }
-
-    /// The files the tool reads its settings from, in its own lookup order, and the one
-    /// Fearlezz creates when none exists.
-    fn lookup(self) -> (&'static [&'static str], &'static str) {
-        match self {
-            Tool::CargoLints => (&["Cargo.toml"], "Cargo.toml"),
-            Tool::DartAnalysis => (&["analysis_options.yaml"], "analysis_options.yaml"),
-            Tool::Clippy => (&[".clippy.toml", "clippy.toml"], "clippy.toml"),
-            Tool::Claude => (&[".claude/settings.json"], ".claude/settings.json"),
-            Tool::Biome => (
-                &["biome.json", "biome.jsonc", ".biome.json", ".biome.jsonc"],
-                "biome.json",
-            ),
-            Tool::Eslint => (&[ESLINT_FILE], ESLINT_FILE),
-            Tool::Ruff => (&[".ruff.toml", "ruff.toml", "pyproject.toml"], "ruff.toml"),
-            Tool::Ktlint => (&[".editorconfig"], ".editorconfig"),
-            Tool::Detekt => (&[DETEKT_FILE], DETEKT_FILE),
-            Tool::Golangci => (
-                &[
-                    ".golangci.yml",
-                    ".golangci.yaml",
-                    ".golangci.toml",
-                    ".golangci.json",
-                ],
-                ".golangci.yml",
-            ),
-            Tool::Tsconfig => (&["tsconfig.json"], "tsconfig.json"),
-            Tool::Oxlint => (&[".oxlintrc.json"], ".oxlintrc.json"),
-            Tool::Yamllint => (
-                &[".yamllint", ".yamllint.yaml", ".yamllint.yml"],
-                ".yamllint.yaml",
-            ),
-            // Every file is written, like the skill.
-            Tool::FlutterLook => (&[FLUTTER_LOOK[0].0, FLUTTER_LOOK[1].0], FLUTTER_LOOK[0].0),
-            // Unlike the others, every file is written; `skill_files` picks which.
-            Tool::Skill => (&[CLAUDE_SKILL, AGENTS_SKILL], CLAUDE_SKILL),
-            // Likewise; `hook_agents` picks which.
-            Tool::Hooks => (&[CODEX_HOOKS, CURSOR_HOOKS], CODEX_HOOKS),
-        }
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "TOOLS holds every tool at its place; each_row_sits_at_its_tool keeps it so"
+    )]
+    fn row(self) -> &'static Row {
+        &TOOLS[self as usize]
     }
 
     /// The file the tool would read now, so the settings land where the project keeps them
     /// instead of in a new file that shadows them.
     fn resolve(self, root: &Path) -> Result<String> {
-        let (lookup, default) = self.lookup();
-        for path in lookup {
+        let row = self.row();
+        for path in row.files {
             let Some(text) = read(root, path)? else {
                 continue;
             };
             // Ruff reads pyproject.toml only when it has a [tool.ruff] table.
-            let ruff_section = || {
+            let own_section = || {
                 text.parse::<Table>()
                     .ok()
-                    .and_then(|t| t.get("tool")?.get("ruff").cloned())
+                    .and_then(|t| t.get("tool")?.get(row.name).cloned())
                     .is_some()
             };
-            if *path != "pyproject.toml" || ruff_section() {
+            if *path != "pyproject.toml" || own_section() {
                 return Ok((*path).to_string());
             }
         }
-        Ok(default.to_string())
+        Ok(row.default.to_string())
     }
 }
 
@@ -621,13 +646,9 @@ fn dart_lint_table(lints: &Lints) -> Table {
             continue;
         }
         on.insert(rule.clone(), Value::Boolean(level.is_on()));
-        let severity = match level {
-            lints::Level::Gate => "error",
-            lints::Level::Flag => "warning",
-            lints::Level::Hint => "info",
-            lints::Level::Off => continue,
-        };
-        errors.insert(rule.clone(), Value::String(severity.into()));
+        if let Some(severity) = severity(*level, "warning", "info") {
+            errors.insert(rule.clone(), Value::String(severity.into()));
+        }
     }
     let mut analyzer = Table::new();
     if !errors.is_empty() {
@@ -1122,15 +1143,8 @@ fn skill_files(table: &Table) -> Result<Vec<&'static str>> {
     agents
         .iter()
         .map(|agent| {
-            let name = agent.as_str().unwrap_or_default();
-            let Some((_, file)) = SKILL_FILES.iter().find(|(n, _)| *n == name) else {
-                let names: Vec<&str> = SKILL_FILES.iter().map(|(n, _)| *n).collect();
-                bail!(
-                    "[settings.skill]: no agent {agent}; agents are {}",
-                    names.join(", ")
-                );
-            };
-            Ok(*file)
+            names::find(&SKILL_FILES, agent.as_str().unwrap_or_default())
+                .map_err(|names| anyhow!("[settings.skill]: no agent {agent}; agents are {names}"))
         })
         .collect()
 }
@@ -1162,18 +1176,8 @@ fn hook_agents(table: &Table) -> Result<Option<Vec<Agent>>> {
     agents
         .iter()
         .map(|agent| {
-            let name = agent.as_str().unwrap_or_default();
-            AGENTS
-                .iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, a)| *a)
-                .with_context(|| {
-                    let names: Vec<&str> = AGENTS.iter().map(|(n, _)| *n).collect();
-                    format!(
-                        "[settings.hooks]: no agent {agent}; agents are {}",
-                        names.join(", ")
-                    )
-                })
+            Agent::named(agent.as_str().unwrap_or_default())
+                .map_err(|names| anyhow!("[settings.hooks]: no agent {agent}; agents are {names}"))
         })
         .collect::<Result<Vec<_>>>()
         .map(Some)
@@ -1195,14 +1199,18 @@ fn agents_in_use(root: &Path) -> Vec<Agent> {
 const ESLINT_FILE: &str = "eslint.fearlezz.mjs";
 const DETEKT_FILE: &str = "config/detekt/detekt.yml";
 
-/// A level as a tool spells it, for tools with error, warn and info.
-fn severity(level: lints::Level, info: &str) -> &str {
-    match level {
-        lints::Level::Gate => "error",
-        lints::Level::Flag => "warn",
-        lints::Level::Hint => info,
-        lints::Level::Off => "off",
-    }
+/// A level as a tool spells a gate (error), a flag and a hint; `None` for a rule that is off.
+fn severity<'a>(level: lints::Level, flag: &'a str, hint: &'a str) -> Option<&'a str> {
+    level.finding().map(|level| match level {
+        Level::Gate => "error",
+        Level::Flag => flag,
+        Level::Hint => hint,
+    })
+}
+
+/// A level as a tool with `off` spells it.
+fn switch(level: lints::Level, hint: &str) -> String {
+    severity(level, "warn", hint).unwrap_or("off").into()
 }
 
 /// oxlint's categories, all off in the file Fearlezz writes, so only rules with a level run.
@@ -1224,12 +1232,12 @@ fn oxlint_lint_table(lints: &Lints) -> Table {
     };
     let plugins: BTreeSet<&str> = rules
         .iter()
-        .filter(|(_, level)| **level != lints::Level::Off)
+        .filter(|(_, level)| level.is_on())
         .filter_map(|(name, _)| name.split_once('/').map(|(plugin, _)| plugin))
         .collect();
     let table: Table = rules
         .iter()
-        .map(|(rule, level)| (rule.clone(), Value::String(severity(*level, "warn").into())))
+        .map(|(rule, level)| (rule.clone(), Value::String(switch(*level, "warn"))))
         .collect();
     let categories: Table = OXLINT_CATEGORIES
         .iter()
@@ -1268,7 +1276,7 @@ fn biome_lint_table(lints: &Lints) -> Table {
         else {
             continue;
         };
-        g.insert(rule.into(), Value::String(severity(*level, "info").into()));
+        g.insert(rule.into(), Value::String(switch(*level, "info")));
     }
     let mut linter = Table::new();
     linter.insert("rules".into(), Value::Table(groups));
@@ -1282,7 +1290,7 @@ fn eslint_lint_table(lints: &Lints) -> Table {
     };
     let table: Table = rules
         .iter()
-        .map(|(rule, level)| (rule.clone(), Value::String(severity(*level, "warn").into())))
+        .map(|(rule, level)| (rule.clone(), Value::String(switch(*level, "warn"))))
         .collect();
     Table::from_iter([("rules".to_string(), Value::Table(table))])
 }
@@ -1329,8 +1337,7 @@ const EDITORCONFIG_BEGIN: &str = "# Fearlezz: begin";
 const EDITORCONFIG_END: &str = "# Fearlezz: end";
 
 /// `.editorconfig` with a block for Kotlin files between markers; the rest stays.
-fn editorconfig(root: &Path, table: &Table) -> Result<(String, String)> {
-    let path = ".editorconfig";
+fn editorconfig(root: &Path, path: &str, table: &Table) -> Result<(String, String)> {
     let text = read(root, path)?.unwrap_or_default();
     let mut block = format!("{EDITORCONFIG_BEGIN}. {MANAGED}\n[*.{{kt,kts}}]\n");
     for (key, value) in table {
@@ -1500,6 +1507,13 @@ avoid_print = false
             plain,
             serde_json::json!({"a": "C:\\", "b": "1, ]", "c": [1, 2]})
         );
+    }
+
+    #[test]
+    fn each_row_sits_at_its_tool() {
+        for (at, row) in TOOLS.iter().enumerate() {
+            assert_eq!(row.tool as usize, at, "{}", row.name);
+        }
     }
 
     #[test]

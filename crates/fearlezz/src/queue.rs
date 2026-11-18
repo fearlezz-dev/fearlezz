@@ -86,6 +86,11 @@ fn slots() -> Option<usize> {
 /// after every poll whether the step is no longer needed, such as when another worktree just
 /// proved the same inputs. Says once that it waits and behind what, and how the wait ended.
 pub(crate) fn turn<T>(what: &str, done: impl Fn() -> Option<T>) -> Result<Turn<T>> {
+    queue(what, what, done)
+}
+
+/// [`turn`], with the waiters behind it told `shown` for `what`.
+fn queue<T>(what: &str, shown: &str, done: impl Fn() -> Option<T>) -> Result<Turn<T>> {
     let Some(slots) = slots() else {
         return Ok(Turn::Go(None));
     };
@@ -102,7 +107,7 @@ pub(crate) fn turn<T>(what: &str, done: impl Fn() -> Option<T>) -> Result<Turn<T
                 eprintln!("wait {what}: the same inputs ran meanwhile; reused");
                 return Ok(Turn::Done(found));
             }
-            Holder::now(what).claim(lease.file())?;
+            Holder::now(shown).claim(lease.file())?;
             HOLDING.fetch_add(1, Ordering::SeqCst);
             if waited {
                 eprintln!(
@@ -139,7 +144,12 @@ pub(crate) fn turn<T>(what: &str, done: impl Fn() -> Option<T>) -> Result<Turn<T
 
 /// Waits for a slot for the heavy step `what`, which no other run can do instead.
 pub(crate) fn slot(what: &str) -> Result<Option<Slot>> {
-    match turn(what, || None::<std::convert::Infallible>)? {
+    alone(what, what)
+}
+
+/// [`slot`], with the waiters behind it told `shown` for `what`.
+fn alone(what: &str, shown: &str) -> Result<Option<Slot>> {
+    match queue(what, shown, || None::<std::convert::Infallible>)? {
         Turn::Go(slot) => Ok(slot),
         Turn::Done(never) => match never {},
     }
@@ -152,7 +162,11 @@ pub(crate) fn by_hand(command: &[String]) -> Result<u8> {
     let (program, args) = command
         .split_first()
         .context("name the command to run after --")?;
-    let slot = slot(&command.join(" "))?;
+    // Agents waiting behind it see only the program: its arguments may hold anything.
+    let name = Path::new(program)
+        .file_name()
+        .map_or_else(|| program.clone(), |n| n.to_string_lossy().into_owned());
+    let slot = alone(&command.join(" "), &format!("{name} by hand"))?;
     let mut cmd = Command::new(program);
     cmd.args(args);
     if slot.is_some() {

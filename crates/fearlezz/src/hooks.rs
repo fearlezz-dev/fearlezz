@@ -9,6 +9,7 @@ use clap::ValueEnum;
 use serde_json::{Value, json};
 
 use crate::config::Config;
+use crate::names::Named;
 
 /// An agent whose hooks Fearlezz writes and answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -18,11 +19,13 @@ pub(crate) enum Agent {
     Cursor,
 }
 
-pub(crate) const AGENTS: [(&str, Agent); 3] = [
-    ("claude", Agent::Claude),
-    ("codex", Agent::Codex),
-    ("cursor", Agent::Cursor),
-];
+impl Named for Agent {
+    const NAMES: &'static [(&'static str, Agent)] = &[
+        ("claude", Agent::Claude),
+        ("codex", Agent::Codex),
+        ("cursor", Agent::Cursor),
+    ];
+}
 
 /// The moments Fearlezz hooks into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -34,14 +37,6 @@ pub(crate) enum Event {
 }
 
 impl Agent {
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Agent::Claude => "claude",
-            Agent::Codex => "codex",
-            Agent::Cursor => "cursor",
-        }
-    }
-
     /// The hooks this agent reads, as its settings file has them. Every command ends in
     /// `|| true`, so a Fearlezz without this subcommand never blocks the agent.
     pub(crate) fn settings(self) -> Value {
@@ -264,7 +259,8 @@ fn check_run_by_hand(config: &Config, line: &str) -> Option<String> {
         return None;
     }
     config
-        .every_check()
+        .checks
+        .iter()
         .filter(|c| c.builtin.is_none())
         .find(|c| {
             c.steps.last().is_some_and(|step| {

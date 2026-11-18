@@ -23,9 +23,10 @@ pub(crate) struct Worktree {
     pub files: Vec<String>,
     pub tree: String,
     pub committed: bool,
-    /// The shell of the `[env]` its checks run in: the change's own for the change's
-    /// worktree, the base commit's for a base checkout (see `look::Base`).
-    pub shell: Option<String>,
+    /// What of the `[env]` its checks run in shapes their results (its shell, services and
+    /// preview): the change's own for the change's worktree, the base commit's for a base
+    /// checkout (see `base::Checkout`).
+    pub env: crate::config::EnvKey,
     pub hasher: Hasher,
 }
 
@@ -47,7 +48,7 @@ impl Worktree {
             tree: git.tree()?,
             committed: git.committed()?,
             git,
-            shell: env.shell.clone(),
+            env: env.key(),
             hasher: Hasher::default(),
         })
     }
@@ -63,7 +64,7 @@ impl Worktree {
         self.hasher.inputs(
             &self.git.root,
             check,
-            self.shell.as_deref(),
+            &self.env,
             &self.files,
             scope.as_deref(),
         )
@@ -122,7 +123,7 @@ pub(crate) struct View {
     pub live: bool,
     pub group: Group,
     pub now: String,
-    pub next: String,
+    pub next: Next,
 }
 
 impl View {
@@ -164,24 +165,91 @@ impl Group {
 
 const ACTIVE_SECONDS: i64 = 30 * 60;
 
-/// The next line once all proof is in at the final stage.
-pub(crate) const READY: &str = "all proof is in: ready to merge";
+/// What the agent should do next: the `next:` line every command ends with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Next {
+    /// The developer has a question to answer.
+    Waiting(String),
+    /// The agent skill is older than this Fearlezz.
+    Sync,
+    /// The check gave passed and failed on the same inputs.
+    Stabilize(String),
+    /// The check failed.
+    Fix(String),
+    /// These checks need a run.
+    Run(Vec<String>),
+    /// The change takes away proof the base branch requires.
+    Floor,
+    /// Nothing changed yet.
+    Change,
+    /// Red before green holds a fix: what to do, as [`crate::red::Mark::next`] says it.
+    Red(String),
+    /// The stage is done; the next one is called this.
+    WhenReady(String),
+    /// Ready but for work that is not committed.
+    Commit,
+    /// All proof is in at the final stage.
+    Ready,
+    /// A run proved a commit, where no work is judged.
+    CommitProven,
+    /// Every check waits in the stage called this.
+    Stage(String),
+    /// A check could not record: its recorder lacks a permission or a tool.
+    Recorder,
+}
 
-/// The next line at the final stage when the change fails the floor of the base branch.
-pub(crate) const FLOOR_NEXT: &str = "the change takes away proof the base branch requires \
-                                     (above): restore it, or ask the developer whether a \
-                                     person with admin rights should merge past the required \
-                                     check: fearlezz say ask \"<question>\"";
-
-/// The next line after proving a commit, where no work is being judged.
-pub(crate) const COMMIT_PROVEN: &str =
-    "this proved the commit, not the work; fearlezz shows where the work stands";
+impl std::fmt::Display for Next {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Next::Waiting(q) => write!(f, "waiting for the developer: {q}"),
+            Next::Sync => f.write_str(
+                "write the agent skill for this Fearlezz version: fearlezz setup sync, then \
+                 commit it",
+            ),
+            // The same inputs stay unstable, so only a change to them can clear it.
+            Next::Stabilize(id) => write!(
+                f,
+                "make {id} stable (fix the flake, or add the input it misses to its inputs), \
+                 then fearlezz run {id}"
+            ),
+            Next::Fix(id) => write!(f, "fix {id}, then fearlezz run {id}"),
+            Next::Run(todo) => write!(
+                f,
+                "fearlezz run   ({} needed: {})",
+                todo.len(),
+                todo.join(", ")
+            ),
+            Next::Floor => f.write_str(
+                "the change takes away proof the base branch requires (above): restore it, or \
+                 ask the developer whether a person with admin rights should merge past the \
+                 required check: fearlezz say ask \"<question>\"",
+            ),
+            Next::Change => {
+                f.write_str("make a change; fearlezz --plan shows the proof it will need")
+            }
+            Next::Red(line) => f.write_str(line),
+            Next::WhenReady(stage) => write!(f, "when ready: fearlezz run --stage {stage}"),
+            // Proof counts only for what is committed.
+            Next::Commit => f.write_str("commit the work: ready means everything is committed"),
+            Next::Ready => f.write_str("all proof is in: ready to merge"),
+            Next::CommitProven => f.write_str(
+                "this proved the commit, not the work; fearlezz shows where the work stands",
+            ),
+            Next::Stage(stage) => write!(f, "fearlezz run --stage {stage}"),
+            Next::Recorder => f.write_str(
+                "give the recorder its permission or install its tool (fix: above), then \
+                 fearlezz run",
+            ),
+        }
+    }
+}
 
 pub(crate) fn view(
     config: &Config,
     store: &Store,
     journal: &Journal,
     worktree: Option<&mut Worktree>,
+    bases: &crate::base::Bases,
     now: Timestamp,
 ) -> Result<View> {
     let stages = &config.stages;
@@ -217,15 +285,14 @@ pub(crate) fn view(
         committed = wt.committed;
         // Only the final stage answers for what the base branch requires.
         if stage == final_stage && !wt.changed.is_empty() {
-            floor_fails = !crate::floor::Floor::read(config, wt)?.holds();
+            floor_fails = !crate::floor::Floor::read(config, wt, bases)?.holds();
         }
         // Asked once, and only when a check's red before green is in question.
         let mut fix: Option<bool> = None;
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
         // A check this machine cannot stand in for is left to CI: it never holds the work.
         let here = config
-            .checks
-            .iter()
+            .due()
             .filter(|c| crate::legs::left_to_ci(config, c).is_none());
         for check in here {
             let latest = latest_ran(journal, &check.id);
@@ -281,7 +348,7 @@ pub(crate) fn view(
             red_next = red_hold(wt, &checks)?;
         }
     } else {
-        for check in &config.checks {
+        for check in config.due() {
             if let Some(ran) = latest_ran(journal, &check.id) {
                 checks.push(CheckView {
                     id: check.id.clone(),
@@ -310,7 +377,7 @@ pub(crate) fn view(
         live,
         group: Group::Idle,
         now: String::new(),
-        next: String::new(),
+        next: Next::Change,
     };
     let failing = view
         .checks
@@ -326,13 +393,7 @@ pub(crate) fn view(
     } else {
         Group::Idle
     };
-    view.next = next(
-        config,
-        &view,
-        skill_out_of_date,
-        floor_fails,
-        red_next.as_deref(),
-    );
+    view.next = next(config, &view, skill_out_of_date, floor_fails, red_next);
     view.now = now_line(config, &view);
     Ok(view)
 }
@@ -446,66 +507,54 @@ fn red_hold(wt: &Worktree, checks: &[CheckView]) -> Result<Option<String>> {
     Ok(held.into_iter().find_map(|(id, mark)| mark.next(id)))
 }
 
-/// What the agent should do next, as one line. Order: the developer, the agent skill, failures,
-/// needed runs, what the base branch requires, moving on.
+/// What the agent should do next. Order: the developer, the agent skill, failures, needed
+/// runs, what the base branch requires, moving on.
 fn next(
     config: &Config,
     v: &View,
     skill_out_of_date: bool,
     floor_fails: bool,
-    red: Option<&str>,
-) -> String {
+    red: Option<String>,
+) -> Next {
     let stages = &config.stages;
     if let Some(q) = &v.waiting {
-        return format!("waiting for the developer: {q}");
+        return Next::Waiting(q.clone());
     }
     if skill_out_of_date {
-        return "write the agent skill for this Fearlezz version: fearlezz setup sync, then \
-                commit it"
-            .into();
+        return Next::Sync;
     }
     let due: Vec<&CheckView> = v.checks.iter().filter(|c| c.stage <= v.stage).collect();
     if let Some(c) = due
         .iter()
         .find(|c| matches!(c.state, CheckState::Failed | CheckState::Unstable))
     {
-        // The same inputs stay unstable, so only a change to them can clear it.
         return if c.state == CheckState::Unstable {
-            format!(
-                "make {0} stable (fix the flake, or add the input it misses to its inputs), then \
-                 fearlezz run {0}",
-                c.id
-            )
+            Next::Stabilize(c.id.clone())
         } else {
-            format!("fix {0}, then fearlezz run {0}", c.id)
+            Next::Fix(c.id.clone())
         };
     }
-    let todo: Vec<&str> = due
+    let todo: Vec<String> = due
         .iter()
         .filter(|c| c.state != CheckState::Ok)
-        .map(|c| c.id.as_str())
+        .map(|c| c.id.clone())
         .collect();
     if !todo.is_empty() {
-        return format!(
-            "fearlezz run   ({} needed: {})",
-            todo.len(),
-            todo.join(", ")
-        );
+        return Next::Run(todo);
     }
     if floor_fails {
-        return FLOOR_NEXT.into();
+        return Next::Floor;
     }
     if v.checks.is_empty() {
-        return "make a change; fearlezz --plan shows the proof it will need".into();
+        return Next::Change;
     }
     if let Some(line) = red {
-        return line.to_string();
+        return Next::Red(line);
     }
     match stages.after(v.stage) {
-        Some(s) => format!("when ready: fearlezz run --stage {}", stages.name(s)),
-        // Proof counts only for what is committed.
-        None if !v.committed => "commit the work: ready means everything is committed".into(),
-        None => READY.into(),
+        Some(s) => Next::WhenReady(stages.name(s).to_string()),
+        None if !v.committed => Next::Commit,
+        None => Next::Ready,
     }
 }
 

@@ -14,6 +14,7 @@ pub mod look;
 pub mod media;
 pub mod notes;
 pub mod review;
+pub mod why;
 
 use std::path::PathBuf;
 
@@ -303,14 +304,6 @@ impl Proof {
             accepted: None,
             looks: Vec::new(),
             preview: None,
-        }
-    }
-
-    /// The proof of one look alone, for its own page.
-    pub fn of_look(look: Look) -> Proof {
-        Proof {
-            looks: vec![look],
-            ..Proof::new(String::new(), String::new(), String::new())
         }
     }
 

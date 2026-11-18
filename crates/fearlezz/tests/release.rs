@@ -192,6 +192,86 @@ fn publish_sees_only_its_env_and_the_version() {
 }
 
 #[test]
+fn what_publish_prints_hides_the_values_of_its_env() {
+    let config = "[release.shop]\npublish = 'echo \"publishing with $SHOP_TOKEN\"; echo \"again $SHOP_TOKEN\" >&2; touch .published'\nlanded = \"test -f .published\"\nenv = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+    let repo = Repo::new(
+        config,
+        &[
+            (
+                "package.json",
+                "{\"name\": \"widget\", \"version\": \"0.9.1\"}\n",
+            ),
+            (".gitignore", ".published\n"),
+        ],
+    );
+    let out = repo.fz_env(&["run", "--release"], &[("SHOP_TOKEN", "s3cret-token")]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let all = format!("{}{}", out.stdout, out.stderr);
+    assert!(!all.contains("s3cret-token"), "{all}");
+    assert!(all.contains("publishing with ***"), "{all}");
+    assert!(all.contains("again ***"), "{all}");
+}
+
+#[test]
+fn a_publish_prompt_without_a_newline_shows_while_it_waits() {
+    // The publish prints a question and waits for its answer: the question must show before.
+    let config = "[release.shop]\npublish = 'printf \"Enter OTP: \"; while ! test -f .answered; do sleep 0.1; done; touch .published'\nlanded = \"test -f .published\"\nenv = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+    let repo = Repo::new(
+        config,
+        &[
+            (
+                "package.json",
+                "{\"name\": \"widget\", \"version\": \"0.9.1\"}\n",
+            ),
+            (".gitignore", ".published\n.answered\n"),
+        ],
+    );
+    let mut cmd = std::process::Command::new(assert_cmd::cargo::cargo_bin!("fearlezz"));
+    cmd.args(["run", "--release"])
+        .current_dir(repo.path(""))
+        .env("XDG_CACHE_HOME", &repo.cache)
+        .env("XDG_CONFIG_HOME", common::no_config())
+        .env("SHOP_TOKEN", "s3cret-token")
+        .env_remove("CI")
+        .env_remove("FEARLEZZ_JOURNAL")
+        .stdout(std::process::Stdio::piped());
+    for name in common::ACTIONS_ENV {
+        cmd.env_remove(name);
+    }
+    let mut child = cmd.spawn().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    // Answers once the question shows; a publish whose question never shows waits until its
+    // release gives up, and the test fails on what it printed.
+    let answered = repo.path(".answered");
+    let reader = std::thread::spawn(move || {
+        use std::io::Read as _;
+        let (mut seen, mut buf) = (Vec::new(), [0u8; 256]);
+        while let Ok(n @ 1..) = stdout.read(&mut buf) {
+            seen.extend_from_slice(&buf[..n]);
+            if String::from_utf8_lossy(&seen).contains("Enter OTP: ") {
+                std::fs::write(&answered, "").unwrap();
+            }
+        }
+        String::from_utf8_lossy(&seen).into_owned()
+    });
+    let killer = {
+        let id = child.id();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(20));
+            drop(
+                std::process::Command::new("kill")
+                    .arg(id.to_string())
+                    .status(),
+            );
+        })
+    };
+    let status = child.wait().unwrap();
+    drop(killer);
+    let out = reader.join().unwrap();
+    assert!(status.success(), "{out}");
+}
+
+#[test]
 fn the_npm_reader_asks_the_registry_for_a_scoped_package() {
     let reg = FakeRegistry::start();
     // The scope's slash goes encoded, as the registry takes it.

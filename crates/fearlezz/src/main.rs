@@ -1,6 +1,7 @@
 //! `fearlezz`: helps coding agents prove their work. See the README for the model.
 
 mod action;
+mod base;
 mod commits;
 mod config;
 mod counts;
@@ -21,14 +22,17 @@ mod legs;
 mod lints;
 mod look;
 mod media;
+mod names;
 mod presets;
 mod process;
 mod proof;
+mod prove;
 mod queue;
 mod read;
 mod record;
 mod red;
 mod release;
+mod report;
 mod rules;
 mod run;
 mod settings;
@@ -48,7 +52,7 @@ use jiff::Timestamp;
 use config::Config;
 use git::Git;
 use journal::{Event, Journal};
-use state::{CheckState, View, Worktree};
+use state::{CheckState, Next, View, Worktree};
 use store::{Outcome, Store};
 
 #[derive(Parser)]
@@ -216,6 +220,8 @@ struct Ctx {
     git: Git,
     config: Config,
     store: Store,
+    /// The base commits this command compares with, each opened once on first use.
+    bases: base::Bases,
     now: Timestamp,
 }
 
@@ -270,6 +276,7 @@ fn ctx() -> Result<Ctx> {
         git,
         config,
         store,
+        bases: base::Bases::default(),
         now,
     })
 }
@@ -299,8 +306,19 @@ impl Ctx {
     }
 
     fn view(&self, journal: &Journal) -> Result<View> {
-        let mut wt = self.worktree()?;
-        state::view(&self.config, &self.store, journal, Some(&mut wt), self.now)
+        self.view_in(journal, Some(&mut self.worktree()?))
+    }
+
+    /// The view of `journal` with `wt`, the worktree its branch is checked out in, if any.
+    fn view_in(&self, journal: &Journal, wt: Option<&mut Worktree>) -> Result<View> {
+        state::view(
+            &self.config,
+            &self.store,
+            journal,
+            wt,
+            &self.bases,
+            self.now,
+        )
     }
 
     /// Views of every journal; live where its branch is checked out somewhere.
@@ -312,7 +330,7 @@ impl Ctx {
                 Some(git) => Some(Worktree::read(git, &self.config)?),
                 None => None,
             };
-            let view = state::view(&self.config, &self.store, &journal, wt.as_mut(), self.now)?;
+            let view = self.view_in(&journal, wt.as_mut())?;
             views.push((view, journal));
         }
         views.sort_by_key(|(v, _)| (v.group, std::cmp::Reverse(v.last_at)));
@@ -352,9 +370,9 @@ fn ci_run(proof: Option<PathBuf>, leg: Option<legs::Asked>, scheduled: bool) -> 
     let workflow = action::Workflow::read();
     let mut ctx = prepared()?;
     if scheduled {
-        ctx.config.on_schedule();
+        ctx.config.scheduled = true;
         // A scheduled workflow that proves nothing must not stay green.
-        if ctx.config.checks.is_empty() {
+        if ctx.config.due().next().is_none() {
             bail!(
                 "no check has schedule = true, so a scheduled run proves nothing; give the slow \
                  checks schedule = true, or remove the scheduled workflow"
@@ -381,12 +399,12 @@ fn ci_run(proof: Option<PathBuf>, leg: Option<legs::Asked>, scheduled: bool) -> 
     let mut journal = Journal::in_memory("ci");
     let to = ctx.config.stages.name(ctx.config.stages.last()).to_string();
     journal.append(ctx.now, Event::Stage { to, reason: None })?;
-    run_checks(
+    prove::run(
         &ctx,
         journal,
         &[],
         true,
-        Some(CiOut {
+        Some(report::CiOut {
             proof,
             workflow,
             leg,
@@ -431,13 +449,12 @@ fn ci_plan(reuse: Option<&Path>) -> Result<bool> {
 /// and otherwise not proven. Judges what the change weakens, writes the bundle when asked and
 /// the job summary GitHub Actions names.
 fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<bool> {
-    use std::io::Write as _;
     let workflow = action::Workflow::read();
     let ctx = ctx()?;
     let mut wt = ctx.worktree()?;
     let reuse = legs::Reuse::read(reuse, workflow.pull().is_some())?;
     let found = legs::read_legs(dir)?;
-    let mut proof = ci_proof(&ctx, &workflow)?;
+    let mut proof = report::ci_proof(&ctx, &workflow)?;
     println!(
         "commit {}: the gate over {} legs in {}",
         proof.commit,
@@ -463,12 +480,18 @@ fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<
                         .and_then(|r| r.pass(&check.id, platform.as_deref(), &key))
                     {
                         Some(entry) => entry,
-                        None => legs::missing(
-                            check,
-                            platform.as_deref(),
-                            ctx.config.stages.name(check.stage),
-                            &leg.id,
-                        ),
+                        None => {
+                            let away = proof::Away::Unproven(legs::missing(
+                                check,
+                                platform.as_deref(),
+                                &leg.id,
+                            ));
+                            let stage = ctx.config.stages.name(check.stage);
+                            proof::Check {
+                                platform: platform.clone(),
+                                ..proof::not_run(check, stage, &away)
+                            }
+                        }
                     }
                 }
             };
@@ -481,7 +504,7 @@ fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<
     }
     // Each leg that needs the preview deploys the same tree; the first one found names it.
     proof.preview = found.iter().find_map(|l| l.proof.preview.clone());
-    let floor = floor::Floor::read(&ctx.config, &wt)?;
+    let floor = floor::Floor::read(&ctx.config, &wt, &ctx.bases)?;
     proof.weakened.clone_from(&floor.weakened);
     let gate = if floor.holds() {
         floor::Gate::Job
@@ -491,14 +514,7 @@ fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<
     if let Some(dir) = &bundle {
         proof::write(&proof, dir)?;
     }
-    if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-        let summary = action::summary(&proof, None, &gate)?;
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(Path::new(&path))?
-            .write_all(summary.as_bytes())?;
-    }
+    report::summary(&proof, None, &gate)?;
     let blockers = proof.blockers();
     // What weakens is said below, with how it gets past.
     let weakened: Vec<String> = proof.weakened.iter().map(|w| w.what()).collect();
@@ -509,7 +525,7 @@ fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<
     for line in floor.lines(&gate) {
         println!("{line}");
     }
-    println!("next: {}", state::COMMIT_PROVEN);
+    println!("next: {}", Next::CommitProven);
     Ok(blockers.is_empty())
 }
 
@@ -529,14 +545,11 @@ fn gate_accept(
     else {
         return floor::Gate::Job;
     };
-    match host.resume(run.trim()).accepted(&floor.weakened) {
-        Ok(accepted) => match accepted.filter(|a| a.covers(&proof.head, &floor.weakened)) {
-            Some(accept) => {
-                proof.accepted = Some(accept.clone());
-                floor::Gate::Accepted(accept)
-            }
-            None => floor::Gate::Host,
-        },
+    match report::ask_accept(&host.resume(run.trim()), proof, floor) {
+        Ok(()) => proof
+            .accepted
+            .clone()
+            .map_or(floor::Gate::Host, floor::Gate::Accepted),
         Err(e) => {
             println!("proof host not asked: {e:#}");
             floor::Gate::Unasked
@@ -576,7 +589,7 @@ fn release_run() -> Result<bool> {
 
 /// Whether a check takes pictures, which needs ffmpeg.
 fn needs_ffmpeg(config: &Config) -> bool {
-    config.checks.iter().any(|c| config.needs_ffmpeg(c))
+    config.due().any(|c| config.needs_ffmpeg(c))
 }
 
 fn dispatch(cmd: Cmd) -> Result<bool> {
@@ -624,7 +637,7 @@ fn dispatch(cmd: Cmd) -> Result<bool> {
                     return Ok(true);
                 }
             }
-            run_checks(&ctx, ctx.journal()?, &checks, fresh, None)
+            prove::run(&ctx, ctx.journal()?, &checks, fresh, None)
         }
         Cmd::Say { what } => say(&prepared()?, what),
         Cmd::Setup { what } => setup(what),
@@ -655,11 +668,11 @@ fn hook_answer(event: hooks::Event, input: &hooks::Input) -> Result<hooks::Answe
     let view = ctx.view(&journal)?;
     let work = hooks::Work {
         name: journal.name.clone(),
-        ready: view.next == state::READY,
+        ready: view.next == Next::Ready,
         waiting: view.waiting.is_some(),
         needs_proof: wt.changed.iter().any(|p| ctx.config.needs_proof(p)),
         now: view.now.clone(),
-        next: view.next.clone(),
+        next: view.next.to_string(),
         // Asked of the host only where it can hold the agent: a stop it has not held yet.
         open_notes: if matches!(event, hooks::Event::Stop) && !input.again {
             feedback::open_notes(&ctx.git, &host_url(Some(&ctx.config)))
@@ -707,7 +720,7 @@ fn setup_init() -> Result<()> {
 }
 
 /// The proof host this repository sends its proof to, or the default one outside a repository.
-fn host_url(config: Option<&Config>) -> String {
+pub(crate) fn host_url(config: Option<&Config>) -> String {
     config
         .and_then(|c| c.host.as_deref())
         .unwrap_or(host::DEFAULT)
@@ -921,27 +934,6 @@ fn see(see: &See) -> Result<bool> {
     Ok(true)
 }
 
-/// The findings a run counted, worst first, with how many were left out.
-fn print_findings(r: &store::RunResult) {
-    const SHOWN: usize = 10;
-    for f in r.findings.iter().take(SHOWN) {
-        println!("  {f}");
-    }
-    if r.findings.len() > SHOWN {
-        println!(
-            "  and {} more: fearlezz --check {}",
-            r.findings.len() - SHOWN,
-            r.check
-        );
-    }
-    if r.findings_elsewhere > 0 {
-        println!(
-            "  ({} more on lines this change did not touch)",
-            r.findings_elsewhere
-        );
-    }
-}
-
 fn plan(ctx: &Ctx) -> Result<()> {
     let j = ctx.journal()?;
     let v = ctx.view(&j)?;
@@ -965,7 +957,13 @@ fn plan(ctx: &Ctx) -> Result<()> {
     if !any {
         println!("  nothing touched yet");
     }
-    let scheduled: Vec<&str> = ctx.config.set_aside.iter().map(|c| c.id.as_str()).collect();
+    let scheduled: Vec<&str> = ctx
+        .config
+        .checks
+        .iter()
+        .filter(|c| c.schedule)
+        .map(|c| c.id.as_str())
+        .collect();
     if !scheduled.is_empty() {
         println!(
             "  scheduled {}: never needed by a change; fearlezz run --ci --scheduled proves them",
@@ -974,1117 +972,6 @@ fn plan(ctx: &Ctx) -> Result<()> {
     }
     println!("next: {}", v.next);
     Ok(())
-}
-
-/// The checks a run takes on: the named ones, every check of this run when proving a commit, and otherwise
-/// every check of the current stage and earlier ones.
-fn targets<'a>(
-    ctx: &'a Ctx,
-    before: &View,
-    ids: &[String],
-    in_memory: bool,
-) -> Result<Vec<&'a config::Check>> {
-    if !ids.is_empty() {
-        return ids.iter().map(|id| ctx.config.check(id)).collect();
-    }
-    if in_memory {
-        return Ok(ctx.config.checks.iter().collect());
-    }
-    let due: Vec<&str> = before
-        .checks
-        .iter()
-        .filter(|c| c.stage <= before.stage)
-        .map(|c| c.id.as_str())
-        .collect();
-    Ok(ctx
-        .config
-        .checks
-        .iter()
-        .filter(|c| due.contains(&c.id.as_str()))
-        .collect())
-}
-
-fn print_failure(f: &store::RunResult) {
-    let code = f
-        .exit_code
-        .map_or_else(|| "signal".to_string(), |c| c.to_string());
-    if f.findings.iter().any(|x| x.level == findings::Level::Gate) {
-        println!("fail {}: blocking findings", f.check);
-    } else {
-        if let Some(name) = &f.missing_secret {
-            println!("fail {}: SecretSpec could not give it {name}", f.check);
-            println!("  fix: {}", secret_fix(name));
-        } else if let Some(why) = &f.no_preview {
-            let (why, fix) = no_preview(why);
-            println!("fail {}: {why}", f.check);
-            println!("  fix: {fix}");
-        } else if let Some(tool) = f
-            .not_found()
-            .then(|| run::missing_command(&f.log))
-            .flatten()
-        {
-            println!("fail {}: {tool} was not found", f.check);
-            println!("  fix: {}", install_fix(&tool));
-        } else if let Some(failed) = &f.generated {
-            println!("fail {}: {}", f.check, failed.why());
-            let path = f.dir.join(generated::DIFF);
-            if let Ok(diff) = std::fs::read_to_string(&path) {
-                let (shown, left) = text::head(&diff, 40);
-                for line in shown {
-                    println!("  {line}");
-                }
-                if left > 0 {
-                    println!("  ({left} more lines)");
-                }
-                println!("  diff: {}", path.display());
-            }
-            println!("  fix: {}", failed.fix(&f.check, true));
-            print_findings(f);
-            return;
-        } else if f.tests == Some(0) && f.exit_code == Some(0) {
-            println!("fail {}: it ran no tests, so it proves nothing", f.check);
-            for why in &f.proof_errors {
-                println!("  {why}");
-            }
-        } else if let (Some(0), Some(why)) = (f.exit_code, f.proof_errors.first()) {
-            // Its command passed, but what it had to leave (a coverage report) is missing.
-            println!("fail {}: {why}", f.check);
-        } else {
-            println!("fail {} (exit {code})", f.check);
-        }
-        for line in run::tail(&f.log, 12) {
-            println!("  {line}");
-        }
-        println!("  log: {}", f.log.display());
-    }
-    print_cases(f);
-    print_findings(f);
-}
-
-/// Each test a run names as failed or flaky, the failed ones first and cut short, and what to
-/// do about a flaky one its check does not list.
-fn print_cases(r: &store::RunResult) {
-    const SHOWN: usize = 10;
-    let failed: Vec<&counts::Case> = r.cases.iter().filter(|c| c.failed).collect();
-    for case in failed.iter().take(SHOWN) {
-        println!("  {}", case.line().unwrap_or_default());
-    }
-    if failed.len() > SHOWN {
-        println!("  and {} more failed", failed.len() - SHOWN);
-    }
-    for case in r.cases.iter().filter(|c| c.flaky && !c.failed) {
-        println!("  {}", case.line().unwrap_or_default());
-    }
-    if let Some(case) = failed.iter().find(|c| c.flaky) {
-        println!(
-            "  fix: make it pass every time; only with the developer's OK, flaky_tests = [\"{}\"] on \
-             check {} lets it pass on a rerun, which weakens the proof",
-            case.name, r.check
-        );
-    }
-}
-
-/// A run's proof as it is built, and the run on the proof host while it takes it. Proving a
-/// commit for CI shows more besides the usual lines, so a reader can tell the checks ran: the
-/// commit and each check with its command and time, and on GitHub Actions the job summary.
-/// Only CI writes these, so the agent whose work they judge cannot change them. A local run
-/// has a report only while the host takes it, signed in: the host shows it unproven.
-struct Report {
-    proof: proof::Proof,
-    /// The run on the proof host, while it takes it.
-    stream: Option<host::Stream>,
-    /// The host's page of the work, once the host opened the run.
-    page: Option<String>,
-    /// A folder for the proof bundle, when asked.
-    bundle: Option<PathBuf>,
-    /// Proving a commit for CI, not a local run.
-    ci: bool,
-    /// The platform of the leg it runs, which names each of its checks.
-    platform: Option<String>,
-}
-
-/// What proving a commit for CI takes besides the checks.
-struct CiOut {
-    /// A folder for the proof bundle.
-    proof: Option<PathBuf>,
-    /// What GitHub Actions says of the run: the pull request and pages the proof names.
-    workflow: action::Workflow,
-    /// The leg of a plan it runs, for a commit proven in several jobs.
-    leg: Option<legs::Asked>,
-}
-
-/// The proof of the commit CI checked out, before any check: the pull request's head merged
-/// into the base branch, or HEAD.
-fn ci_proof(ctx: &Ctx, workflow: &action::Workflow) -> Result<proof::Proof> {
-    let merge = ctx.git.head_short()?;
-    // A pull request's run proves the merge GitHub made of its head into the base branch;
-    // the head is the commit people know.
-    let full = workflow.head().map(str::to_string);
-    let short = full.as_ref().map(|sha| {
-        // A shallow checkout may lack the head itself.
-        ctx.git
-            .short(sha)
-            .unwrap_or_else(|_| sha.chars().take(7).collect())
-    });
-    let head = match full {
-        Some(sha) => sha,
-        None => ctx.git.head()?,
-    };
-    let commit = match short {
-        Some(head) if head != merge => {
-            format!("{head} (merged with {} as {merge})", ctx.config.base)
-        }
-        _ => merge,
-    };
-    Ok(proof::Proof {
-        repository: workflow.repository.clone(),
-        pull: workflow.pull(),
-        run_url: workflow.run_url.clone(),
-        ..proof::Proof::new(commit, head, ctx.config.base.clone())
-    })
-}
-
-impl Report {
-    fn start(
-        ctx: &Ctx,
-        wt: &Worktree,
-        targets: &[&config::Check],
-        out: CiOut,
-        leg: Option<&legs::Leg<'_>>,
-    ) -> Result<Report> {
-        let to_run = targets.len();
-        let mut proof = ci_proof(ctx, &out.workflow)?;
-        let of = match leg {
-            Some(leg) => format!("leg {}: ", leg.id),
-            None => String::new(),
-        };
-        println!(
-            "commit {}: {} changed files, {of}{to_run} of {} checks to run",
-            proof.commit,
-            wt.changed.len(),
-            ctx.config.checks.len()
-        );
-        proof.leg = leg.map(|l| l.id.clone());
-        let planned = out.leg.map(|a| a.planned).unwrap_or_default();
-        let stream = host::Host::from_actions(ctx.config.host.as_deref())
-            .and_then(|host| open_run(host, &proof, &out.workflow, targets, &planned));
-        Ok(Report {
-            page: stream.as_ref().map(|s| s.url.clone()),
-            stream,
-            proof,
-            bundle: out.proof,
-            ci: true,
-            platform: leg.and_then(legs::Leg::platform_name),
-        })
-    }
-
-    /// A local run on the proof host, when the developer signed in to it and the branch is on
-    /// GitHub: opened before its checks run, so a person can leave notes on its pictures
-    /// before there is a pull request. None otherwise, and then nothing leaves the machine.
-    fn local(ctx: &Ctx, targets: &[&config::Check]) -> Result<Option<Report>> {
-        let url = host_url(Some(&ctx.config));
-        let Some(login) = feedback::login_of(&url) else {
-            return Ok(None);
-        };
-        let (Some(repository), Ok(branch)) = (ctx.git.github_repository(), ctx.git.branch()) else {
-            return Ok(None);
-        };
-        let head = ctx.git.head()?;
-        let proof = proof::Proof {
-            repository: Some(repository.clone()),
-            ..proof::Proof::new(ctx.git.head_short()?, head.clone(), ctx.config.base.clone())
-        };
-        let open = fearlezz_proof::events::Open {
-            repository,
-            branch,
-            pull: None,
-            head,
-            base: ctx.config.base.clone(),
-            source: fearlezz_proof::events::Source::Local { login: login.login },
-            checks: targets.iter().map(|c| c.id.clone()).collect(),
-        };
-        let stream = match host::Host::from_login(&url, &login.token).open(&open) {
-            Ok(host::Opening::Opened(stream)) => {
-                println!(
-                    "proof page: {} shows this run, unproven; fearlezz setup logout stops sending \
-                     local runs",
-                    stream.url
-                );
-                stream
-            }
-            Ok(host::Opening::NotInstalled(install)) => {
-                println!(
-                    "proof page: the Fearlezz app is not installed on this repository, so this \
-                     run was not sent; install it to see local runs on the host: {install}"
-                );
-                return Ok(None);
-            }
-            Err(e) => {
-                println!("proof page not sent: {e:#}");
-                return Ok(None);
-            }
-        };
-        Ok(Some(Report {
-            page: Some(stream.url.clone()),
-            stream: Some(stream),
-            proof,
-            bundle: None,
-            ci: false,
-            platform: None,
-        }))
-    }
-
-    /// A check starts.
-    fn starts(&mut self, check: &config::Check) {
-        self.stream_step(|s| s.started(&check.id));
-    }
-
-    /// A check could not run here.
-    fn not_run(&mut self, check: &config::Check, stage: &str, why: &str) {
-        let mut entry = proof::not_run(check, stage, why);
-        entry.platform.clone_from(&self.platform);
-        self.stream_step(|s| s.finished(&entry, None));
-        self.proof.checks.push(entry);
-    }
-
-    /// Sends one step of the run to the host; a host that fails is said once and sent
-    /// nothing more, and never fails the proof.
-    fn stream_step(&mut self, step: impl FnOnce(&host::Stream) -> Result<()>) {
-        if let Some(stream) = &self.stream
-            && let Err(e) = step(stream)
-        {
-            println!("proof page not sent: {e:#}");
-            self.stream = None;
-        }
-    }
-
-    /// A check ended, with its pictures compared with the base when it takes pictures.
-    fn ran(
-        &mut self,
-        check: &config::Check,
-        stage: &str,
-        result: &store::RunResult,
-        look: Option<&look::Look>,
-    ) {
-        let word = match result.outcome {
-            Outcome::Passed => "passed",
-            Outcome::Failed => "failed",
-        };
-        #[expect(clippy::cast_precision_loss, reason = "a duration shown in seconds")]
-        let secs = result.duration_ms as f64 / 1000.0;
-        let run = match check.run.trim().split_once('\n') {
-            Some((first, _)) => format!("{first} ..."),
-            None => check.run.trim().to_string(),
-        };
-        let tests = match result.tests {
-            Some(1) => "  1 test".to_string(),
-            Some(n) => format!("  {n} tests"),
-            None => String::new(),
-        };
-        let coverage = result
-            .coverage
-            .map(|m| format!("  {}", m.summary()))
-            .unwrap_or_default();
-        if self.ci {
-            println!("{word} {}  {secs:.1} s{tests}{coverage}  {run}", check.id);
-        }
-        let failure = (result.outcome == Outcome::Failed).then(|| failure_item(result));
-        let mut entry = proof::ran(check, stage, result, failure);
-        entry.platform.clone_from(&self.platform);
-        self.stream_step(|s| s.finished(&entry, look));
-        self.proof.checks.push(entry);
-    }
-
-    /// Judges what the change weakens, writes the bundle when asked, closes the run on the
-    /// proof host with it, and writes the job summary GitHub Actions names, when it names one.
-    /// Before it judges, a CI run the host took asks it whether an admin accepted exactly what
-    /// the change weakens at this head; a host that does not answer means not accepted. A
-    /// local run never asks. The gate it answers says where the weakening got past, or can: a
-    /// host that failed the ask or done holds no run an accept can reach.
-    fn finish(mut self, floor: &floor::Floor) -> Result<floor::Gate> {
-        use std::io::Write as _;
-        self.proof.weakened.clone_from(&floor.weakened);
-        let hosted = self.ci && self.stream.is_some();
-        if hosted && !floor.holds() {
-            let head = self.proof.head.clone();
-            let mut accepted = None;
-            self.stream_step(|s| {
-                accepted = s
-                    .accepted(&floor.weakened)?
-                    .filter(|a| a.covers(&head, &floor.weakened));
-                Ok(())
-            });
-            self.proof.accepted = accepted;
-        }
-        let temp = match (&self.bundle, &self.stream) {
-            (None, Some(_)) => Some(tempfile::tempdir()?),
-            _ => None,
-        };
-        let bundle = self
-            .bundle
-            .clone()
-            .or_else(|| temp.as_ref().map(|t| t.path().to_path_buf()));
-        if let Some(dir) = &bundle {
-            proof::write(&self.proof, dir)?;
-        }
-        if let Some(dir) = &bundle {
-            self.stream_step(|s| s.done(dir));
-        }
-        // The gate of a split proof streams nothing; it asks the host through a leg's run.
-        if let (Some(dir), Some(stream), Some(_)) = (&self.bundle, &self.stream, &self.proof.leg) {
-            std::fs::write(dir.join(legs::HOST_RUN), stream.run())?;
-        }
-        let gate = match self.proof.accepted.clone() {
-            Some(accept) => floor::Gate::Accepted(accept),
-            None if hosted && self.stream.is_some() => floor::Gate::Host,
-            None if hosted => floor::Gate::Unasked,
-            None => floor::Gate::Job,
-        };
-        if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY").filter(|_| self.ci) {
-            let summary = action::summary(&self.proof, self.page.as_deref(), &gate)?;
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(Path::new(&path))?
-                .write_all(summary.as_bytes())?;
-        }
-        Ok(gate)
-    }
-}
-
-/// Opens the run on the proof host, printing its page or why there is none. A host that
-/// fails never fails the proof: CI proves the commit anyway.
-fn open_run(
-    host: host::Host,
-    proof: &proof::Proof,
-    workflow: &action::Workflow,
-    targets: &[&config::Check],
-    planned: &[String],
-) -> Option<host::Stream> {
-    let (Some(repository), Some(branch)) = (&workflow.repository, workflow.branch()) else {
-        println!(
-            "proof page not sent: the run names no repository and branch (GITHUB_REPOSITORY, \
-             GITHUB_REF)"
-        );
-        return None;
-    };
-    let Some(ci_job) = &workflow.ci_job else {
-        println!(
-            "proof page not sent: the run names no job of a workflow run (GITHUB_RUN_ID, \
-             GITHUB_RUN_ATTEMPT, RUNNER_NAME)"
-        );
-        return None;
-    };
-    let open = fearlezz_proof::events::Open {
-        repository: repository.clone(),
-        branch: branch.to_string(),
-        pull: proof.pull.clone(),
-        head: proof.head.clone(),
-        base: proof.base.clone(),
-        source: fearlezz_proof::events::Source::Ci {
-            job: workflow.job.clone().unwrap_or_default(),
-            run_url: workflow.run_url.clone(),
-            run_id: ci_job.run_id,
-            run_attempt: ci_job.run_attempt,
-            runner_name: ci_job.runner_name.clone(),
-            leg: proof.leg.clone(),
-            planned: planned.to_vec(),
-        },
-        checks: targets.iter().map(|c| c.id.clone()).collect(),
-    };
-    match host.open(&open) {
-        Ok(host::Opening::Opened(stream)) => {
-            println!("proof page: {}", stream.url);
-            Some(stream)
-        }
-        Ok(host::Opening::NotInstalled(install)) => {
-            println!(
-                "proof page: the Fearlezz app is not installed on this repository, so nothing \
-                 was sent; install it to get the page: {install}"
-            );
-            None
-        }
-        Err(e) => {
-            println!("proof page not sent: {e:#}");
-            None
-        }
-    }
-}
-
-/// How to make a missing tool reachable for checks.
-fn install_fix(tool: &str) -> String {
-    let nix = if run::NIX_TOOLS.contains(&tool) {
-        format!(" (in devenv.nix: add `pkgs.{tool}` to packages)")
-    } else {
-        String::new()
-    };
-    format!(
-        "install {tool} where checks find it: the project's dev dependencies ({}), its devenv{nix}, \
-         or PATH",
-        process::TOOL_DIRS.join(", ")
-    )
-}
-
-/// How to let SecretSpec give a check the secret `name`.
-fn secret_fix(name: &str) -> String {
-    format!(
-        "declare {name} in secretspec.toml and store it with its provider (1Password: \
-         `secretspec set {name}`); sign in to the provider locally (`op signin`), and give CI \
-         its token (1Password: the OP_SERVICE_ACCOUNT_TOKEN secret in the job's env)"
-    )
-}
-
-/// Why a check's preview could not be deployed, and what to do about it.
-fn no_preview(why: &env::NoPreview) -> (String, String) {
-    let by_hand = "run `[env] preview` by hand at the checkout root, with FEARLEZZ_PREVIEW_NAME set, \
-                   and read its log (above)";
-    match why {
-        env::NoPreview::Failed { code } => (
-            format!(
-                "the preview failed (exit {})",
-                code.map_or_else(|| "signal".to_string(), |c| c.to_string())
-            ),
-            format!("make it deploy: {by_hand}"),
-        ),
-        env::NoPreview::NoUrl => (
-            "the preview printed no URL".to_string(),
-            format!(
-                "make [env] preview print the URL of its deploy (the last http:// or https:// URL \
-                 it prints is taken): {by_hand}"
-            ),
-        ),
-        env::NoPreview::Secret { name } => (
-            format!("SecretSpec could not give the preview {name}"),
-            secret_fix(name),
-        ),
-        env::NoPreview::NoSecretSpec => (
-            "secretspec was not found for the preview's secrets".to_string(),
-            install_fix("secretspec"),
-        ),
-        env::NoPreview::Unset => (
-            "its checkout's [env] has no preview command".to_string(),
-            "add a preview command to [env] in fearlezz.toml".to_string(),
-        ),
-    }
-}
-
-fn failure_item(f: &store::RunResult) -> proof::Item {
-    let what = format!("check `{}` failed", f.check);
-    if let Some(why) = &f.no_preview {
-        let (why, fix) = no_preview(why);
-        return proof::Item { what, why, fix };
-    }
-    if let Some(name) = &f.missing_secret {
-        return proof::Item {
-            what,
-            why: format!("SecretSpec could not give it {name}"),
-            fix: secret_fix(name),
-        };
-    }
-    if let Some(tool) = f
-        .not_found()
-        .then(|| run::missing_command(&f.log))
-        .flatten()
-    {
-        return proof::Item {
-            what,
-            why: format!("{tool} was not found"),
-            fix: install_fix(&tool),
-        };
-    }
-    if let Some(found) = f.findings.iter().find(|x| x.level == findings::Level::Gate) {
-        return proof::Item {
-            what,
-            why: format!("blocking findings, such as {found}"),
-            fix: "fix the findings; the check page lists them".into(),
-        };
-    }
-    if let Some(failed) = &f.generated {
-        return proof::Item {
-            what,
-            why: failed.why(),
-            fix: failed.fix(&f.check, false),
-        };
-    }
-    if f.tests == Some(0) && f.exit_code == Some(0) {
-        let detail = f
-            .proof_errors
-            .first()
-            .map(|e| format!(": {e}"))
-            .unwrap_or_default();
-        return proof::Item {
-            what,
-            why: format!("it ran no tests, so it proves nothing{detail}"),
-            fix: "make it run its tests, or give it the tests reader its runner needs".into(),
-        };
-    }
-    if let (Some(0), Some(why)) = (f.exit_code, f.proof_errors.first()) {
-        return proof::Item {
-            what,
-            why: why.clone(),
-            fix: "make its command leave what the check reads".into(),
-        };
-    }
-    let code = f
-        .exit_code
-        .map_or_else(|| "a signal".to_string(), |c| format!("exit code {c}"));
-    proof::Item {
-        what,
-        why: format!("its command ended with {code}"),
-        fix: "fix what it reports; the check page shows the end of its output".into(),
-    }
-}
-
-/// Runs the checks `ids` names, or those the stage needs, and says what is next. `out` is
-/// given when proving a commit for CI.
-fn run_checks(
-    ctx: &Ctx,
-    mut j: Journal,
-    ids: &[String],
-    fresh: bool,
-    out: Option<CiOut>,
-) -> Result<bool> {
-    let mut wt = ctx.worktree()?;
-    let before = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
-    let stages = &ctx.config.stages;
-    let stage = stages.name(before.stage).to_string();
-    let final_stage = stages.name(stages.last()).to_string();
-    let in_memory = j.is_in_memory();
-    let leg = match out.as_ref().and_then(|o| o.leg.as_ref()) {
-        Some(asked) => Some(legs::leg(&ctx.config, &asked.id, &asked.checks)?),
-        None => None,
-    };
-    // A leg proves its platform only on a machine that fits it.
-    if let Some(p) = leg
-        .as_ref()
-        .and_then(|l| l.platform)
-        .filter(|p| !p.fits_here())
-        && let Some(os) = &p.os
-    {
-        bail!(
-            "leg {} needs {os}, and this machine runs {}; give platform {} a runner of {os} \
-             (runs-on)",
-            leg.as_ref().map_or("", |l| l.id.as_str()),
-            std::env::consts::OS,
-            p.name
-        );
-    }
-    let mut targets = match &leg {
-        Some(leg) => leg.checks.clone(),
-        None => targets(ctx, &before, ids, in_memory)?,
-    };
-    // Outside a leg, a check this machine can stand in for none of the platforms of is left
-    // to CI, where its leg proves it.
-    // CI without a leg cannot prove them: each is not proven.
-    let mut left_out = Vec::new();
-    if leg.is_none() {
-        targets.retain(|check| legs::left_to_ci(&ctx.config, check).is_none());
-        let due = ctx.config.checks.iter().filter(|c| {
-            (in_memory || c.stage <= before.stage) && (ids.is_empty() || ids.contains(&c.id))
-        });
-        for check in due {
-            if let Some(on) = legs::left_to_ci(&ctx.config, check) {
-                // Without platforms, the OS its screen needs stands for where it runs.
-                let needs = check.screen.never_here().unwrap_or_default();
-                if out.is_some() {
-                    let platforms = on.len();
-                    let os = check.screen.describe_os();
-                    let on = if on.is_empty() { vec![os] } else { on };
-                    for platform in &on {
-                        let mut entry = legs::left_out(check, platform, stages.name(check.stage));
-                        // Without platforms, legs cannot place it: one of its OS can.
-                        if let Some(item) = entry.failure.as_mut().filter(|_| platforms == 0) {
-                            item.why = format!("this machine cannot have its screen: {needs}");
-                            item.fix = format!(
-                                "add a [platform.<name>] with os = \"{}\" and prove the commit in legs",
-                                check.screen.os().unwrap_or_default()
-                            );
-                        }
-                        if let Some(item) = &entry.failure {
-                            println!("blocked: {}: {}", item.what, item.why);
-                            println!("  fix: {}", item.fix);
-                        }
-                        left_out.push(entry);
-                    }
-                } else if on.is_empty() {
-                    println!("left to CI {}: {needs}", check.id);
-                } else if needs.is_empty() {
-                    println!("left to CI {}: runs on {}", check.id, on.join(", "));
-                } else {
-                    println!(
-                        "left to CI {}: {needs}, runs on {}",
-                        check.id,
-                        on.join(", ")
-                    );
-                }
-            }
-        }
-    }
-    let proven_here = left_out.is_empty();
-    // A full run at the final stage answers for the whole work, and for what the base
-    // branch requires, not only for its checks; for a leg, the gate does.
-    let floor = if ids.is_empty() && stage == final_stage {
-        floor::Floor::read(&ctx.config, &wt)?
-    } else {
-        floor::Floor::default()
-    };
-    let in_leg = leg.is_some();
-    let answers_for_work = !in_memory && ids.is_empty() && stage == final_stage;
-    // The floor holds when nothing weakens, or when an admin accepted on the proof host
-    // exactly what weakens at this head (the gate the commit report answers).
-    let settled = |view: &View, floor_holds: bool| {
-        floor_holds && (!answers_for_work || view.next == state::READY || view.checks.is_empty())
-    };
-    let next_line = |view: &View, floor_holds: bool| {
-        if in_memory {
-            state::COMMIT_PROVEN.to_string()
-        } else if !floor_holds {
-            state::FLOOR_NEXT.to_string()
-        } else {
-            view.next.clone()
-        }
-    };
-    let finish = |report: Option<Report>| -> Result<bool> {
-        let gate = report.map_or(Ok(floor::Gate::Job), |r| r.finish(&floor))?;
-        // A leg's proof names what the change weakens, so the host shows it; the gate judges.
-        if in_leg {
-            if !floor.holds() {
-                println!("the gate judges what the change weakens");
-            }
-            return Ok(true);
-        }
-        for line in floor.lines(&gate) {
-            println!("{line}");
-        }
-        Ok(floor.holds_at(&gate))
-    };
-    // A pull request's CI checks out a merge commit with no branch; its number names the
-    // preview, so each push updates one preview, and two forks' branches never share one.
-    let branch = out
-        .as_ref()
-        .and_then(|o| o.workflow.pull())
-        .map(|pull| format!("pr-{}", pull.number))
-        .or_else(|| wt.git.branch().ok());
-    let mut report = match out {
-        Some(out) => Some(Report::start(ctx, &wt, &targets, out, leg.as_ref())?),
-        None if targets.is_empty() => None,
-        None => Report::local(ctx, &targets)?,
-    };
-    if let Some(r) = report.as_mut() {
-        r.proof.checks.extend(left_out);
-    }
-    if targets.is_empty() {
-        // Every check waits in a later stage: say where.
-        let later = (ids.is_empty() && !in_memory)
-            .then(|| {
-                let waiting = before.checks.iter().filter(|c| c.stage > before.stage);
-                let first = waiting.clone().map(|c| c.stage).min()?;
-                let names: Vec<&str> = waiting
-                    .filter(|c| c.stage == first)
-                    .map(|c| c.id.as_str())
-                    .collect();
-                Some((stages.name(first).to_string(), names))
-            })
-            .flatten();
-        match &later {
-            Some((next_stage, names)) => println!(
-                "nothing to run in {stage}; {} {} in {next_stage}",
-                names.join(", "),
-                if names.len() == 1 { "waits" } else { "wait" }
-            ),
-            None => println!("nothing to run in {stage}"),
-        }
-        let floor_holds = finish(report)?;
-        match &later {
-            Some((next_stage, _)) if floor_holds => {
-                println!("next: fearlezz run --stage {next_stage}");
-            }
-            _ => println!("next: {}", next_line(&before, floor_holds)),
-        }
-        return Ok(proven_here && settled(&before, floor_holds));
-    }
-
-    let clock = std::time::Instant::now();
-    let (mut passed, mut reused) = (0, 0);
-    let mut failures = Vec::new();
-    let mut unstable = Vec::new();
-    let mut green = Vec::new();
-    let env = ctx.env();
-    let mut prepared = false;
-    let mut held = None;
-    let mut looks = Vec::new();
-    // Opened once, on the first check with pictures.
-    let mut base = None;
-    let (mut not_run, mut cannot_record) = (0, 0);
-    let journal_name = j.name.clone();
-    // Reuse only a pass, never across an unstable key, and at the final stage only a run
-    // this journal made at that stage.
-    let reusable = |key: &str| {
-        if fresh || ctx.store.unstable(key) {
-            return None;
-        }
-        ctx.store.for_key(key).pop().filter(|r| {
-            r.outcome == Outcome::Passed
-                && (stage != final_stage || r.made_at_final(&journal_name, &final_stage))
-        })
-    };
-    for check in &targets {
-        let inputs = wt.inputs(check)?;
-        let reuse = reusable(&inputs.key);
-        // A screen this machine can never have, in a leg: its `on` names the wrong platform.
-        if let Some(why) = check.screen.never_here() {
-            let os = check.screen.describe_os();
-            println!(
-                "fail {}: {why}, and this leg runs on {}",
-                check.id,
-                std::env::consts::OS
-            );
-            println!(
-                "  fix: put it on a platform whose os is {os}, by its on or a [platform] with that os"
-            );
-            if let Some(r) = report.as_mut() {
-                r.not_run(check, stages.name(check.stage), why);
-            }
-            cannot_record += 1;
-            continue;
-        }
-        // A check runs only where its screen can be had: a window where something may
-        // record, the simulator or a Linux display where their tools are. A window cannot be
-        // granted on CI's runners (looks of app windows are proven on a developer's
-        // machine), so there it is not run; anywhere else a missing tool fails with the one
-        // time fix, CI included, since a runner of the right system is the one that proves
-        // it. Neither is stored, so it is not called unstable once the tool is there.
-        if reuse.is_none()
-            && (check.screen.owned() || check.pictures.record.is_some())
-            && let Some(u) = record::unavailable(&check.screen)
-        {
-            if let Some(r) = report.as_mut().filter(|r| r.ci && !check.screen.owned()) {
-                println!("not run {}: {}", check.id, u.why);
-                r.not_run(check, stages.name(check.stage), &u.why);
-                not_run += 1;
-            } else {
-                println!("fail {}: {}", check.id, u.why);
-                println!("  fix: {}", u.fix);
-                if let Some(r) = report.as_mut() {
-                    r.not_run(check, stages.name(check.stage), &u.why);
-                }
-                cannot_record += 1;
-            }
-            continue;
-        }
-        if let Some(r) = report.as_mut() {
-            r.starts(check);
-        }
-        // The worktree's services (which its preview deploy shares) before a slot, always: a
-        // run waiting for them holds no slot, so the run holding them can always get one.
-        if reuse.is_none() && (check.needs_services() || check.needs_preview()) && held.is_none() {
-            held = Some(if let Some(hold) = env.state.try_hold(&wt.git.root)? {
-                hold
-            } else {
-                eprintln!(
-                    "wait {}: another run in this worktree holds its services; it goes on once \
-                     that run ends",
-                    check.id
-                );
-                env.state.hold(&wt.git.root)?
-            });
-        }
-        // Heavy work waits its turn on this machine, and another worktree may prove the same
-        // inputs meanwhile.
-        let turn = match reuse {
-            Some(r) => queue::Turn::Done(r),
-            None if check.light => queue::Turn::Go(None),
-            None => queue::turn(&check.id, || reusable(&inputs.key))?,
-        };
-        let (result, was_reused) = match turn {
-            queue::Turn::Done(r) => (r, true),
-            // The slot is freed once the check's command ends.
-            queue::Turn::Go(_slot) => {
-                if !prepared {
-                    if let Some(line) = env.state.prepare(env.cfg, &env.main, &wt.git.root)? {
-                        println!("{line}");
-                    }
-                    prepared = true;
-                }
-                let mut vars = std::collections::BTreeMap::new();
-                if check.needs_services() {
-                    let fresh = stage == final_stage;
-                    let (services, line) =
-                        env.state
-                            .ensure_up(env.cfg, &wt.git.root, &j.name, fresh, ctx.now)?;
-                    if let Some(line) = line {
-                        println!("{line}");
-                    }
-                    vars = services.ports;
-                }
-                let mut undeployed = None;
-                if check.needs_preview() {
-                    let name = env::preview_name(branch.as_deref(), &wt.git.head_short()?);
-                    match env.state.preview(env.cfg, &wt.git.root, &wt.tree, &name)? {
-                        Ok(deployed) => {
-                            if let Some(line) = deployed.line {
-                                println!("{line}");
-                            }
-                            vars.insert("FEARLEZZ_PREVIEW_URL".to_string(), deployed.url);
-                        }
-                        Err(u) => undeployed = Some(u),
-                    }
-                }
-                let at = run::Where {
-                    root: &wt.git.root,
-                    shell: wt.shell.as_deref(),
-                    tree: &wt.tree,
-                    journal: &j.name,
-                    stage: &stage,
-                    vars: &vars,
-                    changed: &wt.lines,
-                    no_preview: undeployed.as_ref(),
-                };
-                let result = run::execute(&ctx.store, check, &inputs, &at)?;
-                if check.needs_services() {
-                    // Idle time counts from when the check stopped using them.
-                    let used = ctx
-                        .now
-                        .checked_add(jiff::SignedDuration::try_from(clock.elapsed())?)?;
-                    env.state.touch(&wt.git.root, used)?;
-                }
-                (result, false)
-            }
-        };
-        // A generator that rewrote files changed the worktree: later checks are keyed on the
-        // files as they are now.
-        if matches!(result.generated, Some(generated::Failed::Stale(_))) {
-            wt = ctx.worktree()?;
-        }
-        j.append(
-            ctx.now,
-            Event::Ran {
-                check: check.id.clone(),
-                key: inputs.key.clone(),
-                result: result.id.clone(),
-                outcome: result.outcome,
-                tree: wt.tree.clone(),
-                reused: was_reused,
-            },
-        )?;
-        reused += usize::from(was_reused);
-        // Compared as soon as the check passed, so its look goes with it to the proof host.
-        let look = if result.outcome == Outcome::Passed {
-            look_at(ctx, &wt, check, &result, &stage, &mut base)?
-        } else {
-            None
-        };
-        if let Some(r) = report.as_mut() {
-            r.ran(check, stages.name(check.stage), &result, look.as_ref());
-        }
-        looks.extend(look);
-        match result.outcome {
-            Outcome::Passed => {
-                passed += 1;
-                green.push((*check, result));
-            }
-            Outcome::Failed => failures.push(result),
-        }
-        if ctx.store.unstable(&inputs.key) {
-            unstable.push(check.id.clone());
-        }
-    }
-    for id in &unstable {
-        println!(
-            "unstable {id}: same inputs gave passed and failed (flaky, or an input not declared); \
-             it stays unstable until its inputs change"
-        );
-    }
-    failures.iter().for_each(print_failure);
-    for (_, r) in &green {
-        print_cases(r);
-        print_findings(r);
-    }
-    if let Some(r) = report.as_mut() {
-        r.proof.looks = looks;
-        // The preview of the tree this run proved, deployed now or by an earlier run.
-        if targets.iter().any(|c| c.needs_preview()) {
-            r.proof.preview = env.state.preview_of(&wt.git.root, &wt.tree);
-        }
-        for id in &unstable {
-            if let Some(c) = r.proof.check_mut(id) {
-                c.unstable = true;
-            }
-        }
-    }
-    // In CI, and at the final stage of a journal so the agent learns it before CI.
-    // It marks each run, so `fearlezz` and the hooks hold the work to the same verdict.
-    let red_blocks = (in_memory || stage == final_stage)
-        && red_before_green(ctx, &wt, &green, &stage, report.as_mut())?;
-    let not_run_text = if not_run > 0 {
-        format!(", {not_run} not run")
-    } else {
-        String::new()
-    };
-    println!(
-        "{} checks: {passed} passed, {} failed, {reused} reused{not_run_text}, {:.1} s",
-        targets.len(),
-        failures.len() + cannot_record,
-        clock.elapsed().as_secs_f64()
-    );
-    let floor_holds = finish(report)?;
-    // Only now: the commit report reads this run's results, which no journal names in CI, so
-    // a check sharing its inputs with another could lose its output to the prune.
-    prune_store(ctx);
-    let after = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
-    if stage == final_stage
-        && (after.next == state::READY || in_memory)
-        && env.state.services(&wt.git.root).is_some()
-    {
-        env.state.stop(env.cfg, &wt.git.root)?;
-        println!("services stopped: all proof is in");
-    }
-    if let Some(line) = after.pictures_to_review(&ctx.config) {
-        println!("{line}");
-    }
-    if cannot_record > 0 {
-        println!(
-            "next: give the recorder its permission or install its tool (fix: above), then fearlezz run"
-        );
-    } else {
-        println!("next: {}", next_line(&after, floor_holds));
-    }
-    Ok(proven_here
-        && failures.is_empty()
-        && cannot_record == 0
-        && !red_blocks
-        && settled(&after, floor_holds))
-}
-
-/// Runs each green check that reads changed test files on the base commit with those files,
-/// one line per check, noted in the commit report when there is one, and marks each run with
-/// what it found. True when the change is a fix and its tests do not fail there, or could not
-/// run there: what cannot be decided is not proven.
-fn red_before_green(
-    ctx: &Ctx,
-    wt: &Worktree,
-    green: &[(&config::Check, store::RunResult)],
-    stage: &str,
-    mut report: Option<&mut Report>,
-) -> Result<bool> {
-    let fix = red::is_fix_change(&wt.git, &wt.base)?;
-    let mut blocks = false;
-    for (check, head) in green {
-        let ran = red::run(
-            &ctx.git,
-            &ctx.config,
-            &ctx.store,
-            (check, head),
-            wt,
-            stage,
-            &ctx.env(),
-        );
-        let id = &check.id;
-        let mark = |unshown: Option<red::Unshown>| {
-            store::AgainstBase::update(head, &wt.base, |a| a.red = Some(red::Mark { unshown }))
-        };
-        let mut record = |red: proof::Red| {
-            for line in red.lines(id) {
-                println!("{line}");
-            }
-            blocks |= red.blocks;
-            if let Some(c) = report.as_mut().and_then(|r| r.proof.check_mut(id)) {
-                c.red = Some(red);
-            }
-        };
-        let mut red = match ran {
-            Ok(Some(red)) => red,
-            Ok(None) => continue,
-            Err(e) => {
-                let why = format!("{e:#}");
-                mark(Some(red::Unshown::DidNotRun(why.clone())))?;
-                record(proof::Red {
-                    verdict: proof::Verdict::DidNotRun,
-                    files: Vec::new(),
-                    tests: Vec::new(),
-                    why: Some(why.replace('\n', " ")),
-                    blocks: fix,
-                    log: None,
-                });
-                continue;
-            }
-        };
-        mark(red::unshown(&red))?;
-        // Tests that pass on the base too show nothing of a fix.
-        red.blocks = fix && red.verdict == proof::Verdict::NotRed;
-        record(red);
-    }
-    Ok(blocks)
-}
-
-/// Compares the stills and films of a green check with the base commit (`base`, opened on the
-/// first check that needs it), says what it found, and records the comparison against it. The
-/// look it made, if any.
-fn look_at(
-    ctx: &Ctx,
-    wt: &Worktree,
-    check: &config::Check,
-    result: &store::RunResult,
-    stage: &str,
-    base: &mut Option<Result<look::Base>>,
-) -> Result<Option<look::Look>> {
-    // A check that takes pictures is compared even without any, so all gone shows.
-    let has_media = look::has_media(result);
-    if !has_media && !ctx.config.takes_pictures(check) {
-        return Ok(None);
-    }
-    let base =
-        base.get_or_insert_with(|| look::Base::at(&ctx.git, &ctx.config, wt.base.clone(), ""));
-    let outcome = match base {
-        Ok(base) => look::look(&ctx.store, check, result, base, stage, &ctx.env()),
-        Err(e) => Err(anyhow::anyhow!("the base checkout failed: {e:#}")),
-    };
-    // Without a before every picture is new; a failed look never ends the run. A run
-    // without pictures whose base cannot be compared has nothing to show.
-    let outcome = outcome.or_else(|e| {
-        if !has_media {
-            return Ok(look::LookOutcome::NoMedia);
-        }
-        look::without_before(check, result, &ctx.git.common, &format!("{e:#}"))
-            .map(look::LookOutcome::Done)
-    });
-    let looked = match &outcome {
-        Ok(look::LookOutcome::NoMedia | look::LookOutcome::SameInputs) => {
-            Some(store::Looked::Nothing)
-        }
-        Ok(look::LookOutcome::Done(l)) => Some(store::Looked::At(l.dir.clone())),
-        Err(_) => None,
-    };
-    if let Some(looked) = looked {
-        store::AgainstBase::update(result, &wt.base, |a| a.look = Some(looked))?;
-    }
-    match outcome {
-        Ok(look::LookOutcome::NoMedia) => Ok(None),
-        Ok(look::LookOutcome::SameInputs) => {
-            println!(
-                "look {}: inputs are the same as on the base, so is what it shows",
-                check.id
-            );
-            Ok(None)
-        }
-        Ok(look::LookOutcome::Done(l)) => {
-            match &l.no_before {
-                Some(why) => println!("look {}: no before ({why}); {}", check.id, l.counts()),
-                None => println!("look {}: {}", check.id, l.counts()),
-            }
-            if let Some(note) = &l.note {
-                println!("  note: {note}");
-            }
-            for line in look::lines(&l) {
-                println!("{line}");
-            }
-            Ok(Some(l))
-        }
-        Err(e) => {
-            println!("look {} failed: {e:#}", check.id);
-            Ok(None)
-        }
-    }
 }
 
 /// Where a work stands, then what waits on the proof host (`host`: its lines and how many notes
@@ -2233,7 +1120,7 @@ pub(crate) fn panic_text(panic: &(dyn std::any::Any + Send)) -> &str {
 /// How long ago `then` was, in words.
 /// Deletes results nothing reads again; see [`store::Store::prune`]. A failure only warns:
 /// the run itself is done.
-fn prune_store(ctx: &Ctx) {
+pub(crate) fn prune_store(ctx: &Ctx) {
     let named = || -> Result<BTreeSet<(String, String)>> {
         let since = ctx.now.as_second() - store::KEEP_DAYS * 24 * 3600;
         let mut named = BTreeSet::new();
