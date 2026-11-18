@@ -561,8 +561,14 @@ fn main() {
     conclusion.exit();
 }
 
+/// Runs one test once the world is up. Starting the worker builds it, which can take minutes,
+/// so a test must never read the clock before: a token it signed would expire while it waits.
 fn run(test: fn()) -> Result<(), Failed> {
-    std::panic::catch_unwind(test).map_err(|panic| {
+    std::panic::catch_unwind(|| {
+        world();
+        test();
+    })
+    .map_err(|panic| {
         let message = panic
             .downcast_ref::<String>()
             .cloned()
