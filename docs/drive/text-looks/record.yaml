@@ -1,0 +1,43 @@
+# docs/drive/text-looks/record.yaml: the working state of one piece of work.
+goal: a person sees what changed in rendered text output and reviews it like a changed picture; generated code is proven up to date without shell glue
+
+pieces:
+  - id: generates
+    status: done
+    tries:
+      - id: in-place
+        what: "`generates` globs on a check; Fearlezz reads those files before and after its command, any difference fails with the diff; regenerated files stay"
+        state: working
+        evidence: [crates/fearlezz/tests/generated.rs]
+  - id: text-looks
+    status: done
+    tries:
+      - id: third-kind
+        what: "`texts` glob (and proof.jsonl kind text) beside stills and films; compared line by line with the base run; summary, CLI, job summary, bundle and host page"
+        state: picked
+        evidence: [crates/fearlezz/tests/text_looks.rs, ee/host-tests/tests/host.rs the_page_shows_a_changed_text_as_its_diff]
+
+decided:
+  - id: two-models
+    what: "Two features, one diff: `texts` for looks against base, `generates` for files that must match the tree"
+  - id: wording
+    what: "Pictures and texts: \"pictures\" stays for stills and films; the job summary heading is \"Changed looks\""
+  - id: host-csp
+    what: "The page fetches a text from the files origin: the files origin is in connect-src"
+  - id: generates-relative-to-dir
+    what: "`generates` globs are relative to the folder the check runs in, so `each` copies work"
+
+open: []
+
+slices:
+  - id: generates
+    tests: [crates/fearlezz/tests/generated.rs]
+    status: done
+  - id: text-looks-core
+    tests: [crates/fearlezz/tests/look.rs text tests]
+    status: done
+  - id: text-looks-host
+    tests: [ee/host-tests]
+    status: done
+
+next: "done: final stage ready to merge after rebasing on the tests/ee flake fix; pull request #37 waits for the developer to merge"

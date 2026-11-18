@@ -259,8 +259,8 @@ fn main() {
             the_files_origin_ignores_cookies_and_sets_none,
         ),
         (
-            "the_files_origin_serves_only_pictures_and_films",
-            the_files_origin_serves_only_pictures_and_films,
+            "the_files_origin_serves_only_pictures_films_and_plain_text",
+            the_files_origin_serves_only_pictures_films_and_plain_text,
         ),
         (
             "the_page_gets_a_grant_for_the_files_of_a_run_it_shows",
@@ -298,6 +298,10 @@ fn main() {
         (
             "a_flaky_picture_is_shown_and_marked",
             a_flaky_picture_is_shown_and_marked,
+        ),
+        (
+            "the_page_shows_a_changed_text_as_its_diff",
+            the_page_shows_a_changed_text_as_its_diff,
         ),
         (
             "a_look_that_arrives_shows_without_a_reload",
@@ -895,9 +899,14 @@ fn the_work_page_is_served_for_a_navigation() {
         assert_eq!(script.status, 200, "{}", &html[start..end]);
         let policy = answer.header("content-security-policy").unwrap();
         assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
-        // Pictures and films load from the files origin only.
+        // Pictures, films and texts load from the files origin only; the page reads a text
+        // there to diff it.
         let files = &world().worker.files;
-        for directive in [format!("img-src {files}"), format!("media-src {files}")] {
+        for directive in [
+            format!("img-src {files}"),
+            format!("media-src {files}"),
+            format!("connect-src 'self' {files};"),
+        ] {
             assert!(policy.contains(&directive), "{policy}");
         }
     }
@@ -1246,7 +1255,7 @@ fn the_files_origin_ignores_cookies_and_sets_none() {
     assert_eq!(answer.status, 404, "{}", answer.text());
 }
 
-fn the_files_origin_serves_only_pictures_and_films() {
+fn the_files_origin_serves_only_pictures_films_and_plain_text() {
     let job = Job::push("owner/repo", "feat/types");
     let run = job.open(&["screens"]);
     let served: &[(&str, &[u8], &str)] = &[
@@ -1258,6 +1267,12 @@ fn the_files_origin_serves_only_pictures_and_films() {
         ("looks/s/f.avif", b"types: an avif", "image/avif"),
         ("looks/s/g.mp4", b"types: an mp4", "video/mp4"),
         ("looks/s/h.webm", b"types: a webm", "video/webm"),
+        // A text of a look, kept as `.txt` whatever it was: plain text a browser never runs.
+        (
+            "looks/s/i.yaml.txt",
+            b"types: a text",
+            "text/plain; charset=utf-8",
+        ),
     ];
     // What CI wrote is content of a pull request: anything a browser could run, or guess at,
     // is never served.
@@ -1289,6 +1304,13 @@ fn the_files_origin_serves_only_pictures_and_films() {
             "{path}"
         );
     }
+    // The page reads a text to diff it, across origins.
+    let answer = get_url(&format!("{base}looks/s/i.yaml.txt"), &[]);
+    assert_eq!(
+        answer.header("access-control-allow-origin"),
+        Some(world().worker.url.as_str()),
+        "the app origin may read a text"
+    );
     for (path, _) in refused {
         let answer = get_url(&format!("{base}{path}"), &[]);
         assert_eq!(answer.status, 404, "{path}: {}", answer.text());
@@ -1766,6 +1788,58 @@ fn a_flaky_picture_is_shown_and_marked() {
     assert_eq!(
         browser.eval("document.querySelector('[data-stage] [data-flaky-note]') !== null"),
         json!(true)
+    );
+}
+
+fn the_page_shows_a_changed_text_as_its_diff() {
+    let job = Job::push("owner/repo", "feat/texts");
+    let run = job.open(&["render"]);
+    let before: &[u8] = b"kind: ConfigMap\nname: app\ncolor: red\n";
+    let after: &[u8] = b"kind: ConfigMap\nname: app\ncolor: blue\n";
+    let files = [
+        ("looks/render/media/before-app.yaml.txt", before),
+        ("looks/render/media/after-app.yaml.txt", after),
+    ];
+    let look = look_of(
+        "render",
+        &[json!({
+            "name": "app", "kind": "text", "change": "changed",
+            "summary": "1 line added, 1 removed",
+            "before": files[0].0, "after": files[1].0, "comparison": null,
+        })],
+    );
+    let answer = job.finished_with_look(&run.id, &entry("render", "passed"), &files, &look);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    for (_, bytes) in &files {
+        job.send(bytes);
+    }
+    let mut browser = browser::Browser::start();
+    browser.open(&format!(
+        "{}/owner/repo/work/feat/texts",
+        world().worker.url
+    ));
+    browser.wait_for("!!document.querySelector('[data-stage] [data-diff]')");
+    browser.wait_for(
+        r#"[...document.querySelectorAll('[data-stage] [data-line="now"]')].some(l => l.textContent.includes("color: blue"))"#,
+    );
+    assert_eq!(
+        browser.eval(
+            r#"[...document.querySelectorAll('[data-stage] [data-line="was"]')].map(l => l.textContent)"#
+        ),
+        json!(["-color: red"]),
+        "the removed line"
+    );
+    // A text has no picture modes, and its card in the sheet says it is a text.
+    assert_eq!(
+        browser.eval("document.querySelectorAll('[data-stage] button[data-mode]').length"),
+        json!(0),
+        "no picture modes"
+    );
+    assert_eq!(
+        browser
+            .eval(r#"!!document.querySelector('[data-picture="render/app"] [data-text-thumb]')"#),
+        json!(true),
+        "a text card in the sheet"
     );
 }
 

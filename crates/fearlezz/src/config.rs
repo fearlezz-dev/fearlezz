@@ -161,6 +161,9 @@ pub(crate) struct Check {
     /// Tests (names or globs, as written) that may pass only on a rerun. Listing more weakens
     /// the proof.
     pub flaky_tests: Globs,
+    /// The files its command writes into the repository, relative to the folder it runs in:
+    /// they must come out the same as the tree had them.
+    pub generates: Globs,
     /// Work Fearlezz does itself instead of running a command.
     pub builtin: Option<Builtin>,
     /// The platforms it must pass on, by name: as written, or the default one. Empty in a
@@ -173,14 +176,17 @@ pub(crate) struct Check {
     pub timeout: Option<crate::legs::Budget>,
 }
 
-/// What pictures a check takes, in one place: the check's inputs, the floor and whether a run
-/// needs ffmpeg all read this, so a new picture field is added here once.
+/// What pictures and texts a check takes, in one place: the check's inputs, the floor and
+/// whether a run needs ffmpeg all read this, so a new field is added here once.
 #[derive(Default)]
 pub(crate) struct Pictures {
     /// For a check that writes pictures into a folder: which files in it are stills and
     /// which are films.
     pub stills: Option<MediaGlob>,
     pub films: Option<MediaGlob>,
+    /// For a check that writes text into a folder (rendered manifests, a plan): which files
+    /// in it are texts, compared line by line.
+    pub texts: Option<MediaGlob>,
     /// For a check that records an app's window while its command runs.
     pub record: Option<crate::record::Spec>,
     /// Pictures (ids or globs, as written) that are compared and shown but never wait for a
@@ -192,6 +198,11 @@ impl Pictures {
     /// Whether the check names pictures it takes, by glob or by recording a window. A check
     /// can also list pictures in `proof.jsonl` without naming them here.
     pub(crate) fn named(&self) -> bool {
+        self.names_media() || self.texts.is_some()
+    }
+
+    /// Whether it names stills or films, by glob or by recording a window: what needs ffmpeg.
+    pub(crate) fn names_media(&self) -> bool {
         self.stills.is_some() || self.films.is_some() || self.record.is_some()
     }
 
@@ -200,6 +211,7 @@ impl Pictures {
         self.stills
             .iter()
             .chain(&self.films)
+            .chain(&self.texts)
             .flat_map(|g| g.proofs(out))
             .collect()
     }
@@ -217,6 +229,7 @@ impl Pictures {
                 self.stills.as_ref().map(MediaGlob::glob),
                 self.films.as_ref().map(MediaGlob::glob),
                 self.record.as_ref().map(crate::record::Spec::fingerprint),
+                self.texts.as_ref().map(MediaGlob::glob),
             )
         })
     }
@@ -229,6 +242,7 @@ impl Pictures {
         for (kind, b, h) in [
             ("stills", &self.stills, &head.stills),
             ("films", &self.films, &head.films),
+            ("texts", &self.texts, &head.texts),
         ] {
             match (
                 b.as_ref().map(MediaGlob::glob),
@@ -443,6 +457,7 @@ struct RawCheck {
     test_files: Vec<String>,
     stills: Option<String>,
     films: Option<String>,
+    texts: Option<String>,
     #[serde(default)]
     flaky: Vec<String>,
     #[serde(default)]
@@ -452,6 +467,8 @@ struct RawCheck {
     on: Vec<String>,
     job: Option<String>,
     timeout: Option<String>,
+    #[serde(default)]
+    generates: Vec<String>,
     /// Turns off a check a piece from `use` brings in.
     #[serde(default)]
     #[expect(
@@ -677,6 +694,12 @@ impl Config {
                         .map(|g| MediaGlob::parse("film", g))
                         .transpose()
                         .with_context(|| format!("check {id}"))?,
+                    texts: c
+                        .texts
+                        .as_deref()
+                        .map(|g| MediaGlob::parse("text", g))
+                        .transpose()
+                        .with_context(|| format!("check {id}"))?,
                     record: c
                         .record
                         .map(crate::record::Spec::parse)
@@ -686,6 +709,7 @@ impl Config {
                 },
                 flaky_tests: globs(&c.flaky_tests)
                     .with_context(|| format!("check {id}: flaky_tests"))?,
+                generates: globs(&c.generates).with_context(|| format!("check {id}: generates"))?,
                 dir: match c.dir {
                     Some(dir) => Some(folder(&dir).with_context(|| format!("check {id}: dir"))?),
                     None => None,
@@ -848,6 +872,12 @@ impl Config {
         check.pictures.named() || self.stages.name(check.stage) == "look"
     }
 
+    /// Whether `check` needs ffmpeg: it names stills or films, or runs in the look stage, where
+    /// it may list them in `proof.jsonl`. A check that names only texts needs none.
+    pub(crate) fn needs_ffmpeg(&self, check: &Check) -> bool {
+        check.pictures.names_media() || self.stages.name(check.stage) == "look"
+    }
+
     /// The check called `id`, set aside or not: naming a check runs it.
     pub(crate) fn check(&self, id: &str) -> Result<&Check> {
         self.every_check().find(|c| c.id == id).with_context(|| {
@@ -916,6 +946,7 @@ fn builtin_check(
         test_globs: Globs::default(),
         pictures: Pictures::default(),
         flaky_tests: Globs::default(),
+        generates: Globs::default(),
     }
 }
 
@@ -1203,8 +1234,21 @@ fn globs<'a>(patterns: impl IntoIterator<Item = &'a String>) -> Result<Globs> {
 }
 
 impl Check {
+    /// Whether its results depend on `path`: one of its inputs, or a file it generates,
+    /// which it compares with what its command writes.
     pub(crate) fn reads(&self, path: &str) -> bool {
-        self.inputs.is_match(path)
+        self.inputs.is_match(path) || self.generated(path)
+    }
+
+    /// Whether `path`, from the root, is a file its `generates` names.
+    pub(crate) fn generated(&self, path: &str) -> bool {
+        match &self.dir {
+            Some(dir) => path
+                .strip_prefix(dir.as_str())
+                .and_then(|p| p.strip_prefix('/'))
+                .is_some_and(|p| self.generates.is_match(p)),
+            None => self.generates.is_match(path),
+        }
     }
 
     /// Whether `path` is one of its tests, by `test_files`.

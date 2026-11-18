@@ -193,6 +193,9 @@ export function isFilm(picture: Picture): boolean {
   return picture.kind === "film" || (picture.comparison != null && !picture.comparison.still);
 }
 
+/** Whether it is a text of a look, which shows as a diff rather than a picture. */
+export const isText = (picture: Picture): boolean => picture.kind === "text";
+
 /** A picture's name as a person reads it: its parts, without the extension. */
 export function title(p: Parts): string {
   return [p.screen, p.viewport, p.theme].filter(Boolean).join(" / ");

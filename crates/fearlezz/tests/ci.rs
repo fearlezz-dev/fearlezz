@@ -1009,7 +1009,7 @@ fn the_job_summary_names_the_pull_requests_head_not_the_merge_commit() {
     );
 }
 
-// Changed pictures on the pull request
+// Changed looks on the pull request
 
 /// Records two stills, `home` in the color `src/color.txt` names and `about` in white.
 const RECORD: &str = r#"set -e
@@ -1058,9 +1058,9 @@ fn changed_pictures_are_listed_and_neither_block_nor_wait() {
     let (out, text) = summary(&repo);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(text.contains("**Proven**"), "{text}");
-    assert!(text.contains("#### Changed pictures"), "{text}");
+    assert!(text.contains("#### Changed looks"), "{text}");
     assert!(
-        text.contains("A person reviews them on the pull request."),
+        text.contains("A person reviews these pictures and texts on the pull request."),
         "{text}"
     );
     assert!(!text.contains("/fearlezz"), "{text}");
@@ -1128,7 +1128,7 @@ fn pictures_that_stay_the_same_leave_the_commit_proven() {
     let (out, text) = summary(&repo);
     assert!(out.ok, "{}", out.stdout);
     assert!(text.contains("**Proven**"), "{text}");
-    assert!(!text.contains("Changed pictures"), "{text}");
+    assert!(!text.contains("Changed looks"), "{text}");
 }
 
 #[test]

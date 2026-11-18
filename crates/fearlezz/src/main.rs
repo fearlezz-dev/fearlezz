@@ -9,6 +9,7 @@ mod env;
 mod feedback;
 mod findings;
 mod floor;
+mod generated;
 mod git;
 mod hooks;
 mod host;
@@ -29,6 +30,7 @@ mod settings;
 mod sops;
 mod state;
 mod store;
+mod text;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -554,7 +556,7 @@ fn release_run() -> Result<bool> {
 
 /// Whether a check takes pictures, which needs ffmpeg.
 fn needs_ffmpeg(config: &Config) -> bool {
-    config.checks.iter().any(|c| config.takes_pictures(c))
+    config.checks.iter().any(|c| config.needs_ffmpeg(c))
 }
 
 fn dispatch(cmd: Cmd) -> Result<bool> {
@@ -1002,6 +1004,22 @@ fn print_failure(f: &store::RunResult) {
         {
             println!("fail {}: {tool} was not found", f.check);
             println!("  fix: {}", install_fix(&tool));
+        } else if let Some(failed) = &f.generated {
+            println!("fail {}: {}", f.check, failed.why());
+            let path = f.dir.join(generated::DIFF);
+            if let Ok(diff) = std::fs::read_to_string(&path) {
+                let (shown, left) = text::head(&diff, 40);
+                for line in shown {
+                    println!("  {line}");
+                }
+                if left > 0 {
+                    println!("  ({left} more lines)");
+                }
+                println!("  diff: {}", path.display());
+            }
+            println!("  fix: {}", failed.fix(&f.check, true));
+            print_findings(f);
+            return;
         } else if f.tests == Some(0) && f.exit_code == Some(0) {
             println!("fail {}: it ran no tests, so it proves nothing", f.check);
             for why in &f.proof_errors {
@@ -1460,6 +1478,13 @@ fn failure_item(f: &store::RunResult) -> proof::Item {
             fix: "fix the findings; the check page lists them".into(),
         };
     }
+    if let Some(failed) = &f.generated {
+        return proof::Item {
+            what,
+            why: failed.why(),
+            fix: failed.fix(&f.check, false),
+        };
+    }
     if f.tests == Some(0) && f.exit_code == Some(0) {
         let detail = f
             .proof_errors
@@ -1745,6 +1770,11 @@ fn run_checks(
             }
             (result, false)
         };
+        // A generator that rewrote files changed the worktree: later checks are keyed on the
+        // files as they are now.
+        if matches!(result.generated, Some(generated::Failed::Stale(_))) {
+            wt = ctx.worktree()?;
+        }
         j.append(
             ctx.now,
             Event::Ran {
@@ -1949,7 +1979,7 @@ fn look_at(
         Ok(look::LookOutcome::NoMedia) => Ok(None),
         Ok(look::LookOutcome::SameInputs) => {
             println!(
-                "look {}: inputs are the same as on the base, so the pictures are too",
+                "look {}: inputs are the same as on the base, so is what it shows",
                 check.id
             );
             Ok(None)

@@ -542,7 +542,7 @@ export type Picture = {
  */
 name: string, 
 /**
- * `still` or `film`.
+ * `still`, `film` or `text`.
  */
 kind: string, 
 /**

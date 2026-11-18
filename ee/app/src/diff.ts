@@ -7,8 +7,31 @@ export type Piece = { text: string; differs: boolean };
 /** One line of a diff: kept from both, only in the old text, or only in the new. */
 export type Line = { kind: "same" | "was" | "now"; pieces: Piece[] };
 
-/** The longest common subsequence of `a` and `b`, as pairs of indexes. */
+/** How many cells a longest common subsequence table may have; past it the two count as
+ * sharing nothing, so a large text never stalls the page. */
+const CELLS = 4_000_000;
+
+/** The longest common subsequence of `a` and `b`, as pairs of indexes: the lines both start
+ * and end with, and between them the longest common subsequence of the rest while its table
+ * stays small. */
 function common<T>(a: T[], b: T[]): [number, number][] {
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let end = 0;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+  const pairs: [number, number][] = [];
+  for (let k = 0; k < start; k++) pairs.push([k, k]);
+  const midA = a.slice(start, a.length - end);
+  const midB = b.slice(start, b.length - end);
+  if (midA.length * midB.length <= CELLS) {
+    for (const [i, j] of table(midA, midB)) pairs.push([i + start, j + start]);
+  }
+  for (let k = end; k > 0; k--) pairs.push([a.length - k, b.length - k]);
+  return pairs;
+}
+
+/** The longest common subsequence of `a` and `b` by the full table. */
+function table<T>(a: T[], b: T[]): [number, number][] {
   const n = a.length;
   const m = b.length;
   const len: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
@@ -60,6 +83,36 @@ function pieces(was: string, now: string): [Piece[], Piece[]] {
 }
 
 const whole = (text: string, differs: boolean): Piece[] => [{ text, differs }];
+
+/** A run of kept lines folded away, by how many. */
+export type Fold = { count: number };
+
+/** The lines of a diff with each run of kept lines longer than twice `context` folded to a
+ * count, `context` kept lines staying on each side of a change. */
+export function folded(lines: Line[], context: number): (Line | Fold)[] {
+  const out: (Line | Fold)[] = [];
+  let k = 0;
+  while (k < lines.length) {
+    if (lines[k]!.kind !== "same") {
+      out.push(lines[k]!);
+      k++;
+      continue;
+    }
+    let end = k;
+    while (end < lines.length && lines[end]!.kind === "same") end++;
+    const keepBefore = k === 0 ? 0 : context;
+    const keepAfter = end === lines.length ? 0 : context;
+    if (end - k > keepBefore + keepAfter) {
+      out.push(...lines.slice(k, k + keepBefore));
+      out.push({ count: end - k - keepBefore - keepAfter });
+      out.push(...lines.slice(end - keepAfter, end));
+    } else {
+      out.push(...lines.slice(k, end));
+    }
+    k = end;
+  }
+  return out;
+}
 
 /** The lines of `now` against `was` (either may be absent): kept lines, and each run of lines
  * taken out followed by lines put in, where a taken out line and the put in line at the same

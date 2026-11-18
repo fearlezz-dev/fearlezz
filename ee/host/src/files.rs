@@ -102,6 +102,8 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
         &format!("frame-ancestors {}", config.app_origin),
     )?;
     headers.set("X-Frame-Options", "SAMEORIGIN")?;
+    // The page reads a text of a look to diff it; the grant in the URL is what opens it.
+    headers.set("Access-Control-Allow-Origin", &config.app_origin)?;
     // A file at a path of a run can be replaced while the run goes; the grant lasts an hour.
     headers.set("Cache-Control", "private, no-cache")?;
     let range = req
@@ -160,8 +162,9 @@ fn byte_range(header: &str, size: u64) -> Option<Result<(u64, u64), ()>> {
     Some(Ok((start, end)))
 }
 
-/// The type a file's name pins, for the pictures and films a page shows; anything else, which
-/// a browser could run or guess at, is never served.
+/// The type a file's name pins, for the pictures, films and texts a page shows (a text of a look
+/// is kept as `.txt`, plain text a browser never runs); anything else, which a browser could
+/// run or guess at, is never served.
 pub fn content_type(path: &str) -> Option<&'static str> {
     let extension = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     match extension.as_deref()? {
@@ -172,6 +175,7 @@ pub fn content_type(path: &str) -> Option<&'static str> {
         "avif" => Some("image/avif"),
         "mp4" => Some("video/mp4"),
         "webm" => Some("video/webm"),
+        "txt" => Some("text/plain; charset=utf-8"),
         _ => None,
     }
 }

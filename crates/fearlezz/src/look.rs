@@ -1,5 +1,5 @@
-//! The look at a change: every still and film a check records, compared with the same check
-//! run on the base commit (where the branch left the base branch), on this machine.
+//! The look at a change: every still, film and text a check takes, compared with the same
+//! check run on the base commit (where the branch left the base branch), on this machine.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,8 +31,9 @@ pub(crate) fn saved(dir: &Path) -> Option<Look> {
     })
 }
 
-/// What a person reviews of `look`: each picture that is not the same as on the base, with
-/// the summary of its comparison and the before and after files to open, one per line.
+/// What a person reviews of `look`: each picture or text that is not the same as on the base,
+/// with the summary of its comparison and the before and after files to open, one per line,
+/// and for a text the start of its diff.
 pub(crate) fn lines(look: &Look) -> Vec<String> {
     let mut lines = Vec::new();
     for item in look.items.iter().filter(|i| i.change != Change::Same) {
@@ -43,8 +44,54 @@ pub(crate) fn lines(look: &Look) -> Vec<String> {
                 lines.push(format!("    {side}: {}", look.dir.join(rel).display()));
             }
         }
+        if item.kind == TEXT {
+            let diff = text_diff(look, item);
+            let (shown, left) = crate::text::head(&diff, DIFF_LINES);
+            lines.extend(shown.iter().map(|l| format!("    {l}")));
+            if left > 0 {
+                lines.push(format!(
+                    "    ({left} more lines; diff the before and after files)"
+                ));
+            }
+        }
     }
     lines
+}
+
+/// The kind of a text in a look.
+pub(crate) const TEXT: &str = "text";
+
+/// How many lines of a text's diff are shown where it is named.
+pub(crate) const DIFF_LINES: usize = 40;
+
+/// The unified diff of a text `item` of `look`, from its before (nothing when new) to its
+/// after (nothing when gone).
+pub(crate) fn text_diff(look: &Look, item: &Item) -> String {
+    let side = |rel: &Option<String>| {
+        rel.as_ref()
+            .and_then(|rel| fs::read(look.dir.join(rel)).ok())
+            .map(|b| crate::text::readable(&b))
+            .unwrap_or_default()
+    };
+    crate::text::unified(&item.name, &side(&item.before), &side(&item.after))
+}
+
+/// How two texts compare, from their files: the same bytes, or changed with the lines it adds
+/// and removes in a summary.
+fn compare_texts(before: &Path, after: &Path) -> Result<(Change, String)> {
+    let (b, a) = (fs::read(before)?, fs::read(after)?);
+    if b == a {
+        return Ok((Change::Same, "same".into()));
+    }
+    let (added, removed) =
+        crate::text::counts(&crate::text::readable(&b), &crate::text::readable(&a));
+    let lines = |n: usize| if n == 1 { "line" } else { "lines" };
+    let summary = match (added, removed) {
+        (0, r) => format!("{r} {} removed", lines(r)),
+        (a, 0) => format!("{a} {} added", lines(a)),
+        (a, r) => format!("{a} {} added, {r} removed", lines(a)),
+    };
+    Ok((Change::Changed, summary))
 }
 
 pub(crate) enum LookOutcome {
@@ -186,7 +233,7 @@ fn media_proofs(result: &RunResult) -> Vec<MediaProof> {
         .iter()
         .filter_map(|p| {
             let kind = p["kind"].as_str()?;
-            if kind != "still" && kind != "film" {
+            if kind != "still" && kind != "film" && kind != TEXT {
                 return None;
             }
             let file = p["file"].as_str()?.to_string();
@@ -372,7 +419,17 @@ fn build(
     let copy = |side: &str, run: &RunResult, p: &MediaProof| -> Result<String, String> {
         let tag = hex::encode(&Sha256::digest(p.file.as_bytes())[..4]);
         let name = p.file.rsplit('/').next().unwrap_or(&p.file);
-        let rel = format!("media/{side}-{tag}-{name}");
+        // A text is kept as `.txt` whatever its own extension, the one type of text the proof
+        // host serves, as plain text a browser never runs.
+        let is_txt = Path::new(name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("txt"));
+        let txt = if p.kind == TEXT && !is_txt {
+            ".txt"
+        } else {
+            ""
+        };
+        let rel = format!("media/{side}-{tag}-{name}{txt}");
         fs::copy(run.dir.join(&p.file), dir.join(&rel))
             .map(|_| rel)
             .map_err(|e| format!("{} is missing from the proof folder ({e})", p.file))
@@ -444,7 +501,18 @@ fn build(
                 .map(|(item, pair)| {
                     s.spawn(move || {
                         let mut item = item.clone();
-                        if let Some((b, a)) = pair {
+                        if let (Some((b, a)), true) = (pair, item.kind == TEXT) {
+                            match compare_texts(b, a) {
+                                Ok((change, summary)) => {
+                                    item.change = change;
+                                    item.summary = summary;
+                                }
+                                Err(e) => {
+                                    item.change = Change::Unreadable;
+                                    item.summary = format!("{e:#}");
+                                }
+                            }
+                        } else if let Some((b, a)) = pair {
                             let compared = media::decode_both(b, a)
                                 .and_then(|(fb, fa)| media::compare(&fb, &fa));
                             match compared {

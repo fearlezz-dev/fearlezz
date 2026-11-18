@@ -64,6 +64,9 @@ pub(crate) struct RunResult {
     /// Why the preview the check needs could not be deployed, so its command never ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_preview: Option<crate::env::NoPreview>,
+    /// For a check with `generates`: why its generated files fail the run, if they do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated: Option<crate::generated::Failed>,
     pub dir: PathBuf,
     pub log: PathBuf,
 }
@@ -215,6 +218,9 @@ impl Hasher {
         }
         if let Some(pictures) = check.pictures.taken() {
             parts.insert("(pictures)".into(), definition(&pictures));
+        }
+        if !check.generates.patterns().is_empty() {
+            parts.insert("(generates)".into(), definition(&check.generates));
         }
         if let Some(shell) = shell.filter(|_| check.builtin.is_none()) {
             parts.insert("(shell)".into(), sha256(shell.as_bytes()));
