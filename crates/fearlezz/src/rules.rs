@@ -217,9 +217,16 @@ impl Rules {
         for rule in &self.0 {
             match &rule.kind {
                 Kind::Changed(paths) => {
-                    for path in changed.paths().filter(|p| paths.set.is_match(p)) {
-                        found.push(rule.finding(path, 1, None, true, || {
-                            format!("this change touches {path}, which {} keeps as is", rule.id)
+                    let kept = |p: &&str| paths.set.is_match(p) && !rule.skip.set.is_match(p);
+                    for path in changed.paths().filter(kept) {
+                        // A deleted file has no line to name.
+                        let (line, how) = if root.join(path).is_file() {
+                            (1, "touches")
+                        } else {
+                            (0, "deletes")
+                        };
+                        found.push(rule.finding(path, line, None, true, || {
+                            format!("this change {how} {path}, which {} keeps as is", rule.id)
                         }));
                     }
                 }

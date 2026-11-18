@@ -150,22 +150,32 @@ impl RawPorts {
     }
 }
 
-/// What a check needs besides its files.
+/// A word in a check's `needs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Need {
-    /// The services `[env] up` starts; their ports reach the check as env vars.
+enum Need {
     Services,
+    Envtest,
+    Preview,
+    Ios,
+    Linux,
+}
+
+/// What a check needs besides its files, read once from its `needs` with its `device` or
+/// `display`.
+#[derive(Default)]
+pub(crate) struct Needs {
+    /// The services `[env] up` starts; their ports reach the check as env vars.
+    pub services: bool,
     /// The envtest binaries (etcd, kube-apiserver) of the Kubernetes version its go.mod
     /// requires, fetched by setup-envtest; their folder reaches it as `KUBEBUILDER_ASSETS`.
-    Envtest,
+    pub envtest: bool,
     /// The deploy `[env] preview` makes of the checkout; its URL reaches the check as
     /// `FEARLEZZ_PREVIEW_URL`.
-    Preview,
-    /// An iOS simulator Fearlezz leases; its id reaches the check in `FEARLEZZ_DEVICE`.
-    Ios,
-    /// A Linux display Fearlezz starts (Xvfb); it reaches the check in `DISPLAY`.
-    Linux,
+    pub preview: bool,
+    /// Where its app shows: this machine's own screen, or the iOS simulator (`ios`) or Linux
+    /// display (`linux`) it names, with the device type or display size it asks for.
+    pub screen: crate::record::Target,
 }
 
 /// The ordered stages of a change. The last one is the merge gate, where every check runs
@@ -197,10 +207,7 @@ pub(crate) struct Check {
     /// Secrets it gets from SecretSpec, by name. Their names are part of its inputs, never
     /// their values.
     pub secrets: Vec<String>,
-    pub needs: Vec<Need>,
-    /// Where its app shows: this machine's own screen, or the simulator or Linux display its
-    /// `needs` names, with the device type or display size it asks for.
-    pub screen: crate::record::Target,
+    pub needs: Needs,
     /// For a check that reports findings: where they come from and which count.
     pub findings: Option<FindingsSpec>,
     /// For a check that runs tests: where it says how many ran. Zero tests fails it.
@@ -384,50 +391,48 @@ fn record_weakenings(b: &crate::record::Spec, h: &crate::record::Spec) -> Vec<Ch
     found
 }
 
-/// The screen a check's `needs` names, with its `device` or `display`.
-fn screen(c: &RawCheck) -> Result<crate::record::Target> {
-    use crate::record::Target;
-    let ios = c.needs.contains(&Need::Ios);
-    let linux = c.needs.contains(&Need::Linux);
-    if ios && linux {
-        bail!("needs both ios and linux; a check runs on one machine, so split it in two");
-    }
-    if c.device.is_some() && !ios {
-        bail!("device is only for a check that needs = [\"ios\"]");
-    }
-    if c.display.is_some() && !linux {
-        bail!("display is only for a check that needs = [\"linux\"]");
-    }
-    let screen = if ios {
-        Target::Ios {
-            device: c.device.clone(),
+impl Needs {
+    /// What `c` needs, its screen with the `record` it takes there.
+    fn read(c: &RawCheck, record: Option<&crate::record::Spec>) -> Result<Needs> {
+        use crate::record::Target;
+        let has = |need| c.needs.contains(&need);
+        let (ios, linux) = (has(Need::Ios), has(Need::Linux));
+        if ios && linux {
+            bail!("needs both ios and linux; a check runs on one machine, so split it in two");
         }
-    } else if linux {
-        let size = match &c.display {
-            Some(text) => crate::record::parse_size(text).with_context(|| {
-                format!("display = \"{text}\" is not a width and height such as \"1280x720\"")
-            })?,
-            None => crate::record::DEFAULT_SIZE,
+        if c.device.is_some() && !ios {
+            bail!("device is only for a check that needs = [\"ios\"]");
+        }
+        if c.display.is_some() && !linux {
+            bail!("display is only for a check that needs = [\"linux\"]");
+        }
+        let screen = if ios {
+            Target::Ios {
+                device: c.device.clone(),
+            }
+        } else if linux {
+            let size = match &c.display {
+                Some(text) => crate::record::parse_size(text).with_context(|| {
+                    format!("display = \"{text}\" is not a width and height such as \"1280x720\"")
+                })?,
+                None => crate::record::DEFAULT_SIZE,
+            };
+            Target::Linux { size }
+        } else {
+            Target::Window
         };
-        Target::Linux { size }
-    } else {
-        Target::Window
-    };
-    let crops = c
-        .record
-        .as_ref()
-        .and_then(|r| r.get("crop_top"))
-        .and_then(|crop| {
-            crop.as_float()
-                .or_else(|| crop.as_integer().map(|i| i as f64))
+        if screen.owned() && record.is_some_and(|r| r.crop_top > 0.0) {
+            bail!(
+                "record: crop_top is only for a window; the simulator and a Linux display have no title bar"
+            );
+        }
+        Ok(Needs {
+            services: has(Need::Services),
+            envtest: has(Need::Envtest),
+            preview: has(Need::Preview),
+            screen,
         })
-        .is_some_and(|crop| crop > 0.0);
-    if crops && screen != Target::Window {
-        bail!(
-            "record: crop_top is only for a window; the simulator and a Linux display have no title bar"
-        );
     }
-    Ok(screen)
 }
 
 /// A check Fearlezz runs in process.
@@ -894,7 +899,7 @@ struct Around<'a> {
 impl RawCheck {
     /// The check this table says, its id left for the caller to set; an error names no
     /// check, since the caller puts its id in front.
-    fn resolve(self, at: &Around<'_>) -> Result<Check> {
+    fn resolve(mut self, at: &Around<'_>) -> Result<Check> {
         let stage = at.stages.find(&self.stage).with_context(|| {
             format!(
                 "unknown stage \"{}\"; stages are {}",
@@ -902,7 +907,12 @@ impl RawCheck {
                 at.stages.0.join(", ")
             )
         })?;
-        let screen = screen(&self)?;
+        let record = self
+            .record
+            .take()
+            .map(crate::record::Spec::parse)
+            .transpose()?;
+        let needs = Needs::read(&self, record.as_ref())?;
         let steps = match self.run {
             RawRun::One(command) => vec![command],
             RawRun::Steps(steps) if steps.is_empty() => {
@@ -927,7 +937,7 @@ impl RawCheck {
             |kind, glob: Option<String>| glob.map(|g| MediaGlob::parse(kind, &g)).transpose();
         Ok(Check {
             inputs: globs(own.iter().chain(shell_inputs)).context("inputs")?,
-            on: crate::legs::Platform::on(at.platforms, self.on, screen.os())?,
+            on: crate::legs::Platform::on(at.platforms, self.on, needs.screen.os())?,
             job: crate::legs::job(self.job)?,
             timeout: self
                 .timeout
@@ -946,7 +956,7 @@ impl RawCheck {
                 stills: media("still", self.stills)?,
                 films: media("film", self.films)?,
                 texts: media("text", self.texts)?,
-                record: self.record.map(crate::record::Spec::parse).transpose()?,
+                record,
                 flaky: globs(&self.flaky).context("flaky")?,
             },
             flaky_tests: globs(&self.flaky_tests).context("flaky_tests")?,
@@ -963,8 +973,7 @@ impl RawCheck {
             env: self.env,
             secrets: self.secrets,
             schedule: self.schedule,
-            needs: self.needs,
-            screen,
+            needs,
             ..Check::default()
         })
     }
@@ -1304,15 +1313,11 @@ impl Check {
     }
 
     pub(crate) fn needs_services(&self) -> bool {
-        self.needs.contains(&Need::Services)
-    }
-
-    pub(crate) fn needs_envtest(&self) -> bool {
-        self.needs.contains(&Need::Envtest)
+        self.needs.services
     }
 
     pub(crate) fn needs_preview(&self) -> bool {
-        self.needs.contains(&Need::Preview)
+        self.needs.preview
     }
 }
 

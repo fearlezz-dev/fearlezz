@@ -134,9 +134,12 @@ pub(crate) enum Place {
 }
 
 impl Place {
-    /// The developer's choice for this machine, from `FEARLEZZ_OFF_SCREEN`.
-    pub(crate) fn from_env() -> Place {
-        if std::env::var_os("FEARLEZZ_OFF_SCREEN").is_some_and(|v| v == "1") {
+    /// Where a window on `screen` is kept: on a screen of Fearlezz's own, or on this
+    /// machine's by the developer's choice, from `FEARLEZZ_OFF_SCREEN`.
+    pub(crate) fn of(screen: &Target) -> Place {
+        if screen.owned() {
+            Place::Own
+        } else if std::env::var_os("FEARLEZZ_OFF_SCREEN").is_some_and(|v| v == "1") {
             Place::OffScreen
         } else {
             Place::Stay
@@ -604,6 +607,8 @@ pub(crate) enum Ended {
     AfterSeconds,
     /// Fearlezz stopped it after it ran `wait` without a window to record.
     WaitedTooLong,
+    /// Fearlezz stopped it when the check's budget (`timeout`) ran out.
+    OverBudget,
 }
 
 /// How a recorded run of a check's command went.
@@ -620,7 +625,7 @@ impl Recorded {
             && match &self.ended {
                 Ended::Exited(status) => status.success(),
                 Ended::AfterSeconds => true,
-                Ended::WaitedTooLong => false,
+                Ended::WaitedTooLong | Ended::OverBudget => false,
             }
     }
 }
@@ -666,6 +671,8 @@ pub(crate) struct Recorder<'a, S> {
     /// developer has open would otherwise be filmed on both sides of a look.
     before: BTreeSet<u32>,
     place: Place,
+    /// When the check's budget runs out: then the command is stopped wherever it is.
+    until: Option<Instant>,
     /// The app in front before the command started, which gets focus back from a parked app.
     /// None when focus is not watched (the window stays) or no longer can be.
     developer: Option<Result<i32, String>>,
@@ -694,7 +701,12 @@ struct Tend {
 
 impl<'a, S: Screen> Recorder<'a, S> {
     /// Notes the windows open now; call it before starting the command.
-    pub(crate) fn new(mut screen: S, spec: &'a Spec, place: Place) -> Result<Self> {
+    pub(crate) fn new(
+        mut screen: S,
+        spec: &'a Spec,
+        place: Place,
+        until: Option<Instant>,
+    ) -> Result<Self> {
         let before = screen.windows()?.iter().map(|w| w.id).collect();
         let developer = match place {
             Place::OffScreen => Some(screen.front().map_err(|e| format!("{e:#}"))),
@@ -705,6 +717,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
             spec,
             before,
             place,
+            until,
             developer,
             parked: false,
             films: Vec::new(),
@@ -999,6 +1012,10 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 )?;
                 return Ok(Err(Ended::Exited(status)));
             }
+            if self.until.is_some_and(|u| Instant::now() >= u) {
+                stop(child)?;
+                return Ok(Err(Ended::OverBudget));
+            }
             let windows = self.screen.windows()?;
             if let Some(w) = choose(&windows, &self.pick(root), &self.before) {
                 writeln!(
@@ -1061,6 +1078,10 @@ impl<'a, S: Screen> Recorder<'a, S> {
         loop {
             if let Some(status) = child.try_wait()? {
                 return Ok(Ended::Exited(status));
+            }
+            if self.until.is_some_and(|u| Instant::now() >= u) {
+                stop(child)?;
+                return Ok(Ended::OverBudget);
             }
             if deadline.is_some_and(|d| Instant::now() >= d) {
                 writeln!(log, "record: stopping the command after `seconds`")?;
@@ -1560,7 +1581,7 @@ mod tests {
             brought: None,
             events: Vec::new(),
         };
-        let mut recorder = Recorder::new(screen, &spec, desk.place)?;
+        let mut recorder = Recorder::new(screen, &spec, desk.place, None)?;
         let mut cmd = std::process::Command::new("sh");
         cmd.arg("-c").arg(command);
         #[cfg(unix)]

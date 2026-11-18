@@ -285,7 +285,12 @@ impl EnvState {
             .env("FEARLEZZ_PREVIEW_NAME", name)
             .envs(secrets.iter().map(|(secret, value)| (secret, value)));
         let status = command.status().context("starting [env] preview")?;
-        run::mask_file(&log, &run::masked_forms(&secrets))?;
+        // Split before masking, which changes the length of what SecretSpec said.
+        let forms = run::masked_forms(&secrets);
+        let text = fs::read(&log)?;
+        let (asked, printed) = text.split_at(usize::try_from(asked_len)?.min(text.len()));
+        let printed = run::masked(printed, &forms);
+        fs::write(&log, [run::masked(asked, &forms), printed.clone()].concat())?;
         if !status.success() {
             return Ok(Err(Undeployed {
                 why: NoPreview::Failed {
@@ -294,11 +299,7 @@ impl EnvState {
                 log,
             }));
         }
-        let text = fs::read(&log).unwrap_or_default();
-        let printed = text
-            .get(usize::try_from(asked_len).unwrap_or(usize::MAX)..)
-            .unwrap_or_default();
-        let Some(url) = last_url(&String::from_utf8_lossy(printed)) else {
+        let Some(url) = last_url(&String::from_utf8_lossy(&printed)) else {
             return Ok(Err(Undeployed {
                 why: NoPreview::NoUrl,
                 log,

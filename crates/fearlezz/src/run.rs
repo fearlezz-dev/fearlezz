@@ -71,7 +71,7 @@ pub(crate) fn execute(
             writeln!(out, "{line}")?;
         }
         Ended::Never(Why::Preview(undeployed.why.clone()))
-    } else if check.needs_envtest() {
+    } else if check.needs.envtest {
         match envtest_assets(check, at, &out)? {
             Ok(assets) => {
                 let mut vars = at.vars.clone();
@@ -124,9 +124,10 @@ pub(crate) fn execute(
     }
     let (mut findings, mut findings_elsewhere) = (Vec::new(), 0);
     if let Some(spec) = &check.findings {
-        // A built in check gives its findings in process; a tool's are read from what it wrote.
+        // A built in check gives its findings in process, named from the root, deleted files
+        // too; a tool's are read from what it wrote.
         let (found, unread) = match builtin_found.take() {
-            Some(found) => (crate::findings::place(found, &run), Vec::new()),
+            Some(found) => (found, Vec::new()),
             None => spec.read.read(&run),
         };
         errors.extend(unread);
@@ -313,7 +314,7 @@ fn spawn(
         dir,
         at,
     };
-    match &check.screen {
+    match &check.needs.screen {
         Target::Window => run.on(None::<crate::record::System>, &[], out),
         Target::Linux { size } => {
             let display = match crate::record::display::Display::start(*size) {
@@ -347,9 +348,9 @@ fn spawn(
     }
 }
 
-/// Runs `cmd` to its end, or stops it at the check's budget when it has one.
-fn budgeted(check: &Check, mut cmd: Command, out: File) -> Result<Ended> {
-    let Some(budget) = &check.timeout else {
+/// Runs `cmd` to its end, or stops it at `until`, when the check's budget runs out.
+fn budgeted(check: &Check, mut cmd: Command, until: Option<Instant>, out: File) -> Result<Ended> {
+    let Some(until) = until else {
         let status = cmd
             .status()
             .with_context(|| format!("starting check {}", check.id))?;
@@ -361,24 +362,28 @@ fn budgeted(check: &Check, mut cmd: Command, out: File) -> Result<Ended> {
     let mut child = cmd
         .spawn()
         .with_context(|| format!("starting check {}", check.id))?;
-    let until = Instant::now() + budget.time;
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(Ended::of(status));
         }
         if Instant::now() >= until {
             crate::record::stop(&mut child)?;
-            use std::io::Write as _;
-            let mut log = out;
-            writeln!(
-                log,
-                "fearlezz: {} exceeded its {budget} budget and was stopped",
-                check.id
-            )?;
-            return Ok(Ended::STOPPED);
+            return over_budget(check, out);
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Says in the check's log that it ran out of its budget and was stopped; it fails.
+fn over_budget(check: &Check, mut log: File) -> Result<Ended> {
+    if let Some(budget) = &check.timeout {
+        writeln!(
+            log,
+            "fearlezz: {} exceeded its {budget} budget and was stopped",
+            check.id
+        )?;
+    }
+    Ok(Ended::STOPPED)
 }
 
 /// Says in the check's log why its screen or recording failed; the check fails.
@@ -437,30 +442,24 @@ impl Run<'_> {
         let Some((last, before)) = check.steps.split_last() else {
             bail!("check {} has no command to run", check.id);
         };
+        // One budget for all its steps and its recording, from when the first starts.
+        let until = check.timeout.as_ref().map(|b| Instant::now() + b.time);
         for step in before {
-            let status = self
-                .command(step, out.try_clone()?, &out, env)?
-                .status()
-                .with_context(|| format!("starting check {}", check.id))?;
-            if !status.success() {
-                return Ok(Ended::of(status));
+            let cmd = self.command(step, out.try_clone()?, &out, env)?;
+            let ended = budgeted(check, cmd, until, out.try_clone()?)?;
+            if !matches!(ended, Ended::Ran { passed: true, .. }) {
+                return Ok(ended);
             }
         }
         let cmd = self.command(last, stdout, &out, env)?;
         let Some(record) = &check.pictures.record else {
-            let ran = budgeted(check, cmd, out);
+            let ran = budgeted(check, cmd, until, out);
             drop(owned);
             return ran;
         };
         match owned {
-            Some(screen) => self.recording(cmd, record, screen, crate::record::Place::Own, out),
-            None => self.recording(
-                cmd,
-                record,
-                crate::record::System::default(),
-                crate::record::Place::from_env(),
-                out,
-            ),
+            Some(screen) => self.recording(cmd, record, screen, until, out),
+            None => self.recording(cmd, record, crate::record::System::default(), until, out),
         }
     }
 
@@ -470,15 +469,16 @@ impl Run<'_> {
         mut cmd: Command,
         record: &crate::record::Spec,
         screen: S,
-        place: crate::record::Place,
+        until: Option<Instant>,
         mut log: File,
     ) -> Result<Ended> {
         let Run { check, dir, at, .. } = self;
+        let place = crate::record::Place::of(&check.needs.screen);
         // Its own process group, so stopping it after `seconds` stops the app it started too.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
         // The windows open before the command starts are never recorded.
-        let mut recorder = match crate::record::Recorder::new(screen, record, place) {
+        let mut recorder = match crate::record::Recorder::new(screen, record, place, until) {
             Ok(r) => r,
             Err(e) => return failed(&mut log, "record", &e),
         };
@@ -527,6 +527,7 @@ impl Run<'_> {
         };
         let code = match &recorded.ended {
             crate::record::Ended::Exited(status) => status.code(),
+            crate::record::Ended::OverBudget => return over_budget(check, log),
             crate::record::Ended::AfterSeconds | crate::record::Ended::WaitedTooLong => None,
         };
         Ok(Ended::Ran {
@@ -644,16 +645,20 @@ fn mask(dir: &Path, forms: &[Vec<u8>]) -> Result<()> {
 }
 
 /// Replaces every form of a secret's value in the file at `path` with [`MASK`].
-pub(crate) fn mask_file(path: &Path, forms: &[Vec<u8>]) -> Result<()> {
+fn mask_file(path: &Path, forms: &[Vec<u8>]) -> Result<()> {
     let bytes = fs::read(path)?;
-    let mut masked = bytes.clone();
-    for form in forms {
-        masked = replace(&masked, form, MASK);
-    }
+    let masked = masked(&bytes, forms);
     if masked != bytes {
         fs::write(path, masked)?;
     }
     Ok(())
+}
+
+/// `bytes` with every form of a secret's value replaced by [`MASK`].
+pub(crate) fn masked(bytes: &[u8], forms: &[Vec<u8>]) -> Vec<u8> {
+    forms
+        .iter()
+        .fold(bytes.to_vec(), |masked, form| replace(&masked, form, MASK))
 }
 
 /// `bytes` with every `from` replaced by `to`.

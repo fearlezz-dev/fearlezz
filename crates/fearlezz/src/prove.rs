@@ -407,13 +407,13 @@ impl Run<'_> {
             Reuse::Pass { at_final }
         };
         // A screen this machine can never have, in a leg: its `on` names the wrong platform.
-        if let Some(why) = check.screen.never_here() {
+        if let Some(why) = check.needs.screen.never_here() {
             return Ok(Came::Away(Away::Cannot {
                 why: why.to_string(),
                 said: format!("{why}, and this leg runs on {}", std::env::consts::OS),
                 fix: format!(
                     "put it on a platform whose os is {}, by its on or a [platform] with that os",
-                    check.screen.describe_os()
+                    check.needs.screen.describe_os()
                 ),
             }));
         }
@@ -423,19 +423,21 @@ impl Run<'_> {
         // it is not run; anywhere else a missing tool fails with the one time fix, CI
         // included, since a runner of the right system is the one that proves it. Neither is
         // stored, so it is not called unstable once the tool is there.
-        if (check.screen.owned() || check.pictures.record.is_some())
-            && let Some(u) = record::unavailable(&check.screen)
+        if (check.needs.screen.owned() || check.pictures.record.is_some())
+            && let Some(u) = record::unavailable(&check.needs.screen)
             && reuse.found(&ctx.store, &inputs.key).is_none()
         {
-            return Ok(Came::Away(if self.mode.commit && !check.screen.owned() {
-                Away::Skipped(u.why)
-            } else {
-                Away::Cannot {
-                    said: u.why.clone(),
-                    why: u.why,
-                    fix: u.fix,
-                }
-            }));
+            return Ok(Came::Away(
+                if self.mode.commit && !check.needs.screen.owned() {
+                    Away::Skipped(u.why)
+                } else {
+                    Away::Cannot {
+                        said: u.why.clone(),
+                        why: u.why,
+                        fix: u.fix,
+                    }
+                },
+            ));
         }
         self.report.starts(check);
         let site = Site {
@@ -623,7 +625,7 @@ fn left_to_ci(ctx: &Ctx, before: &View, ids: &[String], commit: bool) -> Vec<pro
             continue;
         };
         // Without platforms, the OS its screen needs stands for where it runs.
-        let needs = check.screen.never_here().unwrap_or_default();
+        let needs = check.needs.screen.never_here().unwrap_or_default();
         if !commit {
             match (on.is_empty(), needs.is_empty()) {
                 (true, _) => println!("left to CI {}: {needs}", check.id),
@@ -638,7 +640,7 @@ fn left_to_ci(ctx: &Ctx, before: &View, ids: &[String], commit: bool) -> Vec<pro
         }
         let stage = ctx.config.stages.name(check.stage);
         let platforms = if on.is_empty() {
-            vec![check.screen.describe_os()]
+            vec![check.needs.screen.describe_os()]
         } else {
             on.clone()
         };
@@ -649,7 +651,7 @@ fn left_to_ci(ctx: &Ctx, before: &View, ids: &[String], commit: bool) -> Vec<pro
                 item.why = format!("this machine cannot have its screen: {needs}");
                 item.fix = format!(
                     "add a [platform.<name>] with os = \"{}\" and prove the commit in legs",
-                    check.screen.os().unwrap_or_default()
+                    check.needs.screen.os().unwrap_or_default()
                 );
             }
             let away = Away::Unproven(item);
