@@ -10,6 +10,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, Result, bail};
 use jiff::Timestamp;
 
+use fearlezz_proof::why::{Generated, Why};
+
 use crate::config::Check;
 use crate::record::Target;
 use crate::store::{Inputs, Outcome, RunResult, Store};
@@ -56,16 +58,19 @@ pub(crate) fn execute(
         files: std::cell::OnceCell::new(),
     };
     let mut builtin_found = None;
-    let (exit_ok, exit_code, missing_secret) = if let Some(builtin) = &check.builtin {
+    let ended = if let Some(builtin) = &check.builtin {
         builtin_found = Some(run_builtin(builtin, at, &listed, out)?);
-        (true, Some(0), None)
+        Ended::Ran {
+            passed: true,
+            code: Some(0),
+        }
     } else if let Some(undeployed) = at.no_preview {
         // The check's log ends as the preview's did, so its failure shows why.
         let mut out = out;
         for line in tail(&undeployed.log, 12) {
             writeln!(out, "{line}")?;
         }
-        (false, None, None)
+        Ended::Never(Why::Preview(undeployed.why.clone()))
     } else if check.needs_envtest() {
         match envtest_assets(check, at, &out)? {
             Ok(assets) => {
@@ -73,10 +78,26 @@ pub(crate) fn execute(
                 vars.insert("KUBEBUILDER_ASSETS".into(), assets);
                 run_command(check, &Where { vars: &vars, ..*at }, &dir, out)?
             }
-            Err(code) => (false, code, None),
+            Err(code) => Ended::Ran {
+                passed: false,
+                code,
+            },
         }
     } else {
         run_command(check, at, &dir, out)?
+    };
+    let (exit_ok, exit_code) = match ended {
+        Ended::Ran { passed, code } => (passed, code),
+        Ended::Never(_) => (false, None),
+    };
+    // What kept its command from running, the shell not finding it included.
+    let never = match ended {
+        Ended::Never(why) => Some(why),
+        Ended::Ran {
+            code: Some(NOT_FOUND),
+            ..
+        } => missing_command(&log).map(Why::MissingTool),
+        Ended::Ran { .. } => None,
     };
     let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
     let run = crate::read::Run {
@@ -86,7 +107,7 @@ pub(crate) fn execute(
         since: started,
     };
 
-    let (mut proofs, mut proof_errors) = read_proofs(&dir.join("proof.jsonl"));
+    let (mut proofs, mut errors) = read_proofs(&dir.join("proof.jsonl"));
     proofs.extend(check.pictures.proofs(&dir));
     let mut passed = exit_ok;
     let mut generated_failed = None;
@@ -104,11 +125,11 @@ pub(crate) fn execute(
     let (mut findings, mut findings_elsewhere) = (Vec::new(), 0);
     if let Some(spec) = &check.findings {
         // A built in check gives its findings in process; a tool's are read from what it wrote.
-        let (found, errors) = match builtin_found.take() {
+        let (found, unread) = match builtin_found.take() {
             Some(found) => (crate::findings::place(found, &run), Vec::new()),
             None => spec.read.read(&run),
         };
-        proof_errors.extend(errors);
+        errors.extend(unread);
         let found = spec.levels.apply(&spec.tools, spec.defaults(found));
         let verdict = crate::findings::judge(found, spec.on, at.changed, passed);
         passed = verdict.passed;
@@ -135,7 +156,7 @@ pub(crate) fn execute(
             }
             // First, as it is why the run failed.
             Err(why) => {
-                proof_errors.insert(0, why);
+                errors.insert(0, why);
                 passed = false;
             }
         }
@@ -147,7 +168,7 @@ pub(crate) fn execute(
             n
         }
         Err(why) => {
-            proof_errors.push(why);
+            errors.push(why);
             0
         }
     });
@@ -158,6 +179,9 @@ pub(crate) fn execute(
     if tests == Some(0) || cases.iter().any(|c| c.failed) {
         passed = false;
     }
+    let why = (!passed).then(|| {
+        never.unwrap_or_else(|| shown(&findings, generated_failed, tests, exit_code, errors))
+    });
     let result = RunResult {
         id,
         check: check.id.clone(),
@@ -175,15 +199,13 @@ pub(crate) fn execute(
         started_at,
         duration_ms,
         proofs,
-        proof_errors,
         findings,
         findings_elsewhere,
         coverage: measured,
         tests,
         cases,
-        missing_secret,
-        no_preview: at.no_preview.map(|u| u.why.clone()),
-        generated: generated_failed,
+        why,
+        before_why: crate::store::BeforeWhy::default(),
         dir,
         log,
     };
@@ -223,15 +245,34 @@ fn command(
     Ok(cmd)
 }
 
+/// How a check's command ended.
+enum Ended {
+    /// It ran: whether it passed, and its exit code (none when a signal or Fearlezz stopped
+    /// it, or its screen failed).
+    Ran { passed: bool, code: Option<i32> },
+    /// It never ran, for this reason.
+    Never(Why),
+}
+
+impl Ended {
+    /// A command that ended with `status`.
+    fn of(status: std::process::ExitStatus) -> Ended {
+        Ended::Ran {
+            passed: status.success(),
+            code: status.code(),
+        }
+    }
+
+    /// A command that failed without an exit code.
+    const STOPPED: Ended = Ended::Ran {
+        passed: false,
+        code: None,
+    };
+}
+
 /// Gets the check's secrets and runs its command with them, masking them in its files before
-/// anything reads those, since they are kept, shown and uploaded. Returns whether it passed,
-/// its exit code, and the secret SecretSpec could not give it, if any.
-fn run_command(
-    check: &Check,
-    at: &Where<'_>,
-    dir: &Path,
-    mut out: File,
-) -> Result<(bool, Option<i32>, Option<String>)> {
+/// anything reads those, since they are kept, shown and uploaded.
+fn run_command(check: &Check, at: &Where<'_>, dir: &Path, mut out: File) -> Result<Ended> {
     let folder = check
         .dir
         .as_ref()
@@ -247,26 +288,25 @@ fn run_command(
     )?;
     Ok(match asked {
         Ok(secrets) => {
-            let (passed, code) = spawn(check, &secrets, dir, out, at)?;
+            let ended = spawn(check, &secrets, dir, out, at)?;
             mask(dir, &masked_forms(&secrets))?;
-            (passed, code, None)
+            ended
         }
-        // The log names what the shell could not find, as for a check's own command.
-        Err(Unfetched::NoSecretSpec) => (false, Some(NOT_FOUND), None),
-        Err(Unfetched::Secret(name)) => (false, None, Some(name)),
+        Err(Unfetched::NoSecretSpec) => Ended::Never(Why::MissingTool("secretspec".into())),
+        Err(Unfetched::Secret(name)) => Ended::Never(Why::Secret(name)),
     })
 }
 
 /// Runs the check's command in a clean env, inside the environment's shell if any, on the
 /// screen it needs: this machine's own, or a Linux display or iOS simulator of Fearlezz's own
-/// kept until its last step ends. Returns whether it passed and its exit code.
+/// kept until its last step ends.
 fn spawn(
     check: &Check,
     secrets: &[(String, String)],
     dir: &Path,
     mut out: File,
     at: &Where<'_>,
-) -> Result<(bool, Option<i32>)> {
+) -> Result<Ended> {
     let run = Run {
         check,
         secrets,
@@ -308,12 +348,12 @@ fn spawn(
 }
 
 /// Runs `cmd` to its end, or stops it at the check's budget when it has one.
-fn budgeted(check: &Check, mut cmd: Command, out: File) -> Result<(bool, Option<i32>)> {
+fn budgeted(check: &Check, mut cmd: Command, out: File) -> Result<Ended> {
     let Some(budget) = &check.timeout else {
         let status = cmd
             .status()
             .with_context(|| format!("starting check {}", check.id))?;
-        return Ok((status.success(), status.code()));
+        return Ok(Ended::of(status));
     };
     // Its own process group, so stopping it stops what it started too.
     #[cfg(unix)]
@@ -324,7 +364,7 @@ fn budgeted(check: &Check, mut cmd: Command, out: File) -> Result<(bool, Option<
     let until = Instant::now() + budget.time;
     loop {
         if let Some(status) = child.try_wait()? {
-            return Ok((status.success(), status.code()));
+            return Ok(Ended::of(status));
         }
         if Instant::now() >= until {
             crate::record::stop(&mut child)?;
@@ -335,17 +375,16 @@ fn budgeted(check: &Check, mut cmd: Command, out: File) -> Result<(bool, Option<
                 "fearlezz: {} exceeded its {budget} budget and was stopped",
                 check.id
             )?;
-            return Ok((false, None));
+            return Ok(Ended::STOPPED);
         }
         std::thread::sleep(Duration::from_millis(50));
     }
 }
 
 /// Says in the check's log why its screen or recording failed; the check fails.
-fn failed(log: &mut File, what: &str, e: &anyhow::Error) -> Result<(bool, Option<i32>)> {
-    use std::io::Write as _;
+fn failed(log: &mut File, what: &str, e: &anyhow::Error) -> Result<Ended> {
     writeln!(log, "{what}: {e:#}")?;
-    Ok((false, None))
+    Ok(Ended::STOPPED)
 }
 
 /// A check about to run, with what its commands get.
@@ -386,7 +425,7 @@ impl Run<'_> {
         owned: Option<S>,
         env: &[(&str, String)],
         out: File,
-    ) -> Result<(bool, Option<i32>)> {
+    ) -> Result<Ended> {
         let check = self.check;
         // A tool that prints findings on stdout keeps them apart from its log; only the last
         // step's stdout holds them, the steps before it prepare.
@@ -404,7 +443,7 @@ impl Run<'_> {
                 .status()
                 .with_context(|| format!("starting check {}", check.id))?;
             if !status.success() {
-                return Ok((false, status.code()));
+                return Ok(Ended::of(status));
             }
         }
         let cmd = self.command(last, stdout, &out, env)?;
@@ -433,7 +472,7 @@ impl Run<'_> {
         screen: S,
         place: crate::record::Place,
         mut log: File,
-    ) -> Result<(bool, Option<i32>)> {
+    ) -> Result<Ended> {
         let Run { check, dir, at, .. } = self;
         // Its own process group, so stopping it after `seconds` stops the app it started too.
         #[cfg(unix)]
@@ -490,7 +529,10 @@ impl Run<'_> {
             crate::record::Ended::Exited(status) => status.code(),
             crate::record::Ended::AfterSeconds | crate::record::Ended::WaitedTooLong => None,
         };
-        Ok((recorded.passed(), code))
+        Ok(Ended::Ran {
+            passed: recorded.passed(),
+            code,
+        })
     }
 }
 
@@ -726,6 +768,48 @@ pub(crate) const NIX_TOOLS: [&str; 11] = [
     "osv-scanner",
     "zizmor",
 ];
+
+/// How to make a missing tool reachable for checks.
+pub(crate) fn install(tool: &str) -> String {
+    let nix = if NIX_TOOLS.contains(&tool) {
+        format!(" (in devenv.nix: add `pkgs.{tool}` to packages)")
+    } else {
+        String::new()
+    };
+    format!(
+        "install {tool} where checks find it: the project's dev dependencies ({}), its devenv{nix}, \
+         or PATH",
+        crate::process::TOOL_DIRS.join(", ")
+    )
+}
+
+/// Why a run whose command ran failed, from what it showed, the first that applies: a
+/// blocking finding, its generated files, no tests, what its readers could not read
+/// (`unread`, the first one the cause), then its exit.
+pub(crate) fn shown(
+    findings: &[crate::findings::Finding],
+    generated: Option<Generated>,
+    tests: Option<u64>,
+    exit_code: Option<i32>,
+    unread: Vec<String>,
+) -> Why {
+    if let Some(found) = findings
+        .iter()
+        .find(|x| x.level == crate::findings::Level::Gate)
+    {
+        return Why::Gate(found.to_string());
+    }
+    if let Some(failed) = generated {
+        return Why::Generated(failed);
+    }
+    if tests == Some(0) && exit_code == Some(0) {
+        return Why::NoTests(unread);
+    }
+    match (exit_code, unread.into_iter().next()) {
+        (Some(0), Some(why)) => Why::Unread(why),
+        _ => Why::Exit(exit_code),
+    }
+}
 
 /// The exit code a shell gives when it cannot find the command.
 pub(crate) const NOT_FOUND: i32 = 127;

@@ -7,53 +7,14 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+
+use fearlezz_proof::why::Generated;
 
 use crate::config::Check;
 use crate::git::Git;
 
 /// The name of the diff a run writes into its folder when its generated files differ.
 pub(crate) const DIFF: &str = "generated.diff";
-
-/// Why a check's generated files fail it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Failed {
-    /// Each file its command wrote otherwise than the tree had it, labeled for people
-    /// (`gen/a.rs`, `gen/b.rs (new)`, `gen/c.rs (gone)`); the diff is in the run's folder.
-    Stale(Vec<String>),
-    /// Neither the tree nor the command has a file its globs (these) name, so it proves
-    /// nothing.
-    NamesNoFile(Vec<String>),
-}
-
-impl Failed {
-    /// Why it fails, in a few words.
-    pub(crate) fn why(&self) -> String {
-        match self {
-            Failed::Stale(files) => {
-                format!("generated files are out of date: {}", files.join(", "))
-            }
-            Failed::NamesNoFile(globs) => {
-                format!("generates names no file git tracks ({})", globs.join(", "))
-            }
-        }
-    }
-
-    /// What to do about it, for check `check`; `here` when the regenerated files are in the
-    /// worktree the person reads this in.
-    pub(crate) fn fix(&self, check: &str, here: bool) -> String {
-        match (self, here) {
-            (Failed::Stale(_), true) => {
-                format!("{check} regenerated them; commit them as they are now")
-            }
-            (Failed::Stale(_), false) => {
-                format!("run fearlezz run {check} and commit the files it regenerates")
-            }
-            (Failed::NamesNoFile(_), _) => "name the files its command writes in generates".into(),
-        }
-    }
-}
 
 /// The generated files as the tree has them before the command runs, by path from the root.
 pub(crate) struct Snapshot(BTreeMap<String, Vec<u8>>);
@@ -82,7 +43,7 @@ impl Snapshot {
         files: &[String],
         root: &Path,
         check: &Check,
-    ) -> Result<(Option<Failed>, String)> {
+    ) -> Result<(Option<Generated>, String)> {
         let now = read(files, root, check)?;
         let mut stale = Vec::new();
         let mut diff = String::new();
@@ -102,9 +63,9 @@ impl Snapshot {
             diff.push_str(&crate::text::unified(path, &text(was), &text(is)));
         }
         let failed = if !stale.is_empty() {
-            Some(Failed::Stale(stale))
+            Some(Generated::Stale(stale))
         } else if now.is_empty() {
-            Some(Failed::NamesNoFile(check.generates.patterns().to_vec()))
+            Some(Generated::NamesNoFile(check.generates.patterns().to_vec()))
         } else {
             None
         };
