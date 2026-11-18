@@ -86,3 +86,161 @@ impl fmt::Display for Weakening {
         write!(f, "{}: {}", self.what(), self.why())
     }
 }
+
+/// One way a part of the config weakened, rendered into a [`Weakening`]'s `hows` by its
+/// `Display`, the one place each shared shape (a value replaced or lowered, a setting changed,
+/// a list's names) is worded. A way of a single part, said whole, is [`Change::Is`].
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Change {
+    /// A way with no value to name, said whole: `it is gone`, `it runs another command`.
+    Is(String),
+    /// A value replaced by a weaker one: `it runs in another folder (src, now the root)`.
+    Replaced {
+        /// What happened, such as `it runs in another folder`.
+        how: String,
+        /// The value on the base branch, as a reader sees it.
+        from: String,
+        /// The value in the change.
+        to: String,
+    },
+    /// A level lowered: `it goes from gate to flag`.
+    Lowered {
+        /// What lowers, such as `it goes` or `its level goes`.
+        how: String,
+        /// The level on the base branch.
+        from: String,
+        /// The level in the change.
+        to: String,
+    },
+    /// A setting that came, which Fearlezz cannot tell the direction of: `it is added (true)`.
+    Added(String),
+    /// A setting that went: `it is removed (was true)`.
+    Removed(String),
+    /// A setting whose value changed: `it changes from 80 to 100`.
+    Changed {
+        /// The value on the base branch.
+        from: String,
+        /// The value in the change.
+        to: String,
+    },
+    /// Names a list gained, lost or put in another order: `it gets other secrets (+TOKEN)`.
+    Names {
+        /// What the list does now, such as `it gets other secrets`.
+        how: String,
+        /// Each name added or dropped, or the new order; [`Change::names`] builds it only when
+        /// there is one.
+        names: Vec<Name>,
+    },
+    /// A `no_proof` glob that lets more files go without proof.
+    Exempts(Name),
+}
+
+/// How a list differs from the base branch's, one name at a time.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Name {
+    /// A name or glob the list adds: `+TOKEN`.
+    Added(String),
+    /// A name or glob the list drops: `-TOKEN`.
+    Dropped(String),
+    /// The same names in an order that means more.
+    Reordered,
+}
+
+impl Change {
+    /// A setting that came, went or changed from `from` to `to`, or nothing when it stayed.
+    pub fn set(from: Option<String>, to: Option<String>) -> Option<Change> {
+        match (from, to) {
+            (Some(from), Some(to)) if from != to => Some(Change::Changed { from, to }),
+            (None, Some(to)) => Some(Change::Added(to)),
+            (Some(from), None) => Some(Change::Removed(from)),
+            _ => None,
+        }
+    }
+
+    /// A list that does `how` by `names`, or nothing when no name differs.
+    pub fn names(how: impl Into<String>, names: Vec<Name>) -> Option<Change> {
+        (!names.is_empty()).then(|| Change::Names {
+            how: how.into(),
+            names,
+        })
+    }
+
+    /// A value replaced: `how (from, now to)`.
+    pub fn replaced(
+        how: impl Into<String>,
+        from: impl fmt::Display,
+        to: impl fmt::Display,
+    ) -> Self {
+        Change::Replaced {
+            how: how.into(),
+            from: from.to_string(),
+            to: to.to_string(),
+        }
+    }
+}
+
+/// A way said whole.
+impl From<String> for Change {
+    fn from(how: String) -> Self {
+        Change::Is(how)
+    }
+}
+
+impl From<&str> for Change {
+    fn from(how: &str) -> Self {
+        Change::Is(how.to_string())
+    }
+}
+
+/// The names `head` adds and `base` had that `head` drops, the added first, each in its list's
+/// order.
+pub fn names_diff(base: &[String], head: &[String]) -> Vec<Name> {
+    let added = head
+        .iter()
+        .filter(|n| !base.contains(n))
+        .cloned()
+        .map(Name::Added);
+    let dropped = base
+        .iter()
+        .filter(|n| !head.contains(n))
+        .cloned()
+        .map(Name::Dropped);
+    added.chain(dropped).collect()
+}
+
+impl fmt::Display for Change {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Change::Is(how) => f.write_str(how),
+            Change::Replaced { how, from, to } => write!(f, "{how} ({from}, now {to})"),
+            Change::Lowered { how, from, to } => write!(f, "{how} from {from} to {to}"),
+            Change::Added(to) => write!(f, "it is added ({to})"),
+            Change::Removed(from) => write!(f, "it is removed (was {from})"),
+            Change::Changed { from, to } => write!(f, "it changes from {from} to {to}"),
+            Change::Names { how, names } => {
+                let names: Vec<String> = names.iter().map(Name::to_string).collect();
+                write!(f, "{how} ({})", names.join(", "))
+            }
+            Change::Exempts(Name::Added(glob)) => write!(f, "it newly says {glob} needs no proof"),
+            Change::Exempts(Name::Dropped(glob)) => write!(
+                f,
+                "it no longer takes {} back from needing no proof",
+                glob.trim_start_matches('!')
+            ),
+            Change::Exempts(Name::Reordered) => {
+                f.write_str("it reorders its globs so more files need no proof")
+            }
+        }
+    }
+}
+
+/// `+NAME`, `-NAME` or `reordered`.
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Name::Added(name) => write!(f, "+{name}"),
+            Name::Dropped(name) => write!(f, "-{name}"),
+            Name::Reordered => f.write_str("reordered"),
+        }
+    }
+}
