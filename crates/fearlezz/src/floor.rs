@@ -7,6 +7,7 @@ use anyhow::Result;
 use fearlezz_proof::floor::{Change, PAST, Part, Weakening, names_diff};
 use fearlezz_proof::review::Accept;
 
+use crate::base::Bases;
 use crate::config::{self, Builtin, Config, Env, Ports};
 use crate::findings::Scope;
 use crate::names::Named;
@@ -35,15 +36,13 @@ pub(crate) struct Floor {
 impl Floor {
     /// Compares the change's config with the one on its base commit. Without a config there,
     /// there is no floor.
-    pub(crate) fn read(head: &Config, wt: &Worktree) -> Result<Floor> {
-        let git = &wt.git;
-        let (base, _hold) = git.base_worktree(&wt.base, "")?;
-        if !base.root.join(config::FILE).exists() {
+    pub(crate) fn read(head: &Config, wt: &Worktree, bases: &Bases) -> Result<Floor> {
+        let opened = bases.at(&wt.git, &wt.base)?;
+        let Some(base) = &opened.config else {
             return Ok(Floor::default());
-        }
-        let base = Config::load(&base.root, &git.common)?;
+        };
         let mut weakened: Vec<Weakening> = Vec::new();
-        for (part, change) in weakenings(&base, head, &wt.files) {
+        for (part, change) in weakenings(base, head, &wt.files) {
             let how = change.to_string();
             if let Some(w) = weakened.iter_mut().find(|w| w.part == part) {
                 if !w.hows.contains(&how) {

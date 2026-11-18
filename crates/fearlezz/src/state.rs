@@ -25,7 +25,7 @@ pub(crate) struct Worktree {
     pub committed: bool,
     /// What of the `[env]` its checks run in shapes their results (its shell, services and
     /// preview): the change's own for the change's worktree, the base commit's for a base
-    /// checkout (see `look::Base`).
+    /// checkout (see `base::Checkout`).
     pub env: crate::config::EnvKey,
     pub hasher: Hasher,
 }
@@ -183,6 +183,7 @@ pub(crate) fn view(
     store: &Store,
     journal: &Journal,
     worktree: Option<&mut Worktree>,
+    bases: &crate::base::Bases,
     now: Timestamp,
 ) -> Result<View> {
     let stages = &config.stages;
@@ -218,7 +219,7 @@ pub(crate) fn view(
         committed = wt.committed;
         // Only the final stage answers for what the base branch requires.
         if stage == final_stage && !wt.changed.is_empty() {
-            floor_fails = !crate::floor::Floor::read(config, wt)?.holds();
+            floor_fails = !crate::floor::Floor::read(config, wt, bases)?.holds();
         }
         // Asked once, and only when a check's red before green is in question.
         let mut fix: Option<bool> = None;

@@ -15,11 +15,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::base::{Base, Bases, Checkout};
 use crate::config::{Check, Config};
 use crate::counts::{Case, Reader};
 use crate::env::EnvCtx;
 use crate::git::Git;
-use crate::look::{self, Base};
+use crate::look;
 use crate::proof::{RED_NEXT, Red, Verdict};
 use crate::state::Worktree;
 use crate::store::{Outcome, RunResult, Store};
@@ -34,12 +35,13 @@ pub(crate) fn test_files(check: &Check, wt: &Worktree) -> Vec<String> {
 }
 
 /// Runs `check` on the base commit with the change's test files laid over it, in a hidden
-/// worktree named by their content, so the same test files reuse it and its result. When that
-/// fails, also runs it on the plain base commit (or reuses that run) to tell a broken base
-/// apart. `head` is the check's passing run on the change. None when the change touches none
+/// worktree named by their content, so the same test files reuse it and its result. Checks
+/// read different test files, so each gets its own; one shared between checks would carry one
+/// check's files into the next. When that fails, also runs it on the plain base commit (or
+/// reuses that run) to tell a broken base apart. `head` is the check's passing run on the change. None when the change touches none
 /// of its test files. It never blocks: whether it should depends on the change being a fix.
 pub(crate) fn run(
-    git: &Git,
+    bases: &Bases,
     config: &Config,
     store: &Store,
     (check, head): (&Check, &RunResult),
@@ -59,7 +61,10 @@ pub(crate) fn run(
     if files.is_empty() {
         return Ok(None);
     }
-    if !on_base_config(git, wt, &check.id)? {
+    let base = bases.at(&wt.git, &wt.base)?;
+    // A check the change adds has no run on the base commit to compare with.
+    let has_it = |c: &Config| c.checks.iter().any(|c| c.id == check.id);
+    if !base.config.as_ref().is_some_and(has_it) {
         return Ok(Some(shown(files, Verdict::New, Vec::new(), None)));
     }
     let mut hash = Sha256::new();
@@ -78,22 +83,8 @@ pub(crate) fn run(
     let mut name = hex::encode(hash.finalize());
     name.truncate(10);
     let name = format!("-red-{name}");
-    let mut base = Base::at(git, config, wt.base.clone(), &name)?;
-    for (path, content) in overlay {
-        let to = base.wt.git.root.join(path);
-        match content {
-            Some(bytes) => {
-                if let Some(dir) = to.parent() {
-                    fs::create_dir_all(dir)?;
-                }
-                fs::write(&to, bytes)?;
-            }
-            None if to.exists() => fs::remove_file(&to)?,
-            None => {}
-        }
-    }
-    base.reread(config)?;
-    let result = on_base(store, check, &mut base, stage, env)?;
+    let mut over = base.overlay(&wt.git, config, &name, overlay)?;
+    let result = on_base(store, check, (&base, &mut over), stage, env)?;
     let red = if passed_on_base(&result) {
         let tests = names(result.cases.iter().filter(|c| {
             (!c.failed || c.flaky) && files.iter().any(|f| crate::counts::is_from(c, f))
@@ -106,8 +97,7 @@ pub(crate) fn run(
                 .iter()
                 .filter(|c| c.failed && !c.flaky && passes(head, &c.name)),
         );
-        let mut plain = Base::at(git, config, wt.base.clone(), "")?;
-        let plain = on_base(store, check, &mut plain, stage, env)?;
+        let plain = on_base(store, check, (&base, &mut *base.plain(config)?), stage, env)?;
         let names_tests = matches!(check.tests, Some(Reader::Junit { .. }));
         if plain.outcome == Outcome::Failed {
             tests.retain(|t| !fails(&plain, t));
@@ -130,29 +120,18 @@ pub(crate) fn run(
     Ok(Some(red))
 }
 
-/// Whether the base commit's config has check `id`: one the change adds has no run there to
-/// compare with.
-fn on_base_config(git: &Git, wt: &Worktree, id: &str) -> Result<bool> {
-    let (base, _hold) = git.base_worktree(&wt.base, "")?;
-    if !base.root.join(crate::config::FILE).exists() {
-        return Ok(false);
-    }
-    let config = Config::load(&base.root, &git.common)?;
-    Ok(config.checks.iter().any(|c| c.id == id))
-}
-
 /// The check's run on `base`, reused when its inputs ran there before.
 fn on_base(
     store: &Store,
     check: &Check,
-    base: &mut Base,
+    (base, site): (&Base, &mut Checkout),
     stage: &str,
     env: &EnvCtx<'_>,
 ) -> Result<RunResult> {
-    let inputs = base.wt.inputs(check)?;
+    let inputs = site.wt.inputs(check)?;
     match store.latest_that_ran(&inputs.key) {
         Some(r) => Ok(r),
-        None => look::run_on_base(store, check, &inputs, base, stage, env),
+        None => look::run_on_base(store, check, &inputs, (base, site), stage, env),
     }
 }
 

@@ -6,12 +6,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::config::{Check, Config, Env};
+use crate::base::{Base, Checkout};
+use crate::config::{Check, Env};
 use crate::env::EnvCtx;
-use crate::git::Git;
 use crate::media::{self, Verdict};
 use crate::run;
-use crate::state::Worktree;
 use crate::store::{Outcome, RunResult, Store};
 
 /// The journal name base runs are recorded under.
@@ -109,46 +108,6 @@ pub(crate) enum LookOutcome {
     Done(Look),
 }
 
-/// The base commit, checked out in the per user cache (see [`Git::bases_dir`]).
-pub(crate) struct Base {
-    pub commit: String,
-    pub wt: Worktree,
-    /// The base commit's own `[env]`: its code ran in that environment, so its checkout is
-    /// prepared, its services run and its checks run inside its shell by it, never by the
-    /// change's.
-    env: Env,
-    prepared: bool,
-    /// Keeps other commands from removing the worktree while this one uses it.
-    _hold: crate::lease::Lease,
-}
-
-impl Base {
-    /// The base commit in a checkout of its own, told apart from others by `name`. Every
-    /// run on a base commit goes through here, so where base checkouts live is decided once.
-    pub(crate) fn at(git: &Git, config: &Config, commit: String, name: &str) -> Result<Base> {
-        let (base, hold) = git.base_worktree(&commit, name)?;
-        let env = if base.root.join(crate::config::FILE).exists() {
-            Config::load(&base.root, &git.common)?.env
-        } else {
-            Env::default()
-        };
-        let wt = Worktree::read_in(base, config, &env)?;
-        Ok(Base {
-            commit,
-            wt,
-            env,
-            prepared: false,
-            _hold: hold,
-        })
-    }
-
-    /// Reads the worktree again after its files changed.
-    pub(crate) fn reread(&mut self, config: &Config) -> Result<()> {
-        self.wt = Worktree::read_in(self.wt.git.clone(), config, &self.env)?;
-        Ok(())
-    }
-}
-
 /// `stills = "<glob>"` or `films = "<glob>"`: every file the check wrote under
 /// `$FEARLEZZ_OUT` matching the glob is a still (or film), for tools that write pictures into a
 /// folder and no `proof.jsonl`. Each is named by its path below the glob's fixed folders,
@@ -224,11 +183,11 @@ pub(crate) fn look(
     store: &Store,
     check: &Check,
     result: &RunResult,
-    base: &mut Base,
+    (base, site): (&Base, &mut Checkout),
     stage: &str,
     env: &EnvCtx<'_>,
 ) -> Result<LookOutcome> {
-    let inputs = base.wt.inputs(check)?;
+    let inputs = site.wt.inputs(check)?;
     if inputs.key == result.key {
         return Ok(if has_media(result) {
             LookOutcome::SameInputs
@@ -238,7 +197,7 @@ pub(crate) fn look(
     }
     let before = match store.latest_that_ran(&inputs.key) {
         Some(r) => r,
-        None => run_on_base(store, check, &inputs, base, stage, env)?,
+        None => run_on_base(store, check, &inputs, (base, site), stage, env)?,
     };
     if !has_media(result) && (before.outcome == Outcome::Failed || !has_media(&before)) {
         return Ok(LookOutcome::NoMedia);
@@ -248,9 +207,9 @@ pub(crate) fn look(
             "the check fails on the base commit (log: {})",
             before.log.display()
         );
-        return without_before(check, result, &base.wt.git.common, &reason).map(LookOutcome::Done);
+        return without_before(check, result, &site.wt.git.common, &reason).map(LookOutcome::Done);
     }
-    let dir = look_dir(&base.wt.git.common, check, &before.id, &result.id);
+    let dir = look_dir(&site.wt.git.common, check, &before.id, &result.id);
     let saved = saved(&dir);
     // A base run that passes without any picture usually means it could not reach what it
     // records, or the recording is new in this change.
@@ -306,7 +265,7 @@ pub(crate) fn run_on_base(
     store: &Store,
     check: &Check,
     inputs: &crate::store::Inputs,
-    base: &mut Base,
+    (base, site): (&Base, &mut Checkout),
     stage: &str,
     env: &EnvCtx<'_>,
 ) -> Result<RunResult> {
@@ -320,18 +279,20 @@ pub(crate) fn run_on_base(
             crate::queue::Turn::Done(found) => return Ok(found),
         }
     };
-    let root = base.wt.git.root.clone();
-    if !base.prepared {
-        if let Some(line) = env.state.prepare(&base.env, &env.main, &root)? {
+    let none = Env::default();
+    let base_env = base.env().unwrap_or(&none);
+    let root = site.wt.git.root.clone();
+    if !site.prepared {
+        if let Some(line) = env.state.prepare(base_env, &env.main, &root)? {
             println!("base {line}");
         }
-        base.prepared = true;
+        site.prepared = true;
     }
     let mut vars = std::collections::BTreeMap::new();
     if check.needs_services() {
         let (services, line) =
             env.state
-                .ensure_up(&base.env, &root, BASE_JOURNAL, false, env.now)?;
+                .ensure_up(base_env, &root, BASE_JOURNAL, false, env.now)?;
         if let Some(line) = line {
             println!("base {line}");
         }
@@ -344,9 +305,9 @@ pub(crate) fn run_on_base(
         // Named by its tree: a red before green checkout of the same commit holds the change's
         // tests, so it is another deploy. Base checkouts are shared by worktrees, so the deploy
         // holds the checkout.
-        let name = format!("base-{}", base.wt.tree.get(..7).unwrap_or(&base.wt.tree));
+        let name = format!("base-{}", site.wt.tree.get(..7).unwrap_or(&site.wt.tree));
         let _held = env.state.hold(&root)?;
-        match env.state.preview(&base.env, &root, &base.wt.tree, &name)? {
+        match env.state.preview(base_env, &root, &site.wt.tree, &name)? {
             Ok(deployed) => {
                 if let Some(line) = deployed.line {
                     println!("base {line}");
@@ -358,17 +319,17 @@ pub(crate) fn run_on_base(
     }
     let at = run::Where {
         root: &root,
-        shell: base.wt.env.shell.as_deref(),
-        tree: &base.wt.tree,
+        shell: site.wt.env.shell.as_deref(),
+        tree: &site.wt.tree,
         journal: BASE_JOURNAL,
         stage,
         vars: &vars,
-        changed: &base.wt.lines,
+        changed: &site.wt.lines,
         no_preview: undeployed.as_ref(),
     };
     let result = run::execute(store, check, inputs, &at);
     let stopped = if check.needs_services() {
-        env.state.stop(&base.env, &root)
+        env.state.stop(base_env, &root)
     } else {
         Ok(())
     };
