@@ -156,12 +156,12 @@ pub(crate) struct Hasher {
 
 impl Hasher {
     /// `changed_lines` is the digest of the lines a findings check is judged on, if any;
-    /// `shell` is the shell of the `[env]` the checkout at `root` runs its commands in.
+    /// `env` is what of the `[env]` the checkout at `root` runs its commands in shapes results.
     pub(crate) fn inputs(
         &mut self,
         root: &Path,
         check: &Check,
-        shell: Option<&str>,
+        env: &crate::config::EnvKey,
         files: &[String],
         changed_lines: Option<&str>,
     ) -> Result<Inputs> {
@@ -226,7 +226,7 @@ impl Hasher {
         if !check.generates.patterns().is_empty() {
             parts.insert("(generates)".into(), definition(&check.generates));
         }
-        if let Some(shell) = shell.filter(|_| check.builtin.is_none()) {
+        if let Some(shell) = env.shell.as_ref().filter(|_| check.builtin.is_none()) {
             parts.insert("(shell)".into(), sha256_hex(shell.as_bytes()));
         }
         // Each folder's copy of a check runs the same command on other files.
@@ -237,10 +237,10 @@ impl Hasher {
         if check.screen.owned() {
             parts.insert("(screen)".into(), definition(&check.screen));
         }
-        if let Some(services) = &check.services {
+        if let Some(services) = env.services.as_ref().filter(|_| check.needs_services()) {
             parts.insert("(services)".into(), sha256_hex(services.as_bytes()));
         }
-        if let Some(preview) = &check.preview {
+        if let Some(preview) = env.preview.as_ref().filter(|_| check.needs_preview()) {
             parts.insert("(preview)".into(), sha256_hex(preview.as_bytes()));
         }
         for path in files.iter().filter(|p| check.reads(p)) {
@@ -258,7 +258,7 @@ impl Hasher {
         key.update(RESULT_FORMAT.as_bytes());
         key.update(b"\0");
         // Steps apart, so they never key like one script of the same lines.
-        key.update(check.run.as_bytes());
+        key.update(check.run().as_bytes());
         if check.steps.len() > 1 {
             key.update(format!("\0{} steps", check.steps.len()).as_bytes());
         }

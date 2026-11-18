@@ -28,15 +28,6 @@ const AUTOSQUASH: [&str; 3] = ["fixup! ", "squash! ", "amend! "];
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawCommits {
     types: Option<Vec<String>>,
-    /// Turns off the check a piece's `[commits]` brings in.
-    #[serde(default)]
-    off: bool,
-}
-
-impl RawCommits {
-    pub(crate) fn off(&self) -> bool {
-        self.off
-    }
 }
 
 #[derive(Clone, Debug)]

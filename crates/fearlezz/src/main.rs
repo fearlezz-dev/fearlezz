@@ -354,9 +354,9 @@ fn ci_run(proof: Option<PathBuf>, leg: Option<legs::Asked>, scheduled: bool) -> 
     let workflow = action::Workflow::read();
     let mut ctx = prepared()?;
     if scheduled {
-        ctx.config.on_schedule();
+        ctx.config.scheduled = true;
         // A scheduled workflow that proves nothing must not stay green.
-        if ctx.config.checks.is_empty() {
+        if ctx.config.due().next().is_none() {
             bail!(
                 "no check has schedule = true, so a scheduled run proves nothing; give the slow \
                  checks schedule = true, or remove the scheduled workflow"
@@ -578,7 +578,7 @@ fn release_run() -> Result<bool> {
 
 /// Whether a check takes pictures, which needs ffmpeg.
 fn needs_ffmpeg(config: &Config) -> bool {
-    config.checks.iter().any(|c| config.needs_ffmpeg(c))
+    config.due().any(|c| config.needs_ffmpeg(c))
 }
 
 fn dispatch(cmd: Cmd) -> Result<bool> {
@@ -967,7 +967,13 @@ fn plan(ctx: &Ctx) -> Result<()> {
     if !any {
         println!("  nothing touched yet");
     }
-    let scheduled: Vec<&str> = ctx.config.set_aside.iter().map(|c| c.id.as_str()).collect();
+    let scheduled: Vec<&str> = ctx
+        .config
+        .checks
+        .iter()
+        .filter(|c| c.schedule)
+        .map(|c| c.id.as_str())
+        .collect();
     if !scheduled.is_empty() {
         println!(
             "  scheduled {}: never needed by a change; fearlezz run --ci --scheduled proves them",
@@ -990,7 +996,7 @@ fn targets<'a>(
         return ids.iter().map(|id| ctx.config.check(id)).collect();
     }
     if in_memory {
-        return Ok(ctx.config.checks.iter().collect());
+        return Ok(ctx.config.due().collect());
     }
     let due: Vec<&str> = before
         .checks
@@ -1000,8 +1006,7 @@ fn targets<'a>(
         .collect();
     Ok(ctx
         .config
-        .checks
-        .iter()
+        .due()
         .filter(|c| due.contains(&c.id.as_str()))
         .collect())
 }
@@ -1143,7 +1148,7 @@ impl Report {
             "commit {}: {} changed files, {of}{to_run} of {} checks to run",
             proof.commit,
             wt.changed.len(),
-            ctx.config.checks.len()
+            ctx.config.due().count()
         );
         proof.leg = leg.map(|l| l.id.clone());
         let planned = out.leg.map(|a| a.planned).unwrap_or_default();
@@ -1253,9 +1258,9 @@ impl Report {
         };
         #[expect(clippy::cast_precision_loss, reason = "a duration shown in seconds")]
         let secs = result.duration_ms as f64 / 1000.0;
-        let run = match check.run.trim().split_once('\n') {
+        let run = match check.run().trim().split_once('\n') {
             Some((first, _)) => format!("{first} ..."),
-            None => check.run.trim().to_string(),
+            None => check.run().trim().to_string(),
         };
         let tests = match result.tests {
             Some(1) => "  1 test".to_string(),
@@ -1437,7 +1442,7 @@ fn run_checks(
     let mut left_out = Vec::new();
     if leg.is_none() {
         targets.retain(|check| legs::left_to_ci(&ctx.config, check).is_none());
-        let due = ctx.config.checks.iter().filter(|c| {
+        let due = ctx.config.due().filter(|c| {
             (in_memory || c.stage <= before.stage) && (ids.is_empty() || ids.contains(&c.id))
         });
         for check in due {
@@ -1690,7 +1695,7 @@ fn run_checks(
                 }
                 let at = run::Where {
                     root: &wt.git.root,
-                    shell: wt.shell.as_deref(),
+                    shell: wt.env.shell.as_deref(),
                     tree: &wt.tree,
                     journal: &j.name,
                     stage: &stage,

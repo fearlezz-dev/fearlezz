@@ -138,7 +138,7 @@ fn on_base_config(git: &Git, wt: &Worktree, id: &str) -> Result<bool> {
         return Ok(false);
     }
     let config = Config::load(&base.root, &git.common)?;
-    Ok(config.every_check().any(|c| c.id == id))
+    Ok(config.checks.iter().any(|c| c.id == id))
 }
 
 /// The check's run on `base`, reused when its inputs ran there before.

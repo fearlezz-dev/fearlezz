@@ -23,9 +23,10 @@ pub(crate) struct Worktree {
     pub files: Vec<String>,
     pub tree: String,
     pub committed: bool,
-    /// The shell of the `[env]` its checks run in: the change's own for the change's
-    /// worktree, the base commit's for a base checkout (see `look::Base`).
-    pub shell: Option<String>,
+    /// What of the `[env]` its checks run in shapes their results (its shell, services and
+    /// preview): the change's own for the change's worktree, the base commit's for a base
+    /// checkout (see `look::Base`).
+    pub env: crate::config::EnvKey,
     pub hasher: Hasher,
 }
 
@@ -47,7 +48,7 @@ impl Worktree {
             tree: git.tree()?,
             committed: git.committed()?,
             git,
-            shell: env.shell.clone(),
+            env: env.key(),
             hasher: Hasher::default(),
         })
     }
@@ -63,7 +64,7 @@ impl Worktree {
         self.hasher.inputs(
             &self.git.root,
             check,
-            self.shell.as_deref(),
+            &self.env,
             &self.files,
             scope.as_deref(),
         )
@@ -224,8 +225,7 @@ pub(crate) fn view(
         skill_out_of_date = config.settings.skill_out_of_date(&wt.git.root)?;
         // A check this machine cannot stand in for is left to CI: it never holds the work.
         let here = config
-            .checks
-            .iter()
+            .due()
             .filter(|c| crate::legs::left_to_ci(config, c).is_none());
         for check in here {
             let latest = latest_ran(journal, &check.id);
@@ -281,7 +281,7 @@ pub(crate) fn view(
             red_next = red_hold(wt, &checks)?;
         }
     } else {
-        for check in &config.checks {
+        for check in config.due() {
             if let Some(ran) = latest_ran(journal, &check.id) {
                 checks.push(CheckView {
                     id: check.id.clone(),

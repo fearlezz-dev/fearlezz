@@ -26,7 +26,7 @@ pub(crate) fn ran(
         platform: None,
         key: Some(result.key.clone()),
         reused: None,
-        run: check.run.trim().to_string(),
+        run: check.run().trim().to_string(),
         stage: stage.to_string(),
         outcome: match result.outcome {
             Outcome::Passed => Ran::Passed,
@@ -54,7 +54,7 @@ pub(crate) fn not_run(check: &crate::config::Check, stage: &str, why: &str) -> C
         platform: None,
         key: None,
         reused: None,
-        run: check.run.trim().to_string(),
+        run: check.run().trim().to_string(),
         stage: stage.to_string(),
         outcome: Ran::NotRun,
         seconds: 0.0,

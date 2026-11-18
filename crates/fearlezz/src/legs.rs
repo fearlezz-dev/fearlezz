@@ -242,7 +242,7 @@ fn leg_id(platform: Option<&str>, job: Option<&str>) -> String {
 /// Every leg of the config, by id, each check once on each of its platforms.
 pub(crate) fn legs(config: &Config) -> Vec<Leg<'_>> {
     let mut legs: Vec<Leg<'_>> = Vec::new();
-    for check in &config.checks {
+    for check in config.due() {
         let on: Vec<Option<&Platform>> = if check.on.is_empty() {
             vec![None]
         } else {
