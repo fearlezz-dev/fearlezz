@@ -182,9 +182,12 @@ h1 { font-size: clamp(1.45rem, 3.2vw, 1.9rem); font-weight: 700; letter-spacing:
 .weakening-row .how { color: var(--quiet); }
 .weakening-row .plain { margin-left: auto; }
 .change { margin: 8px 0 6px; }
+/* Lines never wrap, so a long one scrolls inside the box. Containing its inline size keeps that
+   line out of the width the box asks of its parents: the grids around it size their columns
+   from their items' content, and would otherwise widen the card and the page to fit it. */
 .diff-lines {
   margin: 0; padding: 6px 0; font: 0.84rem/1.6 var(--mono); background: var(--page); border-radius: 6px;
-  overflow-x: auto; white-space: pre;
+  overflow-x: auto; white-space: pre; contain: inline-size;
 }
 .diff-lines .line { display: block; padding: 0 12px 0 8px; min-width: max-content; }
 .diff-lines .sign { display: inline-block; width: 1.5ch; color: var(--quiet); user-select: none; }
