@@ -19,14 +19,14 @@ use crate::share::Link;
 use crate::{Config, Refusal, cache, cli, github, not_found, session};
 
 /// How long the host trusts GitHub's word on what a person may see or do.
-pub const GITHUB_SECONDS: i64 = 300;
+pub(crate) const GITHUB_SECONDS: i64 = 300;
 
 /// What a refusal says to someone who may read the repository once they sign in.
 const SIGN_IN_TO_SEE: &str = "sign in to see this work";
 
 /// Who asks, as the policy sees them: borrowed from what the request resolved.
 #[derive(Clone, Copy)]
-pub enum Viewer<'a> {
+pub(crate) enum Viewer<'a> {
     /// Nobody signed in, or a session whose GitHub token no longer works.
     Anonymous,
     /// Someone holding a share link, which views its one work.
@@ -37,20 +37,20 @@ pub enum Viewer<'a> {
 
 impl<'a> Viewer<'a> {
     /// Who a page is shown to: the session's person, or someone anonymous.
-    pub fn of(person: Option<&'a Person>) -> Viewer<'a> {
+    pub(crate) fn of(person: Option<&'a Person>) -> Viewer<'a> {
         person.map_or(Viewer::Anonymous, Viewer::Person)
     }
 }
 
 /// A person, with the GitHub token that decides what they may do.
-pub struct Person {
+pub(crate) struct Person {
     pub login: String,
     pub token: String,
     pub via: Via,
 }
 
 /// How a person came in.
-pub enum Via {
+pub(crate) enum Via {
     /// A browser's session: the id of its row, which the cookie holds.
     Session(String),
     /// The CLI's own token.
@@ -59,7 +59,7 @@ pub enum Via {
 
 impl Person {
     /// The id of the session the person came in by, if they came in by one.
-    pub fn session(&self) -> Option<&str> {
+    pub(crate) fn session(&self) -> Option<&str> {
         match &self.via {
             Via::Session(id) => Some(id),
             Via::Cli => None,
@@ -69,7 +69,7 @@ impl Person {
 
 /// What a viewer asks to do on a repository.
 #[derive(Clone, Copy)]
-pub enum Action<'a> {
+pub(crate) enum Action<'a> {
     /// See the repository's pages, and the works, runs and files on them. A share link sees
     /// only the work it names, so a caller that knows the work names it.
     Read {
@@ -114,7 +114,7 @@ impl Action<'_> {
 /// person GitHub shows nothing of a private repository or a share link of another work, and
 /// `401` for a CLI token whose GitHub token no longer works. Anything else answers `403` saying
 /// the role it needs, or `401` when the person's GitHub token no longer works.
-pub async fn can(
+pub(crate) async fn can(
     env: &Env,
     config: &Config,
     viewer: Viewer<'_>,
@@ -155,7 +155,7 @@ pub async fn can(
 
 /// Where the policy may take GitHub's word from.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Asking {
+pub(crate) enum Asking {
     /// Only the word the host holds: a work's room asks this while it runs a write, which must
     /// not wait for GitHub (`room.rs`).
     Cache,
@@ -166,7 +166,7 @@ pub enum Asking {
 /// Whether `viewer` may see the repository `repo` (lowercased): `Err` `404` for a person GitHub
 /// shows nothing of it, and None when `asking` cannot say. A session whose GitHub token no
 /// longer works is someone anonymous, while a CLI token's is `401`.
-pub async fn sees(
+pub(crate) async fn sees(
     env: &Env,
     config: &Config,
     viewer: Viewer<'_>,
@@ -202,7 +202,7 @@ pub async fn sees(
 
 /// What a person may do on a repository: GitHub's word, kept for a few minutes. `401` when
 /// their GitHub token no longer works.
-pub async fn role(
+pub(crate) async fn role(
     env: &Env,
     config: &Config,
     person: &Person,
@@ -227,7 +227,7 @@ pub async fn role(
 
 /// The person a browser's ask speaks for, after the checks every saying passes: no token, from
 /// the app origin, JSON, and a session. `what` is what they ask, as "sign in to <what>" says.
-pub async fn speaker(
+pub(crate) async fn speaker(
     req: &Request,
     env: &Env,
     config: &Config,

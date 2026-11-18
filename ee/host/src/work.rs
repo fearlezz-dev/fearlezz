@@ -301,12 +301,12 @@ struct ShownRun {
 
 /// Every run with its work, the one join of a run to its repository: the columns of `RunRow`,
 /// and a `WHERE` on `r` and `w` follows.
-pub const RUNS: &str = "SELECT r.id, r.work, w.repo, w.repository, w.branch, w.pull, r.head, r.git_ref, r.source, r.state \
+pub(crate) const RUNS: &str = "SELECT r.id, r.work, w.repo, w.repository, w.branch, w.pull, r.head, r.git_ref, r.source, r.state \
      FROM runs r JOIN works w ON w.id = r.work";
 
 /// A run with its work's repository, as the calls about one run read it.
 #[derive(Deserialize)]
-pub struct RunRow {
+pub(crate) struct RunRow {
     pub id: String,
     pub work: String,
     /// The repository, lowercased, as the host keys it.
@@ -325,20 +325,20 @@ pub struct RunRow {
 
 impl RunRow {
     /// The run `id`, CI's or local, whoever may see it.
-    pub async fn find(db: &D1Database, id: &str) -> worker::Result<Option<RunRow>> {
+    pub(crate) async fn find(db: &D1Database, id: &str) -> worker::Result<Option<RunRow>> {
         db.prepare(format!("{RUNS} WHERE r.id = ?1"))
             .bind(&[id.into()])?
             .first(None)
             .await
     }
 
-    pub fn source(&self) -> worker::Result<Source> {
+    pub(crate) fn source(&self) -> worker::Result<Source> {
         read(&self.source)
     }
 
     /// Whether it is a local run, the agent's word: never reviewed, and it never moves the
     /// work's head, its review, the check run or the pull request comment.
-    pub fn local(&self) -> worker::Result<bool> {
+    pub(crate) fn local(&self) -> worker::Result<bool> {
         Ok(matches!(self.source()?, Source::Local { .. }))
     }
 }

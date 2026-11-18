@@ -29,7 +29,7 @@ struct Ask {
 
 /// The run `id`, CI's or local, when `viewer` may see it; a run they may not see is not
 /// found.
-pub async fn run(
+pub(crate) async fn run(
     env: &Env,
     config: &Config,
     db: &D1Database,
@@ -141,14 +141,21 @@ pub async fn accept(req: Request, env: &Env, config: &Config, id: &str) -> Answe
     let run = run(env, config, &db, viewer, id).await?;
     reviewed(&run, "weakenings are accepted")?;
     access::can(env, config, viewer, Action::Accept, &run.repository).await?;
-    let proof: Option<String> = db
-        .prepare("SELECT proof FROM runs WHERE id = ?1")
+    // Read with its state, as the done that wrote it left both.
+    #[derive(Deserialize)]
+    struct Closed {
+        state: String,
+        proof: Option<String>,
+    }
+    let closed: Option<Closed> = db
+        .prepare("SELECT state, proof FROM runs WHERE id = ?1")
         .bind(&[id.into()])?
-        .first(Some("proof"))
+        .first(None)
         .await?;
-    let proof = proof.as_deref().map(read::<Proof>).transpose()?;
+    let closed = closed.ok_or_else(not_found)?;
+    let proof = closed.proof.as_deref().map(read::<Proof>).transpose()?;
     let weakened = proof
-        .filter(|p| work::state(&run.state) == RunState::Done && !p.weakened.is_empty())
+        .filter(|p| work::state(&closed.state) == RunState::Done && !p.weakened.is_empty())
         .map(|p| p.weakened)
         .ok_or_else(|| Refusal::new(409, "this run weakens nothing to accept"))?;
     let accept = review::Accept {

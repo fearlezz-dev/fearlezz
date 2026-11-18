@@ -142,21 +142,6 @@ impl Refusal {
         }
     }
 
-    /// Whether it asks to sign in first: a page answers it by sending the person to sign in.
-    pub fn asks_sign_in(&self) -> bool {
-        self.status == 401
-    }
-
-    /// The refusal as a write gives it: a repository its asker must sign in to see is not found,
-    /// so a write confirms nothing a read would not.
-    pub fn hidden(self) -> Refusal {
-        if self.asks_sign_in() {
-            not_found()
-        } else {
-            self
-        }
-    }
-
     /// API callers read JSON; people read text.
     fn response(&self, json: bool) -> Result<Response> {
         let response = if json {
@@ -165,6 +150,21 @@ impl Refusal {
             Response::ok(self.message.clone())?
         };
         Ok(response.with_status(self.status))
+    }
+
+    /// Whether it asks to sign in first: a page answers it by sending the person to sign in.
+    pub(crate) fn asks_sign_in(&self) -> bool {
+        self.status == 401
+    }
+
+    /// The refusal as a write gives it: a repository its asker must sign in to see is not found,
+    /// so a write confirms nothing a read would not.
+    pub(crate) fn hidden(self) -> Refusal {
+        if self.asks_sign_in() {
+            not_found()
+        } else {
+            self
+        }
     }
 }
 

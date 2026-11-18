@@ -28,7 +28,7 @@ use crate::{Answer, Config, Refusal, crypto, files, not_found, now, pages, repo_
 const PREFIX: &str = "fzh_";
 
 /// What the CLI is told when it has no token that holds.
-pub const SIGN_IN: &str = "sign in to the proof host: fearlezz setup login";
+pub(crate) const SIGN_IN: &str = "sign in to the proof host: fearlezz setup login";
 
 /// How long a CLI token lives after its last use.
 const IDLE_SECONDS: i64 = 30 * 86400;

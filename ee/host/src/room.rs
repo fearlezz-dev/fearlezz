@@ -39,7 +39,7 @@ use crate::{Config, repository, review, session, share, work};
 /// Who a page's live connection is held for, which says how long it stays open: the viewer as
 /// the socket keeps it, with no token, so a session that ends ends its pages.
 #[derive(Serialize, Deserialize)]
-pub enum Held {
+pub(crate) enum Held {
     /// Someone the repository's rule let in, with their session when signed in: open while
     /// the rule still lets them in.
     Person {
@@ -53,7 +53,7 @@ pub enum Held {
 
 impl Held {
     /// How a page of the repository `repo` (lowercased) the policy let `viewer` see is held.
-    pub fn of(viewer: Viewer<'_>, repo: &str) -> Held {
+    pub(crate) fn of(viewer: Viewer<'_>, repo: &str) -> Held {
         match viewer {
             Viewer::Share(link) => Held::Link {
                 tag: share::tag(&link.id),
@@ -239,7 +239,7 @@ pub async fn send(env: &Env, room: &str, text: &str) -> Result<()> {
 
 /// Hands a page's live connection to room `room`, which answers it with what `of` names
 /// (`work=<id>` or `repo=<owner/name>`) and holds it as `held`.
-pub async fn connect(
+pub(crate) async fn connect(
     env: &Env,
     req: &Request,
     room: &str,

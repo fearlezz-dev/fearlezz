@@ -29,7 +29,7 @@ pub struct Link {
 }
 
 /// The tag of the pages open through link `id`, which revoking it ends.
-pub fn tag(id: &str) -> String {
+pub(crate) fn tag(id: &str) -> String {
     format!("share:{id}")
 }
 

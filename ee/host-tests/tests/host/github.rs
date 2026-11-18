@@ -323,8 +323,11 @@ impl FakeGitHub {
     }
 
     /// GitHub no longer takes the person token `token`, as when its person revokes it.
-    pub fn forget(&self, token: &str) {
-        let mut state = self.state.lock().unwrap();
+    pub(crate) fn forget(&self, token: &str) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.tokens.remove(token);
     }
 

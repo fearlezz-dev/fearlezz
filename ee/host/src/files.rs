@@ -107,13 +107,13 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
 
 /// Where R2 keeps the bytes `sha256` of the repository `repo` (lowercased): each repository
 /// keeps its own, so a blob is only ever served for runs of its repository.
-pub fn blob_key(repo: &str, sha256: &str) -> String {
+pub(crate) fn blob_key(repo: &str, sha256: &str) -> String {
     format!("blobs/{repo}/{sha256}")
 }
 
 /// A run's file, as both origins serve it: the type its name pins, where its bytes are kept,
 /// and their size.
-pub struct Stored {
+pub(crate) struct Stored {
     pub kind: &'static str,
     pub key: String,
     pub size: u64,
@@ -121,7 +121,12 @@ pub struct Stored {
 
 /// The file at `path` (escaped, as a URL holds it) of the run `run` of `repo` (lowercased):
 /// `404` for a path that does not decode, a type never served, or a file the run lacks.
-pub async fn stored(env: &Env, repo: &str, run: &str, path: &str) -> Result<Stored, Refusal> {
+pub(crate) async fn stored(
+    env: &Env,
+    repo: &str,
+    run: &str,
+    path: &str,
+) -> Result<Stored, Refusal> {
     let path = percent_encoding::percent_decode_str(path)
         .decode_utf8()
         .map_err(|_| not_found())?
@@ -149,7 +154,11 @@ pub async fn stored(env: &Env, repo: &str, run: &str, path: &str) -> Result<Stor
 }
 
 /// The bytes kept at `key`, whole or the `range` of them: `404` when R2 holds none.
-pub async fn body(env: &Env, key: &str, range: Option<Range>) -> Result<ResponseBody, Refusal> {
+pub(crate) async fn body(
+    env: &Env,
+    key: &str,
+    range: Option<Range>,
+) -> Result<ResponseBody, Refusal> {
     let bucket = env.bucket("BLOBS")?;
     let get = bucket.get(key);
     let object = match range {

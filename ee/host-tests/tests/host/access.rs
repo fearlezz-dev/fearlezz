@@ -62,8 +62,10 @@ fn share_token(branch: &str) -> String {
     let body = json!({"repository": REPOSITORY, "branch": branch});
     let answer = say_to("/api/v2/shares", Some(&writer), &[], &body);
     assert_eq!(answer.status, 201, "{}", answer.text());
-    let url = answer.json()["url"].as_str().unwrap().to_owned();
-    url.rsplit('/').next().unwrap().to_owned()
+    let url = answer.json()["url"].as_str().unwrap_or_default().to_owned();
+    let token = url.rsplit('/').next().unwrap_or_default().to_owned();
+    assert!(!token.is_empty(), "a share link holds its token: {url}");
+    token
 }
 
 /// What the page posts to `path`: JSON from the app origin with the session `cookie`, and
@@ -79,7 +81,7 @@ fn say_to(path: &str, cookie: Option<&str>, headers: &[(&str, &str)], body: &Val
     request("POST", path, &all, Some(body.to_string().into_bytes()))
 }
 
-pub fn the_policy_decides_who_reads_a_private_repository() {
+pub(crate) fn the_policy_decides_who_reads_a_private_repository() {
     let run = policy_run(1, "policy/read");
     let other = policy_run(2, "policy/other");
     let page = "/owner/policy/pull/1";
@@ -132,7 +134,11 @@ pub fn the_policy_decides_who_reads_a_private_repository() {
     );
     let shared = get(&format!("/live/-/share/{token}"), &[]);
     assert_eq!(shared.status, 200, "share live: {}", shared.text());
-    assert_eq!(navigate(&format!("/-/share/{token}"), &[]).status, 200);
+    assert_eq!(
+        navigate(&format!("/-/share/{token}"), &[]).status,
+        200,
+        "share page"
+    );
     to_sign_in(&navigate(page, &[]), page, "a share link opens no page");
 
     // A person GitHub shows nothing of the repository: it is not there.
@@ -140,7 +146,11 @@ pub fn the_policy_decides_who_reads_a_private_repository() {
     let cookie = [("Cookie", stranger.as_str())];
     let answer = navigate(page, &cookie);
     assert_eq!(answer.status, 404, "stranger page: {}", answer.text());
-    assert_eq!(answer.text(), "not found");
+    assert_eq!(
+        answer.text(),
+        "not found",
+        "stranger page says nothing more"
+    );
     refused(&live(page, &cookie), 404, "not found", "stranger live");
     refused(&grant(&run, &cookie), 404, "not found", "stranger grant");
     refused(
@@ -149,21 +159,41 @@ pub fn the_policy_decides_who_reads_a_private_repository() {
         "not found",
         "stranger viewer",
     );
-    assert_eq!(navigate("/owner/policy", &cookie).status, 404);
+    assert_eq!(
+        navigate("/owner/policy", &cookie).status,
+        404,
+        "stranger repository page"
+    );
 
     // A reader sees it all.
     let reader = sign_in("reader-code", "/");
     let cookie = [("Cookie", reader.as_str())];
-    assert_eq!(navigate(page, &cookie).status, 200);
-    assert_eq!(navigate("/owner/policy", &cookie).status, 200);
-    assert_eq!(live(page, &cookie).status, 200);
-    assert_eq!(get("/live/owner/policy", &cookie).status, 200);
-    assert_eq!(grant(&run, &cookie).status, 200);
+    assert_eq!(navigate(page, &cookie).status, 200, "reader page");
+    assert_eq!(
+        navigate("/owner/policy", &cookie).status,
+        200,
+        "reader repository page"
+    );
+    assert_eq!(live(page, &cookie).status, 200, "reader live");
+    assert_eq!(
+        get("/live/owner/policy", &cookie).status,
+        200,
+        "reader repository live"
+    );
+    assert_eq!(grant(&run, &cookie).status, 200, "reader grant");
     let viewer = get("/api/v2/viewer/owner/policy", &cookie);
-    assert_eq!(viewer.json(), json!({"login": "reader", "role": "read"}));
+    assert_eq!(
+        viewer.json(),
+        json!({"login": "reader", "role": "read"}),
+        "reader viewer"
+    );
     let writer = sign_in("writer-code", "/");
     let viewer = get("/api/v2/viewer/owner/policy", &[("Cookie", &writer)]);
-    assert_eq!(viewer.json(), json!({"login": "writer", "role": "write"}));
+    assert_eq!(
+        viewer.json(),
+        json!({"login": "writer", "role": "write"}),
+        "writer viewer"
+    );
 
     // A session whose GitHub token lapsed is someone anonymous.
     let lapsed = lapsed_session("read");
@@ -173,7 +203,7 @@ pub fn the_policy_decides_who_reads_a_private_repository() {
     refused(&grant(&run, &cookie), 401, sign_in_to_see, "lapsed grant");
 }
 
-pub fn the_policy_decides_who_reads_a_file_with_the_cli() {
+pub(crate) fn the_policy_decides_who_reads_a_file_with_the_cli() {
     let run = policy_run(3, "policy/file");
     let file = format!("/api/v2/runs/{run}/files/looks/screens/after/card/light.png");
     let hint = "sign in to the proof host: fearlezz setup login";
@@ -202,9 +232,17 @@ pub fn the_policy_decides_who_reads_a_file_with_the_cli() {
     let reader = super::notes::cli_token("reader");
     let answer = api("GET", &file, &reader, None);
     assert_eq!(answer.status, 200, "reader: {}", answer.text());
-    assert_eq!(answer.header("content-type"), Some("image/png"));
-    assert_eq!(answer.body, b"policy 3 after");
-    assert_eq!(answer.header("content-disposition"), Some("attachment"));
+    assert_eq!(
+        answer.header("content-type"),
+        Some("image/png"),
+        "reader file type"
+    );
+    assert_eq!(answer.body, b"policy 3 after", "reader file bytes");
+    assert_eq!(
+        answer.header("content-disposition"),
+        Some("attachment"),
+        "reader file is a download"
+    );
     refused(
         &api("GET", "/api/v2/runs/nothing/files/a.png", &reader, None),
         404,
@@ -241,10 +279,14 @@ pub fn the_policy_decides_who_reads_a_file_with_the_cli() {
     );
     let writer = super::notes::cli_token("writer");
     let answer = api("GET", installed, &writer, None);
-    assert_eq!(answer.json(), json!({"installed": true}));
+    assert_eq!(
+        answer.json(),
+        json!({"installed": true}),
+        "writer sends local runs"
+    );
 }
 
-pub fn the_policy_decides_who_says_a_verdict_or_accepts() {
+pub(crate) fn the_policy_decides_who_says_a_verdict_or_accepts() {
     let run = policy_run(4, "policy/say");
     let verdict = looks_right("card/light.png");
     let cli = format!("Bearer {}", super::notes::cli_token("writer"));
@@ -325,7 +367,7 @@ pub fn the_policy_decides_who_says_a_verdict_or_accepts() {
     );
 }
 
-pub fn the_policy_decides_who_writes_notes() {
+pub(crate) fn the_policy_decides_who_writes_notes() {
     let run = policy_run(5, "policy/notes");
     let note = super::notes::ask("card/light.png", "after", [0.1, 0.1, 0.2, 0.2], "Too dark.");
     let cli = format!("Bearer {}", super::notes::cli_token("writer"));
@@ -366,7 +408,11 @@ pub fn the_policy_decides_who_writes_notes() {
     );
     let answer = say(&run, "notes", Some(&writer), &[], &note);
     assert_eq!(answer.status, 201, "writer note: {}", answer.text());
-    let id = answer.json()["note"]["id"].as_str().unwrap().to_owned();
+    let id = answer.json()["note"]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!id.is_empty(), "a note has its id");
 
     let resolve = format!("/api/v2/notes/{id}/resolve");
     refused(
@@ -427,5 +473,9 @@ pub fn the_policy_decides_who_writes_notes() {
         "@reader cannot share a work on owner/policy: that needs write access on GitHub",
         "reader list",
     );
-    assert_eq!(get(shares, &[("Cookie", &writer)]).status, 200);
+    assert_eq!(
+        get(shares, &[("Cookie", &writer)]).status,
+        200,
+        "writer list"
+    );
 }

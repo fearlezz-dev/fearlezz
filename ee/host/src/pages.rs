@@ -15,7 +15,7 @@ use crate::{Answer, Config, Refusal, files, not_found, repo_key, room, share};
 /// Whether a page of the repository `repo` (lowercased) is shown to the request: None when it
 /// is, and otherwise what it answers instead, sending to sign in first someone who may see it
 /// once signed in.
-pub async fn barred(
+pub(crate) async fn barred(
     req: &Request,
     env: &Env,
     config: &Config,
@@ -114,7 +114,7 @@ pub async fn live(
 
 /// The live connection to the work `id`, once the caller decided the request may see it, held
 /// as `held` says, as long as its viewer still may.
-pub async fn connect(req: &Request, env: &Env, id: &str, held: &Held) -> Answer {
+pub(crate) async fn connect(req: &Request, env: &Env, id: &str, held: &Held) -> Answer {
     if !upgrades(req)? {
         let db = env.d1("DB")?;
         let snapshot = work::snapshot(&db, id).await?.ok_or_else(not_found)?;

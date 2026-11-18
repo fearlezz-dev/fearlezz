@@ -23,7 +23,7 @@ struct Signin {
 }
 
 /// The signed in person, if the request carries the id of a session that has not expired.
-pub async fn read(req: &Request, env: &Env) -> worker::Result<Option<Person>> {
+pub(crate) async fn read(req: &Request, env: &Env) -> worker::Result<Option<Person>> {
     match cookie(req, SESSION)? {
         Some(id) => find(env, &id).await,
         None => Ok(None),
@@ -31,7 +31,7 @@ pub async fn read(req: &Request, env: &Env) -> worker::Result<Option<Person>> {
 }
 
 /// The person of session `id`, unless it ended: logged out of or expired.
-pub async fn find(env: &Env, id: &str) -> worker::Result<Option<Person>> {
+pub(crate) async fn find(env: &Env, id: &str) -> worker::Result<Option<Person>> {
     #[derive(Deserialize)]
     struct Row {
         login: String,
