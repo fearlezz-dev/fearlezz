@@ -54,6 +54,34 @@ fn deleting_a_frozen_file_counts_as_touching_it() {
     assert!(out.stdout.contains("engine/core.rs"), "{}", out.stdout);
 }
 
+#[test]
+fn deleting_a_frozen_file_gates_at_the_file_and_says_it_was_deleted() {
+    let config = "[rule.engine-frozen]\nlevel = \"gate\"\nchanged = [\"engine/**\"]\n";
+    let repo = feature(config, &[("engine/core.rs", "fn a() {}\n")]);
+    repo.remove("engine/core.rs");
+    let out = repo.fz(&["run", "rules"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains(
+            "gate engine/core.rs  engine-frozen  this change deletes engine/core.rs, which \
+             engine-frozen keeps as is"
+        ),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_skipped_path_of_a_frozen_rule_may_change() {
+    let repo = feature(
+        &format!("{FROZEN}skip = [\"engine/notes.md\"]\n"),
+        &[("engine/notes.md", "a\n")],
+    );
+    repo.write("engine/notes.md", "b\n");
+    let out = repo.fz(&["run", "rules"]);
+    assert!(out.ok, "{}", out.stdout);
+}
+
 const NAMES: &str = r#"
 [rule.screen-names]
 level = "flag"

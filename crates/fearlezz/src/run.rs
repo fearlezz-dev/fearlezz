@@ -124,9 +124,10 @@ pub(crate) fn execute(
     }
     let (mut findings, mut findings_elsewhere) = (Vec::new(), 0);
     if let Some(spec) = &check.findings {
-        // A built in check gives its findings in process; a tool's are read from what it wrote.
+        // A built in check gives its findings in process, named from the root, deleted files
+        // too; a tool's are read from what it wrote.
         let (found, unread) = match builtin_found.take() {
-            Some(found) => (crate::findings::place(found, &run), Vec::new()),
+            Some(found) => (found, Vec::new()),
             None => spec.read.read(&run),
         };
         errors.extend(unread);
