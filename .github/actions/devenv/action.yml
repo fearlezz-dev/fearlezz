@@ -1,0 +1,72 @@
+name: devenv
+description: >-
+  Nix, devenv and the devenv shell of this repository, with its Nix paths from
+  gabber235.cachix.org and, for a job that builds Rust, its Cargo build from the Actions cache.
+
+inputs:
+  op-service-account-token:
+    description: >-
+      The 1Password service account token (`secrets.OP_SERVICE_ACCOUNT_TOKEN`). With it, a run of
+      this repository reads the `cache` profile of secretspec.toml and pushes the shell to
+      gabber235.cachix.org. A fork's pull request gets none, so it only reads.
+    default: ""
+  rust:
+    description: >-
+      The Cargo build cache: `save` restores it and saves it when the key was missed, `restore`
+      only restores it, empty leaves it out.
+    default: ""
+  rust-key:
+    description: The job's own part of the Cargo cache key, since each builds other targets.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: cachix/install-nix-action@v31
+    # Reads gabber235.cachix.org and the public devenv cache. Pushing is the explicit step
+    # below, with a token only this repository's runs can read.
+    - uses: cachix/cachix-action@v16
+      with:
+        name: gabber235
+        extraPullNames: devenv
+    - shell: bash
+      run: nix profile add nixpkgs#devenv && devenv shell -- true
+    # The shell's gc roots hold every path it built: worker-build, which devenv.nix overrides,
+    # and the packages cache.nixos.org misses on one OS (wrangler on Linux, oxlint on macOS).
+    # Cachix skips paths it or cache.nixos.org already has. A failed push costs the next run
+    # time, not this run its result.
+    - if: inputs.op-service-account-token != ''
+      continue-on-error: true
+      shell: bash
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-service-account-token }}
+      run: |
+        token=$(devenv shell -- secretspec get CACHIX_AUTH_TOKEN --profile cache \
+          --provider "onepassword://Fearlezz CI" --reason "push the devenv shell to gabber235.cachix.org")
+        echo "::add-mask::$token"
+        realpath .devenv/gc/* | CACHIX_AUTH_TOKEN=$token cachix push gabber235
+    # The toolchain is pinned by devenv, so a new one starts empty instead of restoring
+    # artifacts it would rebuild; a new lockfile starts from the last build of the same
+    # toolchain.
+    - if: inputs.rust == 'save'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          target
+          ee/target
+        key: cargo-${{ runner.os }}-${{ inputs.rust-key }}-${{ hashFiles('devenv.nix', 'devenv.lock') }}-${{ hashFiles('Cargo.lock', 'ee/Cargo.lock') }}
+        restore-keys: cargo-${{ runner.os }}-${{ inputs.rust-key }}-${{ hashFiles('devenv.nix', 'devenv.lock') }}-
+    - if: inputs.rust == 'restore'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          target
+          ee/target
+        key: cargo-${{ runner.os }}-${{ inputs.rust-key }}-${{ hashFiles('devenv.nix', 'devenv.lock') }}-${{ hashFiles('Cargo.lock', 'ee/Cargo.lock') }}
+        restore-keys: cargo-${{ runner.os }}-${{ inputs.rust-key }}-${{ hashFiles('devenv.nix', 'devenv.lock') }}-
