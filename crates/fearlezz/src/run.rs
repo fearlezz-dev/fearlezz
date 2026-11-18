@@ -644,16 +644,20 @@ fn mask(dir: &Path, forms: &[Vec<u8>]) -> Result<()> {
 }
 
 /// Replaces every form of a secret's value in the file at `path` with [`MASK`].
-pub(crate) fn mask_file(path: &Path, forms: &[Vec<u8>]) -> Result<()> {
+fn mask_file(path: &Path, forms: &[Vec<u8>]) -> Result<()> {
     let bytes = fs::read(path)?;
-    let mut masked = bytes.clone();
-    for form in forms {
-        masked = replace(&masked, form, MASK);
-    }
+    let masked = masked(&bytes, forms);
     if masked != bytes {
         fs::write(path, masked)?;
     }
     Ok(())
+}
+
+/// `bytes` with every form of a secret's value replaced by [`MASK`].
+pub(crate) fn masked(bytes: &[u8], forms: &[Vec<u8>]) -> Vec<u8> {
+    forms
+        .iter()
+        .fold(bytes.to_vec(), |masked, form| replace(&masked, form, MASK))
 }
 
 /// `bytes` with every `from` replaced by `to`.
