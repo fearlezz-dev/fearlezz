@@ -617,7 +617,8 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
         .into_iter()
         .next()
         .and_then(|r| r.review)
-        .map(|r| read::<Review>(&r))
+        // Its title is derived again, so a review stored before the host sent one has it too.
+        .map(|r| read::<Review>(&r).map(Review::titled))
         .transpose()?;
     let verdicts = verdicts
         .results::<VerdictRow>()?

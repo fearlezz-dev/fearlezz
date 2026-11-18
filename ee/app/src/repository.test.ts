@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { grantPath } from "./grant";
 import { placeOf, sharedBy } from "./place";
 import type { Listed } from "./proof";
-import { ListingFeed, standingOf, upsert, waitsOn } from "./repository";
+import { ListingFeed, upsert } from "./repository";
 import { maySignIn, onlyViews } from "./review";
 
 const listed = (branch: string, seq: number, active: number, more: Partial<Listed> = {}): Listed => ({
@@ -13,6 +13,9 @@ const listed = (branch: string, seq: number, active: number, more: Partial<Liste
   pictures: 0,
   notes: 0,
   weakened: false,
+  standing: "none",
+  word: "no run yet",
+  waits: [],
   ...more,
 });
 
@@ -35,25 +38,6 @@ describe("the repository page", () => {
       ["b", 2],
     ]);
   });
-
-  test("each work says where its newest run stands and what waits on it", () => {
-    const ci = { kind: "ci" as const, job: "proof", run_id: 1, run_attempt: 1, runner_name: "runner" };
-    expect(standingOf(listed("a", 1, 1))).toBe("none");
-    expect(standingOf(listed("a", 1, 1, { latest: { head: "h", source: ci, state: "running", failed: 0 } }))).toBe("running");
-    expect(standingOf(listed("a", 1, 1, { latest: { head: "h", source: ci, state: "done", failed: 2 } }))).toBe("failed");
-    expect(standingOf(listed("a", 1, 1, { latest: { head: "h", source: ci, state: "done", failed: 0 } }))).toBe("passed");
-    expect(standingOf(listed("a", 1, 1, { latest: { head: "h", source: ci, state: "cancelled", failed: 0 } }))).toBe("cancelled");
-    // Passed checks with pictures, notes or a weakening still open wait for a person, not done.
-    const done = { head: "h", source: ci, state: "done" as const, failed: 0 };
-    expect(standingOf(listed("a", 1, 1, { latest: done, weakened: true }))).toBe("waits");
-    expect(standingOf(listed("a", 1, 1, { latest: done, pictures: 2 }))).toBe("waits");
-    expect(waitsOn(listed("a", 1, 1, { pictures: 1, notes: 2, weakened: true }))).toEqual([
-      "1 picture to look at",
-      "2 open notes",
-      "a weakening to accept",
-    ]);
-    expect(waitsOn(listed("a", 1, 1))).toEqual([]);
-  });
 });
 
 describe("where the page is", () => {
@@ -71,8 +55,8 @@ describe("where the page is", () => {
   });
 
   test("a share link only views and asks no one to sign in", () => {
-    expect(onlyViews({ login: null, shared: true })).toBe(true);
-    expect(maySignIn({ login: null, shared: true })).toBe(false);
+    expect(onlyViews("shared")).toBe(true);
+    expect(maySignIn("shared")).toBe(false);
     expect(maySignIn({ login: null })).toBe(true);
     expect(onlyViews({ login: "writer", role: "write" })).toBe(false);
   });

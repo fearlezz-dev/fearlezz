@@ -5,7 +5,7 @@
 //! The listing is derived from D1 when a page connects, and again for one work each time that
 //! work changes (`work::commit`), which the repository's room sends to its open pages.
 
-use fearlezz_proof::events::{Latest, Listed, Listing, Source};
+use fearlezz_proof::events::{Latest, Listed, Listing, Source, Standing};
 use fearlezz_proof::review::Review;
 use serde::Deserialize;
 use worker::{D1Database, Env, Headers, Request, Response};
@@ -68,7 +68,11 @@ impl Row {
             pictures: review.as_ref().map_or(0, |r| r.waiting().count() as u32),
             notes: self.notes as u32,
             weakened: review.as_ref().is_some_and(Review::weakenings_wait),
-        })
+            standing: Standing::None,
+            word: String::new(),
+            waits: Vec::new(),
+        }
+        .worded())
     }
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { picturesOf } from "./pictures";
-import type { Picture, Review, Run, Snapshot } from "./proof";
-import { carried, failedFor, localBy, standing, standingOf, verdictOf, waitsFor } from "./review";
+import type { Picture, Run, Snapshot } from "./proof";
+import { canAccept, canSay, carried, isViewer, localBy, roleOf, standingOf, verdictOf } from "./review";
 
 const picture: Picture = {
   name: "card.png",
@@ -46,36 +46,26 @@ describe("verdictOf", () => {
   });
 });
 
-describe("waitsFor", () => {
-  const review: Review = {
-    head: "aaa1111bbb",
-    state: "waits",
-    pictures: [
-      { check: "screens", name: "a.png", key: "1", standing: "waits" },
-      { check: "screens", name: "b.png", key: "2", standing: "waits" },
-    ],
-    weakened: [{ check: "tests", hows: ["it is gone"] }],
-  };
-
-  test("it says what this person can settle; a weakening fails the proof instead of waiting", () => {
-    expect(waitsFor(review, { login: "w", role: "write" })).toBe("2 pictures wait for your look at aaa1111");
-    expect(waitsFor(review, { login: null })).toBe("2 pictures wait for a look at aaa1111");
+describe("who looks", () => {
+  test("the host's line for each role is picked by what the person may do", () => {
+    const title = { read: "1 picture waits for a look at aaa1111", write: "1 picture waits for your look at aaa1111", admin: "x" };
+    expect(title[roleOf({ login: "w", role: "write" })]).toBe("1 picture waits for your look at aaa1111");
+    expect(title[roleOf({ login: null })]).toBe("1 picture waits for a look at aaa1111");
+    expect(title[roleOf("shared")]).toBe("1 picture waits for a look at aaa1111");
+    expect(roleOf(undefined)).toBe("read");
+    expect(canSay({ login: "w", role: "write" })).toBe(true);
+    expect(canSay({ login: "r", role: "read" })).toBe(false);
+    expect(canAccept({ login: "w", role: "write" })).toBe(false);
+    expect(canAccept({ login: "a", role: "admin" })).toBe(true);
   });
-});
 
-describe("failedFor", () => {
-  const review: Review = { head: "aaa1111bbb", state: "failed", pictures: [], weakened: [{ check: "tests", hows: ["it is gone"] }] };
-
-  test("a proof that fails on what it weakens says it waits for an admin's accept", () => {
-    expect(failedFor(review, { login: "w", role: "write" })).toBe(
-      "The proof of aaa1111 failed: what it weakens waits for an admin's accept",
-    );
-    expect(failedFor(review, { login: "a", role: "admin" })).toBe(
-      "The proof of aaa1111 failed: what it weakens waits for your accept",
-    );
-    const accept = { head: "aaa1111bbb", weakened: review.weakened, by: "admin", at: 1 };
-    expect(failedFor({ ...review, accept }, undefined)).toBe("The proof of aaa1111 failed");
-    expect(failedFor({ ...review, weakened: [] }, undefined)).toBe("The proof of aaa1111 failed");
+  test("only a viewer as the host answers it is taken", () => {
+    expect(isViewer({ login: null })).toBe(true);
+    expect(isViewer({ login: "w", role: "write" })).toBe(true);
+    expect(isViewer({ login: "w", role: "owner" })).toBe(false);
+    expect(isViewer({ login: "w" })).toBe(false);
+    expect(isViewer({ error: "sign in" })).toBe(false);
+    expect(isViewer(null)).toBe(false);
   });
 });
 
@@ -94,20 +84,6 @@ const note = (id: string, picture: string, state: "open" | "resolved" = "open") 
 });
 
 describe("needs change", () => {
-  test("the headline counts the pictures open notes are on", () => {
-    const review: Review = {
-      head: "aaa1111bbb",
-      state: "needs_change",
-      pictures: [
-        { check: "screens", name: "a.png", key: "1", standing: "needs_change" },
-        { check: "screens", name: "b.png", key: "2", standing: "waits" },
-      ],
-      weakened: [],
-      notes: [note("n1", "a.png"), note("n2", "a.png")],
-    };
-    expect(standing(review)).toBe("1 picture needs change at aaa1111");
-  });
-
   test("an open note on a picture outweighs looks right, until it is resolved", () => {
     const first = run("r1", "aaa1111", "k1");
     const shown = picturesOf(first)[0]!;

@@ -5,6 +5,7 @@
 
 import type { Note, NoteSide, Region, Run, Snapshot } from "./proof";
 import { post, refusal } from "./api";
+import { short } from "./short";
 
 /** One side of a pair of pictures. */
 export type Side = "before" | "after";
@@ -32,7 +33,7 @@ export const onSide = (note: Note, side: Side) => note.side === side || note.sid
 /** Where an old note was made, beside who made it: an earlier push, or an earlier run. */
 export function fromWhere(note: Note, run: Run): string {
   if (note.run === run.id) return "";
-  if (note.head !== run.head) return `from an earlier push (${note.head.slice(0, 7)})`;
+  if (note.head !== run.head) return `from an earlier push (${short(note.head)})`;
   return "from an earlier run";
 }
 

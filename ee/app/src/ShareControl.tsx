@@ -2,8 +2,8 @@
 // anyone the work live, view only, see the live links, and revoke one.
 
 import { For, Show, createSignal } from "solid-js";
-import type { Work } from "./proof";
-import { type Share, listShares, makeShare, revokeShare } from "./share";
+import type { Share, Work } from "./proof";
+import { listShares, makeShare, revokeShare } from "./share";
 import { ago } from "./ago";
 
 export function ShareControl(props: { work: Work }) {

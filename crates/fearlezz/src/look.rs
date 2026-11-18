@@ -17,7 +17,7 @@ use crate::store::{Outcome, RunResult, Store};
 /// The journal name base runs are recorded under.
 pub(crate) const BASE_JOURNAL: &str = "(base)";
 
-pub(crate) use fearlezz_proof::look::{Change, Item, Look};
+pub(crate) use fearlezz_proof::look::{Change, DiffLine, Item, Look};
 
 /// The look saved in the folder `dir`, if any. Its pictures are relative to that folder,
 /// wherever it was when the look was written.
@@ -75,22 +75,29 @@ pub(crate) fn text_diff(look: &Look, item: &Item) -> String {
     crate::text::unified(&item.name, &side(&item.before), &side(&item.after))
 }
 
+/// How many kept lines stay on each side of a change in a text's diff the bundle carries.
+const CONTEXT: usize = 3;
+
 /// How two texts compare, from their files: the same bytes, or changed with the lines it adds
-/// and removes in a summary.
-fn compare_texts(before: &Path, after: &Path) -> Result<(Change, String)> {
+/// and removes in a summary and its lines against the before.
+fn compare_texts(before: &Path, after: &Path) -> Result<(Change, String, Option<Vec<DiffLine>>)> {
     let (b, a) = (fs::read(before)?, fs::read(after)?);
     if b == a {
-        return Ok((Change::Same, "same".into()));
+        return Ok((Change::Same, "same".into(), None));
     }
-    let (added, removed) =
-        crate::text::counts(&crate::text::readable(&b), &crate::text::readable(&a));
+    let (b, a) = (crate::text::readable(&b), crate::text::readable(&a));
+    let (added, removed) = crate::text::counts(&b, &a);
     let lines = |n: usize| if n == 1 { "line" } else { "lines" };
     let summary = match (added, removed) {
         (0, r) => format!("{r} {} removed", lines(r)),
         (a, 0) => format!("{a} {} added", lines(a)),
         (a, r) => format!("{a} {} added, {r} removed", lines(a)),
     };
-    Ok((Change::Changed, summary))
+    Ok((
+        Change::Changed,
+        summary,
+        Some(crate::text::shown(&b, &a, CONTEXT)),
+    ))
 }
 
 pub(crate) enum LookOutcome {
@@ -416,6 +423,7 @@ fn build(
             after: None,
             comparison: None,
             flaky: check.pictures.is_flaky(&a.name),
+            diff: None,
         };
         let copies = (
             b.map(|(run, b)| copy("before", run, b)).transpose(),
@@ -453,6 +461,7 @@ fn build(
                 after: None,
                 comparison: None,
                 flaky: check.pictures.is_flaky(&b.name),
+                diff: None,
             },
             None,
         ));
@@ -479,9 +488,10 @@ fn build(
                         let mut item = item.clone();
                         if let (Some((b, a)), true) = (pair, item.kind == TEXT) {
                             match compare_texts(b, a) {
-                                Ok((change, summary)) => {
+                                Ok((change, summary, diff)) => {
                                     item.change = change;
                                     item.summary = summary;
+                                    item.diff = diff;
                                 }
                                 Err(e) => {
                                     item.change = Change::Unreadable;
