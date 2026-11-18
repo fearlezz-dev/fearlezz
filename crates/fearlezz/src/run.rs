@@ -11,6 +11,7 @@ use anyhow::{Context as _, Result, bail};
 use jiff::Timestamp;
 
 use crate::config::Check;
+use crate::record::Target;
 use crate::store::{Inputs, Outcome, RunResult, Store};
 
 /// Env vars every check gets, so ordinary tools work. Everything else must be declared.
@@ -272,132 +273,241 @@ fn run_command(
     })
 }
 
-/// Runs the check's command in a clean env, inside the environment's shell if any, recording
-/// its app's window when it has `record`. Returns whether it passed and its exit code.
+/// Runs the check's command in a clean env, inside the environment's shell if any, on the
+/// screen it needs: this machine's own, or a Linux display or iOS simulator of Fearlezz's own
+/// kept until its last step ends. Returns whether it passed and its exit code.
 fn spawn(
     check: &Check,
     secrets: &[(String, String)],
     dir: &Path,
-    out: File,
+    mut out: File,
     at: &Where<'_>,
 ) -> Result<(bool, Option<i32>)> {
-    // A tool that prints findings on stdout keeps them apart from its log; only the last
-    // step's stdout holds them, the steps before it prepare.
-    let stdout_path = dir.join("stdout.txt");
-    let stdout = match &check.findings {
-        Some(f) if f.read.reads_stdout() => File::create(&stdout_path)?,
-        _ => out.try_clone()?,
+    let run = Run {
+        check,
+        secrets,
+        dir,
+        at,
     };
-    let Some((last, before)) = check.steps.split_last() else {
-        bail!("check {} has no command to run", check.id);
-    };
-    for step in before {
-        let status = command(check, step, dir, out.try_clone()?, &out, at, secrets)?
-            .status()
-            .with_context(|| format!("starting check {}", check.id))?;
-        if !status.success() {
-            return Ok((false, status.code()));
+    match &check.screen {
+        Target::Window => run.on(None::<crate::record::System>, &[], out),
+        Target::Linux { size } => {
+            let display = match crate::record::display::Display::start(*size) {
+                Ok(d) => d,
+                Err(e) => return failed(&mut out, "a Linux display", &e),
+            };
+            // GTK and others take Wayland when they find it; this display is X.
+            let env = [
+                ("DISPLAY", display.name()),
+                ("GDK_BACKEND", "x11".to_string()),
+            ];
+            run.on(Some(display), &env, out)
+        }
+        Target::Ios { device } => {
+            let films = check
+                .pictures
+                .record
+                .as_ref()
+                .is_some_and(|r| r.film.is_some());
+            let simulator = match crate::record::simulator::Simulator::lease(
+                device.as_deref(),
+                films,
+                &mut out,
+            ) {
+                Ok(s) => s,
+                Err(e) => return failed(&mut out, "the iOS simulator", &e),
+            };
+            let env = [("FEARLEZZ_DEVICE", simulator.udid().to_string())];
+            run.on(Some(simulator), &env, out)
         }
     }
-    let mut cmd = command(check, last, dir, stdout, &out, at, secrets)?;
-    let Some(record) = &check.pictures.record else {
-        let Some(budget) = &check.timeout else {
-            let status = cmd
-                .status()
-                .with_context(|| format!("starting check {}", check.id))?;
-            return Ok((status.success(), status.code()));
-        };
-        // Its own process group, so stopping it stops what it started too.
-        #[cfg(unix)]
-        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-        let mut child = cmd
-            .spawn()
+}
+
+/// Runs `cmd` to its end, or stops it at the check's budget when it has one.
+fn budgeted(check: &Check, mut cmd: Command, out: File) -> Result<(bool, Option<i32>)> {
+    let Some(budget) = &check.timeout else {
+        let status = cmd
+            .status()
             .with_context(|| format!("starting check {}", check.id))?;
-        let until = Instant::now() + budget.time;
-        loop {
-            if let Some(status) = child.try_wait()? {
-                return Ok((status.success(), status.code()));
-            }
-            if Instant::now() >= until {
-                crate::record::stop(&mut child)?;
-                use std::io::Write as _;
-                let mut log = out;
-                writeln!(
-                    log,
-                    "fearlezz: {} exceeded its {budget} budget and was stopped",
-                    check.id
-                )?;
-                return Ok((false, None));
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        return Ok((status.success(), status.code()));
     };
-    // Its own process group, so stopping it after `seconds` stops the app it started too.
+    // Its own process group, so stopping it stops what it started too.
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    let mut log = out;
-    // The windows open before the command starts are never recorded.
-    let mut recorder = match crate::record::Recorder::new(
-        crate::record::System::default(),
-        record,
-        crate::record::Place::from_env(),
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            use std::io::Write as _;
-            writeln!(log, "record: {e:#}")?;
-            return Ok((false, None));
-        }
-    };
     let mut child = cmd
         .spawn()
         .with_context(|| format!("starting check {}", check.id))?;
-    // A recorder that panics must still stop the app the command started.
-    let recorded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        recorder.during(&mut child, dir, &mut log)
-    }))
-    .unwrap_or_else(|panic| {
-        Err(anyhow::anyhow!(
-            "the recorder failed: {}",
-            crate::panic_text(&*panic)
-        ))
-    });
-    // Every film, failed ones too, so how often films fail can be counted machine wide.
-    let films = recorder.films();
-    let noted = if films.is_empty() {
-        Ok(())
-    } else {
-        crate::git::cache_dir().and_then(|dir| {
-            crate::record::note_films(
-                &dir.join("films.jsonl"),
-                at.root,
-                &check.id,
-                films,
-                &crate::record::Machine::now(),
-            )
-        })
-    };
-    if let Err(e) = noted {
-        use std::io::Write as _;
-        writeln!(
-            log,
-            "record: could not note the film in the machine's film log: {e:#}"
-        )?;
-    }
-    let recorded = match recorded {
-        Ok(r) => r,
-        Err(e) => {
-            use std::io::Write as _;
-            writeln!(log, "record: {e:#}")?;
+    let until = Instant::now() + budget.time;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok((status.success(), status.code()));
+        }
+        if Instant::now() >= until {
             crate::record::stop(&mut child)?;
+            use std::io::Write as _;
+            let mut log = out;
+            writeln!(
+                log,
+                "fearlezz: {} exceeded its {budget} budget and was stopped",
+                check.id
+            )?;
             return Ok((false, None));
         }
-    };
-    let code = match &recorded.ended {
-        crate::record::Ended::Exited(status) => status.code(),
-        crate::record::Ended::AfterSeconds | crate::record::Ended::WaitedTooLong => None,
-    };
-    Ok((recorded.passed(), code))
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Says in the check's log why its screen or recording failed; the check fails.
+fn failed(log: &mut File, what: &str, e: &anyhow::Error) -> Result<(bool, Option<i32>)> {
+    use std::io::Write as _;
+    writeln!(log, "{what}: {e:#}")?;
+    Ok((false, None))
+}
+
+/// A check about to run, with what its commands get.
+struct Run<'a> {
+    check: &'a Check,
+    secrets: &'a [(String, String)],
+    dir: &'a Path,
+    at: &'a Where<'a>,
+}
+
+impl Run<'_> {
+    /// One step as a command, with what its screen gives it in `env`.
+    fn command(
+        &self,
+        step: &str,
+        stdout: File,
+        log: &File,
+        env: &[(&str, String)],
+    ) -> Result<Command> {
+        let mut cmd = command(
+            self.check,
+            step,
+            self.dir,
+            stdout,
+            log,
+            self.at,
+            self.secrets,
+        )?;
+        cmd.envs(env.iter().map(|(name, value)| (name, value)));
+        Ok(cmd)
+    }
+
+    /// Runs its steps on `owned`, a screen of Fearlezz's own kept until the last step ends, or
+    /// on this machine's own screen without one; recording the last when the check has
+    /// `record`, and stopping it at its budget otherwise.
+    fn on<S: crate::record::Screen>(
+        self,
+        owned: Option<S>,
+        env: &[(&str, String)],
+        out: File,
+    ) -> Result<(bool, Option<i32>)> {
+        let check = self.check;
+        // A tool that prints findings on stdout keeps them apart from its log; only the last
+        // step's stdout holds them, the steps before it prepare.
+        let stdout_path = self.dir.join("stdout.txt");
+        let stdout = match &check.findings {
+            Some(f) if f.read.reads_stdout() => File::create(&stdout_path)?,
+            _ => out.try_clone()?,
+        };
+        let Some((last, before)) = check.steps.split_last() else {
+            bail!("check {} has no command to run", check.id);
+        };
+        for step in before {
+            let status = self
+                .command(step, out.try_clone()?, &out, env)?
+                .status()
+                .with_context(|| format!("starting check {}", check.id))?;
+            if !status.success() {
+                return Ok((false, status.code()));
+            }
+        }
+        let cmd = self.command(last, stdout, &out, env)?;
+        let Some(record) = &check.pictures.record else {
+            let ran = budgeted(check, cmd, out);
+            drop(owned);
+            return ran;
+        };
+        match owned {
+            Some(screen) => self.recording(cmd, record, screen, crate::record::Place::Own, out),
+            None => self.recording(
+                cmd,
+                record,
+                crate::record::System::default(),
+                crate::record::Place::from_env(),
+                out,
+            ),
+        }
+    }
+
+    /// Runs `cmd` while recording `screen`.
+    fn recording<S: crate::record::Screen>(
+        self,
+        mut cmd: Command,
+        record: &crate::record::Spec,
+        screen: S,
+        place: crate::record::Place,
+        mut log: File,
+    ) -> Result<(bool, Option<i32>)> {
+        let Run { check, dir, at, .. } = self;
+        // Its own process group, so stopping it after `seconds` stops the app it started too.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        // The windows open before the command starts are never recorded.
+        let mut recorder = match crate::record::Recorder::new(screen, record, place) {
+            Ok(r) => r,
+            Err(e) => return failed(&mut log, "record", &e),
+        };
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("starting check {}", check.id))?;
+        // A recorder that panics must still stop the app the command started.
+        let recorded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recorder.during(&mut child, dir, &mut log)
+        }))
+        .unwrap_or_else(|panic| {
+            Err(anyhow::anyhow!(
+                "the recorder failed: {}",
+                crate::panic_text(&*panic)
+            ))
+        });
+        // Every film of a window, failed ones too, so how often films fail can be counted
+        // machine wide.
+        let films = recorder.films();
+        let noted = if films.is_empty() || place == crate::record::Place::Own {
+            Ok(())
+        } else {
+            crate::git::cache_dir().and_then(|dir| {
+                crate::record::note_films(
+                    &dir.join("films.jsonl"),
+                    at.root,
+                    &check.id,
+                    films,
+                    &crate::record::Machine::now(),
+                )
+            })
+        };
+        if let Err(e) = noted {
+            use std::io::Write as _;
+            writeln!(
+                log,
+                "record: could not note the film in the machine's film log: {e:#}"
+            )?;
+        }
+        let recorded = match recorded {
+            Ok(r) => r,
+            Err(e) => {
+                crate::record::stop(&mut child)?;
+                return failed(&mut log, "record", &e);
+            }
+        };
+        let code = match &recorded.ended {
+            crate::record::Ended::Exited(status) => status.code(),
+            crate::record::Ended::AfterSeconds | crate::record::Ended::WaitedTooLong => None,
+        };
+        Ok((recorded.passed(), code))
+    }
 }
 
 /// `script` run the way a check runs it: through `sh -c` inside the `[env]` `shell`, in the
