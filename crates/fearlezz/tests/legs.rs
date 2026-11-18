@@ -326,6 +326,27 @@ fn dropping_a_platform_from_a_check_weakens_it_at_the_gate() {
     assert!(text.contains("it no longer runs on mac"), "{text}");
 }
 
+#[test]
+fn moving_a_platform_to_another_machine_weakens_it_at_the_gate() {
+    let repo = branch();
+    repo.write(
+        "fearlezz.toml",
+        &std::fs::read_to_string(repo.path("fearlezz.toml"))
+            .unwrap()
+            .replace(
+                r#"matrix = { xcode = "16" }"#,
+                r#"matrix = { xcode = "15" }"#,
+            ),
+    );
+    repo.commit("older xcode");
+    for id in ["linux", "mac", "mac/ui"] {
+        assert_ok(&run_leg(&repo, id, &[], &[]));
+    }
+    let (out, text, _) = gate(&repo, &[], &[]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(text.contains("it runs on another machine"), "{text}");
+}
+
 // Time budgets
 
 #[test]

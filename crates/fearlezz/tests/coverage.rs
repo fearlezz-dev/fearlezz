@@ -463,6 +463,26 @@ fn a_changed_test_file_is_not_measured() {
 }
 
 #[test]
+fn reading_coverage_another_way_weakens_the_proof() {
+    let repo = Repo::new(LCOV, &[("src/a.txt", OLD)]);
+    repo.branch("feat/x");
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &config.replace("coverage = \"lcov\"", "coverage = \"jacoco\""),
+    );
+    repo.commit("read jacoco");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("weakens tests: it reads its coverage as jacoco instead of lcov"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn lowering_the_target_weakens_the_proof() {
     let repo = Repo::new(LCOV, &[("src/a.txt", OLD)]);
     repo.branch("feat/x");
