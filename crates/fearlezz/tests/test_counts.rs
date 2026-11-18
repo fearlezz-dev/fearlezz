@@ -102,6 +102,13 @@ fn zero_tests_fails_the_check() {
         "{}",
         out.stdout
     );
+    assert!(
+        out.stdout.contains(
+            "  fix: make it run its tests, or give it the tests reader its runner needs"
+        ),
+        "{}",
+        out.stdout
+    );
 }
 
 #[test]

@@ -35,6 +35,7 @@ mod sops;
 mod state;
 mod store;
 mod text;
+mod why;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -49,6 +50,7 @@ use git::Git;
 use journal::{Event, Journal};
 use state::{CheckState, View, Worktree};
 use store::{Outcome, Store};
+use why::Why;
 
 #[derive(Parser)]
 #[command(
@@ -1004,28 +1006,11 @@ fn targets<'a>(
 }
 
 fn print_failure(f: &store::RunResult) {
-    let code = f
-        .exit_code
-        .map_or_else(|| "signal".to_string(), |c| c.to_string());
-    if f.findings.iter().any(|x| x.level == findings::Level::Gate) {
-        println!("fail {}: blocking findings", f.check);
-    } else {
-        if let Some(name) = &f.missing_secret {
-            println!("fail {}: SecretSpec could not give it {name}", f.check);
-            println!("  fix: {}", secret_fix(name));
-        } else if let Some(why) = &f.no_preview {
-            let (why, fix) = no_preview(why);
-            println!("fail {}: {why}", f.check);
-            println!("  fix: {fix}");
-        } else if let Some(tool) = f
-            .not_found()
-            .then(|| run::missing_command(&f.log))
-            .flatten()
-        {
-            println!("fail {}: {tool} was not found", f.check);
-            println!("  fix: {}", install_fix(&tool));
-        } else if let Some(failed) = &f.generated {
-            println!("fail {}: {}", f.check, failed.why());
+    let why = Why::of(f);
+    println!("fail {}{}", f.check, why.line());
+    match &why {
+        Why::NoTests(said) => said.iter().for_each(|line| println!("  {line}")),
+        Why::Generated(_) => {
             let path = f.dir.join(generated::DIFF);
             if let Ok(diff) = std::fs::read_to_string(&path) {
                 let (shown, left) = text::head(&diff, 40);
@@ -1037,26 +1022,22 @@ fn print_failure(f: &store::RunResult) {
                 }
                 println!("  diff: {}", path.display());
             }
-            println!("  fix: {}", failed.fix(&f.check, true));
-            print_findings(f);
-            return;
-        } else if f.tests == Some(0) && f.exit_code == Some(0) {
-            println!("fail {}: it ran no tests, so it proves nothing", f.check);
-            for why in &f.proof_errors {
-                println!("  {why}");
-            }
-        } else if let (Some(0), Some(why)) = (f.exit_code, f.proof_errors.first()) {
-            // Its command passed, but what it had to leave (a coverage report) is missing.
-            println!("fail {}: {why}", f.check);
-        } else {
-            println!("fail {} (exit {code})", f.check);
         }
+        _ => {}
+    }
+    if let Some(fix) = why.fix_here(&f.check) {
+        println!("  fix: {fix}");
+    }
+    // The diff and the findings say what blocks; otherwise the end of the log does.
+    if !matches!(why, Why::Gate(_) | Why::Generated(_)) {
         for line in run::tail(&f.log, 12) {
             println!("  {line}");
         }
         println!("  log: {}", f.log.display());
     }
-    print_cases(f);
+    if !matches!(why, Why::Generated(_)) {
+        print_cases(f);
+    }
     print_findings(f);
 }
 
@@ -1287,7 +1268,8 @@ impl Report {
         if self.ci {
             println!("{word} {}  {secs:.1} s{tests}{coverage}  {run}", check.id);
         }
-        let failure = (result.outcome == Outcome::Failed).then(|| failure_item(result));
+        let failure =
+            (result.outcome == Outcome::Failed).then(|| Why::of(result).item(&result.check));
         let mut entry = proof::ran(check, stage, result, failure);
         entry.platform.clone_from(&self.platform);
         self.stream_step(|s| s.finished(&entry, look));
@@ -1407,130 +1389,6 @@ fn open_run(
             println!("proof page not sent: {e:#}");
             None
         }
-    }
-}
-
-/// How to make a missing tool reachable for checks.
-fn install_fix(tool: &str) -> String {
-    let nix = if run::NIX_TOOLS.contains(&tool) {
-        format!(" (in devenv.nix: add `pkgs.{tool}` to packages)")
-    } else {
-        String::new()
-    };
-    format!(
-        "install {tool} where checks find it: the project's dev dependencies ({}), its devenv{nix}, \
-         or PATH",
-        process::TOOL_DIRS.join(", ")
-    )
-}
-
-/// How to let SecretSpec give a check the secret `name`.
-fn secret_fix(name: &str) -> String {
-    format!(
-        "declare {name} in secretspec.toml and store it with its provider (1Password: \
-         `secretspec set {name}`); sign in to the provider locally (`op signin`), and give CI \
-         its token (1Password: the OP_SERVICE_ACCOUNT_TOKEN secret in the job's env)"
-    )
-}
-
-/// Why a check's preview could not be deployed, and what to do about it.
-fn no_preview(why: &env::NoPreview) -> (String, String) {
-    let by_hand = "run `[env] preview` by hand at the checkout root, with FEARLEZZ_PREVIEW_NAME set, \
-                   and read its log (above)";
-    match why {
-        env::NoPreview::Failed { code } => (
-            format!(
-                "the preview failed (exit {})",
-                code.map_or_else(|| "signal".to_string(), |c| c.to_string())
-            ),
-            format!("make it deploy: {by_hand}"),
-        ),
-        env::NoPreview::NoUrl => (
-            "the preview printed no URL".to_string(),
-            format!(
-                "make [env] preview print the URL of its deploy (the last http:// or https:// URL \
-                 it prints is taken): {by_hand}"
-            ),
-        ),
-        env::NoPreview::Secret { name } => (
-            format!("SecretSpec could not give the preview {name}"),
-            secret_fix(name),
-        ),
-        env::NoPreview::NoSecretSpec => (
-            "secretspec was not found for the preview's secrets".to_string(),
-            install_fix("secretspec"),
-        ),
-        env::NoPreview::Unset => (
-            "its checkout's [env] has no preview command".to_string(),
-            "add a preview command to [env] in fearlezz.toml".to_string(),
-        ),
-    }
-}
-
-fn failure_item(f: &store::RunResult) -> proof::Item {
-    let what = format!("check `{}` failed", f.check);
-    if let Some(why) = &f.no_preview {
-        let (why, fix) = no_preview(why);
-        return proof::Item { what, why, fix };
-    }
-    if let Some(name) = &f.missing_secret {
-        return proof::Item {
-            what,
-            why: format!("SecretSpec could not give it {name}"),
-            fix: secret_fix(name),
-        };
-    }
-    if let Some(tool) = f
-        .not_found()
-        .then(|| run::missing_command(&f.log))
-        .flatten()
-    {
-        return proof::Item {
-            what,
-            why: format!("{tool} was not found"),
-            fix: install_fix(&tool),
-        };
-    }
-    if let Some(found) = f.findings.iter().find(|x| x.level == findings::Level::Gate) {
-        return proof::Item {
-            what,
-            why: format!("blocking findings, such as {found}"),
-            fix: "fix the findings; the check page lists them".into(),
-        };
-    }
-    if let Some(failed) = &f.generated {
-        return proof::Item {
-            what,
-            why: failed.why(),
-            fix: failed.fix(&f.check, false),
-        };
-    }
-    if f.tests == Some(0) && f.exit_code == Some(0) {
-        let detail = f
-            .proof_errors
-            .first()
-            .map(|e| format!(": {e}"))
-            .unwrap_or_default();
-        return proof::Item {
-            what,
-            why: format!("it ran no tests, so it proves nothing{detail}"),
-            fix: "make it run its tests, or give it the tests reader its runner needs".into(),
-        };
-    }
-    if let (Some(0), Some(why)) = (f.exit_code, f.proof_errors.first()) {
-        return proof::Item {
-            what,
-            why: why.clone(),
-            fix: "make its command leave what the check reads".into(),
-        };
-    }
-    let code = f
-        .exit_code
-        .map_or_else(|| "a signal".to_string(), |c| format!("exit code {c}"));
-    proof::Item {
-        what,
-        why: format!("its command ended with {code}"),
-        fix: "fix what it reports; the check page shows the end of its output".into(),
     }
 }
 
