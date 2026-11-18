@@ -229,6 +229,10 @@ impl Hasher {
         if let Some(dir) = &check.dir {
             parts.insert("(dir)".into(), sha256(dir.as_bytes()));
         }
+        // The simulator's device type or the display's size shape what the check sees.
+        if check.screen.owned() {
+            parts.insert("(screen)".into(), definition(&check.screen));
+        }
         if let Some(services) = &check.services {
             parts.insert("(services)".into(), sha256(services.as_bytes()));
         }

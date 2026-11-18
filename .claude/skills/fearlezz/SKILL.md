@@ -75,6 +75,23 @@ record = { still = "home", film = "home", seconds = 3 }
 
 Only a window that appears after the command starts is recorded, never one already open, so quit the app before a run that names `window`. The still is taken once the window is up; the film runs until the command ends, or for `seconds`, after which Fearlezz stops the command and the check counts as passed. A run that goes `wait` seconds without a window (none appeared, or every window it opened closed while the command kept running) is stopped and fails. A run records its first window only; a later window keeps the command running but is not recorded. `flutter test integration_test -d macos` starts the app once per file, so film one entry file: `flutter-film` runs `integration_test/app_test.dart`. Where nothing can record, the check does not run: locally it fails with the one time fix; in CI it is listed as not run and does not block, since looks of app windows are proven on a developer's machine.
 
+A check that needs the iOS simulator or a Linux display says so in `needs`, with or without `record`. Fearlezz owns that screen, needs no Screen Recording, and runs it on CI's runners too; `record` then films or stills it:
+
+```toml
+[check.journeys]
+run = "flutter test integration_test/journeys_test.dart -d \"$FEARLEZZ_DEVICE\""
+stage = "merge"
+needs = ["ios"]                  # device = "iPad Air 11-inch (M4)"; by default the newest plain iPhone
+record = { film = "journeys" }
+
+[check.linux-tests]
+run = "flutter test integration_test -d linux"
+stage = "merge"
+needs = ["linux"]                # display = "1280x720" (the default); no xvfb-run
+```
+
+`ios` leases a booted simulator of Fearlezz's own (kept booted between runs, the apps a run installed removed and the keychain reset before and after) and hands its id in `FEARLEZZ_DEVICE`; a recording films the whole device screen from the first app that launches on it. `linux` starts a virtual display (Xvfb, no window manager) and hands it in `DISPLAY`; a recording films the first window that appears on it. Without `on`, the check runs on the platforms whose `os` its screen needs (`linux`, or `macos` for `ios`), else on the default one. A machine that can never have the screen (`linux` on a Mac, `ios` off macOS) leaves the check to CI: `left to CI <check>: needs Linux`, and it does not hold the work. A leg on the wrong OS, or a missing tool (no Xvfb, no iOS runtime), fails the check with the fix.
+
 Never set `FEARLEZZ_OFF_SCREEN` yourself: parking recorded windows off screen is the developer's choice for their machine. Drive the app from its own test; Fearlezz sends a recorded app no input.
 
 ## Seeing the work

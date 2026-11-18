@@ -107,6 +107,10 @@ pub(crate) enum Need {
     /// The deploy `[env] preview` makes of the checkout; its URL reaches the check as
     /// `FEARLEZZ_PREVIEW_URL`.
     Preview,
+    /// An iOS simulator Fearlezz leases; its id reaches the check in `FEARLEZZ_DEVICE`.
+    Ios,
+    /// A Linux display Fearlezz starts (Xvfb); it reaches the check in `DISPLAY`.
+    Linux,
 }
 
 /// The ordered stages of a change. The last one is the merge gate, where every check runs
@@ -145,6 +149,9 @@ pub(crate) struct Check {
     /// For a check that needs the preview: the command that deploys it and the names of the
     /// secrets it gets, part of its inputs.
     pub preview: Option<String>,
+    /// Where its app shows: this machine's own screen, or the simulator or Linux display its
+    /// `needs` names, with the device type or display size it asks for.
+    pub screen: crate::record::Target,
     /// For a check that reports findings: where they come from and which count.
     pub findings: Option<FindingsSpec>,
     /// For a check that runs tests: where it says how many ran. Zero tests fails it.
@@ -313,6 +320,52 @@ fn record_weakenings(b: &crate::record::Spec, h: &crate::record::Spec) -> Vec<St
     found
 }
 
+/// The screen a check's `needs` names, with its `device` or `display`.
+fn screen(c: &RawCheck) -> Result<crate::record::Target> {
+    use crate::record::Target;
+    let ios = c.needs.contains(&Need::Ios);
+    let linux = c.needs.contains(&Need::Linux);
+    if ios && linux {
+        bail!("needs both ios and linux; a check runs on one machine, so split it in two");
+    }
+    if c.device.is_some() && !ios {
+        bail!("device is only for a check that needs = [\"ios\"]");
+    }
+    if c.display.is_some() && !linux {
+        bail!("display is only for a check that needs = [\"linux\"]");
+    }
+    let screen = if ios {
+        Target::Ios {
+            device: c.device.clone(),
+        }
+    } else if linux {
+        let size = match &c.display {
+            Some(text) => crate::record::parse_size(text).with_context(|| {
+                format!("display = \"{text}\" is not a width and height such as \"1280x720\"")
+            })?,
+            None => crate::record::DEFAULT_SIZE,
+        };
+        Target::Linux { size }
+    } else {
+        Target::Window
+    };
+    let crops = c
+        .record
+        .as_ref()
+        .and_then(|r| r.get("crop_top"))
+        .and_then(|crop| {
+            crop.as_float()
+                .or_else(|| crop.as_integer().map(|i| i as f64))
+        })
+        .is_some_and(|crop| crop > 0.0);
+    if crops && screen != Target::Window {
+        bail!(
+            "record: crop_top is only for a window; the simulator and a Linux display have no title bar"
+        );
+    }
+    Ok(screen)
+}
+
 /// A check Fearlezz runs in process.
 #[derive(Clone, Debug)]
 pub(crate) enum Builtin {
@@ -450,6 +503,10 @@ struct RawCheck {
     schedule: bool,
     #[serde(default)]
     needs: Vec<Need>,
+    /// The simulator's device type, with `needs = ["ios"]`.
+    device: Option<String>,
+    /// The Linux display's width and height, such as "1280x720", with `needs = ["linux"]`.
+    display: Option<String>,
     findings: Option<RawFindings>,
     tests: Option<toml::Value>,
     coverage: Option<toml::Value>,
@@ -626,6 +683,7 @@ impl Config {
                     stages.0.join(", ")
                 )
             })?;
+            let screen = screen(&c).with_context(|| format!("check {id}"))?;
             let steps = match c.run {
                 RawRun::One(command) => vec![command],
                 RawRun::Steps(steps) if steps.is_empty() => {
@@ -659,7 +717,7 @@ impl Config {
             let inputs = globs(own.iter().chain(shell_inputs()))
                 .with_context(|| format!("check {id}: inputs"))?;
             checks.push(Check {
-                on: crate::legs::Platform::on(&platforms, c.on)
+                on: crate::legs::Platform::on(&platforms, c.on, screen.os())
                     .with_context(|| format!("check {id}"))?,
                 job: crate::legs::job(c.job).with_context(|| format!("check {id}"))?,
                 timeout: c
@@ -722,6 +780,7 @@ impl Config {
                 secrets: c.secrets,
                 schedule: c.schedule,
                 needs: c.needs,
+                screen,
                 services: if needs_services {
                     services.clone()
                 } else {
@@ -929,6 +988,7 @@ fn builtin_check(
         secrets: Vec::new(),
         schedule: false,
         needs: Vec::new(),
+        screen: crate::record::Target::Window,
         services: None,
         preview: None,
         findings: Some(FindingsSpec {

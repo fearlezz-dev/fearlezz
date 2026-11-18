@@ -1,0 +1,76 @@
+# docs/drive/recording-beyond-macos/record.yaml: the working state of recording beyond macOS windows.
+goal: record works beyond macOS windows, on the iOS simulator and on Linux under a virtual display, so CI pictures work beyond Playwright and headless Flutter
+
+pieces:
+  - id: where-record-looks
+    status: done
+    tries:
+      - id: fearlezz-owns-the-screen
+        what: record gets `on` (window, ios, x11); Fearlezz boots the simulator or starts Xvfb, hands it to the command, records it
+        state: picked
+        why: removes each project's own recorder (arcleaf's Go and ffmpeg pipe, TypewriterV1's xtask), and both run on CI runners where window recording cannot
+      - id: project-captures
+        what: the project writes films itself, Fearlezz collects them by glob
+        state: dropped
+        why: keeps the shell glue this should remove
+  - id: simulator-lifecycle
+    status: done
+    tries:
+      - id: leased-pool
+        what: Fearlezz keeps its own booted simulators per device type, a run leases a free one and removes the apps it installed afterwards
+        taught: "on this Mac: new device first boot 76 s, boot after erase 51 s, reboot 22 s, already booted 0 s"
+        state: picked
+        why: about 0 s once warm; a look runs the check twice and many worktrees run at once
+  - id: x11-display
+    status: done
+    tries:
+      - id: xvfb-x11rb-ffmpeg
+        what: Xvfb picks its display (-displayfd); the first mapped top level window is read over X (x11rb GetImage) at 15 fps into ffmpeg's raw input
+        state: working
+        why: needs only Xvfb and the ffmpeg looks already use; no x11grab build of ffmpeg, no window manager
+        evidence: [crates/fearlezz/tests/record.rs a_linux_display_records_the_window_that_appears]
+  - id: ios-simulator
+    status: done
+    tries:
+      - id: simctl-io
+        what: lease a booted fearlezz device, record with simctl io screenshot and recordVideo
+        taught: "the first iPhone of the newest runtime was a foldable with two displays on a second 27.2 runtime; now the newest plain iPhone across runtimes, and a device with several displays uses its primary"
+        state: working
+        evidence: [crates/fearlezz/tests/record.rs an_ios_simulator_records_the_app_the_command_launches]
+  - id: left-to-ci
+    status: done
+    tries:
+      - id: not-run-here
+        what: a screen this machine can never have is left to CI locally and out of the work; CI proves it on a platform of its OS, which `on` defaults to
+        state: picked
+
+decided:
+  - id: owns-screen
+    what: "A. Fearlezz owns it: record gets on = window | ios | linux; Fearlezz boots it, films it, works in CI"
+  - id: kept-booted
+    what: "Kept booted, leased: about 0 s warm; apps it installed are removed after"
+  - id: wrong-os
+    what: "Not run, CI proves: local work can finish; CI runs it and shows the film"
+  - id: scope
+    what: "Just the screens: ship now; piece checks and clips later"
+  - id: screen-key
+    what: the key is record.screen, not record.on, since multi-job CI settled `on = [platforms]` on a check
+    why: two `on` keys on one check would read alike and mean different things
+  - id: screen-need
+    what: "needs = [...]: any check gets the screen; record films it"
+    why: a review found checks that need the screen without pictures (GrammarGuard's integration tests under xvfb-run); supersedes screen-key
+
+open: []
+
+slices:
+  - id: config
+    tests: [locally_a_screen_this_machine_never_has_is_left_to_ci, a_record_names_a_screen_fearlezz_knows, a_record_refuses_what_its_screen_does_not_have]
+    status: done
+  - id: x11
+    tests: [a_linux_display_records_the_window_that_appears]
+    status: done
+  - id: ios
+    tests: [an_ios_simulator_records_the_app_the_command_launches]
+    status: done
+
+next: Finish the proof, fresh review, PR. Later and separate: flutter piece checks for ios and linux, a film per test case.

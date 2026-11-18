@@ -1,7 +1,8 @@
 //! Recording an app's window from outside the app: a still (PNG) or a film (MP4) of one
 //! window, found by pid, bundle id, app name or title, or as the window of an app a check's
-//! command started. macOS only (ScreenCaptureKit); elsewhere every call says it cannot
-//! record here.
+//! command started: on this Mac's screen (ScreenCaptureKit; elsewhere every call says it
+//! cannot record here), on an iOS simulator Fearlezz leases ([`simulator`]) or on a Linux
+//! display it starts ([`display`]).
 //!
 //! A check with `record` runs its command while Fearlezz waits for a window that appeared
 //! after the command started, takes the still, films until the command ends (or `seconds`
@@ -28,6 +29,10 @@ mod stub;
 use stub as sys;
 #[cfg(target_os = "macos")]
 mod place;
+// Both compile everywhere so their code is linted where the proof runs; whether a machine
+// can have their screen is [`Target::never_here`].
+pub(crate) mod display;
+pub(crate) mod simulator;
 #[cfg(not(target_os = "macos"))]
 use stub as place;
 
@@ -82,6 +87,8 @@ pub(crate) enum Pick<'a> {
     Named(&'a str),
     /// A window of one of these processes: the ones a check's command started.
     Started(BTreeSet<i32>),
+    /// Any window: on a screen of Fearlezz's own, whatever appears came from the command.
+    Any,
 }
 
 impl Pick<'_> {
@@ -96,6 +103,7 @@ impl Pick<'_> {
                 }
             },
             Pick::Started(pids) => pids.contains(&w.pid),
+            Pick::Any => true,
         }
     }
 }
@@ -120,6 +128,9 @@ pub(crate) enum Place {
     Stay,
     /// Parked off the developer's screens, focus handed back: `FEARLEZZ_OFF_SCREEN=1`.
     OffScreen,
+    /// On a screen of Fearlezz's own (the simulator, a Linux display), which the developer
+    /// never sees: nothing to park, and every new window came from the command.
+    Own,
 }
 
 impl Place {
@@ -275,6 +286,69 @@ pub(crate) struct Spec {
     pub crop_top: f64,
 }
 
+/// Where a check's app shows, from its `needs`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Target {
+    /// A window on this Mac's own screen (ScreenCaptureKit).
+    #[default]
+    Window,
+    /// A simulator Fearlezz leases from its own booted ones (`needs = ["ios"]`); its id is in
+    /// `FEARLEZZ_DEVICE`. The device type, by default the newest plain iPhone ("iPhone 17")
+    /// on the newest runtime that has it.
+    Ios { device: Option<String> },
+    /// A virtual display Fearlezz starts (Xvfb, `needs = ["linux"]`) at this width and
+    /// height in pixels; it is in `DISPLAY`.
+    Linux { size: (u32, u32) },
+}
+
+impl Target {
+    /// The OS its screen needs, as a platform's `os` names it: macOS for the simulator, Linux
+    /// for a display. A window keeps its own rules ([`unavailable`]), since a Mac without
+    /// Screen Recording can be given it.
+    pub(crate) fn os(&self) -> Option<&'static str> {
+        match self {
+            Target::Window => None,
+            Target::Ios { .. } => Some("macos"),
+            Target::Linux { .. } => Some("linux"),
+        }
+    }
+
+    /// The OS its screen needs as people write it, such as "Linux"; empty for a window.
+    pub(crate) fn describe_os(&self) -> &'static str {
+        match self.os() {
+            Some("macos") => "macOS",
+            Some(_) => "Linux",
+            None => "",
+        }
+    }
+
+    /// Why this machine can never have the screen, when it cannot.
+    pub(crate) fn never_here(&self) -> Option<&'static str> {
+        match self.os()? {
+            os if os == std::env::consts::OS => None,
+            "macos" => Some("needs macOS"),
+            _ => Some("needs Linux"),
+        }
+    }
+
+    /// For example "the iOS simulator".
+    pub(crate) fn describe(&self) -> &'static str {
+        match self {
+            Target::Window => "this machine's screen",
+            Target::Ios { .. } => "the iOS simulator",
+            Target::Linux { .. } => "a Linux display",
+        }
+    }
+
+    /// Whether the screen is Fearlezz's own: the simulator or a Linux display.
+    pub(crate) fn owned(&self) -> bool {
+        *self != Target::Window
+    }
+}
+
+/// The Linux display's size when a check names none.
+pub(crate) const DEFAULT_SIZE: (u32, u32) = (1280, 720);
+
 /// Long enough for a first build of an app before its window appears.
 pub(crate) const DEFAULT_WAIT: Duration = Duration::from_mins(5);
 
@@ -336,20 +410,36 @@ impl Spec {
     }
 }
 
+/// `"1280x720"` as (1280, 720); each side from 16 to 8192 pixels.
+pub(crate) fn parse_size(text: &str) -> Option<(u32, u32)> {
+    let (w, h) = text.split_once('x')?;
+    let side = |s: &str| s.parse::<u32>().ok().filter(|n| (16..=8192).contains(n));
+    Some((side(w)?, side(h)?))
+}
+
 /// Why this machine cannot record, and the one time fix.
 pub(crate) struct Unavailable {
     pub why: String,
     pub fix: String,
 }
 
-/// None when this process may record windows; never prompts.
-pub(crate) fn unavailable() -> Option<Unavailable> {
+/// None when this process may run a check on `screen`; never prompts.
+pub(crate) fn unavailable(screen: &Target) -> Option<Unavailable> {
     if std::env::var_os("FEARLEZZ_RECORDER").is_some_and(|v| v == "off") {
         return Some(Unavailable {
             why: "the recorder is off (FEARLEZZ_RECORDER=off)".into(),
-            fix: "unset FEARLEZZ_RECORDER on a Mac that may record the screen".into(),
+            fix: "unset FEARLEZZ_RECORDER on a machine that may record".into(),
         });
     }
+    match screen {
+        Target::Window => window_unavailable(),
+        Target::Ios { .. } => simulator::unavailable(),
+        Target::Linux { .. } => display::unavailable(),
+    }
+}
+
+/// None when this process may record windows of this Mac.
+fn window_unavailable() -> Option<Unavailable> {
     if cfg!(not(target_os = "macos")) {
         return Some(Unavailable {
             why: "recording a window needs macOS".into(),
@@ -459,7 +549,7 @@ pub(crate) fn still_of(name: &str, dir: &Path, crop_top: f64) -> Result<Still> {
     if name.trim().is_empty() {
         bail!("name the window: a pid, bundle id, app name or part of a title");
     }
-    if let Some(u) = unavailable() {
+    if let Some(u) = unavailable(&Target::Window) {
         bail!("{}; {}", u.why, u.fix);
     }
     let clock = Instant::now();
@@ -608,7 +698,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
         let before = screen.windows()?.iter().map(|w| w.id).collect();
         let developer = match place {
             Place::OffScreen => Some(screen.front().map_err(|e| format!("{e:#}"))),
-            Place::Stay => None,
+            Place::Stay | Place::Own => None,
         };
         Ok(Recorder {
             screen,
@@ -765,7 +855,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 "record: the window stays on your screen; FEARLEZZ_OFF_SCREEN=1 in your \
                  environment parks recorded windows off screen"
             )?;
-        } else {
+        } else if self.place == Place::OffScreen {
             if let Some(Err(why)) = &self.developer {
                 writeln!(log, "record: focus is not given back: {why}")?;
                 self.developer = None;
@@ -945,6 +1035,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
     fn pick(&self, root: i32) -> Pick<'a> {
         match &self.spec.window {
             Some(name) => Pick::Named(name),
+            None if self.place == Place::Own => Pick::Any,
             None => Pick::Started(descendants(root)),
         }
     }

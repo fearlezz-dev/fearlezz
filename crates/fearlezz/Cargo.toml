@@ -26,6 +26,8 @@ tempfile = "3.27.0"
 toml = "1.2.1"
 toml_edit = "0.25.19"
 similar = "3.2.1"
+# A Linux display of Fearlezz's own (Xvfb): its windows and their pixels, over the X protocol.
+x11rb = "0.14.0"
 
 # The window recorder: ScreenCaptureKit through the objc2 bindings.
 [target.'cfg(target_os = "macos")'.dependencies]

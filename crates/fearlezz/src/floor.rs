@@ -180,6 +180,17 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
             }
             (None, _) => {}
         }
+        // Leaving the simulator or a Linux display moves the check to a screen CI cannot
+        // record (this machine's window) or another system's runner.
+        if b.screen.owned()
+            && std::mem::discriminant(&b.screen) != std::mem::discriminant(&h.screen)
+        {
+            say(format!(
+                "it runs on another screen ({}, now {})",
+                b.screen.describe(),
+                h.screen.describe()
+            ));
+        }
         for how in b.pictures.weakenings(&h.pictures) {
             say(how);
         }

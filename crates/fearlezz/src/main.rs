@@ -1563,17 +1563,38 @@ fn run_checks(
         });
         for check in due {
             if let Some(on) = legs::left_to_ci(&ctx.config, check) {
+                // Without platforms, the OS its screen needs stands for where it runs.
+                let needs = check.screen.never_here().unwrap_or_default();
                 if out.is_some() {
+                    let platforms = on.len();
+                    let os = check.screen.describe_os();
+                    let on = if on.is_empty() { vec![os] } else { on };
                     for platform in &on {
-                        let entry = legs::left_out(check, platform, stages.name(check.stage));
+                        let mut entry = legs::left_out(check, platform, stages.name(check.stage));
+                        // Without platforms, legs cannot place it: one of its OS can.
+                        if let Some(item) = entry.failure.as_mut().filter(|_| platforms == 0) {
+                            item.why = format!("this machine cannot have its screen: {needs}");
+                            item.fix = format!(
+                                "add a [platform.<name>] with os = \"{}\" and prove the commit in legs",
+                                check.screen.os().unwrap_or_default()
+                            );
+                        }
                         if let Some(item) = &entry.failure {
                             println!("blocked: {}: {}", item.what, item.why);
                             println!("  fix: {}", item.fix);
                         }
                         left_out.push(entry);
                     }
-                } else {
+                } else if on.is_empty() {
+                    println!("left to CI {}: {needs}", check.id);
+                } else if needs.is_empty() {
                     println!("left to CI {}: runs on {}", check.id, on.join(", "));
+                } else {
+                    println!(
+                        "left to CI {}: {needs}, runs on {}",
+                        check.id,
+                        on.join(", ")
+                    );
                 }
             }
         }
@@ -1686,15 +1707,34 @@ fn run_checks(
                     && (stage != final_stage || r.made_at_final(&j.name, &final_stage))
             })
         };
-        // A check that records a window runs only where something can record. CI does not
-        // need it (looks of app windows are proven on a developer's machine); locally it
-        // fails with the one time fix. Neither is stored, so it is not called unstable once
-        // recording works.
+        // A screen this machine can never have, in a leg: its `on` names the wrong platform.
+        if let Some(why) = check.screen.never_here() {
+            let os = check.screen.describe_os();
+            println!(
+                "fail {}: {why}, and this leg runs on {}",
+                check.id,
+                std::env::consts::OS
+            );
+            println!(
+                "  fix: put it on a platform whose os is {os}, by its on or a [platform] with that os"
+            );
+            if let Some(r) = report.as_mut() {
+                r.not_run(check, stages.name(check.stage), why);
+            }
+            cannot_record += 1;
+            continue;
+        }
+        // A check runs only where its screen can be had: a window where something may
+        // record, the simulator or a Linux display where their tools are. A window cannot be
+        // granted on CI's runners (looks of app windows are proven on a developer's
+        // machine), so there it is not run; anywhere else a missing tool fails with the one
+        // time fix, CI included, since a runner of the right system is the one that proves
+        // it. Neither is stored, so it is not called unstable once the tool is there.
         if reuse.is_none()
-            && check.pictures.record.is_some()
-            && let Some(u) = record::unavailable()
+            && (check.screen.owned() || check.pictures.record.is_some())
+            && let Some(u) = record::unavailable(&check.screen)
         {
-            if let Some(r) = report.as_mut().filter(|r| r.ci) {
+            if let Some(r) = report.as_mut().filter(|r| r.ci && !check.screen.owned()) {
                 println!("not run {}: {}", check.id, u.why);
                 r.not_run(check, stages.name(check.stage), &u.why);
                 not_run += 1;
@@ -1862,7 +1902,9 @@ fn run_checks(
         println!("{line}");
     }
     if cannot_record > 0 {
-        println!("next: give the recorder its permission (fix: above), then fearlezz run");
+        println!(
+            "next: give the recorder its permission or install its tool (fix: above), then fearlezz run"
+        );
     } else {
         println!("next: {}", next_line(&after, floor_holds));
     }

@@ -105,10 +105,22 @@ impl Platform {
         Ok(platforms)
     }
 
-    /// The platforms a check's `on` names, each checked against `platforms`; the default one
-    /// when it names none.
-    pub(crate) fn on(platforms: &[Platform], written: Vec<String>) -> Result<Vec<String>> {
+    /// The platforms a check's `on` names, each checked against `platforms`. When it names
+    /// none: those of the OS its screen needs (`os`), or else the default one.
+    pub(crate) fn on(
+        platforms: &[Platform],
+        written: Vec<String>,
+        os: Option<&str>,
+    ) -> Result<Vec<String>> {
         if written.is_empty() {
+            let of_os: Vec<String> = platforms
+                .iter()
+                .filter(|p| os.is_some() && p.os.as_deref() == os)
+                .map(|p| p.name.clone())
+                .collect();
+            if !of_os.is_empty() {
+                return Ok(of_os);
+            }
             return Ok(platforms
                 .iter()
                 .filter(|p| p.default)
@@ -186,14 +198,20 @@ impl fmt::Display for Budget {
 }
 
 /// The platforms a check is on that this machine cannot stand in for, when it can stand in for
-/// none of them: the check is left to CI. None when it runs here.
+/// none of them: the check is left to CI. None when it runs here. A machine never stands in
+/// for a screen it can never have (a Linux display on a Mac); without platforms such a check
+/// is left to CI with none named, and [`Check::screen`] says what it needs.
 pub(crate) fn left_to_ci<'a>(config: &'a Config, check: &Check) -> Option<Vec<&'a str>> {
+    let screen_here = check.screen.never_here().is_none();
     let on: Vec<&Platform> = config
         .platforms
         .iter()
         .filter(|p| check.on.contains(&p.name))
         .collect();
-    (!on.is_empty() && !on.iter().any(|p| p.fits_here()))
+    if on.is_empty() {
+        return (!screen_here).then(Vec::new);
+    }
+    (!on.iter().any(|p| p.fits_here() && screen_here))
         .then(|| on.iter().map(|p| p.name.as_str()).collect())
 }
 
