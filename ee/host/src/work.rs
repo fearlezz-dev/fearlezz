@@ -287,8 +287,9 @@ async fn settle(db: &D1Database, work: &str, seq: u64, event: Event) -> worker::
     })
 }
 
+/// A run as a snapshot shows it.
 #[derive(Deserialize)]
-struct RunRow {
+struct ShownRun {
     id: String,
     head: String,
     base: String,
@@ -296,6 +297,50 @@ struct RunRow {
     state: String,
     opened: f64,
     proof: Option<String>,
+}
+
+/// Every run with its work, the one join of a run to its repository: the columns of `RunRow`,
+/// and a `WHERE` on `r` and `w` follows.
+pub const RUNS: &str = "SELECT r.id, r.work, w.repo, w.repository, w.branch, w.pull, r.head, r.git_ref, r.source, r.state \
+     FROM runs r JOIN works w ON w.id = r.work";
+
+/// A run with its work's repository, as the calls about one run read it.
+#[derive(Deserialize)]
+pub struct RunRow {
+    pub id: String,
+    pub work: String,
+    /// The repository, lowercased, as the host keys it.
+    pub repo: String,
+    /// The repository as GitHub names it.
+    pub repository: String,
+    pub branch: String,
+    pub pull: Option<f64>,
+    pub head: String,
+    /// Who opened it: a CI token's ref, or `local:<login>` for a person's CLI, which writes
+    /// it again only with the same.
+    pub git_ref: String,
+    pub source: String,
+    pub state: String,
+}
+
+impl RunRow {
+    /// The run `id`, CI's or local, whoever may see it.
+    pub async fn find(db: &D1Database, id: &str) -> worker::Result<Option<RunRow>> {
+        db.prepare(format!("{RUNS} WHERE r.id = ?1"))
+            .bind(&[id.into()])?
+            .first(None)
+            .await
+    }
+
+    pub fn source(&self) -> worker::Result<Source> {
+        read(&self.source)
+    }
+
+    /// Whether it is a local run, the agent's word: never reviewed, and it never moves the
+    /// work's head, its review, the check run or the pull request comment.
+    pub fn local(&self) -> worker::Result<bool> {
+        Ok(matches!(self.source()?, Source::Local { .. }))
+    }
 }
 
 #[derive(Deserialize)]
@@ -496,7 +541,7 @@ fn assemble(results: &[D1Result]) -> worker::Result<Vec<(Run, Option<Proof>)>> {
     };
     let checks = checks.results::<CheckRow>()?;
     let held = held.results::<HeldRow>()?;
-    runs.results::<RunRow>()?
+    runs.results::<ShownRun>()?
         .into_iter()
         .map(|run| {
             let files: Files = held

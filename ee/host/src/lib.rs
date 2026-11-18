@@ -12,6 +12,7 @@
 //! a Durable Object of the work or the repository; the files origin serves the runs' files,
 //! which CI wrote, so nothing of them ever runs where the session cookie lives.
 
+mod access;
 mod api;
 mod cache;
 mod cli;
@@ -113,14 +114,14 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         ("GET", ["live", owner, repo]) => repository::live(&req, env, config, owner, repo).await,
         ("GET", ["live", owner, repo, rest @ ..]) => match pages::place(rest) {
             Some(place) => pages::live(&req, env, config, owner, repo, &place).await,
-            None => Err(Refusal::new(404, "not found")),
+            None => Err(not_found()),
         },
         ("GET", [owner, repo]) => repository::page(&req, env, config, owner, repo).await,
         ("GET", [owner, repo, rest @ ..]) => match pages::place(rest) {
             Some(place) => pages::page(&req, env, config, owner, repo, &place).await,
-            None => Err(Refusal::new(404, "not found")),
+            None => Err(not_found()),
         },
-        _ => Err(Refusal::new(404, "not found")),
+        _ => Err(not_found()),
     }
 }
 
@@ -141,6 +142,21 @@ impl Refusal {
         }
     }
 
+    /// Whether it asks to sign in first: a page answers it by sending the person to sign in.
+    pub fn asks_sign_in(&self) -> bool {
+        self.status == 401
+    }
+
+    /// The refusal as a write gives it: a repository its asker must sign in to see is not found,
+    /// so a write confirms nothing a read would not.
+    pub fn hidden(self) -> Refusal {
+        if self.asks_sign_in() {
+            not_found()
+        } else {
+            self
+        }
+    }
+
     /// API callers read JSON; people read text.
     fn response(&self, json: bool) -> Result<Response> {
         let response = if json {
@@ -150,6 +166,11 @@ impl Refusal {
         };
         Ok(response.with_status(self.status))
     }
+}
+
+/// What the host answers for anything that is not there, or that the asker may not know is.
+pub fn not_found() -> Refusal {
+    Refusal::new(404, "not found")
 }
 
 impl From<worker::Error> for Refusal {

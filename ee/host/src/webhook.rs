@@ -14,7 +14,7 @@ use serde::Deserialize;
 use wasm_bindgen::JsValue;
 use worker::{Env, Request, Response};
 
-use crate::work::{Derive, Event, Write, read};
+use crate::work::{Derive, Event, RUNS, RunRow, Write};
 use crate::{Answer, Config, Refusal, api, crypto, jobs, now, room};
 
 #[derive(Deserialize)]
@@ -210,12 +210,6 @@ async fn workflow_job(env: &Env, event: JobEvent) -> worker::Result<()> {
 /// Closes, as cancelled, the run of `repo` still running that the completed `job` was.
 async fn cancel(env: &Env, repo: &str, job: &WorkflowJob) -> worker::Result<()> {
     #[derive(Deserialize)]
-    struct Row {
-        id: String,
-        work: String,
-        source: String,
-    }
-    #[derive(Deserialize)]
     struct NameRow {
         name: String,
     }
@@ -242,18 +236,17 @@ async fn cancel(env: &Env, repo: &str, job: &WorkflowJob) -> worker::Result<()> 
         .map(|r| r.name)
         .collect();
     let rows = db
-        .prepare(
-            "SELECT r.id, r.work, r.source FROM runs r JOIN works w ON w.id = r.work \
-             WHERE w.repo = ?1 AND r.state = 'running' AND json_extract(r.source, '$.kind') = 'ci' \
+        .prepare(format!(
+            "{RUNS} WHERE w.repo = ?1 AND r.state = 'running' AND json_extract(r.source, '$.kind') = 'ci' \
              AND json_extract(r.source, '$.run_id') = ?2 AND json_extract(r.source, '$.run_attempt') = ?3 \
-             AND json_extract(r.source, '$.runner_name') = ?4",
-        )
+             AND json_extract(r.source, '$.runner_name') = ?4"
+        ))
         .bind(&binds)?
         .all()
         .await?
-        .results::<Row>()?;
+        .results::<RunRow>()?;
     for row in rows {
-        let own = match read::<Source>(&row.source)? {
+        let own = match row.source()? {
             Source::Ci { job: id, .. } => {
                 jobs::own(names.iter().map(String::as_str), &id) == Some(job.name.as_str())
             }

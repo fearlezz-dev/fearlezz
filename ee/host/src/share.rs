@@ -16,17 +16,12 @@ use serde::Deserialize;
 use serde_json::json;
 use worker::{D1Database, Env, Headers, Request, Response};
 
-use crate::room::Viewer;
-use crate::say::Act;
-use crate::session::{self, Session};
+use crate::access::{self, Action, Person, Viewer};
+use crate::room::Held;
 use crate::work::{self, Place};
-use crate::{Answer, Config, Refusal, crypto, now, pages, repo_key, room, say};
+use crate::{Answer, Config, Refusal, crypto, not_found, now, pages, repo_key, room, session};
 
-fn not_found() -> Refusal {
-    Refusal::new(404, "not found")
-}
-
-/// A live link, as the host keeps it.
+/// A live link, as the host keeps it: whoever holds its token views its work.
 #[derive(Deserialize)]
 pub struct Link {
     pub id: String,
@@ -34,7 +29,7 @@ pub struct Link {
 }
 
 /// The tag of the pages open through link `id`, which revoking it ends.
-fn tag(id: &str) -> String {
+pub fn tag(id: &str) -> String {
     format!("share:{id}")
 }
 
@@ -65,8 +60,8 @@ pub async fn page(env: &Env, config: &Config, token: &str) -> Answer {
 /// `/live/-/share/<token>`: the live connection of the link's work, ended when it is revoked.
 pub async fn live(req: &Request, env: &Env, config: &Config, token: &str) -> Answer {
     let link = find(env, config, token).await?.ok_or_else(not_found)?;
-    let viewer = Viewer::Link { tag: tag(&link.id) };
-    pages::connect(req, env, &link.work, &viewer).await
+    let held = Held::of(Viewer::Share(&link), &link.work);
+    pages::connect(req, env, &link.work, &held).await
 }
 
 /// The work a share call names: `{"repository": "owner/name", "branch"}`.
@@ -80,42 +75,35 @@ struct Named {
 /// work or private repository they may not see, `403` without write access, `401` when their
 /// GitHub sign in expired.
 async fn writable(
-    req: &Request,
     env: &Env,
     config: &Config,
-    person: &Session,
+    person: &Person,
     named: &Named,
 ) -> Result<(D1Database, String, String), Refusal> {
     let (owner, name) = named.repository.split_once('/').ok_or_else(not_found)?;
     let repo = repo_key(owner, name);
-    if !pages::open(req, env, config, &repo).await? {
-        return Err(not_found());
-    }
+    let viewer = Viewer::Person(person);
+    let read = Action::Read { work: None };
+    access::can(env, config, viewer, read, &repo)
+        .await
+        .map_err(Refusal::hidden)?;
     let db = env.d1("DB")?;
     let work = work::find(&db, &repo, &Place::Branch(named.branch.clone()))
         .await?
         .ok_or_else(not_found)?;
-    say::require(
-        env,
-        config,
-        &person.login,
-        &person.token,
-        &named.repository,
-        Act::Share,
-    )
-    .await?;
+    access::can(env, config, viewer, Action::Share, &named.repository).await?;
     Ok((db, work, repo))
 }
 
 /// `POST /api/v2/shares`: makes a link to a work. `201 {"url", "share": {"id", "made_by",
 /// "made_at"}}`; the URL holds the token and is shown only now.
 pub async fn make(mut req: Request, env: &Env, config: &Config) -> Answer {
-    let person = say::person(&req, env, config, "share a work").await?;
+    let person = access::speaker(&req, env, config, "share a work").await?;
     let named: Named = req
         .json()
         .await
         .map_err(|_| Refusal::new(400, "send {\"repository\": \"owner/name\", \"branch\"}"))?;
-    let (db, work, _) = writable(&req, env, config, &person, &named).await?;
+    let (db, work, _) = writable(env, config, &person, &named).await?;
     let token = crypto::random_id()?;
     let id = crypto::random_id()?;
     let made_at = now() as f64;
@@ -155,7 +143,7 @@ pub async fn list(req: &Request, env: &Env, config: &Config) -> Answer {
         ));
     };
     let named = Named { repository, branch };
-    let (db, work, _) = writable(req, env, config, &person, &named).await?;
+    let (db, work, _) = writable(env, config, &person, &named).await?;
     #[derive(Deserialize, serde::Serialize)]
     struct Listed {
         id: String,
@@ -177,7 +165,7 @@ pub async fn list(req: &Request, env: &Env, config: &Config) -> Answer {
 /// {"revoked": "<id>"}`; a link that is gone, or one of a repository the person may not see,
 /// is `404`.
 pub async fn revoke(req: Request, env: &Env, config: &Config, id: &str) -> Answer {
-    let person = say::person(&req, env, config, "revoke a share link").await?;
+    let person = access::speaker(&req, env, config, "revoke a share link").await?;
     #[derive(Deserialize)]
     struct Row {
         work: String,
@@ -191,18 +179,14 @@ pub async fn revoke(req: Request, env: &Env, config: &Config, id: &str) -> Answe
         .first(None)
         .await?;
     let row = row.ok_or_else(not_found)?;
-    if !pages::open(&req, env, config, &row.repo).await? {
-        return Err(not_found());
-    }
-    say::require(
-        env,
-        config,
-        &person.login,
-        &person.token,
-        &row.repository,
-        Act::Share,
-    )
-    .await?;
+    let viewer = Viewer::Person(&person);
+    let read = Action::Read {
+        work: Some(&row.work),
+    };
+    access::can(env, config, viewer, read, &row.repo)
+        .await
+        .map_err(Refusal::hidden)?;
+    access::can(env, config, viewer, Action::Share, &row.repository).await?;
     db.prepare("DELETE FROM shares WHERE id = ?1")
         .bind(&[id.into()])?
         .run()

@@ -4,7 +4,7 @@
 //! do: read the works of repositories they may read and the pictures of those works' runs, and
 //! open and stream local runs of repositories they may write (`api.rs`). It can never give a
 //! verdict, a note, a resolve or an accept: those take a browser session and refuse any
-//! `Authorization` header (`say::person`).
+//! `Authorization` header (`access::speaker`).
 //!
 //! The token is the host's own: it lives 30 days from its last use, until `fearlezz setup
 //! logout` ends it, while the host keeps the person's GitHub token fresh with its refresh token,
@@ -19,12 +19,16 @@ use serde_json::json;
 use wasm_bindgen::JsValue;
 use worker::{Env, Headers, Request, Response};
 
+use crate::access::{self, Action, Person, Via, Viewer};
 use crate::github::{self, Device, UserToken};
-use crate::work::{self, NOTE_COLUMNS, NoteRow, Place, WorkRow, read};
-use crate::{Answer, Config, Refusal, crypto, files, now, pages, repo_key};
+use crate::work::{self, NOTE_COLUMNS, NoteRow, Place, RunRow, WorkRow, read};
+use crate::{Answer, Config, Refusal, crypto, files, not_found, now, pages, repo_key};
 
 /// What every CLI token starts with, so a reader tells it from CI's OIDC token at a glance.
 const PREFIX: &str = "fzh_";
+
+/// What the CLI is told when it has no token that holds.
+pub const SIGN_IN: &str = "sign in to the proof host: fearlezz setup login";
 
 /// How long a CLI token lives after its last use.
 const IDLE_SECONDS: i64 = 30 * 86400;
@@ -130,12 +134,6 @@ pub async fn logout(req: &Request, env: &Env, config: &Config) -> Answer {
     Ok(Response::empty()?.with_status(204))
 }
 
-/// The person a CLI token speaks for, and their GitHub token.
-pub struct Person {
-    pub login: String,
-    pub token: String,
-}
-
 /// Whether the request carries a CLI token (`fzh_…`), whether or not it holds.
 pub fn carries(req: &Request) -> worker::Result<bool> {
     Ok(bearer(req)?.is_some())
@@ -158,7 +156,7 @@ async fn hash(config: &Config, token: &str) -> worker::Result<String> {
 /// days, or when their GitHub token can no longer be renewed. Each use keeps the token alive
 /// for 30 more days, and a GitHub token about to expire is renewed first.
 pub async fn person(req: &Request, env: &Env, config: &Config) -> Result<Person, Refusal> {
-    let expired = || Refusal::new(401, "sign in to the proof host: fearlezz setup login");
+    let expired = || Refusal::new(401, SIGN_IN);
     let token = bearer(req)?.ok_or_else(expired)?;
     #[derive(Deserialize)]
     struct Row {
@@ -180,6 +178,7 @@ pub async fn person(req: &Request, env: &Env, config: &Config) -> Result<Person,
     let mut person = Person {
         login: row.login,
         token: row.token,
+        via: Via::Cli,
     };
     let stale = row
         .token_expires
@@ -217,18 +216,12 @@ pub async fn person(req: &Request, env: &Env, config: &Config) -> Result<Person,
     Ok(person)
 }
 
-/// The person the request's CLI token speaks for, when they may read `repo` (lowercased):
-/// `401` without a token that holds, `404` for a repository they may not read.
-async fn reader(req: &Request, env: &Env, config: &Config, repo: &str) -> Result<Person, Refusal> {
+/// Refuses the request unless its CLI token speaks for a person who may read `repo`
+/// (lowercased): `401` without a token that holds, `404` for a repository they may not read.
+async fn reads(req: &Request, env: &Env, config: &Config, repo: &str) -> Result<(), Refusal> {
     let reader = person(req, env, config).await?;
-    match pages::reads(env, config, &reader.login, &reader.token, repo).await? {
-        Some(true) => Ok(reader),
-        Some(false) => Err(Refusal::new(404, "not found")),
-        None => Err(Refusal::new(
-            401,
-            "sign in to the proof host: fearlezz setup login",
-        )),
-    }
+    let read = Action::Read { work: None };
+    access::can(env, config, Viewer::Person(&reader), read, repo).await
 }
 
 /// `GET /api/v2/work/<owner>/<repo>/<branch>`: what waits on the host for a work, as the CLI
@@ -243,12 +236,12 @@ pub async fn feedback(
     branch: &[&str],
 ) -> Answer {
     let repo = repo_key(owner, name);
-    reader(req, env, config, &repo).await?;
+    reads(req, env, config, &repo).await?;
     let mut rest = vec!["work"];
     rest.extend_from_slice(branch);
-    let place = pages::place(&rest).ok_or_else(|| Refusal::new(404, "not found"))?;
+    let place = pages::place(&rest).ok_or_else(not_found)?;
     let Place::Branch(branch) = place else {
-        return Err(Refusal::new(404, "not found"));
+        return Err(not_found());
     };
     let db = env.d1("DB")?;
     #[derive(Deserialize)]
@@ -266,7 +259,7 @@ pub async fn feedback(
         .bind(&[repo.as_str().into(), branch.as_str().into()])?
         .first(None)
         .await?;
-    let row = row.ok_or_else(|| Refusal::new(404, "not found"))?;
+    let row = row.ok_or_else(not_found)?;
     let stored = WorkRow {
         id: row.id,
         repository: row.repository,
@@ -321,41 +314,15 @@ pub async fn feedback(
 /// `GET /api/v2/runs/<run>/files/<path>`: one picture or film of a run, for the CLI to draw a
 /// note's region on. Only the types the files origin serves; anything else is `404`.
 pub async fn file(req: &Request, env: &Env, config: &Config, run: &str, path: &[&str]) -> Answer {
-    let repo: Option<String> = env
-        .d1("DB")?
-        .prepare("SELECT w.repo FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1")
-        .bind(&[run.into()])?
-        .first(Some("repo"))
-        .await?;
+    let row = RunRow::find(&env.d1("DB")?, run).await?;
     // Without a token nothing is said, not even whether the run exists.
-    bearer(req)?
-        .ok_or_else(|| Refusal::new(401, "sign in to the proof host: fearlezz setup login"))?;
-    let repo = repo.ok_or_else(|| Refusal::new(404, "not found"))?;
-    reader(req, env, config, &repo).await?;
-    let path = percent_encoding::percent_decode_str(&path.join("/"))
-        .decode_utf8()
-        .map_err(|_| Refusal::new(404, "not found"))?
-        .into_owned();
-    let kind = files::content_type(&path).ok_or_else(|| Refusal::new(404, "not found"))?;
-    let sha: Option<String> = env
-        .d1("DB")?
-        .prepare("SELECT sha256 FROM files WHERE run = ?1 AND path = ?2")
-        .bind(&[run.into(), path.as_str().into()])?
-        .first(Some("sha256"))
-        .await?;
-    let sha = sha.ok_or_else(|| Refusal::new(404, "not found"))?;
-    let object = env
-        .bucket("BLOBS")?
-        .get(format!("blobs/{repo}/{sha}"))
-        .execute()
-        .await?
-        .ok_or_else(|| Refusal::new(404, "not found"))?;
-    let body = object
-        .body()
-        .ok_or_else(|| Refusal::new(404, "not found"))?
-        .response_body()?;
+    bearer(req)?.ok_or_else(|| Refusal::new(401, SIGN_IN))?;
+    let row = row.ok_or_else(not_found)?;
+    reads(req, env, config, &row.repo).await?;
+    let stored = files::stored(env, &row.repo, run, &path.join("/")).await?;
+    let body = files::body(env, &stored.key, None).await?;
     let headers = Headers::new();
-    headers.set("Content-Type", kind)?;
+    headers.set("Content-Type", stored.kind)?;
     headers.set("X-Content-Type-Options", "nosniff")?;
     // What CI wrote, on the origin of the sign in: never a page, only a download.
     headers.set("Content-Security-Policy", "sandbox; default-src 'none'")?;

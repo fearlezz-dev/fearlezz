@@ -11,19 +11,15 @@
 
 use fearlezz_proof::events::{Source, WorkChange};
 use fearlezz_proof::look::Look;
-use fearlezz_proof::review::Role;
 use fearlezz_proof::review::{self, Verdict};
 use fearlezz_proof::{Proof, events::RunState};
 use serde::Deserialize;
 use serde_json::json;
 use worker::{D1Database, Env, Request, Response};
 
-use crate::session::{self, Session};
-use crate::work::{self, Derive, Event, Statement, Write, read};
-use crate::{Answer, Config, Refusal, cache, github, jobs, now, pages, room};
-
-/// How long the host trusts GitHub's word on what a person may do.
-const ROLE_SECONDS: i64 = 300;
+use crate::access::{self, Action, Viewer};
+use crate::work::{self, Derive, Event, RunRow, Statement, Write, read};
+use crate::{Answer, Config, Refusal, github, jobs, not_found, now, room, session};
 
 #[derive(Deserialize)]
 struct Ask {
@@ -31,193 +27,53 @@ struct Ask {
     picture: String,
 }
 
-/// A run, as saying something about it needs it.
-#[derive(Deserialize)]
-pub struct RunRow {
-    pub work: String,
-    pub repo: String,
-    pub repository: String,
-    pub head: String,
-    source: String,
-    state: String,
-    proof: Option<String>,
-}
-
-/// The person a browser request speaks for, after the checks every saying passes: no token,
-/// from the app origin, JSON, and a session.
-pub async fn person(
-    req: &Request,
-    env: &Env,
-    config: &Config,
-    what: &str,
-) -> Result<Session, Refusal> {
-    if req.headers().get("Authorization")?.is_some() {
-        return Err(Refusal::new(
-            403,
-            format!("refused: only a person on the work's page can {what}, never a token"),
-        ));
-    }
-    let origin = req.headers().get("Origin")?;
-    if origin.as_deref() != Some(config.app_origin.as_str()) {
-        return Err(Refusal::new(
-            403,
-            "refused: the ask did not come from this site",
-        ));
-    }
-    let json = req
-        .headers()
-        .get("Content-Type")?
-        .is_some_and(|t| t.trim_start().starts_with("application/json"));
-    if !json {
-        return Err(Refusal::new(415, "send JSON"));
-    }
-    session::read(req, env)
-        .await?
-        .ok_or_else(|| Refusal::new(401, format!("sign in to {what}")))
-}
-
-/// The run `id`, CI's or local, when the request may see it; a run it may not see is not
+/// The run `id`, CI's or local, when `viewer` may see it; a run they may not see is not
 /// found.
 pub async fn run(
-    req: &Request,
     env: &Env,
     config: &Config,
     db: &D1Database,
+    viewer: Viewer<'_>,
     id: &str,
 ) -> Result<RunRow, Refusal> {
-    let row: Option<RunRow> = db
-        .prepare(
-            "SELECT r.work, w.repo, w.repository, r.head, r.source, r.state, r.proof FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1",
-        )
-        .bind(&[id.into()])?
-        .first(None)
-        .await?;
-    let row = row.ok_or_else(|| Refusal::new(404, "not found"))?;
-    if !pages::open(req, env, config, &row.repo).await? {
-        return Err(Refusal::new(404, "not found"));
-    }
+    let row = RunRow::find(db, id).await?.ok_or_else(not_found)?;
+    let read = Action::Read {
+        work: Some(&row.work),
+    };
+    access::can(env, config, viewer, read, &row.repo)
+        .await
+        .map_err(Refusal::hidden)?;
     Ok(row)
 }
 
-impl RunRow {
-    /// Refuses a local run, which is the agent's word and never reviewed: `what` is given on a
-    /// CI run.
-    fn reviewed(&self, what: &str) -> Result<(), Refusal> {
-        if matches!(read::<Source>(&self.source)?, Source::Ci { .. }) {
-            return Ok(());
-        }
-        Err(Refusal::new(
-            409,
-            format!(
-                "this is a local run, which is unproven and never reviewed: {what} on a CI run; notes may be made here"
-            ),
-        ))
-    }
-}
-
-/// What a person does on a repository through the host, each needing a role there: the one
-/// rule every endpoint asks through `require`.
-#[derive(Clone, Copy)]
-pub enum Act {
-    Verdict,
-    Note,
-    Resolve,
-    Share,
-    Accept,
-    LocalRun,
-}
-
-impl Act {
-    /// The role it needs on GitHub.
-    fn needs(self) -> Role {
-        match self {
-            Act::Accept => Role::Admin,
-            Act::Verdict | Act::Note | Act::Resolve | Act::Share | Act::LocalRun => Role::Write,
-        }
-    }
-
-    /// What it does, as a refusal says it: "cannot give verdicts on owner/name".
-    fn words(self) -> &'static str {
-        match self {
-            Act::Verdict => "give verdicts",
-            Act::Note => "make notes",
-            Act::Resolve => "resolve notes",
-            Act::Share => "share a work",
-            Act::Accept => "accept a weakened proof",
-            Act::LocalRun => "send local runs",
-        }
-    }
-}
-
-/// Refuses `login` the act on `repository` unless GitHub gives them the role it needs: `403`
-/// saying so, or `401` when their GitHub token no longer works.
-pub async fn require(
-    env: &Env,
-    config: &Config,
-    login: &str,
-    token: &str,
-    repository: &str,
-    act: Act,
-) -> Result<(), Refusal> {
-    if role(env, config, login, token, repository).await? >= act.needs() {
+/// Refuses a local run, which is the agent's word and never reviewed: `what` is given on a CI
+/// run.
+fn reviewed(run: &RunRow, what: &str) -> Result<(), Refusal> {
+    if !run.local()? {
         return Ok(());
     }
-    let needs = match act.needs() {
-        Role::Admin => "admin rights",
-        Role::Write | Role::Less => "write access",
-    };
     Err(Refusal::new(
-        403,
+        409,
         format!(
-            "@{login} cannot {} on {repository}: that needs {needs} on GitHub",
-            act.words()
+            "this is a local run, which is unproven and never reviewed: {what} on a CI run; notes may be made here"
         ),
     ))
-}
-
-/// What a person may do on a repository: GitHub's word, kept for a few minutes.
-async fn role(
-    env: &Env,
-    config: &Config,
-    login: &str,
-    token: &str,
-    repo: &str,
-) -> Result<Role, Refusal> {
-    let key = format!("role:{}:{}", login.to_lowercase(), repo.to_lowercase());
-    if let Some(cached) = cache::get(env, &key).await? {
-        return Ok(Role::of(&cached));
-    }
-    let Some(role) = github::permission(config, repo, login, token).await? else {
-        return Err(Refusal::new(
-            401,
-            "your GitHub sign in expired; sign in again",
-        ));
-    };
-    cache::put(env, &key, role.word(), ROLE_SECONDS).await?;
-    Ok(role)
 }
 
 /// `POST /api/v2/runs/<run>/verdicts`: a person with write access says a picture of a CI run
 /// looks right. It holds for that picture's content, so later runs showing the same keep it.
 /// What should change is a note, never a verdict.
 pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
-    let person = person(&req, env, config, "give a verdict").await?;
+    let person = access::speaker(&req, env, config, "give a verdict").await?;
     let ask: Ask = req
         .json()
         .await
         .map_err(|_| Refusal::new(400, "send {\"check\", \"picture\"}"))?;
     let db = env.d1("DB")?;
-    let run = run(&req, env, config, &db, id).await?;
-    run.reviewed("verdicts are given")?;
-    require(
-        env,
-        config,
-        &person.login,
-        &person.token,
-        &run.repository,
-        Act::Verdict,
-    )
-    .await?;
+    let viewer = Viewer::Person(&person);
+    let run = run(env, config, &db, viewer, id).await?;
+    reviewed(&run, "verdicts are given")?;
+    access::can(env, config, viewer, Action::Verdict, &run.repository).await?;
     let look: Option<String> = db
         .prepare("SELECT look FROM checks WHERE run = ?1 AND id = ?2")
         .bind(&[id.into(), ask.check.as_str().into()])?
@@ -279,20 +135,18 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
 /// job stays the one gate. When GitHub does not run it again, the accept is kept and the answer
 /// says to run the job again on GitHub.
 pub async fn accept(req: Request, env: &Env, config: &Config, id: &str) -> Answer {
-    let person = person(&req, env, config, "accept a weakened proof").await?;
+    let person = access::speaker(&req, env, config, "accept a weakened proof").await?;
     let db = env.d1("DB")?;
-    let run = run(&req, env, config, &db, id).await?;
-    run.reviewed("weakenings are accepted")?;
-    require(
-        env,
-        config,
-        &person.login,
-        &person.token,
-        &run.repository,
-        Act::Accept,
-    )
-    .await?;
-    let proof = run.proof.as_deref().map(read::<Proof>).transpose()?;
+    let viewer = Viewer::Person(&person);
+    let run = run(env, config, &db, viewer, id).await?;
+    reviewed(&run, "weakenings are accepted")?;
+    access::can(env, config, viewer, Action::Accept, &run.repository).await?;
+    let proof: Option<String> = db
+        .prepare("SELECT proof FROM runs WHERE id = ?1")
+        .bind(&[id.into()])?
+        .first(Some("proof"))
+        .await?;
+    let proof = proof.as_deref().map(read::<Proof>).transpose()?;
     let weakened = proof
         .filter(|p| work::state(&run.state) == RunState::Done && !p.weakened.is_empty())
         .map(|p| p.weakened)
@@ -347,7 +201,7 @@ async fn rerun(config: &Config, run: &RunRow) -> worker::Result<()> {
         runner_name,
         leg,
         ..
-    } = read::<Source>(&run.source)?
+    } = run.source()?
     else {
         return Err(worker::Error::RustError("the run is not a CI run".into()));
     };
@@ -378,13 +232,13 @@ async fn rerun(config: &Config, run: &RunRow) -> worker::Result<()> {
 /// `{"login", "role": "admin" | "write" | "read"}`, or `{"login": null}` without a session.
 pub async fn viewer(req: &Request, env: &Env, config: &Config, owner: &str, name: &str) -> Answer {
     let repo = crate::repo_key(owner, name);
-    if !pages::open(req, env, config, &repo).await? {
-        return Err(Refusal::new(401, "sign in to see this work"));
-    }
-    let answer = match session::read(req, env).await? {
+    let person = session::read(req, env).await?;
+    let read = Action::Read { work: None };
+    access::can(env, config, Viewer::of(person.as_ref()), read, &repo).await?;
+    let answer = match person {
         Some(person) => {
             let repository = format!("{owner}/{name}");
-            let role = role(env, config, &person.login, &person.token, &repository).await?;
+            let role = access::role(env, config, &person, &repository).await?;
             json!({"login": person.login, "role": role.word()})
         }
         None => json!({"login": null}),

@@ -1,7 +1,7 @@
 //! Notes on a work's page: a person with write access marks what should change on a picture of
 //! a run, CI's or a local one (a region of its before, its after or both, a moment of a film,
 //! their words), and resolves a note once it is settled. Both are what a person says, so they pass the same
-//! checks as a verdict (`say::person`): a browser session from the app origin as JSON, never a
+//! checks as a verdict (`access::speaker`): a browser session from the app origin as JSON, never a
 //! token. Every change goes to the work's open pages and moves its review, whose check run
 //! summary lists the open notes.
 
@@ -11,15 +11,15 @@ use fearlezz_proof::notes::{Ask, Note, NoteState, Side, WORDS_MAX};
 use serde_json::json;
 use worker::{Env, Request, Response};
 
-use crate::say::{self, Act};
+use crate::access::{self, Action, Viewer};
 use crate::work::{Derive, Event, NOTE_COLUMNS, NoteRow, Statement, Write, read};
-use crate::{Answer, Config, Refusal, crypto, now, pages, room};
+use crate::{Answer, Config, Refusal, crypto, not_found, now, room, say};
 
 /// `POST /api/v2/runs/<run>/notes`: a person with write access notes what should change on a
 /// picture of a run. A local run takes notes too, though never a verdict: that is how feedback
 /// reaches the agent before a pull request exists. `201 {"note"}`.
 pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
-    let person = say::person(&req, env, config, "make a note").await?;
+    let person = access::speaker(&req, env, config, "make a note").await?;
     let ask: Ask = req.json().await.map_err(|_| {
         Refusal::new(
             400,
@@ -40,16 +40,9 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
         ));
     }
     let db = env.d1("DB")?;
-    let run = say::run(&req, env, config, &db, id).await?;
-    say::require(
-        env,
-        config,
-        &person.login,
-        &person.token,
-        &run.repository,
-        Act::Note,
-    )
-    .await?;
+    let viewer = Viewer::Person(&person);
+    let run = say::run(env, config, &db, viewer, id).await?;
+    access::can(env, config, viewer, Action::Note, &run.repository).await?;
     let look: Option<String> = db
         .prepare("SELECT look FROM checks WHERE run = ?1 AND id = ?2")
         .bind(&[id.into(), ask.check.as_str().into()])?
@@ -138,14 +131,14 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
 /// resolved it no longer needs change: it looks right when a verdict holds for its content, and
 /// waits for a look otherwise.
 pub async fn resolve(req: Request, env: &Env, config: &Config, id: &str) -> Answer {
-    let person = say::person(&req, env, config, "resolve a note").await?;
+    let person = access::speaker(&req, env, config, "resolve a note").await?;
     let db = env.d1("DB")?;
     let row: Option<NoteRow> = db
         .prepare(format!("SELECT {NOTE_COLUMNS} FROM notes WHERE id = ?1"))
         .bind(&[id.into()])?
         .first(None)
         .await?;
-    let row = row.ok_or_else(|| Refusal::new(404, "not found"))?;
+    let row = row.ok_or_else(not_found)?;
     #[derive(serde::Deserialize)]
     struct WorkRow {
         repo: String,
@@ -156,19 +149,15 @@ pub async fn resolve(req: Request, env: &Env, config: &Config, id: &str) -> Answ
         .bind(&[row.work.as_str().into()])?
         .first(None)
         .await?
-        .ok_or_else(|| Refusal::new(404, "not found"))?;
-    if !pages::open(&req, env, config, &work.repo).await? {
-        return Err(Refusal::new(404, "not found"));
-    }
-    say::require(
-        env,
-        config,
-        &person.login,
-        &person.token,
-        &work.repository,
-        Act::Resolve,
-    )
-    .await?;
+        .ok_or_else(not_found)?;
+    let viewer = Viewer::Person(&person);
+    let read = Action::Read {
+        work: Some(&row.work),
+    };
+    access::can(env, config, viewer, read, &work.repo)
+        .await
+        .map_err(Refusal::hidden)?;
+    access::can(env, config, viewer, Action::Resolve, &work.repository).await?;
     let work_id = row.work.clone();
     let mut note = row.note();
     note.state = NoteState::Resolved;

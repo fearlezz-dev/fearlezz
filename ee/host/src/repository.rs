@@ -10,10 +10,11 @@ use fearlezz_proof::review::Review;
 use serde::Deserialize;
 use worker::{D1Database, Env, Headers, Request, Response};
 
-use crate::room::Viewer;
-use crate::session::{self, to_sign_in};
+use crate::access::{self, Action, Viewer};
+use crate::room::Held;
+use crate::session;
 use crate::work::{self, WorkRow};
-use crate::{Answer, Config, Refusal, pages, repo_key, room};
+use crate::{Answer, Config, Refusal, not_found, pages, repo_key, room};
 
 /// Every column a listed work is read from; a `WHERE` on `w` follows.
 const LISTED: &str = "SELECT w.id, w.repo, w.repository, w.branch, w.pull, w.pull_title, w.pull_url, w.seq, w.review, \
@@ -118,11 +119,11 @@ pub async fn changed(env: &Env, work: &str) {
 /// work of is `404`.
 pub async fn page(req: &Request, env: &Env, config: &Config, owner: &str, name: &str) -> Answer {
     let repo = repo_key(owner, name);
-    if !pages::open(req, env, config, &repo).await? {
-        return to_sign_in(&req.path());
+    if let Some(answer) = pages::barred(req, env, config, &repo).await? {
+        return answer;
     }
     if !holds(&env.d1("DB")?, &repo).await? {
-        return Err(Refusal::new(404, "not found"));
+        return Err(not_found());
     }
     pages::app(env, config, &Headers::new()).await
 }
@@ -132,28 +133,28 @@ pub async fn page(req: &Request, env: &Env, config: &Config, owner: &str, name: 
 /// Without a session a private repository answers `401`.
 pub async fn live(req: &Request, env: &Env, config: &Config, owner: &str, name: &str) -> Answer {
     let repo = repo_key(owner, name);
-    let session = session::read(req, env).await?;
-    if !pages::sees(env, config, session.as_ref(), &repo).await? {
-        return Err(Refusal::new(401, "sign in to see this repository"));
-    }
+    let person = session::read(req, env).await?;
+    let viewer = Viewer::of(person.as_ref());
+    let read = Action::Read { work: None };
+    access::can(env, config, viewer, read, &repo)
+        .await
+        .map_err(|refusal| match refusal.asks_sign_in() {
+            true => Refusal::new(401, "sign in to see this repository"),
+            false => refusal,
+        })?;
     let db = env.d1("DB")?;
     if !pages::upgrades(req)? {
-        let listing = listing(&db, &repo)
-            .await?
-            .ok_or_else(|| Refusal::new(404, "not found"))?;
+        let listing = listing(&db, &repo).await?.ok_or_else(not_found)?;
         let headers = Headers::new();
         headers.set("Cache-Control", "no-store")?;
         return Ok(Response::from_json(&listing)?.with_headers(headers));
     }
     if !holds(&db, &repo).await? {
-        return Err(Refusal::new(404, "not found"));
+        return Err(not_found());
     }
     let room = room::of_repository(&repo);
-    let viewer = Viewer::Person {
-        session: session.map(|s| s.id),
-        repo: repo.clone(),
-    };
-    Ok(room::connect(env, req, &room, ("repo", &repo), &viewer).await?)
+    let held = Held::of(viewer, &repo);
+    Ok(room::connect(env, req, &room, ("repo", &repo), &held).await?)
 }
 
 /// Whether the host holds any work of the repository `repo`.

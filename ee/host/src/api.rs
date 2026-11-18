@@ -22,10 +22,10 @@ use serde_json::{Value, json};
 use wasm_bindgen::JsValue;
 use worker::{D1Database, Data, Env, Request, Response};
 
-use crate::cli::{self, Person};
+use crate::access::{self, Action, Person, Viewer};
 use crate::oidc::{self, Token};
-use crate::work::{self, Derive, Event, Statement, WorkRow, Write};
-use crate::{Answer, Config, Refusal, crypto, github, now, review, room, say};
+use crate::work::{self, Derive, Event, RUNS, RunRow, Statement, WorkRow, Write};
+use crate::{Answer, Config, Refusal, cli, crypto, files, github, now, review, room};
 
 /// Who writes a run.
 enum Writer {
@@ -61,15 +61,8 @@ async fn may_write(
     person: &Person,
     repository: &str,
 ) -> Result<(), Refusal> {
-    say::require(
-        env,
-        config,
-        &person.login,
-        &person.token,
-        repository,
-        say::Act::LocalRun,
-    )
-    .await
+    let viewer = Viewer::Person(person);
+    access::can(env, config, viewer, Action::LocalRun, repository).await
 }
 
 pub async fn installed(req: &Request, env: &Env, config: &Config) -> Answer {
@@ -271,26 +264,6 @@ fn ci_may_open(token: &Token, open: &Open) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// A run as the calls after opening it need it.
-#[derive(Deserialize)]
-struct RunRow {
-    work: String,
-    head: String,
-    git_ref: String,
-    state: String,
-    repo: String,
-    repository: String,
-    branch: String,
-    pull: Option<f64>,
-}
-
-impl RunRow {
-    /// Whether it is a local run, which never moves the work's review.
-    fn local(&self) -> bool {
-        self.git_ref.starts_with("local:")
-    }
-}
-
 /// The run `id`, when the writer may write it. Only a CI token of the run's own repository
 /// finds a CI run, and only one for the same ref (the same pull request, or the same pushed
 /// branch) may write it; a person's CLI finds only their own local runs, while they may write
@@ -318,7 +291,7 @@ async fn owned(
     writer: &Writer,
     id: &str,
 ) -> Result<RunRow, Refusal> {
-    let select = "SELECT r.work, r.head, r.git_ref, r.state, w.repo, w.repository, w.branch, w.pull FROM runs r JOIN works w ON w.id = r.work WHERE r.id = ?1";
+    let select = format!("{RUNS} WHERE r.id = ?1");
     let row: Option<RunRow> = match writer {
         Writer::Ci(token) => {
             db.prepare(format!("{select} AND w.repo = ?2"))
@@ -436,7 +409,7 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     let write = Write {
         statements,
         event: Some(Event::run(id, change)),
-        derive: if looks && !run.local() {
+        derive: if looks && !run.local()? {
             Derive::Review
         } else {
             Derive::No
@@ -459,7 +432,7 @@ pub async fn weakenings(mut req: Request, env: &Env, config: &Config, id: &str) 
         .map_err(|e| Refusal::new(400, format!("send {{\"weakened\": [...]}}: {e}")))?;
     let db = env.d1("DB")?;
     let run = owned(env, config, &db, &writer, id).await?;
-    if run.local() {
+    if run.local()? {
         return Err(Refusal::new(
             409,
             "a local run is never reviewed, so nothing it weakens is accepted",
@@ -608,7 +581,7 @@ pub async fn done(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     let write = Write {
         statements,
         event: Some(Event::run(id, change)),
-        derive: if run.local() {
+        derive: if run.local()? {
             Derive::No
         } else {
             Derive::Review
@@ -693,7 +666,7 @@ pub async fn blob(req: Request, env: &Env, config: &Config, sha256: &str) -> Ans
     };
     let expected = hex::decode(sha256).map_err(|e| worker::Error::RustError(e.to_string()))?;
     // R2 checks the bytes against the hash and keeps nothing when they differ.
-    let key = format!("blobs/{repo}/{sha256}");
+    let key = files::blob_key(&repo, sha256);
     if let Err(error) = env
         .bucket("BLOBS")?
         .put(key, body)
@@ -764,7 +737,7 @@ async fn show_completed_looks(
     struct Row {
         run: String,
         work: String,
-        git_ref: String,
+        source: String,
         entry: String,
         look: String,
     }
@@ -773,7 +746,7 @@ async fn show_completed_looks(
     // read every check of every run the repository ever had.
     let rows = db
         .prepare(
-            "SELECT c.run, r.work, r.git_ref, c.entry, c.look \
+            "SELECT c.run, r.work, r.source, c.entry, c.look \
              FROM (SELECT DISTINCT run FROM files WHERE sha256 = ?2) f \
              CROSS JOIN runs r ON r.id = f.run \
              CROSS JOIN works w ON w.id = r.work \
@@ -797,7 +770,7 @@ async fn show_completed_looks(
         let write = Write {
             statements: Vec::new(),
             event: Some(Event::run(row.run, change)),
-            derive: if row.git_ref.starts_with("local:") {
+            derive: if matches!(work::read(&row.source)?, Source::Local { .. }) {
                 Derive::No
             } else {
                 Derive::Review
@@ -837,7 +810,7 @@ pub async fn close_silent(env: &Env) -> worker::Result<()> {
     let db = env.d1("DB")?;
     let rows = db
         .prepare(
-            "SELECT id, work FROM runs WHERE state = 'running' AND git_ref LIKE 'local:%' AND touched < ?1",
+            "SELECT id, work FROM runs WHERE state = 'running' AND json_extract(source, '$.kind') = 'local' AND touched < ?1",
         )
         .bind(&[(now() as f64 - SILENT_SECONDS).into()])?
         .all()

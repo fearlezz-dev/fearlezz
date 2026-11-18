@@ -12,8 +12,8 @@
 //! review, and a GitHub that hangs or fails only delays it.
 //!
 //! A page stays open only while its viewer may still see it, the rule every page follows
-//! (`pages::sees`, GitHub's word cached 5 minutes): before each event the room asks the cache
-//! (`pages::known`), and on an alarm, at least every 5 minutes and right after an event the
+//! (`access::sees`, GitHub's word cached 5 minutes): before each event the room asks the cache
+//! alone, and on an alarm, at least every 5 minutes and right after an event the
 //! cache could not answer for, it asks GitHub for each page a person opened, and closes with
 //! `1008` the pages whose session ended or whose access GitHub took away. A share link's pages
 //! stay until the link is revoked.
@@ -32,13 +32,14 @@ use worker::{
     WebSocketIncomingMessage, WebSocketPair, durable_object,
 };
 
-use crate::pages::{self, SIGHT_SECONDS};
+use crate::access::{self, Asking, GITHUB_SECONDS, Viewer};
 use crate::work::Derive;
-use crate::{Config, repository, review, session, work};
+use crate::{Config, repository, review, session, share, work};
 
-/// Who a page's live connection is held for, which says how long it stays open.
+/// Who a page's live connection is held for, which says how long it stays open: the viewer as
+/// the socket keeps it, with no token, so a session that ends ends its pages.
 #[derive(Serialize, Deserialize)]
-pub enum Viewer {
+pub enum Held {
     /// Someone the repository's rule let in, with their session when signed in: open while
     /// the rule still lets them in.
     Person {
@@ -48,6 +49,25 @@ pub enum Viewer {
     /// Someone holding a share link: open until the link is revoked, which closes the sockets
     /// carrying its `tag`.
     Link { tag: String },
+}
+
+impl Held {
+    /// How a page of the repository `repo` (lowercased) the policy let `viewer` see is held.
+    pub fn of(viewer: Viewer<'_>, repo: &str) -> Held {
+        match viewer {
+            Viewer::Share(link) => Held::Link {
+                tag: share::tag(&link.id),
+            },
+            Viewer::Person(person) => Held::Person {
+                session: person.session().map(str::to_owned),
+                repo: repo.to_owned(),
+            },
+            Viewer::Anonymous => Held::Person {
+                session: None,
+                repo: repo.to_owned(),
+            },
+        }
+    }
 }
 
 /// Why a page whose viewer may no longer see it is closed.
@@ -62,15 +82,6 @@ const PUBLISH: &str = "publish";
 struct Publish {
     work: String,
     first_run: bool,
-}
-
-/// Where a room asks whether a viewer may still see a page.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Asking {
-    /// Only GitHub's word the host holds: a write never waits for GitHub.
-    Cache,
-    /// GitHub, when the host holds no word.
-    GitHub,
 }
 
 /// The room's own state, owned, so a write the room runs holds it.
@@ -129,7 +140,7 @@ impl Pages {
         let mut open = Vec::new();
         let mut unknown = false;
         for socket in self.state.get_websockets() {
-            let Ok(Some(Viewer::Person { session, repo })) = socket.deserialize_attachment() else {
+            let Ok(Some(Held::Person { session, repo })) = socket.deserialize_attachment() else {
                 open.push(socket);
                 continue;
             };
@@ -162,7 +173,7 @@ impl Pages {
         self.state.get_websockets().iter().any(|socket| {
             matches!(
                 socket.deserialize_attachment(),
-                Ok(Some(Viewer::Person { .. }))
+                Ok(Some(Held::Person { .. }))
             )
         })
     }
@@ -179,16 +190,11 @@ async fn sees(
     asking: Asking,
 ) -> Option<bool> {
     let asked = async {
-        let session = match session {
+        let person = match session {
             Some(id) => session::find(env, id).await?,
             None => None,
         };
-        match asking {
-            Asking::Cache => pages::known(env, session.as_ref(), repo).await,
-            Asking::GitHub => pages::sees(env, config, session.as_ref(), repo)
-                .await
-                .map(Some),
-        }
+        access::sees(env, config, Viewer::of(person.as_ref()), repo, asking).await
     };
     match asked.await {
         Ok(sees) => sees,
@@ -232,18 +238,18 @@ pub async fn send(env: &Env, room: &str, text: &str) -> Result<()> {
 }
 
 /// Hands a page's live connection to room `room`, which answers it with what `of` names
-/// (`work=<id>` or `repo=<owner/name>`) and holds it for `viewer`.
+/// (`work=<id>` or `repo=<owner/name>`) and holds it as `held`.
 pub async fn connect(
     env: &Env,
     req: &Request,
     room: &str,
     of: (&str, &str),
-    viewer: &Viewer,
+    held: &Held,
 ) -> Result<Response> {
     let mut url = url::Url::parse("https://room/connect").map_err(worker::Error::from)?;
     url.query_pairs_mut()
         .append_pair(of.0, of.1)
-        .append_pair("viewer", &serde_json::to_string(viewer)?);
+        .append_pair("viewer", &serde_json::to_string(held)?);
     let mut init = RequestInit::new();
     init.with_headers(req.headers().clone());
     fetch(env, room, url.as_str(), &init).await
@@ -289,7 +295,7 @@ impl WorkRoom {
         let storage = self.state.storage();
         if storage.get_alarm().await?.is_none() {
             storage
-                .set_alarm(Duration::from_secs(SIGHT_SECONDS as u64))
+                .set_alarm(Duration::from_secs(GITHUB_SECONDS as u64))
                 .await?;
         }
         Ok(())
@@ -337,8 +343,8 @@ impl DurableObject for WorkRoom {
                 else {
                     return Response::error("connect names no work or repository", 400);
                 };
-                let Some(viewer) =
-                    param("viewer").and_then(|v| serde_json::from_str::<Viewer>(&v).ok())
+                let Some(held) =
+                    param("viewer").and_then(|v| serde_json::from_str::<Held>(&v).ok())
                 else {
                     return Response::error("connect names no viewer", 400);
                 };
@@ -346,14 +352,14 @@ impl DurableObject for WorkRoom {
                 // Accepted before the snapshot is read: an event that lands meanwhile reaches
                 // this socket too, and the page drops what its snapshot already holds by
                 // sequence number, so nothing between the two is missed.
-                match &viewer {
-                    Viewer::Link { tag } => self
+                match &held {
+                    Held::Link { tag } => self
                         .state
                         .accept_websocket_with_tags(&pair.server, &[tag.as_str()]),
-                    Viewer::Person { .. } => self.state.accept_web_socket(&pair.server),
+                    Held::Person { .. } => self.state.accept_web_socket(&pair.server),
                 }
-                pair.server.serialize_attachment(&viewer)?;
-                if matches!(viewer, Viewer::Person { .. }) {
+                pair.server.serialize_attachment(&held)?;
+                if matches!(held, Held::Person { .. }) {
                     self.watch().await?;
                 }
                 match self.snapshot(of, &name).await? {
