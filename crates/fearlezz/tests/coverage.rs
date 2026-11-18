@@ -676,6 +676,48 @@ fn a_jacoco_file_the_repository_does_not_keep_counts_toward_nothing() {
     );
 }
 
+/// A JaCoCo file that is no single file of the repository counts toward nothing, and the
+/// check's log says which, so a report naming files from elsewhere is not lost unseen.
+#[test]
+fn a_jacoco_file_no_repository_file_is_named_in_the_log() {
+    let config = JACOCO.replace(
+        "  </package>\n</report>",
+        "  </package>\n  <package name=\"com/x/gen\">\n    <sourcefile name=\"Gen.kt\">\n      \
+         <line nr=\"1\" mi=\"5\" ci=\"0\" mb=\"0\" cb=\"0\"/>\n    </sourcefile>\n  \
+         </package>\n</report>",
+    );
+    let file = "app/src/main/kotlin/com/x/Foo.kt";
+    let repo = feature(&config, &[(file, "package com.x\n\n")]);
+    repo.write(
+        file,
+        "package com.x\n\nfun a() = 1\nfun b() = 2\nfun c() = 3\n",
+    );
+    let out = repo.fz(&["run", "gradle-test"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let logs = logs(&repo.path(".git/fearlezz/results"));
+    assert!(
+        logs.contains(
+            "coverage: the jacoco report names com/x/gen/Gen.kt, which is no single file of the \
+             repository's code, so it counts toward nothing"
+        ),
+        "{logs}"
+    );
+}
+
+/// Every check log stored below `dir`, one after another.
+fn logs(dir: &std::path::Path) -> String {
+    let mut text = String::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            text.push_str(&logs(&path));
+        } else if path.file_name().is_some_and(|n| n == "output.log") {
+            text.push_str(&std::fs::read_to_string(&path).unwrap_or_default());
+        }
+    }
+    text
+}
+
 /// When git cannot list the project's files, nothing would count, so coverage would pass
 /// unmeasured; the check fails instead.
 #[test]

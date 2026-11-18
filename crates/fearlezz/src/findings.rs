@@ -11,6 +11,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
+use crate::read::{Place, Run, Source};
+
 pub(crate) use fearlezz_proof::findings::{Finding, Level};
 
 /// Where a check's findings come from.
@@ -45,103 +47,142 @@ pub(crate) enum Scope {
     Everywhere,
 }
 
+/// How a format's words for severity map to levels: each word it names, and `*` for any
+/// other word. A word the table gives no level is skipped.
+type Levels = &'static [(&'static str, Level)];
+
+/// The level `levels` gives the severity word `word`.
+fn level(levels: Levels, word: &str) -> Option<Level> {
+    let named = |w: &str| levels.iter().find(|(n, _)| *n == w).map(|&(_, l)| l);
+    named(word).or_else(|| named("*"))
+}
+
+/// A findings format: its name in `findings`, where its tool writes, its severity words, and
+/// how its text is read into findings and what could not be read.
+struct Format {
+    name: &'static str,
+    source: Source<'static>,
+    levels: Levels,
+    parse: fn(&str, Levels) -> Read,
+}
+
+/// The findings a format read, and what it could not read.
+type Read = (Vec<Finding>, Vec<String>);
+
 impl Reader {
+    /// The format table: one row per reader.
+    fn format(self) -> Format {
+        use Level::{Flag, Gate, Hint};
+        let stdout = Source::Stdout;
+        let (name, source, levels, parse): (_, _, Levels, fn(&str, Levels) -> Read) = match self {
+            Reader::Cargo => (
+                "cargo",
+                stdout,
+                &[("error", Gate), ("warning", Flag)],
+                cargo,
+            ),
+            Reader::Sarif => (
+                "sarif",
+                Source::Out {
+                    file: "findings.sarif",
+                    else_stdout: true,
+                },
+                &[("error", Gate), ("warning", Flag), ("*", Hint)],
+                sarif,
+            ),
+            Reader::Jsonl => (
+                "jsonl",
+                Source::Out {
+                    file: "findings.jsonl",
+                    else_stdout: false,
+                },
+                &[],
+                jsonl,
+            ),
+            Reader::Dart => (
+                "dart",
+                stdout,
+                &[("ERROR", Gate), ("WARNING", Gate), ("INFO", Gate)],
+                dart,
+            ),
+            Reader::Eslint => ("eslint", stdout, &[("2", Gate), ("*", Flag)], eslint),
+            Reader::Svelte => ("svelte", stdout, &[("ERROR", Gate), ("*", Flag)], svelte),
+            Reader::Terraform => (
+                "terraform",
+                stdout,
+                &[("warning", Flag), ("*", Gate)],
+                terraform,
+            ),
+            Reader::Yamllint => (
+                "yamllint",
+                stdout,
+                &[("error", Gate), ("*", Flag)],
+                yamllint,
+            ),
+        };
+        Format {
+            name,
+            source,
+            levels,
+            parse,
+        }
+    }
+
     /// As written in `findings`.
     pub(crate) fn name(self) -> &'static str {
-        match self {
-            Reader::Cargo => "cargo",
-            Reader::Sarif => "sarif",
-            Reader::Jsonl => "jsonl",
-            Reader::Dart => "dart",
-            Reader::Eslint => "eslint",
-            Reader::Svelte => "svelte",
-            Reader::Terraform => "terraform",
-            Reader::Yamllint => "yamllint",
-        }
+        self.format().name
     }
 
     /// Whether the check's stdout holds the findings, so it is kept apart from the log.
     pub(crate) fn reads_stdout(self) -> bool {
-        matches!(
-            self,
-            Reader::Cargo
-                | Reader::Sarif
-                | Reader::Dart
-                | Reader::Eslint
-                | Reader::Svelte
-                | Reader::Terraform
-                | Reader::Yamllint
-        )
+        self.format().source.reads_stdout()
     }
 
-    /// Reads the findings a run left. `stdout` is the run's captured stdout, `out` its proof
-    /// folder, `folder` the one the check ran in, if not the root. Returns the findings and
-    /// what could not be read.
-    pub(crate) fn read(
-        self,
-        stdout: &Path,
-        out: &Path,
-        root: &Path,
-        folder: Option<&str>,
-    ) -> (Vec<Finding>, Vec<String>) {
-        let text = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();
-        let mut found = match self {
-            Reader::Cargo => (cargo(&text(stdout)), Vec::new()),
-            Reader::Sarif => {
-                let file = out.join("findings.sarif");
-                let source = if file.exists() {
-                    text(&file)
-                } else {
-                    text(stdout)
-                };
-                sarif(&source)
+    /// Reads the findings a run left, placed in the repository, and what could not be read.
+    pub(crate) fn read(self, run: &Run<'_>) -> Read {
+        let format = self.format();
+        // A stream or a file: never a glob, so never an error.
+        let text: String = format
+            .source
+            .read(run, format.name)
+            .map(|reports| reports.into_iter().map(|r| r.text).collect())
+            .unwrap_or_default();
+        let (found, errors) = (format.parse)(&text, format.levels);
+        (place(found, run), errors)
+    }
+}
+
+/// Findings with each file a repository path. A path that names no file here was written from
+/// another folder (a tool run in a subfolder): judging it would hide it as "elsewhere", so its
+/// findings become one blocking finding instead.
+pub(crate) fn place(mut found: Vec<Finding>, run: &Run<'_>) -> Vec<Finding> {
+    let mut lost = BTreeSet::new();
+    for f in found.iter_mut().filter(|f| !f.file.is_empty()) {
+        f.file = match run.place(&f.file) {
+            Place::Repo(p) | Place::Outside(p) => p,
+            Place::Lost(p) => {
+                lost.insert(p.clone());
+                p
             }
-            Reader::Jsonl => jsonl(&text(&out.join("findings.jsonl"))),
-            Reader::Dart => (dart(&text(stdout)), Vec::new()),
-            Reader::Eslint => eslint(&text(stdout)),
-            Reader::Svelte => svelte(&text(stdout)),
-            Reader::Terraform => terraform(&text(stdout)),
-            Reader::Yamllint => (yamllint(&text(stdout)), Vec::new()),
         };
-        for f in &mut found.0 {
-            // A tool run in the check's folder names files from there, so a relative path is
-            // looked for there first: the root may hold a file of the same name.
-            let from_tool =
-                !f.file.is_empty() && !f.file.starts_with('/') && !f.file.starts_with("file://");
-            f.file = relative(&f.file, root);
-            if let Some(folder) = folder
-                && from_tool
-                && root.join(folder).join(&f.file).is_file()
-            {
-                f.file = format!("{folder}/{}", f.file);
-            }
-        }
-        // A relative path that names no file here was written from another folder (a tool
-        // run in a subfolder). Judging it would hide it as "elsewhere", so it blocks instead.
-        let lost: BTreeSet<String> = found
-            .0
-            .iter()
-            .filter(|f| !f.file.is_empty() && !f.file.starts_with('/'))
-            .filter(|f| !root.join(&f.file).is_file())
-            .map(|f| f.file.clone())
-            .collect();
-        if !lost.is_empty() {
-            found.0.retain(|f| !lost.contains(&f.file));
-            let names: Vec<&str> = lost.iter().take(3).map(String::as_str).collect();
-            let mut gate = unplaced(&format!(
-                "findings name {}{}, which are not files from the repository root",
-                names.join(", "),
-                if lost.len() > 3 { " and more" } else { "" }
-            ));
-            gate.fix = Some(
+    }
+    if !lost.is_empty() {
+        found.retain(|f| !lost.contains(&f.file));
+        let names: Vec<&str> = lost.iter().take(3).map(String::as_str).collect();
+        found.push(Finding {
+            fix: Some(
                 "run the tool so it names paths from the repository root, or from an absolute \
                  path"
                     .into(),
-            );
-            found.0.push(gate);
-        }
-        found
+            ),
+            ..unplaced(&format!(
+                "findings name {}{}, which are not files from the repository root",
+                names.join(", "),
+                if lost.len() > 3 { " and more" } else { "" }
+            ))
+        });
     }
+    found
 }
 
 /// Lines the change added or modified, per file.
@@ -165,7 +206,22 @@ impl Changed {
         let mut files: BTreeMap<String, Lines> = BTreeMap::new();
         let mut current: Option<String> = None;
         let mut old: Option<String> = None;
+        // The old and new lines left in the hunk being read: an added `++ x` reads `+++ x`,
+        // never a header. A context line (git merges near hunks by `diff.interHunkContext`)
+        // is on both sides.
+        let (mut old_left, mut new_left) = (0, 0);
         for line in diff.lines() {
+            let side = match line.as_bytes().first() {
+                Some(b'-') if old_left > 0 => Some((1, 0)),
+                Some(b'+') if new_left > 0 => Some((0, 1)),
+                Some(b' ') if old_left > 0 && new_left > 0 => Some((1, 1)),
+                _ => None,
+            };
+            if let Some((o, n)) = side {
+                old_left -= o;
+                new_left -= n;
+                continue;
+            }
             // Git ends a header path that holds a space with a tab.
             if let Some(path) = line.strip_prefix("--- ") {
                 old = path
@@ -181,14 +237,14 @@ impl Changed {
                 if let Some(p) = current.as_ref().or(old.as_ref()) {
                     files.entry(p.clone()).or_insert(Lines::Ranges(Vec::new()));
                 }
-            } else if let (Some(hunk), Some(path)) = (line.strip_prefix("@@ "), &current) {
-                let Some((start, count)) = added_range(hunk) else {
+            } else if let Some(hunk) = line.strip_prefix("@@ ") {
+                let Some((removed, (start, count))) = ranges(hunk) else {
                     continue;
                 };
-                if count == 0 {
-                    continue;
-                }
-                if let Some(Lines::Ranges(r)) = files.get_mut(path) {
+                (old_left, new_left) = (removed, count);
+                if let (Some(path), true) = (&current, count > 0)
+                    && let Some(Lines::Ranges(r)) = files.get_mut(path)
+                {
                     r.push((start, start + count - 1));
                 }
             }
@@ -240,16 +296,20 @@ impl Changed {
     }
 }
 
-/// `-a,b +c,d @@` gives the added range `(c, d)`; a missing count means one line.
-fn added_range(hunk: &str) -> Option<(u32, u32)> {
-    let plus = hunk.split_whitespace().find(|p| p.starts_with('+'))?;
-    let mut parts = plus[1..].splitn(2, ',');
-    let start = parts.next()?.parse().ok()?;
-    let count = match parts.next() {
-        Some(c) => c.parse().ok()?,
-        None => 1,
+/// `-a,b +c,d @@` gives how many lines it removes, `b`, and the added range `(c, d)`; a
+/// missing count means one line.
+fn ranges(hunk: &str) -> Option<(u32, (u32, u32))> {
+    let range = |sign: char| -> Option<(u32, u32)> {
+        let part = hunk.split_whitespace().find_map(|p| p.strip_prefix(sign))?;
+        let mut parts = part.splitn(2, ',');
+        let start = parts.next()?.parse().ok()?;
+        let count = match parts.next() {
+            Some(c) => c.parse().ok()?,
+            None => 1,
+        };
+        Some((start, count))
     };
-    Some((start, count))
+    Some((range('-')?.1, range('+')?))
 }
 
 /// What a run's findings mean for the check.
@@ -289,21 +349,17 @@ pub(crate) fn judge(
     }
 }
 
-/// Cargo's JSON messages. Lints (a code like `clippy::unwrap_used` or `unused_variables`)
-/// count on changed lines; hard errors (`E0308`, or no code) count anywhere.
 /// A gate finding with no file, counted wherever the change is.
 fn unplaced(message: &str) -> Finding {
     Finding {
-        file: String::new(),
-        line: 0,
-        end_line: None,
-        level: Level::Gate,
-        rule: String::new(),
-        message: message.to_string(),
-        fix: None,
-        why: None,
         anywhere: true,
+        ..Finding::new("", 0, Level::Gate, "", message)
     }
+}
+
+/// A line number a tool wrote as JSON.
+fn line_of(v: &Value) -> Option<u32> {
+    u32::try_from(v.as_u64()?).ok()
 }
 
 /// Cargo names files from its workspace folder, which may be a subfolder of the repository:
@@ -323,12 +379,28 @@ fn cargo_path(file: &str, manifest: Option<&str>) -> String {
         .map_or_else(|| file.to_string(), |p| p.to_string_lossy().to_string())
 }
 
-fn cargo(text: &str) -> Vec<Finding> {
+/// Cargo's JSON messages, one per line among the lines it prints for people. Lints (a code
+/// like `clippy::unwrap_used` or `unused_variables`) count on changed lines; hard errors
+/// (`E0308`, or no code) count anywhere.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
+)]
+fn cargo(text: &str, levels: Levels) -> Read {
     let mut found = Vec::new();
+    let mut errors = Vec::new();
     let mut build_failed = false;
-    for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
+    for (n, line) in text.lines().enumerate() {
+        // `cargo test` prints its tests' output among the messages; each message starts so.
+        if !line.starts_with("{\"reason\":") {
             continue;
+        }
+        let v = match serde_json::from_str::<Value>(line) {
+            Ok(v) => v,
+            Err(e) => {
+                errors.push(format!("cargo line {}: {e}", n + 1));
+                continue;
+            }
         };
         if v["reason"] == "build-finished" && v["success"] == false {
             build_failed = true;
@@ -337,18 +409,16 @@ fn cargo(text: &str) -> Vec<Finding> {
             continue;
         }
         let m = &v["message"];
-        let level = match m["level"].as_str() {
-            Some("error") => Level::Gate,
-            Some("warning") => Level::Flag,
-            _ => continue,
+        let Some(level) = level(levels, m["level"].as_str().unwrap_or("")) else {
+            continue;
         };
+        let message = m["message"].as_str().unwrap_or("");
         let Some(span) = m["spans"]
             .as_array()
             .and_then(|s| s.iter().find(|s| s["is_primary"] == true))
         else {
             // An error without a place (a linker or dependency failure) still counts, except
             // the summaries like "aborting due to 2 previous errors".
-            let message = m["message"].as_str().unwrap_or("");
             if level == Level::Gate && !message.starts_with("aborting due to") {
                 found.push(unplaced(message));
             }
@@ -358,7 +428,7 @@ fn cargo(text: &str) -> Vec<Finding> {
         let hard = code.is_empty()
             || (code.len() == 5
                 && code.starts_with('E')
-                && code[1..].bytes().all(|b| b.is_ascii_digit()));
+                && code.bytes().skip(1).all(|b| b.is_ascii_digit()));
         // Clippy's help is either a suggestion or a link to the lint's page.
         let helps: Vec<&Value> = m["children"]
             .as_array()
@@ -376,9 +446,8 @@ fn cargo(text: &str) -> Vec<Finding> {
                 .flatten()
                 .filter_map(|s| s["suggested_replacement"].as_str())
                 .collect();
-            let replacement = (parts.len() == 1).then(|| parts[0]);
-            match replacement {
-                Some(r) if !r.is_empty() => format!("{}: `{r}`", text(c)),
+            match parts[..] {
+                [r] if !r.is_empty() => format!("{}: `{r}`", text(c)),
                 _ => text(c),
             }
         });
@@ -387,24 +456,22 @@ fn cargo(text: &str) -> Vec<Finding> {
                 .trim_start_matches("for further information visit ")
                 .to_string()
         });
+        let file = cargo_path(
+            span["file_name"].as_str().unwrap_or(""),
+            v["manifest_path"].as_str(),
+        );
         found.push(Finding {
-            file: cargo_path(
-                span["file_name"].as_str().unwrap_or(""),
-                v["manifest_path"].as_str(),
-            ),
-            line: span["line_start"]
-                .as_u64()
-                .and_then(|n| u32::try_from(n).ok())
-                .unwrap_or(0),
-            end_line: span["line_end"]
-                .as_u64()
-                .and_then(|n| u32::try_from(n).ok()),
-            level,
-            rule: code.to_string(),
-            message: m["message"].as_str().unwrap_or("").to_string(),
+            end_line: line_of(&span["line_end"]),
             fix,
             why,
             anywhere: level == Level::Gate && hard,
+            ..Finding::new(
+                file,
+                line_of(&span["line_start"]).unwrap_or(0),
+                level,
+                code,
+                message,
+            )
         });
     }
     // A failed build script or a crash leaves no compiler message; it must not pass because
@@ -414,39 +481,38 @@ fn cargo(text: &str) -> Vec<Finding> {
             "cargo reported a failed build without saying where; see the log",
         ));
     }
-    found
+    (found, errors)
 }
 
-/// `SEVERITY|TYPE|CODE|FILE|LINE|COLUMN|LENGTH|MESSAGE` lines. Every issue blocks, as
-/// `flutter analyze` fails on any; compile errors count anywhere.
-fn dart(text: &str) -> Vec<Finding> {
-    text.lines()
-        .filter_map(|line| {
-            let f: Vec<&str> = line.splitn(8, '|').collect();
-            let [severity, kind, code, file, line, _, _, message] = f[..] else {
-                return None;
-            };
-            if !matches!(severity, "ERROR" | "WARNING" | "INFO") {
-                return None;
-            }
-            Some(Finding {
-                file: file.to_string(),
-                line: line.parse().ok()?,
-                end_line: None,
-                level: Level::Gate,
-                rule: code.to_lowercase(),
-                message: message.to_string(),
-                fix: None,
-                why: None,
+/// `SEVERITY|TYPE|CODE|FILE|LINE|COLUMN|LENGTH|MESSAGE` lines among the analyzer's other
+/// output. Every issue blocks, as `flutter analyze` fails on any; compile errors count
+/// anywhere.
+fn dart(text: &str, levels: Levels) -> Read {
+    let mut found = Vec::new();
+    let mut errors = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let fields: Vec<&str> = line.splitn(8, '|').collect();
+        let [severity, kind, code, file, number, _, _, message] = fields[..] else {
+            continue;
+        };
+        match (level(levels, severity), number.parse()) {
+            (Some(level), Ok(number)) => found.push(Finding {
                 anywhere: matches!(kind, "COMPILE_TIME_ERROR" | "SYNTACTIC_ERROR"),
-            })
-        })
-        .collect()
+                ..Finding::new(file, number, level, code.to_lowercase(), message)
+            }),
+            (None, _) => errors.push(format!(
+                "dart line {}: no such severity as {severity}",
+                n + 1
+            )),
+            (_, Err(e)) => errors.push(format!("dart line {}: line {number}: {e}", n + 1)),
+        }
+    }
+    (found, errors)
 }
 
 /// ESLint's JSON: one entry per file with its messages. Severity 2 blocks; a message without
 /// a rule is a parse error, which counts anywhere.
-fn eslint(text: &str) -> (Vec<Finding>, Vec<String>) {
+fn eslint(text: &str, levels: Levels) -> Read {
     if text.trim().is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -457,24 +523,20 @@ fn eslint(text: &str) -> (Vec<Finding>, Vec<String>) {
     let mut found = Vec::new();
     for file in files.as_array().into_iter().flatten() {
         for m in file["messages"].as_array().into_iter().flatten() {
+            let Some(level) = level(levels, &m["severity"].to_string()) else {
+                continue;
+            };
             let rule = m["ruleId"].as_str().unwrap_or("");
             found.push(Finding {
-                file: file["filePath"].as_str().unwrap_or("").to_string(),
-                line: m["line"]
-                    .as_u64()
-                    .and_then(|n| u32::try_from(n).ok())
-                    .unwrap_or(0),
-                end_line: m["endLine"].as_u64().and_then(|n| u32::try_from(n).ok()),
-                level: if m["severity"] == 2 {
-                    Level::Gate
-                } else {
-                    Level::Flag
-                },
-                rule: rule.to_string(),
-                message: m["message"].as_str().unwrap_or("").to_string(),
-                fix: None,
-                why: None,
+                end_line: line_of(&m["endLine"]),
                 anywhere: rule.is_empty(),
+                ..Finding::new(
+                    file["filePath"].as_str().unwrap_or(""),
+                    line_of(&m["line"]).unwrap_or(0),
+                    level,
+                    rule,
+                    m["message"].as_str().unwrap_or(""),
+                )
             });
         }
     }
@@ -484,7 +546,11 @@ fn eslint(text: &str) -> (Vec<Finding>, Vec<String>) {
 /// svelte-check's machine-verbose lines: a timestamp, then one diagnostic as JSON, its lines
 /// counted from 0. An error (types, compile) blocks wherever it is, as tsc fails on any; a
 /// warning (a11y, state, css) is a flag.
-fn svelte(text: &str) -> (Vec<Finding>, Vec<String>) {
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
+)]
+fn svelte(text: &str, levels: Levels) -> Read {
     let mut found = Vec::new();
     let mut errors = Vec::new();
     for line in text.lines() {
@@ -501,35 +567,38 @@ fn svelte(text: &str) -> (Vec<Finding>, Vec<String>) {
                 continue;
             }
         };
-        let error = d["type"] == "ERROR";
-        let line_of = |at: &Value| u32::try_from(at["line"].as_u64()? + 1).ok();
+        let Some(level) = level(levels, d["type"].as_str().unwrap_or("")) else {
+            continue;
+        };
+        let from_zero = |at: &Value| line_of(&at["line"])?.checked_add(1);
         // A TypeScript error's code is a number, a Svelte warning's a name.
         let code = match &d["code"] {
             Value::String(s) => s.clone(),
             Value::Number(n) => format!("ts{n}"),
             Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => String::new(),
         };
+        // The first line; Svelte adds a link to its docs on the next.
+        let message = d["message"].as_str().and_then(|m| m.lines().next());
         found.push(Finding {
-            file: d["filename"].as_str().unwrap_or("").to_string(),
-            line: line_of(&d["start"]).unwrap_or(0),
-            end_line: line_of(&d["end"]),
-            level: if error { Level::Gate } else { Level::Flag },
-            rule: code,
-            // The first line; Svelte adds a link to its docs on the next.
-            message: d["message"]
-                .as_str()
-                .and_then(|m| m.lines().next())
-                .unwrap_or("")
-                .to_string(),
-            fix: None,
-            why: None,
-            anywhere: error,
+            end_line: from_zero(&d["end"]),
+            anywhere: level == Level::Gate,
+            ..Finding::new(
+                d["filename"].as_str().unwrap_or(""),
+                from_zero(&d["start"]).unwrap_or(0),
+                level,
+                code,
+                message.unwrap_or(""),
+            )
         });
     }
     (found, errors)
 }
 
 /// A result's file. Some tools (ktlint) name it relative to a base folder the run declares.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
+)]
 fn sarif_file(run: &Value, location: &Value) -> String {
     let uri = location["uri"].as_str().unwrap_or("");
     let Some(base) = location["uriBaseId"]
@@ -552,7 +621,13 @@ fn sarif_file(run: &Value, location: &Value) -> String {
     format!("/{}", parts.join("/"))
 }
 
-fn sarif(text: &str) -> (Vec<Finding>, Vec<String>) {
+/// SARIF 2.1: each run's results at their first location. A result without a level is a
+/// warning, as the standard says.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
+)]
+fn sarif(text: &str, levels: Levels) -> Read {
     if text.trim().is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -563,29 +638,22 @@ fn sarif(text: &str) -> (Vec<Finding>, Vec<String>) {
     let mut found = Vec::new();
     for run in doc["runs"].as_array().into_iter().flatten() {
         for r in run["results"].as_array().into_iter().flatten() {
-            let level = match r["level"].as_str().unwrap_or("warning") {
-                "error" => Level::Gate,
-                "warning" => Level::Flag,
-                _ => Level::Hint,
+            let Some(level) = level(levels, r["level"].as_str().unwrap_or("warning")) else {
+                continue;
             };
             let place = &r["locations"][0]["physicalLocation"];
             found.push(Finding {
-                file: sarif_file(run, &place["artifactLocation"]),
-                line: place["region"]["startLine"]
-                    .as_u64()
-                    .and_then(|n| u32::try_from(n).ok())
-                    .unwrap_or(0),
-                end_line: place["region"]["endLine"]
-                    .as_u64()
-                    .and_then(|n| u32::try_from(n).ok()),
-                level,
-                rule: r["ruleId"].as_str().unwrap_or("").to_string(),
-                message: r["message"]["text"].as_str().unwrap_or("").to_string(),
+                end_line: line_of(&place["region"]["endLine"]),
                 fix: r["fixes"][0]["description"]["text"]
                     .as_str()
                     .map(String::from),
-                why: None,
-                anywhere: false,
+                ..Finding::new(
+                    sarif_file(run, &place["artifactLocation"]),
+                    line_of(&place["region"]["startLine"]).unwrap_or(0),
+                    level,
+                    r["ruleId"].as_str().unwrap_or(""),
+                    r["message"]["text"].as_str().unwrap_or(""),
+                )
             });
         }
     }
@@ -594,7 +662,7 @@ fn sarif(text: &str) -> (Vec<Finding>, Vec<String>) {
 
 /// `validate -json` diagnostics. An error means the configuration does not hold together, so
 /// it counts wherever it is, as a compile error does; a warning counts on changed lines.
-fn terraform(text: &str) -> (Vec<Finding>, Vec<String>) {
+fn terraform(text: &str, levels: Levels) -> Read {
     if text.trim().is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -602,33 +670,32 @@ fn terraform(text: &str) -> (Vec<Finding>, Vec<String>) {
         Ok(v) => v,
         Err(e) => return (Vec::new(), vec![format!("validate -json: {e}")]),
     };
-    let line = |v: Option<&Value>| u32::try_from(v?.as_u64()?).ok();
     let found = doc
         .get("diagnostics")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .map(|d| {
+        .filter_map(|d| {
             let text = |key: &str| d.get(key).and_then(Value::as_str);
-            let error = text("severity") != Some("warning");
+            let level = level(levels, text("severity").unwrap_or(""))?;
             let range = d.get("range");
-            let at = |end: &str| line(range?.get(end)?.get("line"));
+            let at = |end: &str| line_of(range?.get(end)?.get("line")?);
             let detail = text("detail").filter(|s| !s.is_empty());
-            Finding {
-                file: range
-                    .and_then(|r| r.get("filename"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                line: at("start").unwrap_or(0),
+            let file = range
+                .and_then(|r| r.get("filename"))
+                .and_then(Value::as_str);
+            Some(Finding {
                 end_line: at("end"),
-                level: if error { Level::Gate } else { Level::Flag },
-                rule: "validate".into(),
-                message: text("summary").unwrap_or("").to_string(),
-                fix: None,
                 why: detail.map(String::from),
-                anywhere: error,
-            }
+                anywhere: level == Level::Gate,
+                ..Finding::new(
+                    file.unwrap_or(""),
+                    at("start").unwrap_or(0),
+                    level,
+                    "validate",
+                    text("summary").unwrap_or(""),
+                )
+            })
         })
         .collect();
     (found, Vec::new())
@@ -636,39 +703,44 @@ fn terraform(text: &str) -> (Vec<Finding>, Vec<String>) {
 
 /// `file:line:column: [level] message (rule)`: an error is a gate, a warning a flag, as the
 /// project's yamllint config sets each rule's level.
-fn yamllint(text: &str) -> Vec<Finding> {
-    text.lines()
-        .filter_map(|l| {
-            let (place, rest) = l.split_once(": [")?;
+fn yamllint(text: &str, levels: Levels) -> Read {
+    let mut found = Vec::new();
+    let mut errors = Vec::new();
+    for (n, l) in text.lines().enumerate() {
+        let Some((place, rest)) = l.split_once(": [") else {
+            continue;
+        };
+        let read = || -> Option<Finding> {
             let mut parts = place.rsplitn(3, ':');
             let _column = parts.next()?;
             let line = parts.next()?.parse().ok()?;
-            let file = parts.next()?.to_string();
-            let (level, rest) = rest.split_once("] ")?;
+            let file = parts.next()?;
+            let (word, rest) = rest.split_once("] ")?;
             let (message, rule) = match rest.rsplit_once(" (") {
                 Some((m, r)) if r.ends_with(')') => (m, r.trim_end_matches(')')),
                 _ => (rest, ""),
             };
-            Some(Finding {
+            Some(Finding::new(
                 file,
                 line,
-                end_line: None,
-                level: if level == "error" {
-                    Level::Gate
-                } else {
-                    Level::Flag
-                },
-                rule: rule.to_string(),
-                message: message.to_string(),
-                fix: None,
-                why: None,
-                anywhere: false,
-            })
-        })
-        .collect()
+                level(levels, word)?,
+                rule,
+                message,
+            ))
+        };
+        match read() {
+            Some(f) => found.push(f),
+            None => errors.push(format!(
+                "yamllint line {}: not file:line:column: [level]",
+                n + 1
+            )),
+        }
+    }
+    (found, errors)
 }
 
-fn jsonl(text: &str) -> (Vec<Finding>, Vec<String>) {
+/// One finding per line in this module's shape.
+fn jsonl(text: &str, _: Levels) -> Read {
     let mut found = Vec::new();
     let mut errors = Vec::new();
     for (n, line) in text
@@ -684,50 +756,53 @@ fn jsonl(text: &str) -> (Vec<Finding>, Vec<String>) {
     (found, errors)
 }
 
-/// A tool's path made relative to the worktree root (`file://` URIs and absolute paths).
-fn relative(file: &str, root: &Path) -> String {
-    let decoded;
-    let path = match file.strip_prefix("file://") {
-        Some(uri) => {
-            decoded = percent_decode(uri);
-            decoded.as_str()
-        }
-        None => file,
-    };
-    let root = root.to_string_lossy();
-    path.strip_prefix(&format!("{root}/"))
-        .unwrap_or(path)
-        .trim_start_matches("./")
-        .to_string()
-}
-
-/// A URI path with `%XX` escapes (such as `%20` for a space) decoded.
-fn percent_decode(uri: &str) -> String {
-    let bytes = uri.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while let Some(&b) = bytes.get(i) {
-        let hex = bytes
-            .get(i + 1..i + 3)
-            .and_then(|h| std::str::from_utf8(h).ok())
-            .and_then(|h| u8::from_str_radix(h, 16).ok());
-        match (b, hex) {
-            (b'%', Some(v)) => {
-                out.push(v);
-                i += 3;
-            }
-            _ => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `reader` reads from `text`, its paths as the tool wrote them.
+    fn parse(reader: Reader, text: &str) -> (Vec<Finding>, Vec<String>) {
+        let format = reader.format();
+        (format.parse)(text, format.levels)
+    }
+
+    fn cargo(text: &str) -> Vec<Finding> {
+        parse(Reader::Cargo, text).0
+    }
+
+    /// A path a tool wrote, from the checkout at `root`, whether or not a file is there.
+    fn relative(file: &str, root: &Path) -> String {
+        let run = Run {
+            out: root,
+            root,
+            folder: None,
+            since: std::time::SystemTime::UNIX_EPOCH,
+        };
+        match run.place(file) {
+            Place::Repo(p) | Place::Outside(p) | Place::Lost(p) => p,
+        }
+    }
+
+    #[test]
+    fn every_reader_has_its_own_name() {
+        let all = [
+            Reader::Cargo,
+            Reader::Sarif,
+            Reader::Jsonl,
+            Reader::Dart,
+            Reader::Eslint,
+            Reader::Svelte,
+            Reader::Terraform,
+            Reader::Yamllint,
+        ];
+        let names: BTreeSet<&str> = all.iter().map(|r| r.name()).collect();
+        assert_eq!(names.len(), all.len());
+        for r in all {
+            let named: Reader = serde_json::from_value(Value::from(r.name())).unwrap();
+            assert_eq!(named, r);
+            assert_eq!(r.reads_stdout(), r != Reader::Jsonl);
+        }
+    }
 
     #[test]
     fn cargo_paths_are_found_from_the_crate_folder_upwards() {
@@ -745,26 +820,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn sarif_uris_are_decoded() {
-        assert_eq!(
-            relative("file:///r/my%20dir/a.rs", Path::new("/r")),
-            "my dir/a.rs"
-        );
-    }
-
     fn finding(file: &str, line: u32, level: Level) -> Finding {
-        Finding {
-            file: file.into(),
-            line,
-            end_line: None,
-            level,
-            rule: "r".into(),
-            message: "m".into(),
-            fix: None,
-            why: None,
-            anywhere: false,
-        }
+        Finding::new(file, line, level, "r", "m")
     }
 
     const DIFF: &str = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -3,0 +4,2 @@ fn x\n+one\n+two\n@@ -9 +11 @@\n-old\n+new\n@@ -20,3 +22,0 @@\n-gone\n";
@@ -837,6 +894,34 @@ mod tests {
     }
 
     #[test]
+    fn an_added_line_that_looks_like_a_header_keeps_the_hunks_after_it() {
+        // An added `++ x` shows as `+++ x` in the diff, a removed `-- x` as `--- x`.
+        let diff = "diff --git a/q.sql b/q.sql\n--- a/q.sql\n+++ b/q.sql\n@@ -1 +1,2 @@\n-old\n+++ added\n+--- also added\n@@ -9,0 +10 @@\n+later\n";
+        let changed = Changed::from_diff(diff, &[], &BTreeSet::new());
+        let touched = |line| changed.touches(&finding("q.sql", line, Level::Gate));
+        assert!(
+            touched(1) && touched(2) && touched(10),
+            "{:?}",
+            changed.files
+        );
+        assert!(!touched(5));
+        assert_eq!(changed.paths().collect::<Vec<_>>(), ["q.sql"]);
+    }
+
+    #[test]
+    fn context_lines_in_a_hunk_never_hide_the_next_file() {
+        // `diff.interHunkContext` merges near hunks with context lines between them.
+        let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,3 @@\n-x\n+y\n same\n-z\n+w\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -5 +5 @@\n-old\n+new\n";
+        let changed = Changed::from_diff(diff, &[], &BTreeSet::new());
+        assert!(
+            changed.touches(&finding("b.rs", 5, Level::Gate)),
+            "{:?}",
+            changed.files
+        );
+        assert!(changed.touches(&finding("a.rs", 3, Level::Gate)));
+    }
+
+    #[test]
     fn a_changed_path_the_diff_text_misses_counts_everywhere() {
         let all: BTreeSet<String> = ["odd \"name\".rs".to_string()].into();
         let changed = Changed::from_diff("", &[], &all);
@@ -849,7 +934,7 @@ mod tests {
     #[test]
     fn dart_issues_block_and_compile_errors_count_anywhere() {
         let out = "ERROR|COMPILE_TIME_ERROR|INVALID_ASSIGNMENT|/r/lib/a.dart|3|11|3|A value of type 'String' can't be assigned.\nINFO|LINT|PREFER_DOUBLE_QUOTES|/r/lib/a.dart|2|20|3|Unnecessary use of single quotes.\nAnalyzing try...\n";
-        let found = dart(out);
+        let (found, _) = parse(Reader::Dart, out);
         assert_eq!(found.len(), 2);
         assert!(found[0].anywhere && !found[1].anywhere);
         assert_eq!(
@@ -860,9 +945,30 @@ mod tests {
     }
 
     #[test]
+    fn lines_a_reader_cannot_read_are_said() {
+        let (found, errors) = parse(
+            Reader::Cargo,
+            "{\"reason\":\"compiler-message\",\nCompiling x\n",
+        );
+        assert_eq!((found.len(), errors.len()), (0, 1), "{errors:?}");
+        assert!(errors[0].starts_with("cargo line 1: "), "{errors:?}");
+
+        let (found, errors) = parse(
+            Reader::Dart,
+            "ERROR|COMPILE_TIME_ERROR|X|/r/a.dart|three|1|1|bad\nAnalyzing try...\n",
+        );
+        assert_eq!((found.len(), errors.len()), (0, 1), "{errors:?}");
+        assert!(errors[0].starts_with("dart line 1: "), "{errors:?}");
+
+        let (found, errors) = parse(Reader::Yamllint, "x.yaml:two:1: [error] bad (colons)\n");
+        assert_eq!((found.len(), errors.len()), (0, 1), "{errors:?}");
+        assert!(errors[0].starts_with("yamllint line 1: "), "{errors:?}");
+    }
+
+    #[test]
     fn sarif_results_become_findings() {
         let doc = r#"{"runs":[{"results":[{"ruleId":"no-eval","level":"error","message":{"text":"eval is evil"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"file:///repo/web/a.js"},"region":{"startLine":7}}}]}]}]}"#;
-        let (found, errors) = sarif(doc);
+        let (found, errors) = parse(Reader::Sarif, doc);
         assert!(errors.is_empty(), "{errors:?}");
         let f = &found[0];
         assert_eq!(relative(&f.file, Path::new("/repo")), "web/a.js");
@@ -876,7 +982,7 @@ mod tests {
     fn sarif_paths_resolve_against_the_base_the_run_declares() {
         // ktlint names files relative to the home folder.
         let doc = r#"{"runs":[{"originalUriBaseIds":{"%SRCROOT%":{"uri":"file:///Users/me/"}},"results":[{"ruleId":"standard:filename","level":"error","message":{"text":"x"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"code/app/../app/src/A.kt","uriBaseId":"%SRCROOT%"},"region":{"startLine":1}}}]}]}]}"#;
-        let (found, _) = sarif(doc);
+        let (found, _) = parse(Reader::Sarif, doc);
         assert_eq!(
             relative(&found[0].file, Path::new("/Users/me/code/app")),
             "src/A.kt"
@@ -889,7 +995,7 @@ mod tests {
 1794884543135 {"type":"WARNING","filename":"src/App.svelte","start":{"line":5,"character":0},"end":{"line":5,"character":17},"message":"`<img>` element should have an alt attribute\nhttps://svelte.dev/e/a11y_missing_attribute","code":"a11y_missing_attribute","source":"svelte"}
 1794884543135 {"type":"ERROR","filename":"src/b.ts","start":{"line":0,"character":13},"end":{"line":0,"character":14},"message":"Type 'string' is not assignable to type 'number'.","code":2322}
 1794884543135 COMPLETED 105 FILES 1 ERRORS 1 WARNINGS 2 FILES_WITH_PROBLEMS"#;
-        let (found, errors) = svelte(out);
+        let (found, errors) = parse(Reader::Svelte, out);
         assert!(errors.is_empty(), "{errors:?}");
         let got: Vec<_> = found
             .iter()
@@ -925,7 +1031,7 @@ mod tests {
     #[test]
     fn terraform_errors_count_anywhere_and_warnings_on_changed_lines() {
         let text = r#"{"diagnostics":[{"severity":"error","summary":"Reference to undeclared input variable","detail":"No nope.","range":{"filename":"main.tf","start":{"line":6},"end":{"line":6}}},{"severity":"warning","summary":"Deprecated","detail":"","range":{"filename":"main.tf","start":{"line":2},"end":{"line":3}}}]}"#;
-        let (found, errors) = terraform(text);
+        let (found, errors) = parse(Reader::Terraform, text);
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(found.len(), 2);
         assert_eq!((found[0].file.as_str(), found[0].line), ("main.tf", 6));
@@ -940,7 +1046,8 @@ mod tests {
 
     #[test]
     fn yamllint_lines_become_findings() {
-        let found = yamllint(
+        let (found, _) = parse(
+            Reader::Yamllint,
             "a/x.yaml:2:5: [error] too many spaces after colon (colons)\nx.yaml:1:4: [warning] truthy value should be one of [false, true] (truthy)\n",
         );
         assert_eq!(found.len(), 2);
@@ -962,7 +1069,7 @@ mod tests {
             {"ruleId":"eqeqeq","severity":2,"message":"use ===","line":3,"endLine":3},
             {"ruleId":"no-console","severity":1,"message":"console","line":5},
             {"ruleId":null,"severity":2,"message":"Parsing error","line":9}]}]"#;
-        let (found, errors) = eslint(doc);
+        let (found, errors) = parse(Reader::Eslint, doc);
         assert!(errors.is_empty(), "{errors:?}");
         let got: Vec<_> = found
             .iter()
