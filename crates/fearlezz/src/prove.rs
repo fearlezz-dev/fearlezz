@@ -128,7 +128,7 @@ pub(crate) fn prove(
     let root = &site.wt.git.root;
     if let Of::Change { held, .. } = &mut site.of
         && held.is_none()
-        && (check.needs_services() || check.needs_preview())
+        && (check.needs.services || check.needs.preview)
     {
         **held = Some(if let Some(hold) = env.state.try_hold(root)? {
             hold
@@ -178,7 +178,7 @@ fn run_at(
         Of::Base => (BASE_JOURNAL, false),
     };
     let mut vars = BTreeMap::new();
-    if check.needs_services() {
+    if check.needs.services {
         let (services, line) = env
             .state
             .ensure_up(site.env, root, journal, fresh, env.now)?;
@@ -188,7 +188,7 @@ fn run_at(
         vars = services.ports;
     }
     let mut undeployed = None;
-    if check.needs_preview() {
+    if check.needs.preview {
         // A base checkout is named by its tree: a red before green checkout of the same
         // commit holds the change's tests, so it is another deploy. Base checkouts are shared
         // by worktrees, so the deploy holds the checkout.
@@ -225,7 +225,7 @@ fn run_at(
     let result = run::execute(store, check, inputs, &at);
     let after = || -> Result<()> {
         match &site.of {
-            _ if !check.needs_services() => Ok(()),
+            _ if !check.needs.services => Ok(()),
             // Idle time counts from when the check stopped using them.
             Of::Change { started, .. } => {
                 let took = jiff::SignedDuration::try_from(started.elapsed())?;
@@ -528,7 +528,7 @@ impl Run<'_> {
             report::print_findings(r);
         }
         // The preview of the tree this run proved, deployed now or by an earlier run.
-        if came.iter().any(|(c, _)| c.needs_preview()) {
+        if came.iter().any(|(c, _)| c.needs.preview) {
             proof.preview = self.env.state.preview_of(&self.wt.git.root, &self.wt.tree);
         }
         // In CI, and at the final stage of a journal so the agent learns it before CI. It

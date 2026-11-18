@@ -667,7 +667,7 @@ impl Config {
     /// off goes, and each release place adds its dry run.
     fn from_table(mut table: toml::Table, found: &dyn Fn(&str) -> Vec<String>) -> Result<Config> {
         let fanned = expand_each(&mut table, found)?;
-        let off = drop_off(&mut table);
+        let off = drop_off(&mut table)?;
         crate::release::add_dry_checks(&mut table, DEFAULT_STAGES.last().copied(), &off);
 
         let raw: RawConfig = toml::Value::Table(table.clone()).try_into()?;
@@ -983,33 +983,43 @@ impl RawCheck {
 /// and `[commits]`, and drops `off = false`, so nothing after reads the key. Returns the ids of
 /// the checks turned off, which a check added later (a release's dry run, a built in check)
 /// never comes back under.
-fn drop_off(table: &mut toml::Table) -> std::collections::BTreeSet<String> {
-    fn off(part: &mut toml::Value) -> bool {
+fn drop_off(table: &mut toml::Table) -> Result<std::collections::BTreeSet<String>> {
+    fn off(part: &mut toml::Value, at: &str) -> Result<bool> {
         let Some(part) = part.as_table_mut() else {
-            return false;
+            return Ok(false);
         };
-        let Some(&toml::Value::Boolean(off)) = part.get("off") else {
-            return false;
-        };
-        part.remove("off");
-        off
+        match part.remove("off") {
+            None => Ok(false),
+            Some(toml::Value::Boolean(off)) => Ok(off),
+            Some(other) => bail!(
+                "in `{at}`: off is {}, expected true or false",
+                other.type_str()
+            ),
+        }
     }
     let mut dropped = std::collections::BTreeSet::new();
     for kind in ["check", "rule", "release"] {
         if let Some(toml::Value::Table(parts)) = table.get_mut(kind) {
-            parts.retain(|id, part| {
-                let gone = off(part);
-                if gone && kind == "check" {
-                    dropped.insert(id.to_string());
+            let mut gone = Vec::new();
+            for (id, part) in parts.iter_mut() {
+                if off(part, &format!("{kind}.{id}"))? {
+                    gone.push(id.clone());
                 }
-                !gone
-            });
+            }
+            for id in gone {
+                parts.remove(&id);
+                if kind == "check" {
+                    dropped.insert(id);
+                }
+            }
         }
     }
-    if table.get_mut("commits").is_some_and(off) {
+    if let Some(commits) = table.get_mut("commits")
+        && off(commits, "commits")?
+    {
         table.remove("commits");
     }
-    dropped
+    Ok(dropped)
 }
 
 /// Paths by a list of globs. `*` stays inside one path segment; `**` crosses segments. A
@@ -1310,14 +1320,6 @@ impl Check {
     /// Whether `path` is one of its tests, by `test_files`.
     pub(crate) fn is_test(&self, path: &str) -> bool {
         self.test_files.is_match(path)
-    }
-
-    pub(crate) fn needs_services(&self) -> bool {
-        self.needs.services
-    }
-
-    pub(crate) fn needs_preview(&self) -> bool {
-        self.needs.preview
     }
 }
 

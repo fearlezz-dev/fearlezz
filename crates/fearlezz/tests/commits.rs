@@ -139,3 +139,18 @@ fn a_project_turns_off_the_check_a_piece_brings() {
         out.stderr
     );
 }
+
+#[test]
+fn the_commits_check_turns_off_like_any_check() {
+    let repo = Repo::new(
+        "use = [\"commits\"]\n\n[check.commits]\noff = true\n",
+        &[("src/a.txt", "1\n")],
+    );
+    let out = repo.fz(&["run", "commits"]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr.contains("no check \"commits\""),
+        "{}",
+        out.stderr
+    );
+}

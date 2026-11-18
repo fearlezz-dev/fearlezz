@@ -274,10 +274,10 @@ impl Hasher {
         if check.needs.screen.owned() {
             parts.insert("(screen)".into(), definition(&check.needs.screen));
         }
-        if let Some(services) = env.services.as_ref().filter(|_| check.needs_services()) {
+        if let Some(services) = env.services.as_ref().filter(|_| check.needs.services) {
             parts.insert("(services)".into(), sha256_hex(services.as_bytes()));
         }
-        if let Some(preview) = env.preview.as_ref().filter(|_| check.needs_preview()) {
+        if let Some(preview) = env.preview.as_ref().filter(|_| check.needs.preview) {
             parts.insert("(preview)".into(), sha256_hex(preview.as_bytes()));
         }
         for path in files.iter().filter(|p| check.reads(p)) {

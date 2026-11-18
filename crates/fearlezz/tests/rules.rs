@@ -239,3 +239,14 @@ fn a_rule_says_what_it_checks_and_can_be_turned_off() {
     assert!(!out.ok);
     assert!(out.stderr.contains("no check \"rules\""), "{}", out.stderr);
 }
+
+#[test]
+fn the_rules_check_turns_off_like_any_check() {
+    let repo = feature(
+        &format!("{FROZEN}\n[check.rules]\noff = true\n"),
+        &[("engine/core.rs", "fn a() {}\n")],
+    );
+    let out = repo.fz(&["run", "rules"]);
+    assert!(!out.ok);
+    assert!(out.stderr.contains("no check \"rules\""), "{}", out.stderr);
+}

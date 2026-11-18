@@ -383,22 +383,48 @@ fn shown_masked(
     status
 }
 
-/// Copies `pipe` line by line into `to`, masked, on a thread of its own.
+/// Copies `pipe` into `to` as it comes, masked, on a thread of its own. Only an end that may
+/// be the start of a value waits for what follows, so a question without a newline shows.
 fn pass_masked<W: std::io::Write + 'static>(
     pipe: Option<impl std::io::Read + Send + 'static>,
     forms: Vec<Vec<u8>>,
     to: fn() -> W,
 ) -> std::thread::JoinHandle<()> {
-    use std::io::BufRead as _;
     std::thread::spawn(move || {
-        let Some(pipe) = pipe else { return };
-        let mut lines = std::io::BufReader::new(pipe);
-        let mut line = Vec::new();
-        while lines.read_until(b'\n', &mut line).is_ok_and(|n| n > 0) {
-            drop(to().write_all(&crate::run::masked(&line, &forms)));
-            line.clear();
+        let Some(mut pipe) = pipe else { return };
+        let (mut held, mut chunk) = (Vec::new(), [0u8; 8192]);
+        loop {
+            let n = pipe.read(&mut chunk).unwrap_or(0);
+            held.extend_from_slice(chunk.get(..n).unwrap_or_default());
+            let masked = crate::run::masked(&held, &forms);
+            let keep = if n == 0 {
+                0
+            } else {
+                open_start(&masked, &forms)
+            };
+            let (shown, open) = masked.split_at(masked.len().saturating_sub(keep));
+            let mut to = to();
+            drop(to.write_all(shown));
+            drop(to.flush());
+            if n == 0 {
+                return;
+            }
+            held = open.to_vec();
         }
     })
+}
+
+/// How many bytes at the end of `bytes` begin one of `forms` without completing it.
+fn open_start(bytes: &[u8], forms: &[Vec<u8>]) -> usize {
+    let longest = forms.iter().map(Vec::len).max().unwrap_or(0);
+    (1..longest.min(bytes.len() + 1))
+        .rev()
+        .find(|&k| {
+            forms
+                .iter()
+                .any(|f| f.len() > k && f.get(..k).is_some_and(|start| bytes.ends_with(start)))
+        })
+        .unwrap_or(0)
 }
 
 /// A command of the place run as a check runs, with the variables it names and the release's
@@ -744,6 +770,22 @@ fn files(globs: &[String], root: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_end_that_may_start_a_value_waits() {
+        let forms = vec![b"s3cret-token".to_vec()];
+        assert_eq!(open_start(b"Enter OTP: ", &forms), 0);
+        assert_eq!(open_start(b"token is s3cr", &forms), 4);
+        assert_eq!(open_start(b"token is s3cret-token", &forms), 0);
+        let (one, two) = (b"with s3cr".to_vec(), b"et-token done".to_vec());
+        let keep = open_start(&one, &forms);
+        let (shown, open) = one.split_at(one.len() - keep);
+        let mut rest = open.to_vec();
+        rest.extend_from_slice(&two);
+        let mut all = shown.to_vec();
+        all.extend(crate::run::masked(&rest, &forms));
+        assert_eq!(all, b"with *** done");
+    }
 
     #[test]
     fn the_sparse_index_folder_follows_the_length_of_the_name() {
