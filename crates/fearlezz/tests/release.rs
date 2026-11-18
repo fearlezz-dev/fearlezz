@@ -192,6 +192,27 @@ fn publish_sees_only_its_env_and_the_version() {
 }
 
 #[test]
+fn what_publish_prints_hides_the_values_of_its_env() {
+    let config = "[release.shop]\npublish = 'echo \"publishing with $SHOP_TOKEN\"; echo \"again $SHOP_TOKEN\" >&2; touch .published'\nlanded = \"test -f .published\"\nenv = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+    let repo = Repo::new(
+        config,
+        &[
+            (
+                "package.json",
+                "{\"name\": \"widget\", \"version\": \"0.9.1\"}\n",
+            ),
+            (".gitignore", ".published\n"),
+        ],
+    );
+    let out = repo.fz_env(&["run", "--release"], &[("SHOP_TOKEN", "s3cret-token")]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let all = format!("{}{}", out.stdout, out.stderr);
+    assert!(!all.contains("s3cret-token"), "{all}");
+    assert!(all.contains("publishing with ***"), "{all}");
+    assert!(all.contains("again ***"), "{all}");
+}
+
+#[test]
 fn the_npm_reader_asks_the_registry_for_a_scoped_package() {
     let reg = FakeRegistry::start();
     // The scope's slash goes encoded, as the registry takes it.

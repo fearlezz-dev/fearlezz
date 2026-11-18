@@ -339,6 +339,6 @@ dry = "shop check"
 publish = "shop push"          # sees FEARLEZZ_VERSION, FEARLEZZ_TAG and env; the files are its arguments ("$@")
 landed = "shop has \"$FEARLEZZ_VERSION\""   # exits 0 once the place has it
 version = "package.json"
-env = ["SHOP_TOKEN"]
+env = ["SHOP_TOKEN"]           # a token CI gives the job; every value shows as *** in what publish prints
 # wait = 600                   seconds it may take to show the version
 ```

@@ -330,9 +330,11 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
         return Ok(format!("{shown} is already there"));
     }
     println!("{}: publishing {shown}", place.name);
-    let status = command(place, &place.publish, &release, at)
-        .status()
-        .with_context(|| format!("starting the publish command of {}", place.name))?;
+    let status = shown_masked(
+        command(place, &place.publish, &release, at),
+        &env_values(&place.env),
+    )
+    .with_context(|| format!("starting the publish command of {}", place.name))?;
     if !status.success() {
         let code = status
             .code()
@@ -354,6 +356,49 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
         }
         std::thread::sleep(left.min(POLL));
     }
+}
+
+/// The values of the variables a place names, which may be tokens: a release cannot tell a
+/// token from a plain value, so every one is hidden in what its publish prints.
+fn env_values(names: &[String]) -> Vec<(String, String)> {
+    names
+        .iter()
+        .filter_map(|n| std::env::var(n).ok().map(|v| (n.clone(), v)))
+        .collect()
+}
+
+/// Runs `cmd`, printing each line it prints on its own stdout or stderr as it comes, with
+/// every form of `values` masked.
+fn shown_masked(
+    mut cmd: std::process::Command,
+    values: &[(String, String)],
+) -> std::io::Result<std::process::ExitStatus> {
+    let forms = crate::run::masked_forms(values);
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let out = pass_masked(child.stdout.take(), forms.clone(), std::io::stdout);
+    let err = pass_masked(child.stderr.take(), forms, std::io::stderr);
+    let status = child.wait();
+    drop(out.join());
+    drop(err.join());
+    status
+}
+
+/// Copies `pipe` line by line into `to`, masked, on a thread of its own.
+fn pass_masked<W: std::io::Write + 'static>(
+    pipe: Option<impl std::io::Read + Send + 'static>,
+    forms: Vec<Vec<u8>>,
+    to: fn() -> W,
+) -> std::thread::JoinHandle<()> {
+    use std::io::BufRead as _;
+    std::thread::spawn(move || {
+        let Some(pipe) = pipe else { return };
+        let mut lines = std::io::BufReader::new(pipe);
+        let mut line = Vec::new();
+        while lines.read_until(b'\n', &mut line).is_ok_and(|n| n > 0) {
+            drop(to().write_all(&crate::run::masked(&line, &forms)));
+            line.clear();
+        }
+    })
 }
 
 /// A command of the place run as a check runs, with the variables it names and the release's
