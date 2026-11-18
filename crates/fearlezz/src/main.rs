@@ -36,7 +36,6 @@ mod sops;
 mod state;
 mod store;
 mod text;
-mod why;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -47,11 +46,11 @@ use clap::{Args, Parser, Subcommand};
 use jiff::Timestamp;
 
 use config::Config;
+use fearlezz_proof::why::Why;
 use git::Git;
 use journal::{Event, Journal};
 use state::{CheckState, View, Worktree};
 use store::{Outcome, Store};
-use why::Why;
 
 #[derive(Parser)]
 #[command(
@@ -1007,7 +1006,7 @@ fn targets<'a>(
 }
 
 fn print_failure(f: &store::RunResult) {
-    let why = Why::of(f);
+    let why = f.failure();
     println!("fail {}{}", f.check, why.line());
     match &why {
         Why::NoTests(said) => said.iter().for_each(|line| println!("  {line}")),
@@ -1026,7 +1025,7 @@ fn print_failure(f: &store::RunResult) {
         }
         _ => {}
     }
-    if let Some(fix) = why.fix_here(&f.check) {
+    if let Some(fix) = why.fix_here(&f.check, run::install) {
         println!("  fix: {fix}");
     }
     // The diff and the findings say what blocks; otherwise the end of the log does.
@@ -1269,8 +1268,8 @@ impl Report {
         if self.ci {
             println!("{word} {}  {secs:.1} s{tests}{coverage}  {run}", check.id);
         }
-        let failure =
-            (result.outcome == Outcome::Failed).then(|| Why::of(result).item(&result.check));
+        let failure = (result.outcome == Outcome::Failed)
+            .then(|| result.failure().item(&result.check, run::install));
         let mut entry = proof::ran(check, stage, result, failure);
         entry.platform.clone_from(&self.platform);
         self.stream_step(|s| s.finished(&entry, look));
@@ -1711,7 +1710,10 @@ fn run_checks(
         };
         // A generator that rewrote files changed the worktree: later checks are keyed on the
         // files as they are now.
-        if matches!(result.generated, Some(generated::Failed::Stale(_))) {
+        if matches!(
+            result.why,
+            Some(Why::Generated(fearlezz_proof::why::Generated::Stale(_)))
+        ) {
             wt = ctx.worktree()?;
         }
         j.append(

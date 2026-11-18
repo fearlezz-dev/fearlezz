@@ -49,21 +49,7 @@ pub(crate) struct Preview {
     pub url: String,
 }
 
-/// Why a checkout has no preview, so the checks that need it fail without running.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum NoPreview {
-    /// The command failed, with its exit code (none when a signal stopped it).
-    Failed { code: Option<i32> },
-    /// The command passed but printed no URL.
-    NoUrl,
-    /// SecretSpec could not give it this secret; its reason is in the log.
-    Secret { name: String },
-    /// The shell found no `secretspec` to ask.
-    NoSecretSpec,
-    /// The checkout's `[env]` has no preview command, as on a base commit from before it.
-    Unset,
-}
+pub(crate) use fearlezz_proof::why::NoPreview;
 
 /// A preview that could not be deployed, and the log that says why.
 pub(crate) struct Undeployed {
