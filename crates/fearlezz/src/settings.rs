@@ -16,6 +16,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
+use fearlezz_proof::floor::Change;
 use toml::{Table, Value};
 
 use crate::findings::{Finding, Level};
@@ -224,7 +225,7 @@ impl Settings {
     /// How `head` tunes the tools that judge code differently: any setting added, removed or
     /// changed, since Fearlezz cannot tell which way a tool's option loosens it. Each as
     /// `settings.<tool>.<key>` and how. Agent settings, the skill and hooks are left out.
-    pub(crate) fn weakenings(&self, head: &Settings) -> Vec<(String, String)> {
+    pub(crate) fn weakenings(&self, head: &Settings) -> Vec<(String, Change)> {
         let empty = Table::new();
         let mut found = Vec::new();
         let tools: BTreeSet<Tool> = self
@@ -239,14 +240,9 @@ impl Settings {
             let now = leaves(head.tools.get(&tool).unwrap_or(&empty));
             let keys: BTreeSet<&String> = base.keys().chain(now.keys()).collect();
             for key in keys {
-                let how = match (base.get(key), now.get(key)) {
-                    (Some(b), Some(h)) if b == h => continue,
-                    (Some(b), Some(h)) => format!("it changes from {b} to {h}"),
-                    (None, Some(h)) => format!("it is added ({h})"),
-                    (Some(b), None) => format!("it is removed (was {b})"),
-                    (None, None) => continue,
-                };
-                found.push((format!("settings.{}.{key}", tool.name()), how));
+                if let Some(how) = Change::set(base.get(key).cloned(), now.get(key).cloned()) {
+                    found.push((format!("settings.{}.{key}", tool.name()), how));
+                }
             }
         }
         found

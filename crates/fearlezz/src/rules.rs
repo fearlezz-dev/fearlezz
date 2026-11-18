@@ -21,6 +21,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
+use fearlezz_proof::floor::Change;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use regex::Regex;
 use serde::Deserialize;
@@ -176,20 +177,20 @@ impl Rules {
 
     /// How `head` enforces less than these rules: a rule gone or off, at a lower level,
     /// covering fewer of `files`, or checking something else. Each as `rule.<id>` and how.
-    pub(crate) fn weakenings(&self, head: &Rules, files: &[String]) -> Vec<(String, String)> {
+    pub(crate) fn weakenings(&self, head: &Rules, files: &[String]) -> Vec<(String, Change)> {
         let mut found = Vec::new();
         for b in &self.0 {
-            let mut say = |how: String| found.push((format!("rule.{}", b.id), how));
+            let mut say = |how: Change| found.push((format!("rule.{}", b.id), how));
             let Some(h) = head.0.iter().find(|h| h.id == b.id) else {
                 say("it is gone".into());
                 continue;
             };
             if h.level < b.level {
-                say(format!(
-                    "its level goes from {} to {}",
-                    b.level.name(),
-                    h.level.name()
-                ));
+                say(Change::Lowered {
+                    how: "its level goes".into(),
+                    from: b.level.name().into(),
+                    to: h.level.name().into(),
+                });
             }
             let lost: Vec<&String> = files
                 .iter()
@@ -199,7 +200,8 @@ impl Rules {
                 say(match lost.len() {
                     1 => format!("it no longer covers {first}"),
                     n => format!("it no longer covers {first} and {} more files", n - 1),
-                });
+                }
+                .into());
             }
             if !b.kind.same(&h.kind) {
                 say("it checks something else".into());
