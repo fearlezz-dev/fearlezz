@@ -14,22 +14,6 @@ use crate::config::Check;
 use crate::record::Target;
 use crate::store::{Inputs, Outcome, RunResult, Store};
 
-/// Env vars every check gets, so ordinary tools work. Everything else must be declared.
-/// The rustup ones choose the toolchain, as PATH does for other tools.
-pub(crate) const BASE_ENV: [&str; 11] = [
-    "PATH",
-    "HOME",
-    "TMPDIR",
-    "TERM",
-    "LANG",
-    "LC_ALL",
-    "USER",
-    "SHELL",
-    "RUSTUP_TOOLCHAIN",
-    "RUSTUP_HOME",
-    "CARGO_HOME",
-];
-
 pub(crate) struct Where<'a> {
     pub root: &'a Path,
     /// The shell of the `[env]` the checkout at `root` runs its commands in.
@@ -219,9 +203,7 @@ fn command(
     at: &Where<'_>,
     secrets: &[(String, String)],
 ) -> Result<Command> {
-    let mut cmd = clean_command(
-        at.root,
-        at.shell,
+    let mut cmd = crate::process::Project::new(at.root, at.shell).clean(
         check.dir.as_deref(),
         step,
         &check.env,
@@ -514,58 +496,6 @@ impl Run<'_> {
     }
 }
 
-/// `script` run the way a check runs it: through `sh -c` inside the `[env]` `shell`, in the
-/// folder `dir` of `root`, with only the base variables and the ones `env` names from
-/// Fearlezz's own, and the project's tool folders in front of PATH. `args` reach the script
-/// as its arguments (`"$@"`), whole, whatever they hold.
-pub(crate) fn clean_command(
-    root: &Path,
-    shell: Option<&str>,
-    dir: Option<&str>,
-    script: &str,
-    env: &[String],
-    args: &[String],
-) -> Command {
-    // Inside a shell the command travels in a variable, so no quoting can break it. A command
-    // with a folder starts there; the shell itself starts at the root, where it finds its own
-    // files, and moves into the folder before the command.
-    let folder = dir.map(|d| root.join(d));
-    let line = match (shell, &folder) {
-        (Some(shell), None) => format!("{shell} sh -c \"$FEARLEZZ_RUN\" sh \"$@\""),
-        (Some(shell), Some(_)) => {
-            format!("{shell} sh -c 'cd \"$FEARLEZZ_DIR\" && eval \"$FEARLEZZ_RUN\"' sh \"$@\"")
-        }
-        (None, _) => script.to_string(),
-    };
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(&line)
-        .arg("sh")
-        .args(args)
-        .current_dir(match (shell, &folder) {
-            (None, Some(folder)) => folder,
-            _ => root,
-        })
-        .env_clear();
-    for name in BASE_ENV
-        .iter()
-        .copied()
-        .chain(env.iter().map(String::as_str))
-    {
-        if let Ok(value) = std::env::var(name) {
-            cmd.env(name, value);
-        }
-    }
-    if let Some(path) = project_path(root) {
-        cmd.env("PATH", path);
-    }
-    if let Some(folder) = &folder {
-        cmd.env("FEARLEZZ_DIR", folder);
-    }
-    cmd.env("FEARLEZZ_RUN", script);
-    cmd
-}
-
 /// Why a check or the preview did not get its secrets.
 pub(crate) enum Unfetched {
     /// SecretSpec could not give this one; its reason is in the log.
@@ -589,28 +519,17 @@ pub(crate) fn fetch_secrets(
     out: &mut File,
 ) -> Result<std::result::Result<Vec<(String, String)>, Unfetched>> {
     // The value goes to a file of its own, so nothing the shell prints on entering can mix in.
-    let get = r#"cd "$FEARLEZZ_DIR" && secretspec get "$FEARLEZZ_SECRET" --reason "$FEARLEZZ_REASON" --caller fearlezz > "$FEARLEZZ_SECRET_FILE""#;
-    let script = match shell {
-        Some(shell) => format!("{shell} sh -c '{get}'"),
-        None => get.to_string(),
-    };
+    let get = r#"secretspec get "$FEARLEZZ_SECRET" --reason "$FEARLEZZ_REASON" --caller fearlezz > "$FEARLEZZ_SECRET_FILE""#;
+    let project = crate::process::Project::new(root, shell);
     let mut secrets = Vec::new();
     for name in names {
         let file = tempfile::NamedTempFile::new()?;
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(&script)
-            .current_dir(root)
-            .stdin(Stdio::null())
-            .stdout(out.try_clone()?)
+        let mut cmd = project.inherited(folder, get);
+        cmd.stdout(out.try_clone()?)
             .stderr(out.try_clone()?)
-            .env("FEARLEZZ_DIR", folder)
             .env("FEARLEZZ_SECRET", name)
             .env("FEARLEZZ_SECRET_FILE", file.path())
             .env("FEARLEZZ_REASON", reason);
-        if let Some(path) = project_path(root) {
-            cmd.env("PATH", path);
-        }
         let status = cmd
             .status()
             .with_context(|| format!("asking SecretSpec for {name}"))?;
@@ -721,24 +640,6 @@ fn free_port() -> Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
-/// Folders where a project installs its own tools, found before the rest of PATH, as a
-/// package manager's scripts find them.
-pub(crate) const TOOL_DIRS: [&str; 2] = ["node_modules/.bin", ".venv/bin"];
-
-/// PATH with the project's tool folders that exist in front, or None when there are none.
-pub(crate) fn project_path(root: &Path) -> Option<std::ffi::OsString> {
-    let dirs: Vec<std::path::PathBuf> = TOOL_DIRS
-        .iter()
-        .map(|d| root.join(d))
-        .filter(|d| d.is_dir())
-        .collect();
-    if dirs.is_empty() {
-        return None;
-    }
-    let rest = std::env::var_os("PATH").unwrap_or_default();
-    std::env::join_paths(dirs.into_iter().chain(std::env::split_paths(&rest))).ok()
-}
-
 /// The Kubernetes version whose envtest binaries a module needs: `k8s.io/api v0.31.2` in its
 /// go.mod (a replacement's version when it has one) is Kubernetes 1.31.
 fn kubernetes_version(go_mod: &str) -> Option<String> {
@@ -794,30 +695,10 @@ fn envtest_assets(
     };
     let bin = crate::files::UserDir::Cache.path()?.join("envtest");
     let command = "setup-envtest use \"$FEARLEZZ_K8S\" --bin-dir \"$FEARLEZZ_ENVTEST\" -p path";
-    let script = match at.shell {
-        Some(shell) => format!("{shell} sh -c '{command}'"),
-        None => command.to_string(),
-    };
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(&script)
-        .current_dir(at.root)
-        .env_clear()
-        .stdin(Stdio::null())
-        .stderr(log.try_clone()?);
     // The check's own variables too, such as a proxy the download needs.
-    for name in BASE_ENV
-        .iter()
-        .copied()
-        .chain(check.env.iter().map(String::as_str))
-    {
-        if let Ok(value) = std::env::var(name) {
-            cmd.env(name, value);
-        }
-    }
-    if let Some(path) = project_path(at.root) {
-        cmd.env("PATH", path);
-    }
+    let mut cmd =
+        crate::process::Project::new(at.root, at.shell).clean(None, command, &check.env, &[]);
+    cmd.stderr(log.try_clone()?);
     cmd.env("FEARLEZZ_K8S", &version)
         .env("FEARLEZZ_ENVTEST", &bin);
     let output = cmd.output().context("starting setup-envtest")?;

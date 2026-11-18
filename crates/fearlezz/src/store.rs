@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::config::Check;
+use crate::files::sha256_hex;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -170,24 +171,27 @@ impl Hasher {
         }
         for name in &check.env {
             let value = std::env::var(name).unwrap_or_default();
-            parts.insert(format!("${name}"), sha256(value.as_bytes()));
+            parts.insert(format!("${name}"), sha256_hex(value.as_bytes()));
         }
         // Only the names: even a digest of a secret's value is not kept on disk.
         if !check.secrets.is_empty() {
             let mut names = check.secrets.clone();
             names.sort();
-            parts.insert("(secrets)".into(), sha256(names.join("\n").as_bytes()));
+            parts.insert("(secrets)".into(), sha256_hex(names.join("\n").as_bytes()));
         }
         if let Some(builtin) = &check.builtin {
-            parts.insert("(builtin)".into(), sha256(builtin.fingerprint().as_bytes()));
+            parts.insert(
+                "(builtin)".into(),
+                sha256_hex(builtin.fingerprint().as_bytes()),
+            );
             // Rewording a commit keeps its tree, so the messages are inputs of their own.
             if let crate::config::Builtin::Commits(commits) = builtin {
                 let messages = commits.messages_text(root)?;
-                parts.insert("(messages)".into(), sha256(messages.as_bytes()));
+                parts.insert("(messages)".into(), sha256_hex(messages.as_bytes()));
             }
             for path in builtin.files() {
                 let hash = match fs::read(root.join(&path)) {
-                    Ok(bytes) => sha256(&bytes),
+                    Ok(bytes) => sha256_hex(&bytes),
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => "(absent)".into(),
                     Err(e) => return Err(e).with_context(|| format!("reading {path}")),
                 };
@@ -196,7 +200,7 @@ impl Hasher {
         }
         if let Some(spec) = check.findings.as_ref().filter(|s| !s.tools.is_empty()) {
             let levels = spec.levels.fingerprint(&spec.tools);
-            parts.insert("(lints)".into(), sha256(levels.as_bytes()));
+            parts.insert("(lints)".into(), sha256_hex(levels.as_bytes()));
         }
         if let Some(spec) = &check.findings {
             parts.insert("(findings)".into(), definition(&spec.judged()));
@@ -223,28 +227,28 @@ impl Hasher {
             parts.insert("(generates)".into(), definition(&check.generates));
         }
         if let Some(shell) = shell.filter(|_| check.builtin.is_none()) {
-            parts.insert("(shell)".into(), sha256(shell.as_bytes()));
+            parts.insert("(shell)".into(), sha256_hex(shell.as_bytes()));
         }
         // Each folder's copy of a check runs the same command on other files.
         if let Some(dir) = &check.dir {
-            parts.insert("(dir)".into(), sha256(dir.as_bytes()));
+            parts.insert("(dir)".into(), sha256_hex(dir.as_bytes()));
         }
         // The simulator's device type or the display's size shape what the check sees.
         if check.screen.owned() {
             parts.insert("(screen)".into(), definition(&check.screen));
         }
         if let Some(services) = &check.services {
-            parts.insert("(services)".into(), sha256(services.as_bytes()));
+            parts.insert("(services)".into(), sha256_hex(services.as_bytes()));
         }
         if let Some(preview) = &check.preview {
-            parts.insert("(preview)".into(), sha256(preview.as_bytes()));
+            parts.insert("(preview)".into(), sha256_hex(preview.as_bytes()));
         }
         for path in files.iter().filter(|p| check.reads(p)) {
             let hash = if let Some(h) = self.files.get(path) {
                 h.clone()
             } else {
                 let bytes = fs::read(root.join(path)).with_context(|| format!("reading {path}"))?;
-                let h = sha256(&bytes);
+                let h = sha256_hex(&bytes);
                 self.files.insert(path.clone(), h.clone());
                 h
             };
@@ -278,11 +282,7 @@ const RESULT_FORMAT: &str = "fearlezz/2";
 /// A part of the key from a definition as Fearlezz parsed it, so a field added to it joins
 /// the key without anyone writing it down.
 fn definition(parsed: &impl std::fmt::Debug) -> String {
-    sha256(format!("{parsed:?}").as_bytes())
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
+    sha256_hex(format!("{parsed:?}").as_bytes())
 }
 
 impl Store {

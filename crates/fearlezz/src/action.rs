@@ -11,7 +11,6 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::Value;
-use sha2::{Digest as _, Sha256};
 
 use crate::look::{Change, Item as Picture};
 use crate::proof::{Proof, Ran};
@@ -458,22 +457,17 @@ pub(crate) fn install_ffmpeg() -> Result<Option<PathBuf>> {
 /// Downloads a gzipped program, checks its sha256 and unpacks it to `target`.
 fn fetch(url: &str, sum: &str, target: &Path) -> Result<()> {
     use std::io::Read as _;
-    let out = Command::new("curl")
-        .args(["-fsSL", "--retry", "3", url])
-        .output()
-        .context("downloading ffmpeg needs curl")?;
-    if !out.status.success() {
-        bail!(
-            "downloading {url} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let got = hex::encode(Sha256::digest(&out.stdout));
+    let out = crate::process::read(
+        Command::new("curl").args(["-fsSL", "--retry", "3", url]),
+        None,
+    )
+    .context("downloading ffmpeg needs curl")?;
+    let got = crate::files::sha256_hex(&out);
     if got != sum {
         bail!("{url} has sha256 {got}, not the pinned {sum}");
     }
     let mut program = Vec::new();
-    flate2::read::GzDecoder::new(out.stdout.as_slice())
+    flate2::read::GzDecoder::new(out.as_slice())
         .read_to_end(&mut program)
         .with_context(|| format!("unpacking {url}"))?;
     let partial = target.with_extension("partial");

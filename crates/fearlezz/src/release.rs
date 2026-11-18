@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
-use sha2::Digest as _;
 
 use crate::host::{self, Body, Limit};
 
@@ -376,16 +375,13 @@ fn command(place: &Place, script: &str, release: &Release, at: &At<'_>) -> std::
         .iter()
         .map(|f| at.root.join(f).display().to_string())
         .collect();
-    let mut cmd = crate::run::clean_command(
-        at.root,
-        at.shell,
+    let mut cmd = crate::process::Project::new(at.root, at.shell).clean(
         place.dir.as_deref(),
         script,
         &place.env,
         &files,
     );
-    cmd.stdin(Stdio::null())
-        .env("FEARLEZZ_VERSION", &release.package.version)
+    cmd.env("FEARLEZZ_VERSION", &release.package.version)
         .env("FEARLEZZ_TAG", &release.tag);
     cmd
 }
@@ -535,8 +531,7 @@ fn github_has(
             Some(digest) => {
                 let bytes =
                     std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-                digest.strip_prefix("sha256:")
-                    == Some(hex::encode(sha2::Sha256::digest(&bytes)).as_str())
+                digest.strip_prefix("sha256:") == Some(crate::files::sha256_hex(&bytes).as_str())
             }
             None => {
                 asset.get("size").and_then(Value::as_u64) == Some(std::fs::metadata(&path)?.len())
@@ -686,12 +681,10 @@ fn files(globs: &[String], root: &Path) -> Result<Vec<String>> {
                     .contains(['*', '?', '[', '{'])
             })
             .collect();
-        let mut found = Vec::new();
-        walk(root, &root.join(&base), &mut |rel| {
-            if matcher.is_match(rel) {
-                found.push(rel.to_string());
-            }
-        })?;
+        let found: Vec<String> = crate::files::walk(root, &root.join(&base))
+            .into_iter()
+            .filter(|rel| matcher.is_match(rel))
+            .collect();
         if found.is_empty() {
             bail!("files: {glob} matches no file; build them before the release");
         }
@@ -711,22 +704,6 @@ fn files(globs: &[String], root: &Path) -> Result<Vec<String>> {
         }
     }
     Ok(all)
-}
-
-fn walk(root: &Path, at: &Path, each: &mut dyn FnMut(&str)) -> Result<()> {
-    if at.is_file() {
-        if let Ok(rel) = at.strip_prefix(root) {
-            each(&rel.to_string_lossy());
-        }
-        return Ok(());
-    }
-    let Ok(entries) = std::fs::read_dir(at) else {
-        return Ok(());
-    };
-    for entry in entries {
-        walk(root, &entry?.path(), each)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

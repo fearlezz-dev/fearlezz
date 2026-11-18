@@ -6,9 +6,7 @@
 //! and films come from `simctl io`, which needs no Screen Recording, so this runs on CI's
 //! macOS runners too.
 
-use std::fs::File;
 use std::io::{BufRead as _, BufReader};
-use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -17,6 +15,7 @@ use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
 
 use super::{Frame, Parking, Unavailable, WindowInfo};
+use crate::lease::{Lease, Mode};
 
 /// simctl itself, found once through Apple's own xcrun (a Nix shell puts a shim first on
 /// PATH that finds no SDK without the shell's DEVELOPER_DIR). It runs directly, not under
@@ -203,7 +202,7 @@ pub(crate) struct Simulator {
     /// `--display=<n>` for a device with more than one screen (a foldable): its primary.
     display: Option<String>,
     /// Held locked for the lease; closing it frees the device.
-    _lease: File,
+    _lease: Lease,
 }
 
 impl Simulator {
@@ -217,7 +216,7 @@ impl Simulator {
     ) -> Result<Self> {
         // Listing, creating and locking happen under the pool's lock, so two runs never take
         // the same device or make two of one name.
-        let pool = lock(&locks()?.join("pool.lock"), true)?.context("locking the pool")?;
+        let pool = Lease::take(&locks()?.join("pool.lock"), Mode::Only)?;
         let list = list()?;
         let (kind, runtime) = list.pick(device)?;
         let prefix = format!("fearlezz {} ", kind.name);
@@ -505,27 +504,12 @@ impl Drop for Simulator {
 fn locks() -> Result<PathBuf> {
     let home =
         std::env::var_os("HOME").context("HOME is not set, so simulators cannot be leased")?;
-    let dir = PathBuf::from(home).join("Library/Caches/fearlezz/simulators");
-    std::fs::create_dir_all(&dir).with_context(|| format!("making {}", dir.display()))?;
-    Ok(dir)
+    Ok(PathBuf::from(home).join("Library/Caches/fearlezz/simulators"))
 }
 
-/// The lease of a device, locked without waiting; None when another run holds it.
-fn lock_device(udid: &str) -> Result<Option<File>> {
-    lock(&locks()?.join(format!("{udid}.lock")), false)
-}
-
-/// `path` locked, waiting for it when `wait`; None when it is held and not waited for.
-fn lock(path: &Path, wait: bool) -> Result<Option<File>> {
-    let file = File::create(path).with_context(|| format!("opening {}", path.display()))?;
-    let how = if wait {
-        libc::LOCK_EX
-    } else {
-        libc::LOCK_EX | libc::LOCK_NB
-    };
-    // SAFETY: flock on a descriptor this function owns; it is released when the file closes.
-    let locked = unsafe { libc::flock(file.as_raw_fd(), how) } == 0;
-    Ok(locked.then_some(file))
+/// The lease of a device, taken without waiting; None when another run holds it.
+fn lock_device(udid: &str) -> Result<Option<Lease>> {
+    Lease::try_take(&locks()?.join(format!("{udid}.lock")), Mode::Only)
 }
 
 /// Whether the film at `path` is whole: there, not empty, and no temporary file of the

@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::config::{Env, Ports};
-use crate::run::{self, BASE_ENV};
+use crate::lease::{Lease, Mode};
+use crate::run;
 
 /// Services unused this long are stopped by the next Fearlezz command of another journal.
 pub(crate) const IDLE_SECONDS: i64 = 30 * 60;
@@ -108,7 +109,9 @@ impl EnvState {
     }
 
     fn key(root: &Path) -> String {
-        hex::encode(Sha256::digest(root.to_string_lossy().as_bytes()))[..16].to_string()
+        let mut key = crate::files::sha256_hex(root.to_string_lossy().as_bytes());
+        key.truncate(16);
+        key
     }
 
     fn services_file(&self, root: &Path) -> PathBuf {
@@ -152,19 +155,14 @@ impl EnvState {
     }
 
     fn save(&self, s: &Services) -> Result<()> {
-        let file = self.services_file(&s.root);
-        if let Some(dir) = file.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        fs::write(file, serde_json::to_string_pretty(s)?)?;
-        Ok(())
+        crate::files::write_atomic(
+            &self.services_file(&s.root),
+            serde_json::to_string_pretty(s)?,
+        )
     }
 
     fn forget(&self, root: &Path) -> Result<()> {
-        match fs::remove_file(self.services_file(root)) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
-            _ => Ok(()),
-        }
+        crate::files::remove_if_exists(&self.services_file(root))
     }
 
     /// Runs one environment command in `root` with a clean env, all output to its log. A
@@ -197,59 +195,29 @@ impl EnvState {
         if let Some(dir) = log.parent() {
             fs::create_dir_all(dir)?;
         }
-        let mut command = Command::new("sh");
-        command
-            .arg("-c")
-            .arg(cmd)
-            .current_dir(root)
-            .env_clear()
-            .stdin(Stdio::null());
-        for name in BASE_ENV
-            .iter()
-            .copied()
-            .chain(env.vars.iter().map(String::as_str))
-        {
-            if let Ok(v) = std::env::var(name) {
-                command.env(name, v);
-            }
-        }
+        // Outside the `[env]` shell: the services and the preparation start it themselves.
+        let command = crate::process::Project::new(root, None).clean(None, cmd, &env.vars, &[]);
         Ok((command, log))
     }
 
     /// Holds the services of `root` for one command's checks: another command waits, and
     /// idle cleanup leaves them alone. Released when dropped.
     pub(crate) fn hold(&self, root: &Path) -> Result<Hold> {
-        let file = self.lock_file(root)?;
-        file.lock()?;
-        Ok(Hold { _file: file })
+        Lease::take(&self.lock_file(root), Mode::Only).map(|lease| Hold { _lease: lease })
     }
 
     /// Holds the services of `root` if no other command does, without waiting.
     pub(crate) fn try_hold(&self, root: &Path) -> Result<Option<Hold>> {
-        let file = self.lock_file(root)?;
-        match file.try_lock() {
-            Ok(()) => Ok(Some(Hold { _file: file })),
-            Err(fs::TryLockError::WouldBlock) => Ok(None),
-            Err(fs::TryLockError::Error(e)) => Err(e.into()),
-        }
+        Ok(Lease::try_take(&self.lock_file(root), Mode::Only)?.map(|lease| Hold { _lease: lease }))
     }
 
     /// Whether a command holds the services of `root` right now.
     fn in_use(&self, root: &Path) -> bool {
-        self.lock_file(root)
-            .is_ok_and(|f| matches!(f.try_lock(), Err(fs::TryLockError::WouldBlock)))
+        Lease::held(&self.lock_file(root))
     }
 
-    fn lock_file(&self, root: &Path) -> Result<fs::File> {
-        let path = self.dir.join("locks").join(Self::key(root));
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        Ok(fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(path)?)
+    fn lock_file(&self, root: &Path) -> PathBuf {
+        self.dir.join("locks").join(Self::key(root))
     }
 
     /// Marks the services of `root` as used at `now`, when a check that needed them ends.
@@ -317,23 +285,19 @@ impl EnvState {
         };
         // Only what the deploy prints holds its URL, not what SecretSpec said before it.
         let asked_len = out.metadata()?.len();
-        // The command travels in a variable, so no quoting inside the shell can break it.
-        let script = match &env.shell {
-            Some(shell) => format!("{shell} sh -c \"$FEARLEZZ_RUN\""),
-            None => cmd.clone(),
-        };
         // A clean env like the services' commands, so a deploy from the change's config never
         // sees the provider's token or CI's own; it gets its settings from `[env] env`.
-        let (mut command, _) = self.command(env, root, "preview", &script)?;
+        let mut command = crate::process::Project::new(root, env.shell.as_deref()).clean(
+            None,
+            cmd,
+            &env.vars,
+            &[],
+        );
         command
             .stdout(out.try_clone()?)
             .stderr(out)
-            .env("FEARLEZZ_RUN", cmd)
             .env("FEARLEZZ_PREVIEW_NAME", name)
             .envs(secrets.iter().map(|(secret, value)| (secret, value)));
-        if let Some(path) = run::project_path(root) {
-            command.env("PATH", path);
-        }
         let status = command.status().context("starting [env] preview")?;
         run::mask_file(&log, &run::masked_forms(&secrets))?;
         if !status.success() {
@@ -359,14 +323,10 @@ impl EnvState {
             tree: tree.to_string(),
             url: url.clone(),
         };
-        let file = self.preview_file(root);
-        if let Some(dir) = file.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        // Written whole and then moved, so a reader never sees half of it.
-        let partial = file.with_extension("json.partial");
-        fs::write(&partial, serde_json::to_string_pretty(&preview)?)?;
-        fs::rename(&partial, &file)?;
+        crate::files::write_atomic(
+            &self.preview_file(root),
+            serde_json::to_string_pretty(&preview)?,
+        )?;
         let line = format!(
             "preview deployed: {url} ({:.1} s)",
             clock.elapsed().as_secs_f64()
@@ -587,7 +547,7 @@ impl EnvState {
 
 /// The services of one checkout held by this command; see [`EnvState::hold`].
 pub(crate) struct Hold {
-    _file: fs::File,
+    _lease: Lease,
 }
 
 /// What stopping idle services did.

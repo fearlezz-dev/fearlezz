@@ -16,6 +16,7 @@ mod hooks;
 mod host;
 mod init;
 mod journal;
+mod lease;
 mod legs;
 mod lints;
 mod look;
@@ -1419,7 +1420,7 @@ fn install_fix(tool: &str) -> String {
     format!(
         "install {tool} where checks find it: the project's dev dependencies ({}), its devenv{nix}, \
          or PATH",
-        run::TOOL_DIRS.join(", ")
+        process::TOOL_DIRS.join(", ")
     )
 }
 

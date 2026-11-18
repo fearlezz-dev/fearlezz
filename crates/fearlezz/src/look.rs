@@ -113,7 +113,7 @@ pub(crate) struct Base {
     env: Env,
     prepared: bool,
     /// Keeps other commands from removing the worktree while this one uses it.
-    _hold: fs::File,
+    _hold: crate::lease::Lease,
 }
 
 impl Base {
@@ -191,8 +191,7 @@ impl MediaGlob {
 
     /// The proofs for the files under `out` this glob matches, sorted by path.
     pub(crate) fn proofs(&self, out: &Path) -> Vec<serde_json::Value> {
-        let mut files = Vec::new();
-        walk(out, out, &mut files);
+        let mut files = crate::files::walk(out, out);
         files.sort();
         files
             .into_iter()
@@ -203,21 +202,6 @@ impl MediaGlob {
                 serde_json::json!({ "kind": self.kind, "file": rel, "id": id })
             })
             .collect()
-    }
-}
-
-/// Every file below `dir`, as a path relative to `base` with forward slashes.
-fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk(base, &path, out);
-        } else if let Ok(rel) = path.strip_prefix(base) {
-            out.push(rel.to_string_lossy().replace('\\', "/"));
-        }
     }
 }
 
@@ -328,7 +312,7 @@ pub(crate) fn without_before(
 /// open.
 fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf {
     let flaky = check.pictures.flaky.patterns().join("\0");
-    let pair = hex::encode(Sha256::digest(format!("{before}\0{after}\0{flaky}")));
+    let pair = crate::files::sha256_hex(format!("{before}\0{after}\0{flaky}"));
     common
         .join("fearlezz")
         .join("looks")

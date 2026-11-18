@@ -1,6 +1,5 @@
 //! Comparing two texts line by line: the one diff generated code and text looks share.
 
-use sha2::{Digest as _, Sha256};
 use similar::{ChangeTag, TextDiff};
 
 /// How many lines `after` adds and removes compared with `before`.
@@ -50,10 +49,7 @@ pub(crate) fn readable(bytes: &[u8]) -> String {
     if let Ok(text) = std::str::from_utf8(bytes) {
         return text.to_string();
     }
-    let digest: String = hex::encode(Sha256::digest(bytes))
-        .chars()
-        .take(16)
-        .collect();
+    let digest: String = crate::files::sha256_hex(bytes).chars().take(16).collect();
     format!("(binary, {} bytes, sha256 {digest}...)\n", bytes.len())
 }
 

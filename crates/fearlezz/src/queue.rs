@@ -11,7 +11,7 @@
 //! result another worktree produced meanwhile for the same inputs, and none is first in line:
 //! the slot goes to whichever waiter polls first.
 
-use std::fs::{File, OpenOptions, TryLockError};
+use std::fs::File;
 use std::io::{Seek as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,6 +20,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
+
+use crate::lease::{Lease, Mode};
 
 /// The developer's choice for this machine: how many heavy steps may run at once.
 const VAR: &str = "FEARLEZZ_QUEUE";
@@ -34,13 +36,13 @@ static HOLDING: AtomicUsize = AtomicUsize::new(0);
 
 /// A taken slot, freed when dropped.
 pub(crate) struct Slot {
-    file: File,
+    lease: Lease,
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
         // Emptied, so no waiter names a step that has ended.
-        drop(self.file.set_len(0));
+        drop(self.lease.file().set_len(0));
         HOLDING.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -88,24 +90,19 @@ pub(crate) fn turn<T>(what: &str, done: impl Fn() -> Option<T>) -> Result<Turn<T
         return Ok(Turn::Go(None));
     };
     let dir = crate::files::UserDir::Cache.path()?.join("queue");
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let mut files = (0..slots)
-        .map(|i| {
-            let path = dir.join(format!("slot-{i}.lock"));
-            open(&path).map(|file| (path, file))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let paths: Vec<PathBuf> = (0..slots)
+        .map(|i| dir.join(format!("slot-{i}.lock")))
+        .collect();
     let clock = Instant::now();
     let mut waited = false;
     loop {
-        if let Some(i) = free(&files)? {
-            let (_, mut file) = files.swap_remove(i);
+        if let Some(mut lease) = free(&paths)? {
             // A result may have landed between the last poll and the lock.
             if waited && let Some(found) = done() {
                 eprintln!("wait {what}: the same inputs ran meanwhile; reused");
                 return Ok(Turn::Done(found));
             }
-            Holder::now(what).claim(&mut file)?;
+            Holder::now(what).claim(lease.file())?;
             HOLDING.fetch_add(1, Ordering::SeqCst);
             if waited {
                 eprintln!(
@@ -113,13 +110,13 @@ pub(crate) fn turn<T>(what: &str, done: impl Fn() -> Option<T>) -> Result<Turn<T
                     elapsed(clock.elapsed().as_secs())
                 );
             }
-            return Ok(Turn::Go(Some(Slot { file })));
+            return Ok(Turn::Go(Some(Slot { lease })));
         }
         if !waited {
             let now = now_secs();
-            let behind: Vec<String> = files
+            let behind: Vec<String> = paths
                 .iter()
-                .map(|(path, _)| behind(Holder::read(path), now))
+                .map(|path| behind(Holder::read(path), now))
                 .collect();
             let plural = if slots == 1 { "slot" } else { "slots" };
             eprintln!(
@@ -173,29 +170,14 @@ pub(crate) fn by_hand(command: &[String]) -> Result<u8> {
         .map_or(1, |code| u8::try_from(code).unwrap_or(1)))
 }
 
-/// The index of a slot this process just locked, if any is free.
-fn free(files: &[(PathBuf, File)]) -> Result<Option<usize>> {
-    for (i, (path, file)) in files.iter().enumerate() {
-        match file.try_lock() {
-            Ok(()) => return Ok(Some(i)),
-            Err(TryLockError::WouldBlock) => {}
-            Err(TryLockError::Error(e)) => {
-                return Err(e).with_context(|| format!("cannot lock {}", path.display()));
-            }
+/// A free slot, now leased by this process, if any.
+fn free(paths: &[PathBuf]) -> Result<Option<Lease>> {
+    for path in paths {
+        if let Some(lease) = Lease::try_take(path, Mode::Only)? {
+            return Ok(Some(lease));
         }
     }
     Ok(None)
-}
-
-/// A slot's file, created when missing and kept intact, so a waiter can read its holder.
-fn open(path: &Path) -> Result<File> {
-    OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)
-        .with_context(|| format!("cannot open {}", path.display()))
 }
 
 /// Who holds a slot, written into its file once it is taken. The next holder rewrites it.

@@ -57,6 +57,25 @@ impl UserDir {
     }
 }
 
+/// Every file at or below `at`, as a path relative to `base` with forward slashes. A folder
+/// that cannot be read counts as empty.
+pub(crate) fn walk(base: &Path, at: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut todo = vec![at.to_path_buf()];
+    while let Some(path) = todo.pop() {
+        if path.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&path) {
+                todo.extend(entries.flatten().map(|e| e.path()));
+            }
+        } else if path.is_file()
+            && let Ok(rel) = path.strip_prefix(base)
+        {
+            out.push(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    out
+}
+
 /// The text of `path`, or None when there is no such file. Any other read error is an error,
 /// so a file that cannot be read is never taken for one that is not there.
 pub(crate) fn read_if_exists(path: &Path) -> std::io::Result<Option<String>> {
@@ -118,6 +137,21 @@ mod tests {
         assert_eq!(names, ["b.txt"]);
         remove_if_exists(&path).unwrap();
         remove_if_exists(&path).unwrap();
+    }
+
+    #[test]
+    fn a_walk_finds_every_file_below_a_folder_or_the_file_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        write_atomic(&dir.path().join("a/b/c.txt"), "").unwrap();
+        write_atomic(&dir.path().join("a/d.txt"), "").unwrap();
+        let mut found = walk(dir.path(), &dir.path().join("a"));
+        found.sort();
+        assert_eq!(found, ["a/b/c.txt", "a/d.txt"]);
+        assert_eq!(walk(dir.path(), &dir.path().join("a/d.txt")), ["a/d.txt"]);
+        assert_eq!(
+            walk(dir.path(), &dir.path().join("none")),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
