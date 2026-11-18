@@ -37,7 +37,8 @@ jobs:
       # The Linux leg's Cargo build, which holds this one.
       - uses: ./.github/actions/devenv
         with:
-          op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          # Only main fills the shared Nix cache: a branch's devenv.nix runs before the push.
+          op-service-account-token: ${{ github.event_name == 'push' && secrets.OP_SERVICE_ACCOUNT_TOKEN || '' }}
           rust: restore
           rust-key: leg-linux
       - name: Build Fearlezz from this commit
@@ -75,7 +76,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/devenv
         with:
-          op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          # Only main fills the shared Nix cache: a branch's devenv.nix runs before the push.
+          op-service-account-token: ${{ github.event_name == 'push' && secrets.OP_SERVICE_ACCOUNT_TOKEN || '' }}
           rust: save
           rust-key: leg-${{ matrix.leg }}
       - name: Build Fearlezz from this commit

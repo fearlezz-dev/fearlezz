@@ -6,9 +6,9 @@ description: >-
 inputs:
   op-service-account-token:
     description: >-
-      The 1Password service account token (`secrets.OP_SERVICE_ACCOUNT_TOKEN`). With it, a run of
-      this repository reads the `cache` profile of secretspec.toml and pushes the shell to
-      gabber235.cachix.org. A fork's pull request gets none, so it only reads.
+      The 1Password service account token (`secrets.OP_SERVICE_ACCOUNT_TOKEN`), given only by a
+      push to main. With it, the job reads the `cache` profile of secretspec.toml and pushes the
+      shell to gabber235.cachix.org; every other run only reads.
     default: ""
   rust:
     description: >-
