@@ -4,8 +4,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context as _, Result, bail};
-use sha2::{Digest as _, Sha256};
+use anyhow::{Context as _, Result};
+
+use crate::lease::{Lease, Mode};
 
 #[derive(Clone)]
 pub(crate) struct Git {
@@ -222,7 +223,7 @@ impl Git {
     /// file lives, no other command removes it. Keeps the three most recently used and
     /// removes older ones nobody holds. `name` tells apart checkouts of one commit, such as
     /// one with a change's test files laid over it. They live in [`Git::bases_dir`].
-    pub(crate) fn base_worktree(&self, commit: &str, name: &str) -> Result<(Git, std::fs::File)> {
+    pub(crate) fn base_worktree(&self, commit: &str, name: &str) -> Result<(Git, Lease)> {
         let bases = self.bases_dir()?;
         let dir = bases.join("checkouts");
         std::fs::create_dir_all(&dir)?;
@@ -232,12 +233,10 @@ impl Git {
         }
         // One command at a time adds or prunes bases, so two never add the same one and none
         // prunes a base another just took.
-        let lock = std::fs::File::create(bases.join("lock"))?;
-        lock.lock()?;
+        let _lock = Lease::take(&bases.join("lock"), Mode::Only)?;
         self.drop_bases_in_git_folder();
         let id = &format!("{}{name}", commit.get(..12).unwrap_or(commit));
-        let hold = hold_file(&bases, std::ffi::OsStr::new(id))?;
-        hold.lock_shared()?;
+        let hold = Lease::take(&bases.join("holds").join(id), Mode::Shared)?;
         let root = dir.join(id);
         if !root.exists() {
             let path = root.to_string_lossy().to_string();
@@ -283,8 +282,9 @@ impl Git {
                 }
             })
             .collect();
-        let hash = hex::encode(Sha256::digest(self.common.to_string_lossy().as_bytes()));
-        Ok(cache_dir()?
+        let hash = crate::files::sha256_hex(self.common.to_string_lossy().as_bytes());
+        Ok(crate::files::UserDir::Cache
+            .path()?
             .join("bases")
             .join(format!("{label}-{}", hash.get(..12).unwrap_or(&hash))))
     }
@@ -294,13 +294,9 @@ impl Git {
         let Some(name) = checkout.file_name() else {
             return Ok(());
         };
-        let free = hold_file(bases, name)?;
-        if let Err(e) = free.try_lock() {
-            return match e {
-                std::fs::TryLockError::WouldBlock => Ok(()),
-                std::fs::TryLockError::Error(e) => Err(e.into()),
-            };
-        }
+        let Some(_free) = Lease::try_take(&bases.join("holds").join(name), Mode::Only)? else {
+            return Ok(());
+        };
         let path = checkout.to_string_lossy().to_string();
         if let Err(e) = self.git(&["worktree", "remove", "--force", &path]) {
             eprintln!("could not remove the old base {path}: {e:#}");
@@ -352,8 +348,7 @@ impl Git {
         if !bases.exists() || age(&marker).is_some_and(|d| d < day) {
             return Ok(());
         }
-        let lock = std::fs::File::create(bases.join("lock"))?;
-        lock.lock()?;
+        let _lock = Lease::take(&bases.join("lock"), Mode::Only)?;
         let keep = day * u32::try_from(keep_days).unwrap_or(u32::MAX);
         for (_, checkout) in checkouts(&bases.join("checkouts")) {
             if age(&checkout).is_some_and(|d| d > keep) {
@@ -393,57 +388,6 @@ fn github_slug(url: &str) -> Option<String> {
         .then(|| format!("{owner}/{name}"))
 }
 
-/// The per user config folder of Fearlezz: below `$XDG_CONFIG_HOME` when set, else the
-/// platform's (`~/Library/Application Support` on macOS, `~/.config` elsewhere).
-pub(crate) fn config_dir() -> Result<PathBuf> {
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute());
-    if let Some(dir) = xdg {
-        return Ok(dir.join("fearlezz"));
-    }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is not set, so there is no config folder for the proof host's sign in")?;
-    let config = if cfg!(target_os = "macos") {
-        home.join("Library").join("Application Support")
-    } else {
-        home.join(".config")
-    };
-    Ok(config.join("fearlezz"))
-}
-
-/// The per user cache folder of Fearlezz: below `$XDG_CACHE_HOME` when set, else the
-/// platform's (`~/Library/Caches` on macOS, `~/.cache` elsewhere).
-pub(crate) fn cache_dir() -> Result<PathBuf> {
-    let xdg = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute());
-    if let Some(dir) = xdg {
-        return Ok(dir.join("fearlezz"));
-    }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is not set, so there is no cache folder for base checkouts")?;
-    let caches = if cfg!(target_os = "macos") {
-        home.join("Library").join("Caches")
-    } else {
-        home.join(".cache")
-    };
-    Ok(caches.join("fearlezz"))
-}
-
-/// The file whose shared lock holds the base checkout `id`.
-fn hold_file(bases: &Path, id: &std::ffi::OsStr) -> std::io::Result<std::fs::File> {
-    let holds = bases.join("holds");
-    std::fs::create_dir_all(&holds)?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(holds.join(id))
-}
-
 /// Each checkout in `dir`, with when it was last used.
 fn checkouts(dir: &Path) -> Vec<(std::time::SystemTime, PathBuf)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -457,17 +401,6 @@ fn checkouts(dir: &Path) -> Vec<(std::time::SystemTime, PathBuf)> {
 
 fn run_git(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
     let mut cmd = Command::new("git");
-    cmd.args(args).current_dir(dir);
-    for (k, v) in env {
-        cmd.env(k, v);
-    }
-    let out = cmd.output().context("running git")?;
-    if !out.status.success() {
-        bail!(
-            "git {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8(out.stdout)?)
+    cmd.args(args).current_dir(dir).envs(env.iter().copied());
+    Ok(String::from_utf8(crate::process::read(&mut cmd, None)?)?)
 }

@@ -7,6 +7,7 @@ mod counts;
 mod coverage;
 mod env;
 mod feedback;
+mod files;
 mod findings;
 mod floor;
 mod generated;
@@ -15,11 +16,13 @@ mod hooks;
 mod host;
 mod init;
 mod journal;
+mod lease;
 mod legs;
 mod lints;
 mod look;
 mod media;
 mod presets;
+mod process;
 mod proof;
 mod queue;
 mod record;
@@ -1417,7 +1420,7 @@ fn install_fix(tool: &str) -> String {
     format!(
         "install {tool} where checks find it: the project's dev dependencies ({}), its devenv{nix}, \
          or PATH",
-        run::TOOL_DIRS.join(", ")
+        process::TOOL_DIRS.join(", ")
     )
 }
 

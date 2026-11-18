@@ -386,16 +386,7 @@ impl Settings {
         for (path, content) in self.render(root)? {
             // Write through a link, so a shared file stays shared.
             let full = std::fs::canonicalize(root.join(&path)).unwrap_or_else(|_| root.join(&path));
-            let dir = full.parent().unwrap_or(root);
-            std::fs::create_dir_all(dir)?;
-            let name = full
-                .file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default();
-            let temp = dir.join(format!(".{name}.fearlezz-{}", std::process::id()));
-            std::fs::write(&temp, content)
-                .and_then(|()| std::fs::rename(&temp, &full))
-                .with_context(|| format!("writing {path}"))?;
+            crate::files::write_atomic(&full, content)?;
             written.push(path);
         }
         Ok(written)
@@ -590,11 +581,7 @@ impl Tool {
 /// A file's text, or None when there is none. Any other read error is an error, so a file
 /// that cannot be read is never written over as if it were empty.
 fn read(root: &Path, path: &str) -> Result<Option<String>> {
-    match std::fs::read_to_string(root.join(path)) {
-        Ok(text) => Ok(Some(text)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("reading {path}")),
-    }
+    crate::files::read_if_exists(&root.join(path)).with_context(|| format!("reading {path}"))
 }
 
 /// Clippy and rustc rules as Cargo.toml lints. A rule that is on warns: Fearlezz gives the

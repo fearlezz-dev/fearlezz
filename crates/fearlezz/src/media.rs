@@ -451,23 +451,23 @@ struct Probe {
 }
 
 fn probe(path: &Path) -> Result<Probe> {
-    let out = Command::new("ffprobe")
-        .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
-        // Packets carry the frames' times without decoding them; sorted by time they are the
-        // frames in the order ffmpeg sends them.
-        .arg("stream=width,height,pix_fmt:packet=pts_time,duration_time")
-        .args(["-of", "json"])
-        .arg(path)
-        .output()
-        .context("running ffprobe; Fearlezz needs it to read stills and films")?;
-    if !out.status.success() {
-        bail!(
-            "ffprobe could not read {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let info: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+    let out = crate::process::read(
+        Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
+            // Packets carry the frames' times without decoding them; sorted by time they are
+            // the frames in the order ffmpeg sends them.
+            .arg("stream=width,height,pix_fmt:packet=pts_time,duration_time")
+            .args(["-of", "json"])
+            .arg(path),
+        None,
+    )
+    .with_context(|| {
+        format!(
+            "ffprobe could not read {}; Fearlezz needs it to read stills and films",
+            path.display()
+        )
+    })?;
+    let info: serde_json::Value = serde_json::from_slice(&out)?;
     let stream = &info["streams"][0];
     let w = stream["width"].as_u64().context("no width")? as usize;
     let h = stream["height"].as_u64().context("no height")? as usize;
@@ -1136,22 +1136,17 @@ pub(crate) fn noted(
         None => "null".to_owned(),
     };
     let run = |seek: &[String]| -> Result<bool> {
-        let done = Command::new("ffmpeg")
-            .args(["-v", "error", "-nostdin", "-y"])
-            .args(seek)
-            .arg("-i")
-            .arg(source)
-            .args(["-frames:v", "1", "-update", "1", "-vf", &filter])
-            .arg(out)
-            .output()
-            .context("running ffmpeg; Fearlezz needs it to draw a note on its picture")?;
-        if !done.status.success() {
-            bail!(
-                "ffmpeg could not draw on {}: {}",
-                source.display(),
-                String::from_utf8_lossy(&done.stderr).trim()
-            );
-        }
+        crate::process::read(
+            Command::new("ffmpeg")
+                .args(["-v", "error", "-nostdin", "-y"])
+                .args(seek)
+                .arg("-i")
+                .arg(source)
+                .args(["-frames:v", "1", "-update", "1", "-vf", &filter])
+                .arg(out),
+            None,
+        )
+        .with_context(|| format!("ffmpeg could not draw a note on {}", source.display()))?;
         Ok(std::fs::metadata(out).is_ok_and(|m| m.len() > 0))
     };
     let seek = time

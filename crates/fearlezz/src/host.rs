@@ -10,9 +10,9 @@
 use std::fs;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use fearlezz_proof::events::{self, Accepted, Done, Files, Missing, Open, Opened, Step, Weakened};
 use fearlezz_proof::floor::Weakening;
 use fearlezz_proof::review::Accept;
@@ -478,27 +478,10 @@ pub(crate) fn curl_within(
             None
         }
     };
-    let mut child = cmd
-        .arg(url)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("talking to the proof host needs curl")?;
-    if let Some(mut stdin) = child.stdin.take()
-        && !token.is_empty()
-    {
-        writeln!(stdin, "header = \"Authorization: Bearer {token}\"")?;
-    }
-    let out = child.wait_with_output()?;
+    let out = run_curl(cmd.arg(url), token, method, url);
     drop(json);
-    if !out.status.success() {
-        bail!(
-            "{method} {url} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
+    let out = out?;
+    let text = String::from_utf8_lossy(&out);
     let (answer, code) = text.rsplit_once('\n').unwrap_or(("", &text));
     let code: u16 = code
         .trim()
@@ -515,8 +498,8 @@ pub(crate) fn curl_within(
 /// Downloads `url` into the file `to` with a bearer token, the token on curl's stdin as `curl`
 /// sends it; the status code.
 pub(crate) fn download(url: &str, token: &str, to: &Path) -> Result<u16> {
-    let mut child = Command::new("curl")
-        .args(["-sS", "-K", "-", "-o"])
+    let mut cmd = Command::new("curl");
+    cmd.args(["-sS", "-K", "-", "-o"])
         .arg(to)
         .args([
             "-w",
@@ -527,26 +510,28 @@ pub(crate) fn download(url: &str, token: &str, to: &Path) -> Result<u16> {
             "120",
         ])
         .args(["-H", "User-Agent: fearlezz"])
-        .arg(url)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("talking to the proof host needs curl")?;
-    if let Some(mut stdin) = child.stdin.take() {
-        writeln!(stdin, "header = \"Authorization: Bearer {token}\"")?;
-    }
-    let out = child.wait_with_output()?;
-    if !out.status.success() {
-        bail!(
-            "GET {url} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    String::from_utf8_lossy(&out.stdout)
+        .arg(url);
+    String::from_utf8_lossy(&run_curl(&mut cmd, token, "GET", url)?)
         .trim()
         .parse()
         .with_context(|| format!("GET {url} gave no status code"))
+}
+
+/// Runs `cmd`, a curl that reads its config from stdin (`-K -`), with `token` there as a
+/// bearer header so it never shows in the process list; what it printed.
+fn run_curl(cmd: &mut Command, token: &str, method: &str, url: &str) -> Result<Vec<u8>> {
+    let config = if token.is_empty() {
+        String::new()
+    } else {
+        format!("header = \"Authorization: Bearer {token}\"\n")
+    };
+    crate::process::read_fed(cmd, config.as_bytes(), None).map_err(|e| match e {
+        crate::process::Failed::Exit { stderr, .. } => anyhow!("{method} {url} failed: {stderr}"),
+        e @ crate::process::Failed::Start { .. } => {
+            anyhow::Error::new(e).context("talking to the proof host needs curl")
+        }
+        e @ crate::process::Failed::Late { .. } => e.into(),
+    })
 }
 
 /// One segment of a URL path, escaped.

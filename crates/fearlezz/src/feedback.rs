@@ -21,7 +21,7 @@ use fearlezz_proof::review::Standing;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::git::{self, Git};
+use crate::git::Git;
 use crate::host::{self, Body, Limit};
 use crate::media;
 
@@ -57,7 +57,7 @@ enum Polled {
 
 /// The sign ins, by host URL, in the user's config folder.
 fn logins_file() -> Result<PathBuf> {
-    Ok(git::config_dir()?.join("logins.json"))
+    Ok(crate::files::UserDir::Config.path()?.join("logins.json"))
 }
 
 fn logins() -> BTreeMap<String, Login> {
@@ -352,7 +352,8 @@ pub(crate) fn notes(git: &Git, url: &str) -> Result<bool> {
             }
         })
         .collect();
-    let dir = git::cache_dir()?
+    let dir = crate::files::UserDir::Cache
+        .path()?
         .join("notes")
         .join(repository)
         .join(branch);
