@@ -382,6 +382,10 @@ fn cargo_path(file: &str, manifest: Option<&str>) -> String {
 /// Cargo's JSON messages, one per line among the lines it prints for people. Lints (a code
 /// like `clippy::unwrap_used` or `unused_variables`) count on changed lines; hard errors
 /// (`E0308`, or no code) count anywhere.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
+)]
 fn cargo(text: &str, levels: Levels) -> Read {
     let mut found = Vec::new();
     let mut errors = Vec::new();
@@ -542,6 +546,10 @@ fn eslint(text: &str, levels: Levels) -> Read {
 /// svelte-check's machine-verbose lines: a timestamp, then one diagnostic as JSON, its lines
 /// counted from 0. An error (types, compile) blocks wherever it is, as tsc fails on any; a
 /// warning (a11y, state, css) is a flag.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
+)]
 fn svelte(text: &str, levels: Levels) -> Read {
     let mut found = Vec::new();
     let mut errors = Vec::new();
@@ -587,6 +595,10 @@ fn svelte(text: &str, levels: Levels) -> Read {
 }
 
 /// A result's file. Some tools (ktlint) name it relative to a base folder the run declares.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
+)]
 fn sarif_file(run: &Value, location: &Value) -> String {
     let uri = location["uri"].as_str().unwrap_or("");
     let Some(base) = location["uriBaseId"]
@@ -611,6 +623,10 @@ fn sarif_file(run: &Value, location: &Value) -> String {
 
 /// SARIF 2.1: each run's results at their first location. A result without a level is a
 /// warning, as the standard says.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
+)]
 fn sarif(text: &str, levels: Levels) -> Read {
     if text.trim().is_empty() {
         return (Vec::new(), Vec::new());
