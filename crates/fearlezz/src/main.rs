@@ -1,6 +1,7 @@
 //! `fearlezz`: helps coding agents prove their work. See the README for the model.
 
 mod action;
+mod base;
 mod commits;
 mod config;
 mod counts;
@@ -218,6 +219,8 @@ struct Ctx {
     git: Git,
     config: Config,
     store: Store,
+    /// The base commits this command compares with, each opened once on first use.
+    bases: base::Bases,
     now: Timestamp,
 }
 
@@ -272,6 +275,7 @@ fn ctx() -> Result<Ctx> {
         git,
         config,
         store,
+        bases: base::Bases::default(),
         now,
     })
 }
@@ -302,7 +306,14 @@ impl Ctx {
 
     fn view(&self, journal: &Journal) -> Result<View> {
         let mut wt = self.worktree()?;
-        state::view(&self.config, &self.store, journal, Some(&mut wt), self.now)
+        state::view(
+            &self.config,
+            &self.store,
+            journal,
+            Some(&mut wt),
+            &self.bases,
+            self.now,
+        )
     }
 
     /// Views of every journal; live where its branch is checked out somewhere.
@@ -314,7 +325,14 @@ impl Ctx {
                 Some(git) => Some(Worktree::read(git, &self.config)?),
                 None => None,
             };
-            let view = state::view(&self.config, &self.store, &journal, wt.as_mut(), self.now)?;
+            let view = state::view(
+                &self.config,
+                &self.store,
+                &journal,
+                wt.as_mut(),
+                &self.bases,
+                self.now,
+            )?;
             views.push((view, journal));
         }
         views.sort_by_key(|(v, _)| (v.group, std::cmp::Reverse(v.last_at)));
@@ -483,7 +501,7 @@ fn ci_gate(dir: &Path, bundle: Option<PathBuf>, reuse: Option<&Path>) -> Result<
     }
     // Each leg that needs the preview deploys the same tree; the first one found names it.
     proof.preview = found.iter().find_map(|l| l.proof.preview.clone());
-    let floor = floor::Floor::read(&ctx.config, &wt)?;
+    let floor = floor::Floor::read(&ctx.config, &wt, &ctx.bases)?;
     proof.weakened.clone_from(&floor.weakened);
     let gate = if floor.holds() {
         floor::Gate::Job
@@ -1403,7 +1421,14 @@ fn run_checks(
     out: Option<CiOut>,
 ) -> Result<bool> {
     let mut wt = ctx.worktree()?;
-    let before = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
+    let before = state::view(
+        &ctx.config,
+        &ctx.store,
+        &j,
+        Some(&mut wt),
+        &ctx.bases,
+        ctx.now,
+    )?;
     let stages = &ctx.config.stages;
     let stage = stages.name(before.stage).to_string();
     let final_stage = stages.name(stages.last()).to_string();
@@ -1482,7 +1507,7 @@ fn run_checks(
     // A full run at the final stage answers for the whole work, and for what the base
     // branch requires, not only for its checks; for a leg, the gate does.
     let floor = if ids.is_empty() && stage == final_stage {
-        floor::Floor::read(&ctx.config, &wt)?
+        floor::Floor::read(&ctx.config, &wt, &ctx.bases)?
     } else {
         floor::Floor::default()
     };
@@ -1572,7 +1597,6 @@ fn run_checks(
     let mut held = None;
     let mut looks = Vec::new();
     // Opened once, on the first check with pictures.
-    let mut base = None;
     let (mut not_run, mut cannot_record) = (0, 0);
     let journal_name = j.name.clone();
     // Reuse only a pass, never across an unstable key, and at the final stage only a run
@@ -1728,7 +1752,7 @@ fn run_checks(
         reused += usize::from(was_reused);
         // Compared as soon as the check passed, so its look goes with it to the proof host.
         let look = if result.outcome == Outcome::Passed {
-            look_at(ctx, &wt, check, &result, &stage, &mut base)?
+            look_at(ctx, &wt, check, &result, &stage)?
         } else {
             None
         };
@@ -1789,7 +1813,14 @@ fn run_checks(
     // Only now: the commit report reads this run's results, which no journal names in CI, so
     // a check sharing its inputs with another could lose its output to the prune.
     prune_store(ctx);
-    let after = state::view(&ctx.config, &ctx.store, &j, Some(&mut wt), ctx.now)?;
+    let after = state::view(
+        &ctx.config,
+        &ctx.store,
+        &j,
+        Some(&mut wt),
+        &ctx.bases,
+        ctx.now,
+    )?;
     if stage == final_stage
         && (after.next == state::READY || in_memory)
         && env.state.services(&wt.git.root).is_some()
@@ -1829,7 +1860,7 @@ fn red_before_green(
     let mut blocks = false;
     for (check, head) in green {
         let ran = red::run(
-            &ctx.git,
+            &ctx.bases,
             &ctx.config,
             &ctx.store,
             (check, head),
@@ -1875,26 +1906,34 @@ fn red_before_green(
     Ok(blocks)
 }
 
-/// Compares the stills and films of a green check with the base commit (`base`, opened on the
-/// first check that needs it), says what it found, and records the comparison against it. The
-/// look it made, if any.
+/// Compares the stills and films of a green check with the base commit, says what it found,
+/// and records the comparison against it. The look it made, if any.
 fn look_at(
     ctx: &Ctx,
     wt: &Worktree,
     check: &config::Check,
     result: &store::RunResult,
     stage: &str,
-    base: &mut Option<Result<look::Base>>,
 ) -> Result<Option<look::Look>> {
     // A check that takes pictures is compared even without any, so all gone shows.
     let has_media = look::has_media(result);
     if !has_media && !ctx.config.takes_pictures(check) {
         return Ok(None);
     }
-    let base =
-        base.get_or_insert_with(|| look::Base::at(&ctx.git, &ctx.config, wt.base.clone(), ""));
-    let outcome = match base {
-        Ok(base) => look::look(&ctx.store, check, result, base, stage, &ctx.env()),
+    let base = ctx.bases.at(&wt.git, &wt.base);
+    let site = match &base {
+        Ok(b) => b.plain(&ctx.config).map(|site| (b, site)),
+        Err(e) => Err(anyhow::anyhow!("{e:#}")),
+    };
+    let outcome = match site {
+        Ok((base, mut site)) => look::look(
+            &ctx.store,
+            check,
+            result,
+            (base, &mut site),
+            stage,
+            &ctx.env(),
+        ),
         Err(e) => Err(anyhow::anyhow!("the base checkout failed: {e:#}")),
     };
     // Without a before every picture is new; a failed look never ends the run. A run
