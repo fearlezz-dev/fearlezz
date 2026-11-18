@@ -9,6 +9,7 @@ use fearlezz_proof::review::Accept;
 
 use crate::config::{self, Builtin, Config, Env, Ports};
 use crate::findings::Scope;
+use crate::names::Named;
 use crate::state::Worktree;
 
 /// Where what a change weakens gets past the job that judges it.

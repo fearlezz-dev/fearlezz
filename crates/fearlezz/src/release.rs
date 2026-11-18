@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::host::{self, Body, Limit};
+use crate::names::Named;
 
 /// The prefix of the check a place's dry run becomes: `release/<place>`.
 pub(crate) const CHECK_PREFIX: &str = "release/";
@@ -67,28 +68,16 @@ pub(crate) enum Reader {
     Github,
 }
 
-impl Reader {
-    const ALL: [(&'static str, Reader); 4] = [
+impl Named for Reader {
+    const NAMES: &'static [(&'static str, Reader)] = &[
         ("crates", Reader::Crates),
         ("npm", Reader::Npm),
         ("pub", Reader::Pub),
         ("github", Reader::Github),
     ];
+}
 
-    fn parse(name: &str) -> Result<Reader> {
-        Reader::ALL
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, r)| *r)
-            .with_context(|| {
-                let names: Vec<&str> = Reader::ALL.iter().map(|(n, _)| *n).collect();
-                format!(
-                    "no landed reader \"{name}\"; readers are {}",
-                    names.join(", ")
-                )
-            })
-    }
-
+impl Reader {
     /// The file a package of this registry names itself and its version in.
     fn manifest(self) -> Option<&'static str> {
         match self {
@@ -146,7 +135,11 @@ pub(crate) fn parse(table: Option<&toml::Value>) -> Result<Vec<Place>> {
         let landed = match p.landed {
             RawLanded::Command(cmd) => Landed::Command(cmd),
             RawLanded::Read { read, url } => Landed::Read {
-                reader: Reader::parse(&read).with_context(at)?,
+                reader: Reader::named(&read)
+                    .map_err(|names| {
+                        anyhow::anyhow!("no landed reader \"{read}\"; readers are {names}")
+                    })
+                    .with_context(at)?,
                 url,
             },
         };

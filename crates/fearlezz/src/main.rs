@@ -21,6 +21,7 @@ mod legs;
 mod lints;
 mod look;
 mod media;
+mod names;
 mod presets;
 mod process;
 mod proof;
