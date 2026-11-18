@@ -12,44 +12,47 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use fearlezz_proof::floor::Change;
 use serde::Deserialize;
 
 use crate::findings::{self, Finding};
+use crate::names::Named;
 
-/// What a finding of one rule means.
+/// What a finding of one rule means: a finding level, or `None` for a rule that is off, which
+/// orders below every level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Level {
-    Off,
-    Hint,
-    Flag,
-    Gate,
+#[serde(try_from = "String")]
+pub(crate) struct Level(Option<findings::Level>);
+
+impl TryFrom<String> for Level {
+    type Error = String;
+
+    fn try_from(word: String) -> Result<Level, String> {
+        use findings::Level::{Flag, Gate, Hint};
+        [Hint, Flag, Gate]
+            .into_iter()
+            .find(|l| l.name() == word)
+            .map(|l| Level(Some(l)))
+            .or_else(|| (word == "off").then_some(Level(None)))
+            .ok_or_else(|| {
+                format!("unknown variant `{word}`, expected one of `off`, `hint`, `flag`, `gate`")
+            })
+    }
 }
 
 impl Level {
     /// The finding level, or `None` for a rule that is off.
     pub(crate) fn finding(self) -> Option<findings::Level> {
-        match self {
-            Level::Off => None,
-            Level::Hint => Some(findings::Level::Hint),
-            Level::Flag => Some(findings::Level::Flag),
-            Level::Gate => Some(findings::Level::Gate),
-        }
+        self.0
     }
 
     pub(crate) fn is_on(self) -> bool {
-        self != Level::Off
+        self.0.is_some()
     }
 
     pub(crate) fn name(self) -> &'static str {
-        match self {
-            Level::Off => "off",
-            Level::Hint => "hint",
-            Level::Flag => "flag",
-            Level::Gate => "gate",
-        }
+        self.0.map_or("off", findings::Level::name)
     }
 }
 
@@ -77,35 +80,25 @@ pub(crate) enum Tool {
     Coverage,
 }
 
-const TOOLS: [(&str, Tool); 11] = [
-    ("clippy", Tool::Clippy),
-    ("rustc", Tool::Rustc),
-    ("dart", Tool::Dart),
-    ("biome", Tool::Biome),
-    ("eslint", Tool::Eslint),
-    ("ruff", Tool::Ruff),
-    ("ktlint", Tool::Ktlint),
-    ("detekt", Tool::Detekt),
-    ("golangci", Tool::Golangci),
-    ("oxlint", Tool::Oxlint),
-    ("coverage", Tool::Coverage),
-];
+impl Named for Tool {
+    const NAMES: &'static [(&'static str, Tool)] = &[
+        ("clippy", Tool::Clippy),
+        ("rustc", Tool::Rustc),
+        ("dart", Tool::Dart),
+        ("biome", Tool::Biome),
+        ("eslint", Tool::Eslint),
+        ("ruff", Tool::Ruff),
+        ("ktlint", Tool::Ktlint),
+        ("detekt", Tool::Detekt),
+        ("golangci", Tool::Golangci),
+        ("oxlint", Tool::Oxlint),
+        ("coverage", Tool::Coverage),
+    ];
+}
 
 impl Tool {
     pub(crate) fn parse(name: &str) -> Result<Tool> {
-        if let Some((_, t)) = TOOLS.iter().find(|(n, _)| *n == name) {
-            Ok(*t)
-        } else {
-            let names: Vec<&str> = TOOLS.iter().map(|(n, _)| *n).collect();
-            bail!("no lint tool \"{name}\"; tools are {}", names.join(", "))
-        }
-    }
-
-    pub(crate) fn name(self) -> &'static str {
-        TOOLS
-            .iter()
-            .find(|(_, t)| *t == self)
-            .map_or("", |(n, _)| *n)
+        Tool::named(name).map_err(|names| anyhow!("no lint tool \"{name}\"; tools are {names}"))
     }
 
     /// The rule's name in this tool's table, when a reported rule id belongs to this tool.
@@ -237,7 +230,7 @@ impl Lints {
                 match level {
                     None => Some(f),
                     Some(l) => {
-                        f.level = l.finding()?;
+                        f.level = l.0?;
                         Some(f)
                     }
                 }
