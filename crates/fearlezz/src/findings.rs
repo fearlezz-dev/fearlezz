@@ -206,11 +206,20 @@ impl Changed {
         let mut files: BTreeMap<String, Lines> = BTreeMap::new();
         let mut current: Option<String> = None;
         let mut old: Option<String> = None;
-        // The lines of the hunk being read: an added `++ x` reads `+++ x`, never a header.
-        let mut body = 0;
+        // The old and new lines left in the hunk being read: an added `++ x` reads `+++ x`,
+        // never a header. A context line (git merges near hunks by `diff.interHunkContext`)
+        // is on both sides.
+        let (mut old_left, mut new_left) = (0, 0);
         for line in diff.lines() {
-            if body > 0 && line.starts_with(['+', '-', ' ']) {
-                body -= 1;
+            let side = match line.as_bytes().first() {
+                Some(b'-') if old_left > 0 => Some((1, 0)),
+                Some(b'+') if new_left > 0 => Some((0, 1)),
+                Some(b' ') if old_left > 0 && new_left > 0 => Some((1, 1)),
+                _ => None,
+            };
+            if let Some((o, n)) = side {
+                old_left -= o;
+                new_left -= n;
                 continue;
             }
             // Git ends a header path that holds a space with a tab.
@@ -232,7 +241,7 @@ impl Changed {
                 let Some((removed, (start, count))) = ranges(hunk) else {
                     continue;
                 };
-                body = removed + count;
+                (old_left, new_left) = (removed, count);
                 if let (Some(path), true) = (&current, count > 0)
                     && let Some(Lines::Ranges(r)) = files.get_mut(path)
                 {
@@ -378,8 +387,8 @@ fn cargo(text: &str, levels: Levels) -> Read {
     let mut errors = Vec::new();
     let mut build_failed = false;
     for (n, line) in text.lines().enumerate() {
-        // `cargo test` prints its tests' output among the messages; only JSON is a message.
-        if !line.starts_with('{') {
+        // `cargo test` prints its tests' output among the messages; each message starts so.
+        if !line.starts_with("{\"reason\":") {
             continue;
         }
         let v = match serde_json::from_str::<Value>(line) {
@@ -881,6 +890,19 @@ mod tests {
         );
         assert!(!touched(5));
         assert_eq!(changed.paths().collect::<Vec<_>>(), ["q.sql"]);
+    }
+
+    #[test]
+    fn context_lines_in_a_hunk_never_hide_the_next_file() {
+        // `diff.interHunkContext` merges near hunks with context lines between them.
+        let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,3 @@\n-x\n+y\n same\n-z\n+w\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -5 +5 @@\n-old\n+new\n";
+        let changed = Changed::from_diff(diff, &[], &BTreeSet::new());
+        assert!(
+            changed.touches(&finding("b.rs", 5, Level::Gate)),
+            "{:?}",
+            changed.files
+        );
+        assert!(changed.touches(&finding("a.rs", 3, Level::Gate)));
     }
 
     #[test]

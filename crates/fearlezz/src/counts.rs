@@ -181,7 +181,12 @@ fn junit_cases(text: &str) -> Vec<Case> {
     let mut cases = Vec::new();
     let mut open = Open::default();
     loop {
+        let at = reader.buffer_position();
         let event = reader.read_event();
+        // A careless reporter (an unescaped `<` in its output) is read past where it can be.
+        if event.is_err() && reader.buffer_position() > at {
+            continue;
+        }
         let (tag, empty) = match event {
             Ok(Event::Start(tag)) => (tag, false),
             Ok(Event::Empty(tag)) => (tag, true),
@@ -268,6 +273,34 @@ mod tests {
             since: std::time::SystemTime::UNIX_EPOCH,
         };
         assert_eq!(reader.count(&run), Ok((9, Vec::new())));
+    }
+
+    #[test]
+    fn a_pattern_reads_output_that_is_not_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = b"caf\xe9\n".to_vec();
+        log.extend_from_slice(b"test result: ok. 2 passed; 0 failed\n");
+        std::fs::write(dir.path().join(crate::read::LOG), log).unwrap();
+        let raw: toml::Value = toml::from_str(r"count = '(\d+) passed; (\d+) failed'").unwrap();
+        let run = crate::read::Run {
+            out: dir.path(),
+            root: dir.path(),
+            folder: None,
+            since: std::time::SystemTime::UNIX_EPOCH,
+        };
+        assert_eq!(
+            Reader::parse(&raw).unwrap().count(&run),
+            Ok((2, Vec::new()))
+        );
+    }
+
+    #[test]
+    fn a_careless_junit_report_is_read_past_its_mistake() {
+        let report = r#"<testsuite><testcase name="a"><system-out>a < b</system-out></testcase>
+<testcase name="b"><failure/></testcase></testsuite>"#;
+        let cases = super::junit_cases(report);
+        let names: Vec<(&str, bool)> = cases.iter().map(|c| (c.name.as_str(), c.failed)).collect();
+        assert_eq!(names, [("a", false), ("b", true)]);
     }
 
     #[test]

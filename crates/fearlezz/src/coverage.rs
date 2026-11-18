@@ -286,6 +286,8 @@ impl Reader {
                 self.name()
             ));
         }
+        unplaced.sort();
+        unplaced.dedup();
         Ok((hits, unplaced))
     }
 }
@@ -430,7 +432,13 @@ fn jacoco(
     let mut package = String::new();
     let mut file: Option<String> = None;
     loop {
-        let tag = match reader.read_event() {
+        let at = reader.buffer_position();
+        let event = reader.read_event();
+        // A careless reporter is read past where it can be.
+        if event.is_err() && reader.buffer_position() > at {
+            continue;
+        }
+        let tag = match event {
             Ok(Event::Start(tag) | Event::Empty(tag)) => tag,
             Ok(Event::End(tag)) if tag.local_name().as_ref() == "sourcefile" => {
                 file = None;
