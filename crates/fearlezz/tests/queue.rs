@@ -347,6 +347,36 @@ fn a_tool_run_by_hand_queues_behind_heavy_work_and_exits_with_its_code() {
 }
 
 #[test]
+fn a_tool_run_by_hand_shows_the_agents_waiting_behind_it_only_its_program() {
+    let m = Machine::new(false);
+    let (started, open) = (m.path("started"), m.path("open"));
+    let script = format!(
+        "touch {}; while [ ! -e {} ]; do sleep 0.05; done",
+        started.display(),
+        open.display()
+    );
+    let by_hand = m.in_b(&["run", "--", "sh", "-c", &script], &[QUEUE]);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !started.exists() {
+        assert!(Instant::now() < deadline, "the tool never started");
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let waiting = m.queued(&m.repo.root, &["run", "gate"], "a");
+    m.open();
+    assert!(by_hand.join().unwrap().ok);
+    let out = waiting.join().unwrap();
+    let folder = m.b.root.file_name().unwrap().to_string_lossy();
+    assert!(
+        out.stderr
+            .contains(&format!("behind sh by hand in {folder} (pid ")),
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains("while"), "{}", out.stderr);
+}
+
+#[test]
 fn fearlezz_inside_a_queued_command_runs_at_once_instead_of_waiting_on_itself() {
     let m = Machine::new(false);
     let fearlezz = assert_cmd::cargo::cargo_bin!("fearlezz");
