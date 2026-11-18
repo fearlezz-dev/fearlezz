@@ -305,12 +305,16 @@ impl Ctx {
     }
 
     fn view(&self, journal: &Journal) -> Result<View> {
-        let mut wt = self.worktree()?;
+        self.view_in(journal, Some(&mut self.worktree()?))
+    }
+
+    /// The view of `journal` with `wt`, the worktree its branch is checked out in, if any.
+    fn view_in(&self, journal: &Journal, wt: Option<&mut Worktree>) -> Result<View> {
         state::view(
             &self.config,
             &self.store,
             journal,
-            Some(&mut wt),
+            wt,
             &self.bases,
             self.now,
         )
@@ -325,14 +329,7 @@ impl Ctx {
                 Some(git) => Some(Worktree::read(git, &self.config)?),
                 None => None,
             };
-            let view = state::view(
-                &self.config,
-                &self.store,
-                &journal,
-                wt.as_mut(),
-                &self.bases,
-                self.now,
-            )?;
+            let view = self.view_in(&journal, wt.as_mut())?;
             views.push((view, journal));
         }
         views.sort_by_key(|(v, _)| (v.group, std::cmp::Reverse(v.last_at)));
@@ -1421,14 +1418,7 @@ fn run_checks(
     out: Option<CiOut>,
 ) -> Result<bool> {
     let mut wt = ctx.worktree()?;
-    let before = state::view(
-        &ctx.config,
-        &ctx.store,
-        &j,
-        Some(&mut wt),
-        &ctx.bases,
-        ctx.now,
-    )?;
+    let before = ctx.view_in(&j, Some(&mut wt))?;
     let stages = &ctx.config.stages;
     let stage = stages.name(before.stage).to_string();
     let final_stage = stages.name(stages.last()).to_string();
@@ -1596,7 +1586,6 @@ fn run_checks(
     let mut prepared = false;
     let mut held = None;
     let mut looks = Vec::new();
-    // Opened once, on the first check with pictures.
     let (mut not_run, mut cannot_record) = (0, 0);
     let journal_name = j.name.clone();
     // Reuse only a pass, never across an unstable key, and at the final stage only a run
@@ -1813,14 +1802,7 @@ fn run_checks(
     // Only now: the commit report reads this run's results, which no journal names in CI, so
     // a check sharing its inputs with another could lose its output to the prune.
     prune_store(ctx);
-    let after = state::view(
-        &ctx.config,
-        &ctx.store,
-        &j,
-        Some(&mut wt),
-        &ctx.bases,
-        ctx.now,
-    )?;
+    let after = ctx.view_in(&j, Some(&mut wt))?;
     if stage == final_stage
         && (after.next == state::READY || in_memory)
         && env.state.services(&wt.git.root).is_some()
