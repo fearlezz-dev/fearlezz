@@ -372,6 +372,86 @@ pub struct Listed {
     pub notes: u32,
     /// Whether what its head weakens waits for an admin's accept.
     pub weakened: bool,
+    /// Where its newest run stands, as [`Listed::worded`] derives it.
+    #[serde(default)]
+    pub standing: Standing,
+    /// Where its newest run stands, in a few words.
+    #[serde(default)]
+    pub word: String,
+    /// What waits on it, each as a short phrase.
+    #[serde(default)]
+    pub waits: Vec<String>,
+}
+
+impl Listed {
+    /// The listed work with where it stands and what waits on it derived from its newest run
+    /// and its counts: pictures without a verdict, open notes, and a weakening for an admin.
+    /// Passed checks with any of those open wait for a person, they are not done.
+    pub fn worded(self) -> Listed {
+        let count =
+            |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let mut waits = Vec::new();
+        if self.pictures > 0 {
+            waits.push(format!(
+                "{} to look at",
+                count(self.pictures, "picture", "pictures")
+            ));
+        }
+        if self.notes > 0 {
+            waits.push(count(self.notes, "open note", "open notes"));
+        }
+        if self.weakened {
+            waits.push("a weakening to accept".to_owned());
+        }
+        let standing = match &self.latest {
+            None => Standing::None,
+            Some(l) if l.state == RunState::Running => Standing::Running,
+            Some(l) if l.state == RunState::Cancelled => Standing::Cancelled,
+            Some(l) if l.failed > 0 => Standing::Failed,
+            Some(_) if !waits.is_empty() => Standing::Waits,
+            Some(_) => Standing::Passed,
+        };
+        Listed {
+            standing,
+            word: standing.word().to_owned(),
+            waits,
+            ..self
+        }
+    }
+}
+
+/// Where a listed work's newest run stands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ListedStanding"))]
+#[serde(rename_all = "snake_case")]
+pub enum Standing {
+    /// It has no run yet.
+    #[default]
+    None,
+    /// It runs.
+    Running,
+    /// Its checks passed and nothing waits on it.
+    Passed,
+    /// Its checks passed and something waits for a person.
+    Waits,
+    /// A check failed.
+    Failed,
+    /// It ended without its proof.
+    Cancelled,
+}
+
+impl Standing {
+    /// Where it stands, in a few words.
+    pub fn word(self) -> &'static str {
+        match self {
+            Standing::None => "no run yet",
+            Standing::Running => "running",
+            Standing::Passed => "passed",
+            Standing::Waits => "waits for a person",
+            Standing::Failed => "failed",
+            Standing::Cancelled => "stopped",
+        }
+    }
 }
 
 /// The newest run of a listed work.
@@ -403,4 +483,17 @@ pub enum Listing {
     },
     /// One work as it is now.
     Work(Listed),
+}
+
+/// A live share link of a work, as the host lists it to a person with write access: who made
+/// it and when, never the link itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Share {
+    /// Its id, which revokes it.
+    pub id: String,
+    /// The GitHub login of who made it.
+    pub made_by: String,
+    /// When, in seconds since the epoch.
+    pub made_at: f64,
 }

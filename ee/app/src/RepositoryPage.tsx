@@ -6,16 +6,7 @@ import { createStore, reconcile } from "solid-js/store";
 import { ago } from "./ago";
 import { type Status, connect } from "./live";
 import type { Listed } from "./proof";
-import { ListingFeed, type Standing, type Works, standingOf, waitsOn } from "./repository";
-
-const WORDS: Record<Standing, string> = {
-  none: "no run yet",
-  running: "running",
-  passed: "passed",
-  waits: "waits for a person",
-  failed: "failed",
-  cancelled: "stopped",
-};
+import { ListingFeed, type Works } from "./repository";
 
 export function RepositoryPage(props: { repository: string }) {
   const [status, setStatus] = createSignal<Status["kind"]>("connecting");
@@ -67,14 +58,13 @@ export function RepositoryPage(props: { repository: string }) {
 }
 
 function Row(props: { listed: Listed; now: number }) {
-  const standing = () => standingOf(props.listed);
+  const standing = () => props.listed.standing;
   const pull = () => props.listed.work.pull;
   const local = () => (props.listed.latest?.source.kind === "local" ? props.listed.latest.source.login || "a developer" : "");
-  const waits = () => waitsOn(props.listed);
   return (
     <li class="work-row" data-listed={props.listed.path} data-state={standing()}>
-      <a href={props.listed.path} title={`${WORDS[standing()]}, ${ago(props.now - props.listed.active)}`}>
-        <span class={`dot ${standing()}`} role="img" aria-label={WORDS[standing()]} />
+      <a href={props.listed.path} title={`${props.listed.word}, ${ago(props.now - props.listed.active)}`}>
+        <span class={`dot ${standing()}`} role="img" aria-label={props.listed.word} />
         <span class="what">
           <span class="title">
             <Show when={pull()} fallback={<span class="branch">{props.listed.work.branch}</span>}>
@@ -98,7 +88,7 @@ function Row(props: { listed: Listed; now: number }) {
           <Show when={props.listed.latest && props.listed.latest.failed > 0 && standing() !== "failed"}>
             <span class="wait bad">{props.listed.latest!.failed} failed so far</span>
           </Show>
-          <For each={waits()}>{(w) => <span class="wait">{w}</span>}</For>
+          <For each={props.listed.waits}>{(w) => <span class="wait">{w}</span>}</For>
         </span>
       </a>
     </li>

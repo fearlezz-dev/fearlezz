@@ -92,7 +92,8 @@ describe("review", () => {
   });
 
   test("the review and the waiting jobs are replaced as they come", () => {
-    const review: Review = { head: "abc1234", state: "waits", pictures: [], weakened: [] };
+    const title = { read: "", write: "", admin: "" };
+    const review: Review = { head: "abc1234", state: "waits", pictures: [], weakened: [], title };
     const next = applyWork(snapshot, 4, { kind: "review", review });
     expect(next.review?.state).toBe("waits");
     const waiting = applyWork(next, 5, { kind: "waiting", waiting: [{ name: "proof", head: "def", since: 1 }] });

@@ -61,6 +61,38 @@ pub struct Item {
     /// Named by the check's `flaky`: compared and shown, but never waits for a person's look.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flaky: bool,
+    /// A changed text's lines against its before, as the CLI compared them: kept lines folded
+    /// to a count past a few on each side of a change. None for a still or film, and in a
+    /// bundle from a CLI that did not write it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<Vec<DiffLine>>,
+}
+
+/// One line of a text's diff.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DiffLine {
+    /// A line both have.
+    Same {
+        /// The line, without its line break.
+        text: String,
+    },
+    /// A line only the before has.
+    Was {
+        /// The line, without its line break.
+        text: String,
+    },
+    /// A line only the after has.
+    Now {
+        /// The line, without its line break.
+        text: String,
+    },
+    /// Kept lines left out, by how many.
+    Fold {
+        /// How many.
+        count: u32,
+    },
 }
 
 impl Item {

@@ -1,27 +1,32 @@
-// Review on the page: who looks at it and what they may do, where a picture stands (an open
-// note on it says it needs change, else a verdict on its content says it looks right), what
-// waits for this person, and what they can say (looks right, and an accept). Notes are in
-// notes.ts.
-// The host derives where review stands; the page only words it for the person looking.
+// Review on the page: who looks at it and what they may do, where a picture stands, and what
+// they can say (looks right, and an accept). Notes are in notes.ts.
+// The host derives where review stands and words it for each role; the page shows that.
 
-import type { PictureVerdict, Review, Run, Snapshot } from "./proof";
+import type { PictureVerdict, Role, Run, Snapshot, Viewer } from "./proof";
 import type { Shown } from "./pictures";
 import { post, refusal } from "./api";
 import { notesOn } from "./notes";
+import { short } from "./short";
 
-/** Who the page is shown to: nobody signed in (or anyone, through a share link, which only
- * views), or a login and what GitHub lets them do. */
-export type Viewer = { login: null; shared?: boolean } | { login: string; role: "admin" | "write" | "read" };
+/** Who the page is shown to: a person as the host says (`Viewer`), or anyone through a share
+ * link, which only views. */
+export type Looker = Viewer | "shared";
+
+/** The signed in person looking, if any. */
+export const signedIn = (looker: Looker | undefined) => (typeof looker === "object" && looker.login !== null ? looker : undefined);
 
 /** Whether the page only views, through a share link: nothing to press, no one asked to sign in. */
-export const onlyViews = (viewer: Viewer | undefined) => viewer?.login === null && !!viewer.shared;
+export const onlyViews = (looker: Looker | undefined) => looker === "shared";
 
-/** Whether to offer `viewer` a way to sign in: someone signed out, not through a share link. */
-export const maySignIn = (viewer: Viewer | undefined) => viewer?.login === null && !viewer.shared;
+/** Whether to offer `looker` a way to sign in: someone signed out, not through a share link. */
+export const maySignIn = (looker: Looker | undefined) => typeof looker === "object" && looker.login === null;
 
-/** Whether `viewer` may give verdicts (write access) or accept weakenings (admin rights). */
-export const canSay = (viewer: Viewer | undefined) => !!viewer?.login && viewer.role !== "read";
-export const canAccept = (viewer: Viewer | undefined) => !!viewer?.login && viewer.role === "admin";
+/** What `looker` may do on the repository: read, also for someone signed out or through a share link. */
+export const roleOf = (looker: Looker | undefined): Role => signedIn(looker)?.role ?? "read";
+
+/** Whether `looker` may give verdicts (write access) or accept weakenings (admin rights). */
+export const canSay = (looker: Looker | undefined) => roleOf(looker) !== "read";
+export const canAccept = (looker: Looker | undefined) => roleOf(looker) === "admin";
 
 /** Who ran a local run, which is unproven and never reviewed; undefined for a CI run. */
 export const localBy = (run: Run) => (run.source.kind === "local" ? run.source.login || "a developer" : undefined);
@@ -42,7 +47,9 @@ export function verdictOf(state: Snapshot, run: Run, p: Shown): PictureVerdict |
 }
 
 /** Where a picture of a run stands: an open note on it says it needs change, which outweighs a
- * looks right verdict on its content; without either it waits for a look (`none`). */
+ * looks right verdict on its content; without either it waits for a look (`none`). The host's
+ * review says the same of the newest head's pictures, but it reaches the page after the verdict
+ * or note that moved it, so the page reads the verdicts and notes it already holds. */
 export function standingOf(state: Snapshot, run: Run, p: Shown): "needs_change" | "looks_right" | "none" {
   if (notesOn(state, p.check, p.picture.name, run).length) return "needs_change";
   return verdictOf(state, run, p) ? "looks_right" : "none";
@@ -50,34 +57,9 @@ export function standingOf(state: Snapshot, run: Run, p: Shown): "needs_change" 
 
 /** Where a verdict came from, beside who gave it: an earlier push, or an earlier run. */
 export function carried(verdict: PictureVerdict, run: Run): string {
-  if (verdict.head !== run.head) return `carried over from an earlier push (${verdict.head.slice(0, 7)})`;
+  if (verdict.head !== run.head) return `carried over from an earlier push (${short(verdict.head)})`;
   if (verdict.run !== run.id) return "carried over from an earlier run";
   return "";
-}
-
-const pictures = (n: number) => `${n} ${n === 1 ? "picture" : "pictures"}`;
-
-/** The pictures that wait for a look, said to the person looking. */
-export function waitsFor(review: Review, viewer: Viewer | undefined): string {
-  const looks = review.pictures.filter((p) => p.standing === "waits").length;
-  const verb = looks === 1 ? "waits" : "wait";
-  const whose = canSay(viewer) ? "your" : "a";
-  return `${pictures(looks)} ${verb} for ${whose} look at ${review.head.slice(0, 7)}`;
-}
-
-/** A failed proof, said to the person looking: what it weakens fails it until an admin accepts
- * it, and the accept runs the proof job again. */
-export function failedFor(review: Review, viewer: Viewer | undefined): string {
-  const failed = `The proof of ${review.head.slice(0, 7)} failed`;
-  if (!review.weakened.length) return failed;
-  if (review.accept) return failed;
-  return `${failed}: what it weakens waits for ${canAccept(viewer) ? "your" : "an admin's"} accept`;
-}
-
-/** Where review stands when open notes say pictures need change, in one line. */
-export function standing(review: Review): string {
-  const n = new Set((review.notes ?? []).map((note) => `${note.check}\n${note.picture}`)).size;
-  return `${pictures(n)} ${n === 1 ? "needs" : "need"} change at ${review.head.slice(0, 7)}`;
 }
 
 /** Sends what a person says about run `run` (`verdicts` or `accept`). The error the host gave,
@@ -89,11 +71,20 @@ export const verdict = (run: string, p: Shown) => say(run, "verdicts", { check: 
 
 export const accept = (run: string) => say(run, "accept", {});
 
+/** Whether `value` is a viewer as the host answers it. */
+export function isViewer(value: unknown): value is Viewer {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (v.login === null) return true;
+  return typeof v.login === "string" && (v.role === "read" || v.role === "write" || v.role === "admin");
+}
+
 /** Who looks at the page of a work of `repository`, once the host says. */
 export async function viewerOf(repository: string): Promise<Viewer> {
   try {
     const answer = await fetch(`/api/v2/viewer/${repository}`, { credentials: "same-origin" });
-    if (answer.ok) return (await answer.json()) as Viewer;
+    const body: unknown = answer.ok ? await answer.json() : undefined;
+    if (isViewer(body)) return body;
   } catch {
     // Without an answer the page offers only signing in.
   }
