@@ -2,7 +2,7 @@
 
 What Fearlezz is for, where it stands and where it is going. Read this first when picking up the work, and update it in the same change that moves something.
 
-Last updated: 2026-11-17.
+Last updated: 2026-11-18.
 
 ## Purpose
 
@@ -86,6 +86,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 - **Monorepos beyond Rust.** A check runs in every project folder with `each`, and the rust piece and `setup init` use it for Cargo projects; the other language pieces and `setup init` still look only at the repository root.
 - **Films stop working until replayd restarts.** On the developer's machine, after a few dozen films (27 in one series, during a load spike), every film fails with "failure to process first sample buffer" while stills still work, with the 0.2.0 build as well; killing `replayd` (launchd restarts it) brings films back. Its cause is unknown. Every film is noted in the machine's film log (`films.jsonl` in Fearlezz's cache folder: repository, check, how it went, the `replayd` pid and the load), so how often it happens can be counted; failures in a row under one `replayd` pid are this problem.
 - **Recording app windows is proven only on the developer's machine.** CI runs the proof on macOS too, but hosted runners cannot grant Screen Recording.
+- **CI on macOS proves only the macOS code.** This repository's macOS leg lints the code only macOS compiles and runs the tests that reach it (`clippy/macos`, `tests/macos`), and only when those files change; a change elsewhere that behaves differently on macOS (BSD tools, a case insensitive file system) is first seen in the developer's local proof.
 - **Linux only code is not proven locally.** The local proof runs on macOS, so code behind `cfg(not(target_os = "macos"))` is first linted in CI.
 - **Native Windows jobs stay outside the proof.** Fearlezz runs on Windows only inside WSL, so a project that must build or test on native Windows (GrammarGuard's `flutter build windows` and `flutter test -d windows`) keeps those as plain CI jobs that its proof does not see.
 - **CI pictures never ran in another project.** Fearlezz proves itself on GitHub's runners, but no other project uses the action's pictures yet.

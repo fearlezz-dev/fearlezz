@@ -34,11 +34,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
+      # The Linux leg's Cargo build, which holds this one.
+      - uses: ./.github/actions/devenv
         with:
-          name: devenv
-      - run: nix profile install nixpkgs#devenv
+          # Only main fills the shared Nix cache: a branch's devenv.nix runs before the push.
+          op-service-account-token: ${{ github.event_name == 'push' && secrets.OP_SERVICE_ACCOUNT_TOKEN || '' }}
+          rust: restore
+          rust-key: leg-linux
       - name: Build Fearlezz from this commit
         run: |
           devenv shell -- cargo build --quiet
@@ -72,11 +74,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
+      - uses: ./.github/actions/devenv
         with:
-          name: devenv
-      - run: nix profile install nixpkgs#devenv
+          # Only main fills the shared Nix cache: a branch's devenv.nix runs before the push.
+          op-service-account-token: ${{ github.event_name == 'push' && secrets.OP_SERVICE_ACCOUNT_TOKEN || '' }}
+          rust: save
+          rust-key: leg-${{ matrix.leg }}
       - name: Build Fearlezz from this commit
         run: |
           devenv shell -- cargo build --quiet
@@ -101,11 +104,7 @@ jobs:
           persist-credentials: false
       # The plan's build is linked against the devenv's glibc in the Nix store; entering the
       # shell once (from the cache, with no build) puts it there.
-      - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
-        with:
-          name: devenv
-      - run: nix profile install nixpkgs#devenv && devenv shell -- true
+      - uses: ./.github/actions/devenv
       - uses: actions/download-artifact@v4
         with:
           name: fearlezz-bin
