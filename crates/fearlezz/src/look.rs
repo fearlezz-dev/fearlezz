@@ -149,55 +149,30 @@ impl Base {
 /// `desktop/home`.
 pub(crate) struct MediaGlob {
     kind: &'static str,
-    /// As written.
-    glob: String,
-    matcher: globset::GlobMatcher,
-    /// The folders before the first segment with a wildcard, with a trailing slash.
-    fixed: String,
+    glob: crate::read::Glob,
 }
 
 impl MediaGlob {
     pub(crate) fn parse(kind: &'static str, written: &str) -> Result<MediaGlob> {
-        let glob = written.strip_prefix("$FEARLEZZ_OUT/").unwrap_or(written);
-        let matcher = globset::GlobBuilder::new(glob)
-            .literal_separator(true)
-            .build()
-            .map_err(|e| anyhow::anyhow!("{kind}s \"{glob}\": {e}"))?
-            .compile_matcher();
-        // The file name segment is never a folder, so only the ones before it count.
-        let folders = glob.rsplit_once('/').map_or("", |(dirs, _)| dirs);
-        let mut fixed = String::new();
-        for segment in folders
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .take_while(|s| !s.contains(['*', '?', '[', '{']))
-        {
-            fixed.push_str(segment);
-            fixed.push('/');
-        }
         Ok(MediaGlob {
             kind,
-            glob: written.to_string(),
-            matcher,
-            fixed,
+            glob: crate::read::Glob::parse(written, &format!("{kind}s"))?,
         })
     }
 
     /// The glob as written.
     pub(crate) fn glob(&self) -> &str {
-        &self.glob
+        self.glob.written()
     }
 
-    /// The proofs for the files under `out` this glob matches, sorted by path.
+    /// The proofs for the files under `out` this glob matches, sorted by path. The run's own
+    /// folder is walked whole: a tool may keep pictures in a hidden folder of it.
     pub(crate) fn proofs(&self, out: &Path) -> Vec<serde_json::Value> {
-        let mut files = crate::files::walk(out, out);
-        files.sort();
-        files
+        self.glob
+            .matches(out, true)
             .into_iter()
-            .filter(|rel| self.matcher.is_match(rel))
             .map(|rel| {
-                let below = rel.strip_prefix(&self.fixed).unwrap_or(&rel);
-                let id = below.rsplit_once('.').map_or(below, |(stem, _)| stem);
+                let id = self.glob.id(&rel);
                 serde_json::json!({ "kind": self.kind, "file": rel, "id": id })
             })
             .collect()

@@ -347,20 +347,12 @@ impl Rules {
                             !ast_grep(Path::new("."), std::slice::from_ref(&doc), Some(code))?
                                 .is_empty();
                         if matched != should_match {
+                            let message =
+                                format!("rule {} {word} {lang} example {}: {code}", rule.id, n + 1);
                             found.push(Finding {
-                                file: String::new(),
-                                line: 0,
-                                end_line: None,
-                                level: Level::Gate,
-                                rule: rule.id.clone(),
-                                message: format!(
-                                    "rule {} {word} {lang} example {}: {code}",
-                                    rule.id,
-                                    n + 1
-                                ),
                                 fix: Some("fix the rule or its example".into()),
-                                why: None,
                                 anywhere: true,
+                                ..Finding::new("", 0, Level::Gate, &rule.id, message)
                             });
                         }
                     }
@@ -465,16 +457,13 @@ impl Rule {
         anywhere: bool,
         default: impl FnOnce() -> String,
     ) -> Finding {
+        let message = self.message.clone().unwrap_or_else(default);
         Finding {
-            file: file.to_string(),
-            line,
             end_line: end_line.filter(|&e| e != line),
-            level: self.level,
-            rule: self.id.clone(),
-            message: self.message.clone().unwrap_or_else(default),
             fix: self.fix.clone(),
             why: self.why.clone(),
             anywhere,
+            ..Finding::new(file, line, self.level, &self.id, message)
         }
     }
 }

@@ -15,15 +15,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::time::SystemTime;
 
 use anyhow::{Context as _, Result, bail};
-use globset::{GlobBuilder, GlobMatcher};
-
+use quick_xml::events::Event;
 use serde::{Deserialize, Serialize};
 
 use crate::findings::{Changed, Finding, Level};
 use crate::lints::{Lints, Tool};
+use crate::read::{Glob, Place, Run, Source};
 
 /// The share of lines, in percent, past which more tests add little.
 const TARGET: u8 = 80;
@@ -143,15 +142,16 @@ impl Coverage {
     }
 
     /// The changed lines no test ran, at the level the project's coverage gives them (or
-    /// `[lints.coverage]` does), and what was measured. `code` is the project's code, the
-    /// only files that count: not tests, not generated or ignored files.
+    /// `[lints.coverage]` does), what was measured, and lines for the check's log about what
+    /// the report names but no file of the code is. `code` is the project's code, the only
+    /// files that count: not tests, not generated or ignored files.
     pub(crate) fn findings(
         &self,
-        at: &At<'_>,
+        run: &Run<'_>,
         changed: &Changed,
         code: &BTreeSet<String>,
-    ) -> Result<(Vec<Finding>, Measured), String> {
-        let mut hits = self.read.hits(at, code)?;
+    ) -> Result<Measuring, String> {
+        let (mut hits, unplaced) = self.read.hits(run, code)?;
         hits.retain(|file, _| code.contains(file));
         let measured = measure(&hits, changed);
         let (level, why) = measured.level(self.target);
@@ -160,17 +160,30 @@ impl Coverage {
             f.level = level;
             f.why = Some(why.clone());
         }
-        Ok((self.levels.apply(&[Tool::Coverage], found), measured))
+        let log = unplaced
+            .iter()
+            .map(|name| {
+                format!(
+                    "coverage: the {} report names {name}, which is no single file of the \
+                     repository's code, so it counts toward nothing",
+                    self.read.name()
+                )
+            })
+            .collect();
+        Ok(Measuring {
+            found: self.levels.apply(&[Tool::Coverage], found),
+            measured,
+            log,
+        })
     }
 }
 
-/// Where a run left its report: its `$FEARLEZZ_OUT`, the checkout, the folder the check ran
-/// in if not the root, and when the run started, since a report from an earlier run is stale.
-pub(crate) struct At<'a> {
-    pub out: &'a Path,
-    pub root: &'a Path,
-    pub folder: Option<&'a str>,
-    pub since: SystemTime,
+/// What a coverage report gave a run.
+pub(crate) struct Measuring {
+    pub found: Vec<Finding>,
+    pub measured: Measured,
+    /// Lines for the check's log.
+    pub log: Vec<String>,
 }
 
 /// The rule every coverage finding has, as `[lints.coverage]` names it.
@@ -193,8 +206,7 @@ const FORMATS: [(&str, Format, &str); 3] = [
 #[derive(Clone)]
 pub(crate) struct Reader {
     format: Format,
-    glob: String,
-    matcher: GlobMatcher,
+    glob: Glob,
 }
 
 /// Only what was written, since this is part of a check's key.
@@ -229,17 +241,9 @@ impl Reader {
                  {{ lcov = \"<glob>\" }} for a report the runner writes elsewhere, or false"
             );
         };
-        let glob = glob.unwrap_or(default);
-        let pattern = glob.strip_prefix("$FEARLEZZ_OUT/").unwrap_or(glob);
-        let matcher = GlobBuilder::new(pattern)
-            .literal_separator(true)
-            .build()
-            .with_context(|| format!("coverage {name} \"{glob}\""))?
-            .compile_matcher();
         Ok(Reader {
             format,
-            glob: glob.to_string(),
-            matcher,
+            glob: Glob::parse(glob.unwrap_or(default), &format!("coverage {name}"))?,
         })
     }
 
@@ -251,40 +255,27 @@ impl Reader {
             .map_or("", |(n, ..)| n)
     }
 
-    /// How often each measured line ran, or why there is no coverage. JaCoCo's files are
-    /// looked up among `code`, the project's code.
-    fn hits(&self, at: &At<'_>, code: &BTreeSet<String>) -> Result<Hits, String> {
-        let At {
-            out,
-            root,
-            folder,
-            since,
-        } = *at;
-        // A check in a project folder looks there, so a sibling's report is never read.
-        let folder_root = folder.map(|f| root.join(f));
-        let base = if self.glob.starts_with("$FEARLEZZ_OUT/") {
-            out
-        } else {
-            folder_root.as_deref().unwrap_or(root)
-        };
-        let mut reports = Vec::new();
-        crate::counts::find(base, base, &self.matcher, since, &mut reports);
-        if reports.is_empty() {
-            return Err(format!(
-                "no {} report matching {} written by this run; the runner wrote none, or wrote \
-                 it elsewhere",
-                self.name(),
-                self.glob
-            ));
-        }
-        let places = Places { root, folder };
+    /// How often each measured line ran, and the files the report names that are no single
+    /// file of the code, or why there is no coverage. A check in a project folder looks
+    /// there, so a sibling's report is never read. JaCoCo's files are looked up among `code`,
+    /// the project's code.
+    fn hits(&self, run: &Run<'_>, code: &BTreeSet<String>) -> Result<(Hits, Vec<String>), String> {
+        let reports = Source::Glob(&self.glob).read(run, &format!("{} report", self.name()))?;
         let mut hits = Hits::new();
+        let mut unplaced = Vec::new();
         let mut named = 0;
-        for (path, text) in &reports {
+        for report in &reports {
             named += match self.format {
-                Format::Lcov => lcov(text, &places, &mut hits),
-                Format::Go => go(text, &places, &mut hits),
-                Format::Jacoco => jacoco(text, path, root, code, &mut hits),
+                Format::Lcov => lcov(&report.text, run, &mut hits),
+                Format::Go => go(&report.text, run, &mut hits),
+                Format::Jacoco => jacoco(
+                    &report.text,
+                    &report.path,
+                    run.root,
+                    code,
+                    &mut hits,
+                    &mut unplaced,
+                ),
             };
         }
         // A report whose every path misses the repository would hide all untested code.
@@ -295,35 +286,16 @@ impl Reader {
                 self.name()
             ));
         }
-        Ok(hits)
+        Ok((hits, unplaced))
     }
 }
 
-/// Where the files a report names are looked for.
-struct Places<'a> {
-    root: &'a Path,
-    folder: Option<&'a str>,
-}
-
-impl Places<'_> {
-    /// The repository path of a file a report names: an absolute path inside the checkout,
-    /// or a relative one from the check's folder, then from the root. `None` for a file
-    /// outside the repository (a dependency) or one that is not there.
-    fn resolve(&self, file: &str) -> Option<String> {
-        let file = file.trim();
-        let path = Path::new(file);
-        if path.is_absolute() {
-            return path
-                .strip_prefix(self.root)
-                .ok()
-                .map(|p| p.to_string_lossy().to_string());
-        }
-        let file = file.trim_start_matches("./");
-        self.folder
-            .map(|f| format!("{f}/{file}"))
-            .into_iter()
-            .chain([file.to_string()])
-            .find(|p| self.root.join(p).is_file())
+/// The repository path of a file a report names; `None` for a file outside the repository
+/// (a dependency) or one that is not there.
+fn resolve(run: &Run<'_>, file: &str) -> Option<String> {
+    match run.place(file) {
+        Place::Repo(path) => Some(path),
+        Place::Outside(_) | Place::Lost(_) => None,
     }
 }
 
@@ -333,13 +305,13 @@ fn mark(hits: &mut Hits, file: String, line: u32, count: u64) {
 }
 
 /// lcov's `SF:` and `DA:<line>,<count>` records. Returns how many files it named.
-fn lcov(text: &str, places: &Places<'_>, hits: &mut Hits) -> usize {
+fn lcov(text: &str, run: &Run<'_>, hits: &mut Hits) -> usize {
     let mut named = 0;
     let mut file = None;
     for line in text.lines() {
         if let Some(path) = line.strip_prefix("SF:") {
             named += 1;
-            file = places.resolve(path);
+            file = resolve(run, path);
         } else if line == "end_of_record" {
             file = None;
         } else if let (Some(da), Some(f)) = (line.strip_prefix("DA:"), &file) {
@@ -364,13 +336,13 @@ fn lcov(text: &str, places: &Places<'_>, hits: &mut Hits) -> usize {
 /// Go's coverprofile: `<import path>/<file>:<line>.<col>,<line>.<col> <statements> <count>`.
 /// Files are named by import path, from the module the nearest `go.mod` names. A line is
 /// covered when any block on it ran; blank and comment lines inside a block are not code.
-fn go(text: &str, places: &Places<'_>, hits: &mut Hits) -> usize {
-    let modules: Vec<(String, String)> = places
+fn go(text: &str, run: &Run<'_>, hits: &mut Hits) -> usize {
+    let modules: Vec<(String, String)> = run
         .folder
         .into_iter()
         .chain([""])
         .filter_map(|dir| {
-            let manifest = places.root.join(dir).join("go.mod");
+            let manifest = run.root.join(dir).join("go.mod");
             let text = std::fs::read_to_string(manifest).ok()?;
             let module = text
                 .lines()
@@ -411,11 +383,11 @@ fn go(text: &str, places: &Places<'_>, hits: &mut Hits) -> usize {
                 format!("{dir}/{rest}")
             })
         });
-        let Some(path) = places.resolve(local.as_deref().unwrap_or(file)) else {
+        let Some(path) = resolve(run, local.as_deref().unwrap_or(file)) else {
             continue;
         };
         let code = sources.entry(path.clone()).or_insert_with(|| {
-            let text = std::fs::read_to_string(places.root.join(&path)).unwrap_or_default();
+            let text = std::fs::read_to_string(run.root.join(&path)).unwrap_or_default();
             text.lines()
                 .map(|l| {
                     let l = l.trim();
@@ -437,56 +409,66 @@ fn go(text: &str, places: &Places<'_>, hits: &mut Hits) -> usize {
 /// JaCoCo XML: `<sourcefile>` by name inside its `<package>`, with a `<line>` per line that
 /// counts missed (`mi`) and covered (`ci`) instructions. A package names no source folder, so
 /// the file is the changed one whose path ends in `<package>/<name>`; of several, the one in
-/// the module the report sits in.
+/// the module the report sits in. A source file that is no single file of `code` goes into
+/// `unplaced`. Returns how many source files it named.
 fn jacoco(
     text: &str,
     report: &Path,
     root: &Path,
     code: &BTreeSet<String>,
     hits: &mut Hits,
+    unplaced: &mut Vec<String>,
 ) -> usize {
     let mut by_name: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for path in code {
         let name = path.rsplit('/').next().unwrap_or(path);
         by_name.entry(name).or_default().push(path);
     }
+    let mut reader = quick_xml::Reader::from_str(text);
+    reader.config_mut().check_end_names = false;
     let mut named = 0;
     let mut package = String::new();
     let mut file: Option<String> = None;
-    let mut rest = text;
-    while let Some((_, after)) = rest.split_once('<') {
-        let (tag, after) = after.split_once('>').unwrap_or((after, ""));
-        rest = after;
-        let attr = |name: &str| crate::counts::attr(tag, name);
-        if let Some(t) = tag.strip_prefix("package") {
-            if t.starts_with(char::is_whitespace) {
-                package = attr("name").unwrap_or_default();
-            }
-        } else if tag.starts_with("sourcefile") {
-            let name = attr("name").unwrap_or_default();
-            let suffix = if package.is_empty() {
-                name
-            } else {
-                format!("{package}/{name}")
-            };
-            named += 1;
-            file = source(&suffix, &package, report, root, &by_name);
-        } else if tag == "/sourcefile" {
-            file = None;
-        } else if tag.starts_with("line ") {
-            let number = |name: &str| attr(name)?.parse::<u64>().ok();
-            let (Some(nr), Some(mi), Some(ci)) = (number("nr"), number("mi"), number("ci")) else {
-                continue;
-            };
-            let Ok(nr) = u32::try_from(nr) else {
-                continue;
-            };
-            if mi + ci == 0 {
+    loop {
+        let tag = match reader.read_event() {
+            Ok(Event::Start(tag) | Event::Empty(tag)) => tag,
+            Ok(Event::End(tag)) if tag.local_name().as_ref() == "sourcefile" => {
+                file = None;
                 continue;
             }
-            if let Some(f) = &file {
-                mark(hits, f.clone(), nr, ci);
+            Ok(Event::Eof) | Err(_) => break,
+            Ok(_) => continue,
+        };
+        let attr = |name: &str| crate::counts::attr(&tag, name);
+        match tag.local_name().as_ref() {
+            "package" => package = attr("name").unwrap_or_default(),
+            "sourcefile" => {
+                let name = attr("name").unwrap_or_default();
+                let suffix = if package.is_empty() {
+                    name
+                } else {
+                    format!("{package}/{name}")
+                };
+                named += 1;
+                file = source(&suffix, &package, report, root, &by_name);
+                if file.is_none() {
+                    unplaced.push(suffix);
+                }
             }
+            "line" => {
+                let number = |name: &str| attr(name)?.parse::<u64>().ok();
+                let (Some(nr), Some(mi), Some(ci)) = (number("nr"), number("mi"), number("ci"))
+                else {
+                    continue;
+                };
+                let (Ok(nr), Some(f)) = (u32::try_from(nr), &file) else {
+                    continue;
+                };
+                if mi + ci > 0 {
+                    mark(hits, f.clone(), nr, ci);
+                }
+            }
+            _ => {}
         }
     }
     named
@@ -580,22 +562,17 @@ fn findings(hits: &Hits, changed: &Changed) -> Vec<Finding> {
 }
 
 fn uncovered(file: &str, from: u32, to: u32) -> Finding {
+    let message = if to > from {
+        format!("changed lines {from} to {to} ran in no test")
+    } else {
+        "this changed line ran in no test".into()
+    };
     Finding {
-        file: file.to_string(),
-        line: from,
         end_line: (to > from).then_some(to),
-        level: Level::Gate,
-        rule: RULE.into(),
-        message: if to > from {
-            format!("changed lines {from} to {to} ran in no test")
-        } else {
-            "this changed line ran in no test".into()
-        },
         fix: Some(
             "add a test that reaches this code through what it should do, or delete the code"
                 .into(),
         ),
-        why: None,
-        anywhere: false,
+        ..Finding::new(file, from, Level::Gate, RULE, message)
     }
 }

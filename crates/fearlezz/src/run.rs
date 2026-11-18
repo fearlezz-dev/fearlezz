@@ -39,7 +39,7 @@ pub(crate) fn execute(
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let id = format!("{nanos:024}-{}", std::process::id());
     let dir = store.new_run_dir(&inputs.key, &id)?;
-    let log = dir.join("output.log");
+    let log = dir.join(crate::read::LOG);
     let out = File::create(&log)?;
 
     let started_at = Timestamp::now();
@@ -51,8 +51,13 @@ pub(crate) fn execute(
     } else {
         Some(crate::generated::Snapshot::take(at.root, check)?)
     };
+    let listed = Listed {
+        root: at.root,
+        files: std::cell::OnceCell::new(),
+    };
+    let mut builtin_found = None;
     let (exit_ok, exit_code, missing_secret) = if let Some(builtin) = &check.builtin {
-        run_builtin(builtin, at, &dir, out)?;
+        builtin_found = Some(run_builtin(builtin, at, &listed, out)?);
         (true, Some(0), None)
     } else if let Some(undeployed) = at.no_preview {
         // The check's log ends as the preview's did, so its failure shows why.
@@ -74,7 +79,12 @@ pub(crate) fn execute(
         run_command(check, at, &dir, out)?
     };
     let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let stdout_path = dir.join("stdout.txt");
+    let run = crate::read::Run {
+        out: &dir,
+        root: at.root,
+        folder: check.dir.as_deref(),
+        since: started,
+    };
 
     let (mut proofs, mut proof_errors) = read_proofs(&dir.join("proof.jsonl"));
     proofs.extend(check.pictures.proofs(&dir));
@@ -82,7 +92,8 @@ pub(crate) fn execute(
     let mut generated_failed = None;
     if let (true, Some(snapshot)) = (exit_ok, &generated) {
         let diff;
-        (generated_failed, diff) = snapshot.compare(at.root, check)?;
+        let files = listed.get().map_err(anyhow::Error::msg)?;
+        (generated_failed, diff) = snapshot.compare(files, at.root, check)?;
         if generated_failed.is_some() {
             passed = false;
         }
@@ -92,9 +103,11 @@ pub(crate) fn execute(
     }
     let (mut findings, mut findings_elsewhere) = (Vec::new(), 0);
     if let Some(spec) = &check.findings {
-        let (found, errors) = spec
-            .read
-            .read(&stdout_path, &dir, at.root, check.dir.as_deref());
+        // A built in check gives its findings in process; a tool's are read from what it wrote.
+        let (found, errors) = match builtin_found.take() {
+            Some(found) => (crate::findings::place(found, &run), Vec::new()),
+            None => spec.read.read(&run),
+        };
         proof_errors.extend(errors);
         let found = spec.levels.apply(&spec.tools, spec.defaults(found));
         let verdict = crate::findings::judge(found, spec.on, at.changed, passed);
@@ -105,31 +118,18 @@ pub(crate) fn execute(
     // Coverage adds findings but never excuses a failed run: only a gate of its own fails it.
     let mut measured = None;
     if let Some(coverage) = &check.coverage {
-        let report = crate::coverage::At {
-            out: &dir,
-            root: at.root,
-            folder: check.dir.as_deref(),
-            since: started,
-        };
-        // The project's code: files git keeps that the check reads, tests aside.
-        let code = crate::git::Git::discover(at.root)
-            .and_then(|git| git.files())
-            .map(|files| {
-                files
-                    .into_iter()
-                    .filter(|p| check.reads(p) && !check.is_test(p))
-                    .collect()
-            })
-            .map_err(|e| {
-                format!("could not list the repository's files to measure coverage: {e:#}")
-            });
-        match code.and_then(|code| coverage.findings(&report, at.changed, &code)) {
-            Ok((found, m)) => {
-                measured = Some(m);
-                passed &= !found
+        match listed
+            .code(check)
+            .and_then(|code| coverage.findings(&run, at.changed, &code))
+        {
+            Ok(m) => {
+                measured = Some(m.measured);
+                passed &= !m
+                    .found
                     .iter()
                     .any(|f| f.level == crate::findings::Level::Gate);
-                findings.extend(found);
+                findings.extend(m.found);
+                append(&log, &m.log)?;
                 findings
                     .sort_by(|a, b| (b.level, &a.file, a.line).cmp(&(a.level, &b.file, b.line)));
             }
@@ -141,16 +141,14 @@ pub(crate) fn execute(
         }
     }
     let mut cases = Vec::new();
-    let tests = check.tests.as_ref().map(|reader| {
-        match reader.count(&[&log, &stdout_path], &dir, at.root, started) {
-            Ok((n, found)) => {
-                cases = found;
-                n
-            }
-            Err(why) => {
-                proof_errors.push(why);
-                0
-            }
+    let tests = check.tests.as_ref().map(|reader| match reader.count(&run) {
+        Ok((n, found)) => {
+            cases = found;
+            n
+        }
+        Err(why) => {
+            proof_errors.push(why);
+            0
         }
     });
     // A test that passed only on a rerun counts as failed unless the check lists it in `flaky_tests`.
@@ -392,7 +390,7 @@ impl Run<'_> {
         let check = self.check;
         // A tool that prints findings on stdout keeps them apart from its log; only the last
         // step's stdout holds them, the steps before it prepare.
-        let stdout_path = self.dir.join("stdout.txt");
+        let stdout_path = self.dir.join(crate::read::STDOUT);
         let stdout = match &check.findings {
             Some(f) if f.read.reads_stdout() => File::create(&stdout_path)?,
             _ => out.try_clone()?,
@@ -743,15 +741,58 @@ pub(crate) fn missing_command(log: &Path) -> Option<String> {
     })
 }
 
-/// Does a built in check's work, leaving its findings where the jsonl reader looks.
+/// The files git tracks or would track in a checkout, listed once after a check's command
+/// ran: its generated files, its coverage and the rules check all read the same list.
+struct Listed<'a> {
+    root: &'a Path,
+    files: std::cell::OnceCell<Result<Vec<String>, String>>,
+}
+
+impl Listed<'_> {
+    fn get(&self) -> Result<&[String], String> {
+        self.files
+            .get_or_init(|| {
+                crate::git::Git::discover(self.root)
+                    .and_then(|git| git.files())
+                    .map_err(|e| format!("{e:#}"))
+            })
+            .as_deref()
+            .map_err(Clone::clone)
+    }
+
+    /// The project's code: the files git keeps that `check` reads, tests aside.
+    fn code(&self, check: &Check) -> Result<std::collections::BTreeSet<String>, String> {
+        let files = self.get().map_err(|e| {
+            format!("could not list the repository's files to measure coverage: {e}")
+        })?;
+        Ok(files
+            .iter()
+            .filter(|p| check.reads(p) && !check.is_test(p))
+            .cloned()
+            .collect())
+    }
+}
+
+/// Adds `lines` to the end of the check's log.
+fn append(log: &Path, lines: &[String]) -> Result<()> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let mut file = fs::OpenOptions::new().append(true).open(log)?;
+    for line in lines {
+        writeln!(file, "{line}")?;
+    }
+    Ok(())
+}
+
+/// Does a built in check's work and gives its findings, saying in its log what it found.
 fn run_builtin(
     builtin: &crate::config::Builtin,
     at: &Where<'_>,
-    dir: &Path,
+    listed: &Listed<'_>,
     mut out: File,
-) -> Result<()> {
-    use std::io::Write as _;
-    let found = match builtin {
+) -> Result<Vec<crate::findings::Finding>> {
+    Ok(match builtin {
         crate::config::Builtin::Settings(settings) => {
             let found = settings.drift(at.root)?;
             for f in &found {
@@ -773,21 +814,14 @@ fn run_builtin(
             found
         }
         crate::config::Builtin::Rules(rules) => {
-            let files = crate::git::Git::discover(at.root)?.files()?;
-            let found = rules.check(at.root, &files, at.changed)?;
+            let files = listed.get().map_err(anyhow::Error::msg)?;
+            let found = rules.check(at.root, files, at.changed)?;
             for f in &found {
                 writeln!(out, "{f}")?;
             }
             found
         }
-    };
-    let mut lines = String::new();
-    for f in &found {
-        lines.push_str(&serde_json::to_string(f)?);
-        lines.push('\n');
-    }
-    fs::write(dir.join("findings.jsonl"), lines)?;
-    Ok(())
+    })
 }
 
 fn read_proofs(path: &Path) -> (Vec<serde_json::Value>, Vec<String>) {
