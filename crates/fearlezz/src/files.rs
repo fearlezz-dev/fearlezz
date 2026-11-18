@@ -103,7 +103,7 @@ pub(crate) fn write_atomic(path: &Path, content: impl AsRef<[u8]>) -> Result<()>
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir).with_context(|| format!("making {}", dir.display()))?;
     // A temporary file of its own for every write, removed when anything fails.
-    let mut temp = tempfile::NamedTempFile::new_in(dir)
+    let temp = tempfile::NamedTempFile::new_in(dir)
         .and_then(|mut temp| temp.write_all(content.as_ref()).map(|()| temp))
         .with_context(|| format!("writing {}", path.display()))?;
     temp.persist(path)
