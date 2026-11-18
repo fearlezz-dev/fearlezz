@@ -181,6 +181,8 @@ pub(crate) struct Check {
     pub job: Option<String>,
     /// How long it may run before Fearlezz stops it and it fails.
     pub timeout: Option<crate::legs::Budget>,
+    /// Quick enough never to wait in the machine's heavy queue (`light = true`).
+    pub light: bool,
 }
 
 /// What pictures and texts a check takes, in one place: the check's inputs, the floor and
@@ -519,6 +521,8 @@ struct RawCheck {
     flaky: Vec<String>,
     #[serde(default)]
     flaky_tests: Vec<String>,
+    #[serde(default)]
+    light: bool,
     record: Option<toml::Value>,
     #[serde(default)]
     on: Vec<String>,
@@ -772,6 +776,7 @@ impl Config {
                     Some(dir) => Some(folder(&dir).with_context(|| format!("check {id}: dir"))?),
                     None => None,
                 },
+                light: c.light,
                 id: id.clone(),
                 run: steps.join("\n"),
                 steps,
@@ -1007,6 +1012,7 @@ fn builtin_check(
         pictures: Pictures::default(),
         flaky_tests: Globs::default(),
         generates: Globs::default(),
+        light: true,
     }
 }
 

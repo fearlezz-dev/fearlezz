@@ -345,6 +345,16 @@ pub(crate) fn run_on_base(
     stage: &str,
     env: &EnvCtx<'_>,
 ) -> Result<RunResult> {
+    // Heavy work waits its turn on this machine; another worktree may run the base meanwhile.
+    let label = format!("{} on the base commit", check.id);
+    let _slot = if check.light {
+        None
+    } else {
+        match crate::queue::turn(&label, || store.for_key(&inputs.key).pop())? {
+            crate::queue::Turn::Go(slot) => slot,
+            crate::queue::Turn::Done(found) => return Ok(found),
+        }
+    };
     let root = base.wt.git.root.clone();
     if !base.prepared {
         if let Some(line) = env.state.prepare(&base.env, &env.main, &root)? {
@@ -489,6 +499,13 @@ fn build(
         ));
     }
 
+    // Decoding and comparing is heavy work, so it waits its turn on this machine, unless the
+    // check says it is light.
+    let _slot = if !check.light && pending.iter().any(|(_, pair)| pair.is_some()) {
+        crate::queue::slot(&format!("look {}", check.id))?
+    } else {
+        None
+    };
     // Compare a few items at a time; each decodes two films in memory.
     let width = std::thread::available_parallelism()
         .map_or(2, std::num::NonZero::get)

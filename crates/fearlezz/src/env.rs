@@ -224,6 +224,16 @@ impl EnvState {
         Ok(Hold { _file: file })
     }
 
+    /// Holds the services of `root` if no other command does, without waiting.
+    pub(crate) fn try_hold(&self, root: &Path) -> Result<Option<Hold>> {
+        let file = self.lock_file(root)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Hold { _file: file })),
+            Err(fs::TryLockError::WouldBlock) => Ok(None),
+            Err(fs::TryLockError::Error(e)) => Err(e.into()),
+        }
+    }
+
     /// Whether a command holds the services of `root` right now.
     fn in_use(&self, root: &Path) -> bool {
         self.lock_file(root)
