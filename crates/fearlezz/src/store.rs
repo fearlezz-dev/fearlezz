@@ -271,8 +271,8 @@ impl Hasher {
             parts.insert("(dir)".into(), sha256_hex(dir.as_bytes()));
         }
         // The simulator's device type or the display's size shape what the check sees.
-        if check.screen.owned() {
-            parts.insert("(screen)".into(), definition(&check.screen));
+        if check.needs.screen.owned() {
+            parts.insert("(screen)".into(), definition(&check.needs.screen));
         }
         if let Some(services) = env.services.as_ref().filter(|_| check.needs_services()) {
             parts.insert("(services)".into(), sha256_hex(services.as_bytes()));

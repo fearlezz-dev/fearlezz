@@ -134,9 +134,12 @@ pub(crate) enum Place {
 }
 
 impl Place {
-    /// The developer's choice for this machine, from `FEARLEZZ_OFF_SCREEN`.
-    pub(crate) fn from_env() -> Place {
-        if std::env::var_os("FEARLEZZ_OFF_SCREEN").is_some_and(|v| v == "1") {
+    /// Where a window on `screen` is kept: on a screen of Fearlezz's own, or on this
+    /// machine's by the developer's choice, from `FEARLEZZ_OFF_SCREEN`.
+    pub(crate) fn of(screen: &Target) -> Place {
+        if screen.owned() {
+            Place::Own
+        } else if std::env::var_os("FEARLEZZ_OFF_SCREEN").is_some_and(|v| v == "1") {
             Place::OffScreen
         } else {
             Place::Stay

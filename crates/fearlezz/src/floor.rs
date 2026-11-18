@@ -197,11 +197,13 @@ fn check_weakenings(
     }
     // Leaving the simulator or a Linux display moves the check to a screen CI cannot
     // record (this machine's window) or another system's runner.
-    if b.screen.owned() && std::mem::discriminant(&b.screen) != std::mem::discriminant(&h.screen) {
+    if b.needs.screen.owned()
+        && std::mem::discriminant(&b.needs.screen) != std::mem::discriminant(&h.needs.screen)
+    {
         say(Change::replaced(
             "it runs on another screen",
-            b.screen.describe(),
-            h.screen.describe(),
+            b.needs.screen.describe(),
+            h.needs.screen.describe(),
         ));
     }
     for how in b.pictures.weakenings(&h.pictures) {

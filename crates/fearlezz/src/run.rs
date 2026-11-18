@@ -71,7 +71,7 @@ pub(crate) fn execute(
             writeln!(out, "{line}")?;
         }
         Ended::Never(Why::Preview(undeployed.why.clone()))
-    } else if check.needs_envtest() {
+    } else if check.needs.envtest {
         match envtest_assets(check, at, &out)? {
             Ok(assets) => {
                 let mut vars = at.vars.clone();
@@ -313,7 +313,7 @@ fn spawn(
         dir,
         at,
     };
-    match &check.screen {
+    match &check.needs.screen {
         Target::Window => run.on(None::<crate::record::System>, &[], out),
         Target::Linux { size } => {
             let display = match crate::record::display::Display::start(*size) {
@@ -453,14 +453,8 @@ impl Run<'_> {
             return ran;
         };
         match owned {
-            Some(screen) => self.recording(cmd, record, screen, crate::record::Place::Own, out),
-            None => self.recording(
-                cmd,
-                record,
-                crate::record::System::default(),
-                crate::record::Place::from_env(),
-                out,
-            ),
+            Some(screen) => self.recording(cmd, record, screen, out),
+            None => self.recording(cmd, record, crate::record::System::default(), out),
         }
     }
 
@@ -470,10 +464,10 @@ impl Run<'_> {
         mut cmd: Command,
         record: &crate::record::Spec,
         screen: S,
-        place: crate::record::Place,
         mut log: File,
     ) -> Result<Ended> {
         let Run { check, dir, at, .. } = self;
+        let place = crate::record::Place::of(&check.needs.screen);
         // Its own process group, so stopping it after `seconds` stops the app it started too.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);

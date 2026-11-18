@@ -1463,10 +1463,10 @@ fn run_checks(
         for check in due {
             if let Some(on) = legs::left_to_ci(&ctx.config, check) {
                 // Without platforms, the OS its screen needs stands for where it runs.
-                let needs = check.screen.never_here().unwrap_or_default();
+                let needs = check.needs.screen.never_here().unwrap_or_default();
                 if out.is_some() {
                     let platforms = on.len();
-                    let os = check.screen.describe_os();
+                    let os = check.needs.screen.describe_os();
                     let on = if on.is_empty() { vec![os] } else { on };
                     for platform in &on {
                         let mut entry = legs::left_out(check, platform, stages.name(check.stage));
@@ -1475,7 +1475,7 @@ fn run_checks(
                             item.why = format!("this machine cannot have its screen: {needs}");
                             item.fix = format!(
                                 "add a [platform.<name>] with os = \"{}\" and prove the commit in legs",
-                                check.screen.os().unwrap_or_default()
+                                check.needs.screen.os().unwrap_or_default()
                             );
                         }
                         if let Some(item) = &entry.failure {
@@ -1608,8 +1608,8 @@ fn run_checks(
         let inputs = wt.inputs(check)?;
         let reuse = reusable(&inputs.key);
         // A screen this machine can never have, in a leg: its `on` names the wrong platform.
-        if let Some(why) = check.screen.never_here() {
-            let os = check.screen.describe_os();
+        if let Some(why) = check.needs.screen.never_here() {
+            let os = check.needs.screen.describe_os();
             println!(
                 "fail {}: {why}, and this leg runs on {}",
                 check.id,
@@ -1631,10 +1631,13 @@ fn run_checks(
         // time fix, CI included, since a runner of the right system is the one that proves
         // it. Neither is stored, so it is not called unstable once the tool is there.
         if reuse.is_none()
-            && (check.screen.owned() || check.pictures.record.is_some())
-            && let Some(u) = record::unavailable(&check.screen)
+            && (check.needs.screen.owned() || check.pictures.record.is_some())
+            && let Some(u) = record::unavailable(&check.needs.screen)
         {
-            if let Some(r) = report.as_mut().filter(|r| r.ci && !check.screen.owned()) {
+            if let Some(r) = report
+                .as_mut()
+                .filter(|r| r.ci && !check.needs.screen.owned())
+            {
                 println!("not run {}: {}", check.id, u.why);
                 r.not_run(check, stages.name(check.stage), &u.why);
                 not_run += 1;

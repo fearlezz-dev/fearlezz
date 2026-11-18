@@ -202,7 +202,7 @@ impl fmt::Display for Budget {
 /// for a screen it can never have (a Linux display on a Mac); without platforms such a check
 /// is left to CI with none named, and [`Check::screen`] says what it needs.
 pub(crate) fn left_to_ci<'a>(config: &'a Config, check: &Check) -> Option<Vec<&'a str>> {
-    let screen_here = check.screen.never_here().is_none();
+    let screen_here = check.needs.screen.never_here().is_none();
     let on: Vec<&Platform> = config
         .platforms
         .iter()
