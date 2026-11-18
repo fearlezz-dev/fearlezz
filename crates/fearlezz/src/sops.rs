@@ -2,6 +2,10 @@
 //! `.sops.yaml` creation rule, matched as sops matches it (against the path from the folder
 //! the `.sops.yaml` is in), and the metadata sops writes into every file it encrypts. Nothing
 //! is decrypted, and nothing read from a file is kept or shown.
+//!
+//! YAML is read by hand, by indentation, as sops writes it: a leak is named by its line, which
+//! a serde YAML reader drops, and walking a maintained event parser's markers takes as much code
+//! as reading the lines.
 
 use std::path::Path;
 
