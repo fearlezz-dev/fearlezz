@@ -8,9 +8,10 @@ import { PicturesPanel } from "./PicturesPanel";
 import { picturesOf } from "./pictures";
 import type { Job, Review, Run, RunCheck, Snapshot, Weakening } from "./proof";
 import { DiffLines } from "./DiffLines";
-import { type Viewer, accept, canAccept, canSay, failedFor, localBy, maySignIn, signIn, standing, toLookAt, viewerOf, waitsFor } from "./review";
+import { type Looker, accept, canAccept, canSay, localBy, maySignIn, roleOf, signIn, signedIn, toLookAt, viewerOf } from "./review";
 import { ShareControl } from "./ShareControl";
 import { ago } from "./ago";
+import { short } from "./short";
 
 const WORDS: Record<CheckState, string> = {
   planned: "waiting",
@@ -44,14 +45,14 @@ export function App(props: { shared?: string | undefined }) {
     return runs.find((r) => r.id === picked()) ?? runs[0];
   });
   // Who looks, asked once the work says its repository.
-  const [viewer, setViewer] = createSignal<Viewer>();
+  const [viewer, setViewer] = createSignal<Looker>();
   const repository = createMemo(() => work.state?.work.repository);
   // Through a share link the page only views, whoever looks: the host is not asked.
   createEffect(
     on(
       repository,
       (repo) => {
-        if (props.shared) setViewer({ login: null, shared: true });
+        if (props.shared) setViewer("shared");
         else if (repo) void viewerOf(repo).then(setViewer);
       },
       { defer: false },
@@ -149,11 +150,11 @@ function title(state: Snapshot): string {
 
 /** Where the run shown stands, in one line: once it ran, what waits for the person looking. A
  * local run is the agent's word, so it says so first and waits for no one. */
-function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer | undefined }) {
+function Standing(props: { run: Run; review: Review | undefined; viewer: Looker | undefined }) {
   const ended = () => props.run.checks.filter((c) => c.entry).length;
   const failed = () => props.run.checks.filter((c) => c.entry?.outcome === "failed").length;
   const toLook = () => picturesOf(props.run).filter(toLookAt).length;
-  const head = () => props.run.head.slice(0, 7);
+  const head = () => short(props.run.head);
   const kind = () => {
     if (localBy(props.run)) return "local";
     if (props.run.state === "running") return "run";
@@ -183,15 +184,11 @@ function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer 
     }
     if (props.run.state === "cancelled") return `The run of ${head()} ended without its proof`;
     if (failed()) return `${failed()} ${failed() === 1 ? "check" : "checks"} failed at ${head()}`;
+    // Once the review of this head failed, needs change, waits or is approved, the host's line
+    // for this person says it.
     const review = props.review;
-    if (review?.state === "failed") return failedFor(review, props.viewer);
-    if (review?.state === "needs_change") return standing(review);
-    if (review?.state === "waits") return waitsFor(review, props.viewer);
-    if (review?.state === "approved") {
-      return review.pictures.length || review.weakened.length
-        ? `Everything looks right at ${head()}`
-        : `Proved ${head()}`;
-    }
+    const said = review?.title[roleOf(props.viewer)];
+    if (said && review && ["failed", "needs_change", "waits", "approved"].includes(review.state)) return said;
     if (toLook()) return `${pictures(toLook())} changed at ${head()}`;
     return `Proved ${head()}`;
   };
@@ -236,7 +233,7 @@ function webAddress(url: string | null | undefined): string | undefined {
 }
 
 /** What the change weakens, waiting for an admin's accept of its head, and who can give it. */
-function Weakenings(props: { review: Review; runs: Run[]; viewer: Viewer | undefined; repository: string }) {
+function Weakenings(props: { review: Review; runs: Run[]; viewer: Looker | undefined; repository: string }) {
   const [error, setError] = createSignal("");
   const [sending, setSending] = createSignal(false);
   // The newest finished CI run of the head: what the accept is of.
@@ -266,13 +263,13 @@ function Weakenings(props: { review: Review; runs: Run[]; viewer: Viewer | undef
               class="btn ok"
               data-accept
               disabled={sending() || !run()}
-              title={`Accepts exactly these weakenings of ${props.review.head.slice(0, 7)} and runs its proof job again`}
+              title={`Accepts exactly these weakenings of ${short(props.review.head)} and runs its proof job again`}
               onClick={() => void send()}
             >
               Accept
             </button>
           </Match>
-          <Match when={props.viewer?.login}>
+          <Match when={signedIn(props.viewer)}>
             <p class="hint" data-cannot title={`Only an admin of ${props.repository} can accept a weaker proof`}>
               Needs an admin
             </p>
@@ -342,7 +339,7 @@ const earlier = (runs: Run[]) => runs.filter((r) => r.head !== runs[0]?.head);
 function Waiting(props: { job: Job; now: number }) {
   return (
     <section class="run waiting" data-waiting={props.job.name}>
-      <div class="run-head" title={`Waits for a runner since ${ago(props.now - props.job.since)}, ${props.job.head.slice(0, 7)}`}>
+      <div class="run-head" title={`Waits for a runner since ${ago(props.now - props.job.since)}, ${short(props.job.head)}`}>
         <span class="run-title">
           <b>{props.job.name}</b>
           <span class="count">queued</span>
@@ -354,7 +351,7 @@ function Waiting(props: { job: Job; now: number }) {
 }
 
 /** The run's pictures, or what to expect of them. */
-function Looks(props: { run: Run; state: Snapshot; viewer: Viewer | undefined }) {
+function Looks(props: { run: Run; state: Snapshot; viewer: Looker | undefined }) {
   const any = () => props.run.checks.some((c) => c.look);
   return (
     <Show
@@ -383,7 +380,7 @@ function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => v
     return props.run.state === "running" ? "Proving" : "Proved";
   };
   const about = () =>
-    `${verb()} ${props.run.head.slice(0, 7)}${by() ? `, local, by ${by()}` : ""}, ${ago(props.now - props.run.opened)}`;
+    `${verb()} ${short(props.run.head)}${by() ? `, local, by ${by()}` : ""}, ${ago(props.now - props.run.opened)}`;
   return (
     <section
       class={`run ${by() ? "local" : ""}`}

@@ -6,17 +6,17 @@
 use std::path::Path;
 
 use fearlezz_proof::events::{
-    Change, Latest, Listed, Listing, Live, Run, RunCheck, RunState, Snapshot, Source, Work,
-    WorkChange,
+    Change, Latest, Listed, Listing, Live, Run, RunCheck, RunState, Share, Snapshot, Source,
+    Standing as ListedStanding, Work, WorkChange,
 };
 use fearlezz_proof::findings::{Finding, Level};
 use fearlezz_proof::floor::Weakening;
-use fearlezz_proof::look::{Change as PictureChange, Item as Picture, Look};
+use fearlezz_proof::look::{Change as PictureChange, DiffLine, Item as Picture, Look};
 use fearlezz_proof::media::{Comparison, Moment, Pair, Verdict as Likeness};
 use fearlezz_proof::notes::{Note, NoteState, Region, Side as NoteSide};
 use fearlezz_proof::review::{
-    Accept, Job, Picture as ReviewPicture, Review, Standing as PictureStanding,
-    State as ReviewState, Verdict as PictureVerdict,
+    Accept, Job, Picture as ReviewPicture, Review, Role, Standing as PictureStanding,
+    State as ReviewState, Title as ReviewTitle, Verdict as PictureVerdict, Viewer,
 };
 use fearlezz_proof::{Case, Check, Item, Pull, Ran, Red, Verdict};
 use ts_rs::{Config, TS};
@@ -29,12 +29,14 @@ fn declarations() -> String {
         Live::decl(&cfg),
         Listing::decl(&cfg),
         Listed::decl(&cfg),
+        ListedStanding::decl(&cfg),
         Latest::decl(&cfg),
         Snapshot::decl(&cfg),
         Change::decl(&cfg),
         WorkChange::decl(&cfg),
         Review::decl(&cfg),
         ReviewState::decl(&cfg),
+        ReviewTitle::decl(&cfg),
         ReviewPicture::decl(&cfg),
         PictureStanding::decl(&cfg),
         PictureVerdict::decl(&cfg),
@@ -45,6 +47,9 @@ fn declarations() -> String {
         NoteState::decl(&cfg),
         Weakening::decl(&cfg),
         Job::decl(&cfg),
+        Viewer::decl(&cfg),
+        Role::decl(&cfg),
+        Share::decl(&cfg),
         Work::decl(&cfg),
         Pull::decl(&cfg),
         Run::decl(&cfg),
@@ -54,6 +59,7 @@ fn declarations() -> String {
         Look::decl(&cfg),
         Picture::decl(&cfg),
         PictureChange::decl(&cfg),
+        DiffLine::decl(&cfg),
         Comparison::decl(&cfg),
         Likeness::decl(&cfg),
         Moment::decl(&cfg),

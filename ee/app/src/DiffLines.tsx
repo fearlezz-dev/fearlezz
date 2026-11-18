@@ -2,12 +2,17 @@
 // or a text of a look.
 
 import { For, Show } from "solid-js";
-import { type Fold, type Line, diff, folded } from "./diff";
+import { type Fold, type Line, diff, folded, sent } from "./diff";
+import type { DiffLine } from "./proof";
 
 /** `was` and `now` line by line, the words that differ marked. With `context`, runs of kept
- * lines longer than that on each side of a change fold to a count, for a long text. */
-export function DiffLines(props: { was: string | null | undefined; now: string | null | undefined; context?: number }) {
+ * lines longer than that on each side of a change fold to a count, for a long text. A text's
+ * diff the bundle carries (`lines`) shows as it is, already folded. */
+export function DiffLines(
+  props: { was: string | null | undefined; now: string | null | undefined; context?: number } | { lines: DiffLine[] },
+) {
   const lines = (): (Line | Fold)[] => {
+    if ("lines" in props) return sent(props.lines);
     const all = diff(props.was, props.now);
     return props.context == null ? all : folded(all, props.context);
   };

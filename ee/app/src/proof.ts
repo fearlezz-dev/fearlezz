@@ -65,7 +65,21 @@ notes: number,
 /**
  * Whether what its head weakens waits for an admin's accept.
  */
-weakened: boolean, };
+weakened: boolean, 
+/**
+ * Where its newest run stands, as [`Listed::worded`] derives it.
+ */
+standing: ListedStanding, 
+/**
+ * Where its newest run stands, in a few words.
+ */
+word: string, 
+/**
+ * What waits on it, each as a short phrase.
+ */
+waits: Array<string>, };
+
+export type ListedStanding = "none" | "running" | "passed" | "waits" | "failed" | "cancelled";
 
 export type Latest = { 
 /**
@@ -204,9 +218,29 @@ notes?: Array<Note>,
 /**
  * Where the preview deploy of the head lives, as its proof names it.
  */
-preview?: string | null, };
+preview?: string | null, 
+/**
+ * Where it stands in one line, as [`Review::title_for`] says it to each role; empty in a
+ * review stored before the host sent it, until [`Review::titled`].
+ */
+title: ReviewTitle, };
 
 export type ReviewState = "ci" | "running" | "failed" | "cancelled" | "needs_change" | "waits" | "approved";
+
+export type ReviewTitle = { 
+/**
+ * To someone who may only read: signed out, through a share link, or read access. GitHub's
+ * check run and comment say this one.
+ */
+read: string, 
+/**
+ * To someone with write access, who gives verdicts.
+ */
+write: string, 
+/**
+ * To an admin, who also accepts weakenings.
+ */
+admin: string, };
 
 export type ReviewPicture = { 
 /**
@@ -389,6 +423,36 @@ url?: string | null,
  */
 since: number, };
 
+export type Viewer = { 
+/**
+ * Their GitHub login.
+ */
+login: string, 
+/**
+ * Their role on the repository.
+ */
+role: Role, } | { 
+/**
+ * Always null.
+ */
+login: null, };
+
+export type Role = "read" | "write" | "admin";
+
+export type Share = { 
+/**
+ * Its id, which revokes it.
+ */
+id: string, 
+/**
+ * The GitHub login of who made it.
+ */
+made_by: string, 
+/**
+ * When, in seconds since the epoch.
+ */
+made_at: number, };
+
 export type Work = { 
 /**
  * `owner/name` as GitHub spells it.
@@ -568,9 +632,33 @@ comparison: Comparison | null,
 /**
  * Named by the check's `flaky`: compared and shown, but never waits for a person's look.
  */
-flaky?: boolean, };
+flaky?: boolean, 
+/**
+ * A changed text's lines against its before, as the CLI compared them: kept lines folded
+ * to a count past a few on each side of a change. None for a still or film, and in a
+ * bundle from a CLI that did not write it.
+ */
+diff?: Array<DiffLine> | null, };
 
 export type PictureChange = "changed" | "timing" | "new" | "gone" | "unreadable" | "same";
+
+export type DiffLine = { "kind": "same", 
+/**
+ * The line, without its line break.
+ */
+text: string, } | { "kind": "was", 
+/**
+ * The line, without its line break.
+ */
+text: string, } | { "kind": "now", 
+/**
+ * The line, without its line break.
+ */
+text: string, } | { "kind": "fold", 
+/**
+ * How many.
+ */
+count: number, };
 
 export type Comparison = { 
 /**
