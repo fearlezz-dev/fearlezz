@@ -374,53 +374,7 @@ pub(crate) fn notes(git: &Git, url: &str) -> Result<bool> {
         return Ok(true);
     }
     for (k, noted) in feedback.notes.iter().enumerate() {
-        let n = k + 1;
-        let note = &noted.note;
-        let at = note
-            .time
-            .map(|t| format!(", at {t:.2} s"))
-            .unwrap_or_default();
-        println!(
-            "note {n}  {}  {}  {}{at}",
-            note.check,
-            note.picture,
-            note.side.label()
-        );
-        println!("  \"{}\"", note.words);
-        println!(
-            "  by {}, on the run of {}",
-            note.by,
-            note.head.get(..7).unwrap_or(&note.head)
-        );
-        // A note on a text is about the whole text, saved as it is.
-        let text = noted.kind == crate::look::TEXT;
-        for (side, path) in [("after", &noted.after), ("before", &noted.before)] {
-            let Some(path) = path else { continue };
-            let drawn = !text
-                && matches!(
-                    (side, note.side),
-                    (_, Side::Both) | ("after", Side::After) | ("before", Side::Before)
-                );
-            let out = dir.join(format!("{n}-{side}.{}", if text { "txt" } else { "png" }));
-            match picture(
-                url, &login, &note.run, path, &dir, n, side, noted, drawn, &out,
-            ) {
-                Ok(()) => {
-                    let what = if text {
-                        format!("the {side} text")
-                    } else if drawn {
-                        format!("the {side} picture, region {n} drawn")
-                    } else {
-                        format!("the {side} picture, to compare")
-                    };
-                    println!("  {}  {what}", out.display());
-                }
-                Err(e) => {
-                    let what = if text { "text" } else { "picture" };
-                    println!("  the {side} {what} could not be saved: {e:#}");
-                }
-            }
-        }
+        show(url, &login, &dir, k + 1, noted);
     }
     println!(
         "next: change the code so each note is settled, then fearlezz run; a person resolves the \
@@ -428,6 +382,56 @@ pub(crate) fn notes(git: &Git, url: &str) -> Result<bool> {
         feedback.url
     );
     Ok(true)
+}
+
+/// Prints one open note, numbered `n`, and saves its pictures (or texts) in `dir`.
+fn show(url: &str, login: &Login, dir: &Path, n: usize, noted: &Noted) {
+    let note = &noted.note;
+    let at = note
+        .time
+        .map(|t| format!(", at {t:.2} s"))
+        .unwrap_or_default();
+    println!(
+        "note {n}  {}  {}  {}{at}",
+        note.check,
+        note.picture,
+        note.side.label()
+    );
+    println!("  \"{}\"", note.words);
+    println!(
+        "  by {}, on the run of {}",
+        note.by,
+        note.head.get(..7).unwrap_or(&note.head)
+    );
+    // A note on a text is about the whole text, saved as it is.
+    let text = noted.kind == crate::look::TEXT;
+    for (side, path) in [("after", &noted.after), ("before", &noted.before)] {
+        let Some(path) = path else { continue };
+        let drawn = !text
+            && matches!(
+                (side, note.side),
+                (_, Side::Both) | ("after", Side::After) | ("before", Side::Before)
+            );
+        let out = dir.join(format!("{n}-{side}.{}", if text { "txt" } else { "png" }));
+        match picture(
+            url, login, &note.run, path, dir, n, side, noted, drawn, &out,
+        ) {
+            Ok(()) => {
+                let what = if text {
+                    format!("the {side} text")
+                } else if drawn {
+                    format!("the {side} picture, region {n} drawn")
+                } else {
+                    format!("the {side} picture, to compare")
+                };
+                println!("  {}  {what}", out.display());
+            }
+            Err(e) => {
+                let what = if text { "text" } else { "picture" };
+                println!("  the {side} {what} could not be saved: {e:#}");
+            }
+        }
+    }
 }
 
 /// Fetches one picture of a note's run and saves it as a PNG at `out`, the region drawn when

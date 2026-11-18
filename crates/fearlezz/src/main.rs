@@ -747,120 +747,126 @@ fn setup(what: Setup) -> Result<bool> {
         Setup::Init => setup_init()?,
         Setup::Login => feedback::login(&here_host_url())?,
         Setup::Logout => feedback::logout(&here_host_url())?,
-        Setup::Update { piece } => {
-            let git = Git::discover(&std::env::current_dir()?)?;
-            let updated = presets::update(&git.root, &git.common, piece.as_deref())?;
-            for (spec, tag) in &updated.pieces {
-                match spec.rsplit_once('@') {
-                    Some((_, old)) if old != tag => println!("{spec} → {tag}"),
-                    _ => println!("{spec}: still the newest tag"),
-                }
-            }
-            for (spec, tag) in &updated.majors {
-                println!(
-                    "{spec}: {tag} is out, a new major version that update does not move to; to \
-                 take it, change the tag in fearlezz.toml"
-                );
-            }
-            for id in &updated.moved {
-                println!("{id}: now pins where its tag points");
-            }
-            match &updated.changes {
-                None => println!(
-                    "the old pins can no longer be read, so the changes cannot be listed; compare \
-                 the pieces by hand"
-                ),
-                Some(changes) if changes.is_empty() => println!("no changes to the settings"),
-                Some(changes) => {
-                    for change in changes {
-                        println!("  {change}");
-                    }
-                }
-            }
-            println!("next: review the changes, then commit fearlezz.toml and fearlezz.lock");
-        }
+        Setup::Update { piece } => setup_update(piece.as_deref())?,
         Setup::Compare {
             before,
             after,
             json,
-        } => {
-            let clock = std::time::Instant::now();
-            let (b, a) = media::decode_both(&before, &after)?;
-            let c = media::compare(&b, &a)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&c)?);
-            } else {
-                println!(
-                    "{} ({:.1} s)",
-                    media::summary(&c),
-                    clock.elapsed().as_secs_f64()
-                );
-                println!(
-                    "next: fearlezz run shows changes for the checks that record stills and films"
-                );
-            }
+        } => setup_compare(&before, &after, json)?,
+        Setup::Sync => setup_sync()?,
+        Setup::Hook { agent, event } => setup_hook(agent, event)?,
+        Setup::Down { all } => setup_down(all)?,
+    }
+    Ok(true)
+}
+
+/// `fearlezz setup update`: moves pinned pieces to their newest tag and lists what changed.
+fn setup_update(piece: Option<&str>) -> Result<()> {
+    let git = Git::discover(&std::env::current_dir()?)?;
+    let updated = presets::update(&git.root, &git.common, piece)?;
+    for (spec, tag) in &updated.pieces {
+        match spec.rsplit_once('@') {
+            Some((_, old)) if old != tag => println!("{spec} → {tag}"),
+            _ => println!("{spec}: still the newest tag"),
         }
-        Setup::Sync => {
-            let ctx = prepared()?;
-            let ctx = &ctx;
-            {
-                let written = ctx.config.settings.sync(&ctx.git.root)?;
-                if written.is_empty() {
-                    println!("settings already in sync");
-                }
-                let wrote = !written.is_empty();
-                for path in written {
-                    println!("wrote {path}");
-                }
-                if wrote {
-                    println!("next: commit the written files with the change");
-                } else {
-                    println!("next: {}", ctx.view(&ctx.journal()?)?.next);
-                }
-            }
-        }
-        Setup::Hook { agent, event } => {
-            let mut text = String::new();
-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
-            let input = hooks::Input::parse(agent, &text);
-            // A hook that cannot judge says nothing: it is a guardrail, and CI is the boundary.
-            let answer = hook_answer(event, &input).unwrap_or_else(|e| {
-                eprintln!("fearlezz hook: {e:#}");
-                hooks::Answer::Nothing
-            });
-            if let Some(out) = hooks::render(agent, event, answer) {
-                println!("{out}");
-            }
-        }
-        Setup::Down { all } => {
-            let ctx = prepared()?;
-            {
-                let env = ctx.env();
-                let roots: Vec<PathBuf> = if all {
-                    env.state
-                        .all_services()
-                        .into_iter()
-                        .map(|s| s.root)
-                        .collect()
-                } else {
-                    env.state
-                        .services(&ctx.git.root)
-                        .into_iter()
-                        .map(|s| s.root)
-                        .collect()
-                };
-                for root in &roots {
-                    env.state.stop_unless_in_use(env.cfg, root)?;
-                    println!("stopped services in {}", root.display());
-                }
-                if roots.is_empty() {
-                    println!("no services running");
-                }
-                println!("next: fearlezz run starts them again when a check needs them");
+    }
+    for (spec, tag) in &updated.majors {
+        println!(
+            "{spec}: {tag} is out, a new major version that update does not move to; to \
+                 take it, change the tag in fearlezz.toml"
+        );
+    }
+    for id in &updated.moved {
+        println!("{id}: now pins where its tag points");
+    }
+    match &updated.changes {
+        None => println!(
+            "the old pins can no longer be read, so the changes cannot be listed; compare \
+                 the pieces by hand"
+        ),
+        Some(changes) if changes.is_empty() => println!("no changes to the settings"),
+        Some(changes) => {
+            for change in changes {
+                println!("  {change}");
             }
         }
     }
-    Ok(true)
+    println!("next: review the changes, then commit fearlezz.toml and fearlezz.lock");
+    Ok(())
+}
+
+/// `fearlezz setup compare`: two stills or films compared, as a summary or as JSON.
+fn setup_compare(before: &Path, after: &Path, json: bool) -> Result<()> {
+    let clock = std::time::Instant::now();
+    let (b, a) = media::decode_both(before, after)?;
+    let c = media::compare(&b, &a)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&c)?);
+    } else {
+        println!(
+            "{} ({:.1} s)",
+            media::summary(&c),
+            clock.elapsed().as_secs_f64()
+        );
+        println!("next: fearlezz run shows changes for the checks that record stills and films");
+    }
+    Ok(())
+}
+
+/// `fearlezz setup sync`: writes the shared tool settings into each tool's own file.
+fn setup_sync() -> Result<()> {
+    let ctx = prepared()?;
+    let written = ctx.config.settings.sync(&ctx.git.root)?;
+    if written.is_empty() {
+        println!("settings already in sync");
+    }
+    let wrote = !written.is_empty();
+    for path in written {
+        println!("wrote {path}");
+    }
+    if wrote {
+        println!("next: commit the written files with the change");
+    } else {
+        println!("next: {}", ctx.view(&ctx.journal()?)?.next);
+    }
+    Ok(())
+}
+
+/// `fearlezz setup hook`: an agent's hook event answered from its input on stdin.
+fn setup_hook(agent: hooks::Agent, event: hooks::Event) -> Result<()> {
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+    let input = hooks::Input::parse(agent, &text);
+    // A hook that cannot judge says nothing: it is a guardrail, and CI is the boundary.
+    let answer = hook_answer(event, &input).unwrap_or_else(|e| {
+        eprintln!("fearlezz hook: {e:#}");
+        hooks::Answer::Nothing
+    });
+    if let Some(out) = hooks::render(agent, event, answer) {
+        println!("{out}");
+    }
+    Ok(())
+}
+
+/// `fearlezz setup down`: stops the services of this worktree, or of every worktree.
+fn setup_down(all: bool) -> Result<()> {
+    let ctx = prepared()?;
+    let env = ctx.env();
+    let services = if all {
+        env.state.all_services()
+    } else {
+        env.state.services(&ctx.git.root).into_iter().collect()
+    };
+    let roots: Vec<PathBuf> = services.into_iter().map(|s| s.root).collect();
+    for root in &roots {
+        env.state.stop_unless_in_use(env.cfg, root)?;
+        println!("stopped services in {}", root.display());
+    }
+    if roots.is_empty() {
+        println!("no services running");
+    }
+    println!("next: fearlezz run starts them again when a check needs them");
+    Ok(())
 }
 
 /// `fearlezz --still`: a still of a running app's window, kept with this repository's

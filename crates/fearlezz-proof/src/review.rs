@@ -277,6 +277,48 @@ pub fn key(item: &Item, sha: impl Fn(&str) -> Option<String>) -> Option<String> 
     ))
 }
 
+/// Each picture or text of the live runs a person looks at, once per content, with its
+/// verdict and where it stands.
+fn looked_at(live: &[&ProvenRun], verdicts: &[Verdict], open: &[&Note]) -> Vec<Picture> {
+    let mut pictures: Vec<Picture> = Vec::new();
+    for (run, _) in live {
+        for check in &run.checks {
+            let Some(look) = &check.look else { continue };
+            for item in look.items.iter().filter(|i| i.to_look_at()) {
+                let Some(key) = check.keys.get(&item.name) else {
+                    continue;
+                };
+                let seen = pictures
+                    .iter()
+                    .any(|p| p.check == check.id && p.name == item.name && &p.key == key);
+                if seen {
+                    continue;
+                }
+                let verdict = verdicts
+                    .iter()
+                    .find(|v| v.check == check.id && v.picture == item.name && &v.key == key)
+                    .cloned();
+                let noted = open
+                    .iter()
+                    .any(|n| n.check == check.id && n.picture == item.name);
+                let standing = match (noted, &verdict) {
+                    (true, _) => Standing::NeedsChange,
+                    (false, Some(_)) => Standing::LooksRight,
+                    (false, None) => Standing::Waits,
+                };
+                pictures.push(Picture {
+                    check: check.id.clone(),
+                    name: item.name.clone(),
+                    key: key.clone(),
+                    standing,
+                    verdict,
+                });
+            }
+        }
+    }
+    pictures
+}
+
 /// The review of `head` from the work's runs (newest first, each with its proof once done),
 /// the display names GitHub gives their jobs (`legs`, by run id, see [`Leg`]), its verdicts,
 /// its notes and the head's accept. Only CI runs of the head count, the newest of each leg that
@@ -318,42 +360,7 @@ pub fn review(
     let live: Vec<&ProvenRun> = seen.iter().filter_map(|(_, chosen)| *chosen).collect();
 
     let open: Vec<&Note> = notes.iter().filter(|n| n.is_open()).collect();
-    let mut pictures: Vec<Picture> = Vec::new();
-    for (run, _) in &live {
-        for check in &run.checks {
-            let Some(look) = &check.look else { continue };
-            for item in look.items.iter().filter(|i| i.to_look_at()) {
-                let Some(key) = check.keys.get(&item.name) else {
-                    continue;
-                };
-                let seen = pictures
-                    .iter()
-                    .any(|p| p.check == check.id && p.name == item.name && &p.key == key);
-                if seen {
-                    continue;
-                }
-                let verdict = verdicts
-                    .iter()
-                    .find(|v| v.check == check.id && v.picture == item.name && &v.key == key)
-                    .cloned();
-                let noted = open
-                    .iter()
-                    .any(|n| n.check == check.id && n.picture == item.name);
-                let standing = match (noted, &verdict) {
-                    (true, _) => Standing::NeedsChange,
-                    (false, Some(_)) => Standing::LooksRight,
-                    (false, None) => Standing::Waits,
-                };
-                pictures.push(Picture {
-                    check: check.id.clone(),
-                    name: item.name.clone(),
-                    key: key.clone(),
-                    standing,
-                    verdict,
-                });
-            }
-        }
-    }
+    let pictures = looked_at(&live, verdicts, &open);
     let mut weakened: Vec<Weakening> = Vec::new();
     for proof in live.iter().filter_map(|(_, proof)| proof.as_ref()) {
         for w in &proof.weakened {
