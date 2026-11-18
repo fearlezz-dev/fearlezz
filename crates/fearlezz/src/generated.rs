@@ -58,28 +58,32 @@ impl Failed {
 /// The generated files as the tree has them before the command runs, by path from the root.
 pub(crate) struct Snapshot(BTreeMap<String, Vec<u8>>);
 
-/// The files below `root` that `check` generates, among those git tracks or would track.
-fn read(root: &Path, check: &Check) -> Result<BTreeMap<String, Vec<u8>>> {
-    let mut files = BTreeMap::new();
-    for path in Git::discover(root)?.files()? {
-        if check.generated(&path) {
-            let bytes = fs::read(root.join(&path))?;
-            files.insert(path, bytes);
-        }
+/// The files below `root` that `check` generates, among `files`, those git tracks or would
+/// track.
+fn read(files: &[String], root: &Path, check: &Check) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut generated = BTreeMap::new();
+    for path in files.iter().filter(|p| check.generated(p)) {
+        generated.insert(path.clone(), fs::read(root.join(path))?);
     }
-    Ok(files)
+    Ok(generated)
 }
 
 impl Snapshot {
     /// The files `check` generates in the worktree at `root`, as they are now.
     pub(crate) fn take(root: &Path, check: &Check) -> Result<Snapshot> {
-        read(root, check).map(Snapshot)
+        read(&Git::discover(root)?.files()?, root, check).map(Snapshot)
     }
 
-    /// How the files `check` generates came out of its command compared with this snapshot:
-    /// why they fail it, if they do, and the diff of those that differ.
-    pub(crate) fn compare(&self, root: &Path, check: &Check) -> Result<(Option<Failed>, String)> {
-        let now = read(root, check)?;
+    /// How the files `check` generates came out of its command compared with this snapshot,
+    /// with `files` those git tracks or would track now: why they fail it, if they do, and the
+    /// diff of those that differ.
+    pub(crate) fn compare(
+        &self,
+        files: &[String],
+        root: &Path,
+        check: &Check,
+    ) -> Result<(Option<Failed>, String)> {
+        let now = read(files, root, check)?;
         let mut stale = Vec::new();
         let mut diff = String::new();
         let paths: std::collections::BTreeSet<&String> = self.0.keys().chain(now.keys()).collect();

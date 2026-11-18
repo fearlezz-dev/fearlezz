@@ -61,12 +61,22 @@ impl UserDir {
 /// Every file at or below `at`, as a path relative to `base` with forward slashes. A folder
 /// that cannot be read counts as empty.
 pub(crate) fn walk(base: &Path, at: &Path) -> Vec<String> {
+    walk_skipping(base, at, |_| false)
+}
+
+/// [`walk`], without the folders below `at` whose name `skip` accepts.
+pub(crate) fn walk_skipping(base: &Path, at: &Path, skip: impl Fn(&str) -> bool) -> Vec<String> {
     let mut out = Vec::new();
     let mut todo = vec![at.to_path_buf()];
     while let Some(path) = todo.pop() {
         if path.is_dir() {
             if let Ok(entries) = std::fs::read_dir(&path) {
-                todo.extend(entries.flatten().map(|e| e.path()));
+                todo.extend(
+                    entries
+                        .flatten()
+                        .filter(|e| !(e.path().is_dir() && skip(&e.file_name().to_string_lossy())))
+                        .map(|e| e.path()),
+                );
             }
         } else if path.is_file()
             && let Ok(rel) = path.strip_prefix(base)
