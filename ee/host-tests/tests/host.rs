@@ -6,6 +6,8 @@
 //! for the same local port.
 
 // Beside this file, not in tests/, where cargo would take each for a test of its own.
+#[path = "host/access.rs"]
+mod access;
 #[path = "host/browser.rs"]
 mod browser;
 #[path = "host/github.rs"]
@@ -526,6 +528,22 @@ fn main() {
         (
             "the_repository_page_updates_live",
             repository::the_repository_page_updates_live,
+        ),
+        (
+            "the_policy_decides_who_reads_a_private_repository",
+            access::the_policy_decides_who_reads_a_private_repository,
+        ),
+        (
+            "the_policy_decides_who_reads_a_file_with_the_cli",
+            access::the_policy_decides_who_reads_a_file_with_the_cli,
+        ),
+        (
+            "the_policy_decides_who_says_a_verdict_or_accepts",
+            access::the_policy_decides_who_says_a_verdict_or_accepts,
+        ),
+        (
+            "the_policy_decides_who_writes_notes",
+            access::the_policy_decides_who_writes_notes,
         ),
     ];
     let mut trials: Vec<Trial> = tests

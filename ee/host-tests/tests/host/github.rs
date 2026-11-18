@@ -177,6 +177,24 @@ impl FakeGitHub {
                     "owner/watched".to_owned(),
                     repo(true, Some(10), &["watcher", "leaver"]),
                 ),
+                // Who may do what, one viewer kind at a time; each `lapsed-*` loses their token.
+                (
+                    "owner/policy".to_owned(),
+                    Repo {
+                        private: true,
+                        installation: Some(12),
+                        readers: set(&[
+                            "reader",
+                            "writer",
+                            "admin",
+                            "lapsed-read",
+                            "lapsed-say",
+                            "lapsed-notes",
+                        ]),
+                        writers: set(&["writer", "admin"]),
+                        admins: set(&["admin"]),
+                    },
+                ),
                 // Its check runs fail or hang when a test says so.
                 ("owner/stalled".to_owned(), reviewed(false, 11)),
                 // The local run tests: each CLI test signs in as a login of its own.
@@ -198,6 +216,9 @@ impl FakeGitHub {
                 ("admin-code".to_owned(), "admin".to_owned()),
                 ("watcher-code".to_owned(), "watcher".to_owned()),
                 ("leaver-code".to_owned(), "leaver".to_owned()),
+                ("lapsed-read-code".to_owned(), "lapsed-read".to_owned()),
+                ("lapsed-say-code".to_owned(), "lapsed-say".to_owned()),
+                ("lapsed-notes-code".to_owned(), "lapsed-notes".to_owned()),
             ]),
             tokens: BTreeMap::new(),
             oidc_keys: vec![(KID.to_owned(), oidc)],
@@ -299,6 +320,12 @@ impl FakeGitHub {
             runner: runner.to_owned(),
             conclusion: conclusion.to_owned(),
         });
+    }
+
+    /// GitHub no longer takes the person token `token`, as when its person revokes it.
+    pub fn forget(&self, token: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.tokens.remove(token);
     }
 
     /// `login` may no longer read `repo`.
@@ -482,6 +509,10 @@ fn answer(
                 .strip_prefix("installation-")
                 .and_then(|id| id.parse::<u64>().ok());
             let person = state.tokens.get(token);
+            // A token GitHub does not know, as a revoked or expired one, is bad credentials.
+            if installation.is_none() && person.is_none() && !token.is_empty() {
+                return (401, json!({"message": "Bad credentials"}));
+            }
             let reads = match (installation, person) {
                 (Some(id), _) => repo.installation == Some(id),
                 (None, Some(login)) => repo.readers.contains(login),
