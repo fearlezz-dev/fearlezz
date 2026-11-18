@@ -75,6 +75,9 @@ inputs = ["crates/fearlezz/src/record.rs", "crates/fearlezz/src/record/**", "cra
 on = ["macos"]
 run = "cargo test --quiet -p fearlezz --bin fearlezz --test env --test record -- record::place:: cloned prepare ios_simulator screen_this_machine_never_has"
 stage = "working"
+# A cold boot on CI takes up to 5 minutes and the whole check passed in 7; a hung simulator
+# fails it instead of holding the leg.
+timeout = "20m"
 tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed', failed = '(?m)^---- (.+?) stdout ----$' }
 inputs = ["crates/fearlezz/src/record.rs", "crates/fearlezz/src/record/**", "crates/fearlezz/src/env.rs", "crates/fearlezz/tests/env.rs", "crates/fearlezz/tests/record.rs", "crates/fearlezz/tests/common/**", "Cargo.toml", "crates/fearlezz/Cargo.toml", "Cargo.lock", "devenv.nix", "devenv.lock"]
 
