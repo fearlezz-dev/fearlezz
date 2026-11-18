@@ -71,8 +71,10 @@ impl Source<'_> {
     /// or each report a glob matches. A glob that matches no report this run wrote is an
     /// error saying `what` it looked for.
     pub(crate) fn read(self, run: &Run<'_>, what: &str) -> Result<Vec<Report>, String> {
+        // A byte that is not UTF-8 (Latin-1 output, binary data) never empties the text.
         let report = |path: PathBuf| {
-            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let bytes = std::fs::read(&path).unwrap_or_default();
+            let text = String::from_utf8_lossy(&bytes).into_owned();
             Report { path, text }
         };
         let stdout = run.out.join(STDOUT);
@@ -137,8 +139,16 @@ impl Glob {
     /// Every file below `base` it matches, as a sorted path from there. `whole` walks every
     /// folder; otherwise hidden folders and installed packages are skipped, as no report is
     /// there.
+    /// A linked folder is not followed then either (a `result` link into the nix store).
     pub(crate) fn matches(&self, base: &Path, whole: bool) -> Vec<String> {
-        let skip = |name: &str| !whole && (name.starts_with('.') || name == "node_modules");
+        let skip = |e: &std::fs::DirEntry| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            !whole
+                && (name.starts_with('.')
+                    || name == "node_modules"
+                    || e.file_type().is_ok_and(|t| t.is_symlink()))
+        };
         let mut found: Vec<String> = crate::files::walk_skipping(base, base, skip)
             .into_iter()
             .filter(|rel| self.matcher.is_match(rel))
