@@ -66,6 +66,8 @@ on = ["macos"]
 run = "cargo clippy --all-targets --quiet --message-format=json"
 stage = "working"
 findings = { read = "cargo", lints = ["clippy", "rustc"] }
+# With the budget of tests/macos, it bounds the whole macOS leg.
+timeout = "10m"
 inputs = ["crates/fearlezz/src/record.rs", "crates/fearlezz/src/record/**", "crates/fearlezz/src/env.rs", "Cargo.toml", "crates/fearlezz/Cargo.toml", "Cargo.lock", "clippy.toml", "devenv.nix", "devenv.lock"]
 
 # The window parking units, the env tests whose fresh checkout clones folders (clonefile), the
