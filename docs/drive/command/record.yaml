@@ -37,6 +37,9 @@ decided:
   - id: secret-source
     what: "A: env, then SecretSpec"
     why: presets move to secrets with no setup
+  - id: drop-env-mask
+    what: drop the mask-all-env rule for release once tokens move to secrets
+    why: one rule, env shown and secrets masked
 
 open: []
 
@@ -57,4 +60,4 @@ slices:
     tests: []
     status: todo
 
-next: show the plan; build once refactor/health has merged, since both touch run.rs
+next: build the slices once refactor/health has merged, since both touch run.rs
