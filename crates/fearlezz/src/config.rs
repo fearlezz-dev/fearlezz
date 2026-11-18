@@ -6,6 +6,7 @@ use std::fmt;
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
+use fearlezz_proof::floor::{Change, Name};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 
@@ -246,7 +247,7 @@ impl Pictures {
     /// How `head` takes fewer pictures than these, the base branch's: a glob gone or changed
     /// (Fearlezz cannot tell a narrower glob from a wider one), a recording gone or recording
     /// less, and more pictures called flaky.
-    pub(crate) fn weakenings(&self, head: &Pictures) -> Vec<String> {
+    pub(crate) fn weakenings(&self, head: &Pictures) -> Vec<Change> {
         let mut found = Vec::new();
         for (kind, b, h) in [
             ("stills", &self.stills, &head.stills),
@@ -257,9 +258,13 @@ impl Pictures {
                 b.as_ref().map(MediaGlob::glob),
                 h.as_ref().map(MediaGlob::glob),
             ) {
-                (Some(b), None) => found.push(format!("it no longer takes {kind} by {b}")),
+                (Some(b), None) => found.push(format!("it no longer takes {kind} by {b}").into()),
                 (Some(b), Some(h)) if b != h => {
-                    found.push(format!("it takes {kind} by another glob ({b}, now {h})"));
+                    found.push(Change::replaced(
+                        format!("it takes {kind} by another glob"),
+                        b,
+                        h,
+                    ));
                 }
                 _ => {}
             }
@@ -277,11 +282,11 @@ impl Pictures {
 
 /// How the recording `h` records less than `b`: a still or film gone or renamed, another
 /// window, less time, longer to wait for its window, or more cut from the top.
-fn record_weakenings(b: &crate::record::Spec, h: &crate::record::Spec) -> Vec<String> {
+fn record_weakenings(b: &crate::record::Spec, h: &crate::record::Spec) -> Vec<Change> {
     let mut found = Vec::new();
     for (kind, was, now) in [("still", &b.still, &h.still), ("film", &b.film, &h.film)] {
         if let Some(was) = was.as_ref().filter(|w| now.as_ref() != Some(*w)) {
-            found.push(format!("it no longer records the {kind} {was}"));
+            found.push(format!("it no longer records the {kind} {was}").into());
         }
     }
     if b.window != h.window {
@@ -289,34 +294,44 @@ fn record_weakenings(b: &crate::record::Spec, h: &crate::record::Spec) -> Vec<St
             w.clone()
                 .unwrap_or_else(|| "the app its command starts".into())
         };
-        found.push(format!(
-            "it records another window ({}, now {})",
+        found.push(Change::replaced(
+            "it records another window",
             name(&b.window),
-            name(&h.window)
+            name(&h.window),
         ));
     }
+    let less = "it records for less time";
     match (b.seconds, h.seconds) {
         (Some(was), Some(now)) if now < was => {
-            found.push(format!("it records for less time ({was} s, now {now} s)"));
+            found.push(Change::replaced(
+                less,
+                format!("{was} s"),
+                format!("{now} s"),
+            ));
         }
-        (None, Some(now)) => found.push(format!(
-            "it records for less time (until its command ends, now {now} s)"
-        )),
+        (None, Some(now)) => {
+            found.push(Change::replaced(
+                less,
+                "until its command ends",
+                format!("{now} s"),
+            ));
+        }
         _ => {}
     }
     let wait =
         |s: &crate::record::Spec| s.wait.unwrap_or(crate::record::DEFAULT_WAIT.as_secs_f64());
     if wait(h) > wait(b) {
-        found.push(format!(
-            "it waits longer for its window ({} s, now {} s)",
-            wait(b),
-            wait(h)
+        found.push(Change::replaced(
+            "it waits longer for its window",
+            format!("{} s", wait(b)),
+            format!("{} s", wait(h)),
         ));
     }
     if h.crop_top > b.crop_top {
-        found.push(format!(
-            "it cuts more from the top ({} points, now {})",
-            b.crop_top, h.crop_top
+        found.push(Change::replaced(
+            "it cuts more from the top",
+            format!("{} points", b.crop_top),
+            h.crop_top,
         ));
     }
     found
@@ -1026,15 +1041,6 @@ pub(crate) struct Globs {
     set: GlobSet,
 }
 
-/// How a glob list matches more than the base branch's: positive globs it adds, `!` globs it
-/// drops, or, with neither, an order that lets a positive glob win over a `!` glob again.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Widening {
-    Added(String),
-    Dropped(String),
-    Reordered,
-}
-
 impl Globs {
     /// Globs that match nothing.
     pub(crate) fn none() -> Globs {
@@ -1057,45 +1063,38 @@ impl Globs {
         &self.patterns
     }
 
+    /// How these globs, a list of flaky `what`, call more of them flaky than `base`, the base
+    /// branch's: one line naming each glob added or `!` glob dropped, or the new order.
+    pub(crate) fn widened(&self, base: &Globs, what: &str) -> Option<Change> {
+        Change::names(format!("it calls more {what} flaky"), self.widenings(base))
+    }
+
     /// How these globs match paths that `base` does not, by a sound rule over the lists as
     /// written: dropping a positive glob or putting in a `!` glob anywhere never matches more,
     /// and globs of one kind side by side mean the same in any order. Anything else may match
-    /// more, and is named.
-    /// How these globs, a list of flaky `what`, call more of them flaky than `base`, the base
-    /// branch's: one line naming each glob added or `!` glob dropped, or the new order.
-    pub(crate) fn widened(&self, base: &Globs, what: &str) -> Option<String> {
-        let how: Vec<String> = self
-            .widenings(base)
-            .into_iter()
-            .map(|w| match w {
-                Widening::Added(p) => format!("+{p}"),
-                Widening::Dropped(p) => format!("-{p}"),
-                Widening::Reordered => "reordered".into(),
-            })
-            .collect();
-        (!how.is_empty()).then(|| format!("it calls more {what} flaky ({})", how.join(", ")))
-    }
-
-    pub(crate) fn widenings(&self, base: &Globs) -> Vec<Widening> {
+    /// more, and is named: positive globs they add, `!` globs they drop, or, with neither, the
+    /// new order. Not [`fearlezz_proof::floor::names_diff`]: a dropped positive glob or an added
+    /// `!` glob matches less, so it is not named.
+    pub(crate) fn widenings(&self, base: &Globs) -> Vec<Name> {
         let (b, h) = (&base.patterns, &self.patterns);
         if narrows_to(b, h) {
             return Vec::new();
         }
         let positive = |p: &&String| !p.starts_with('!');
-        let mut found: Vec<Widening> = h
+        let mut found: Vec<Name> = h
             .iter()
             .filter(positive)
             .filter(|p| !b.contains(p))
-            .map(|p| Widening::Added(p.clone()))
+            .map(|p| Name::Added(p.clone()))
             .collect();
         found.extend(
             b.iter()
                 .filter(|p| !positive(p))
                 .filter(|p| !h.contains(p))
-                .map(|p| Widening::Dropped(p.clone())),
+                .map(|p| Name::Dropped(p.clone())),
         );
         if found.is_empty() {
-            found.push(Widening::Reordered);
+            found.push(Name::Reordered);
         }
         found
     }
@@ -1424,7 +1423,7 @@ mod tests {
         let dropped = &base[..base.len() - 1];
         assert_eq!(
             globs(dropped).widenings(&globs(&base)),
-            [Widening::Dropped("!src/x39/**".into())]
+            [Name::Dropped("!src/x39/**".into())]
         );
         let mut reversed = base.clone();
         reversed[1..].reverse();

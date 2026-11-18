@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Result, bail};
+use fearlezz_proof::floor::Change;
 use serde::Deserialize;
 
 use crate::findings::{self, Finding};
@@ -192,18 +193,20 @@ impl Lints {
 
     /// How `head` judges the rules of `tool` more mildly than these tables: a rule at a lower
     /// level, or no longer set. Each as `lints.<tool>.<rule>` and how it weakened.
-    pub(crate) fn weakenings(&self, head: &Lints, tool: Tool) -> Vec<(String, String)> {
+    pub(crate) fn weakenings(&self, head: &Lints, tool: Tool) -> Vec<(String, Change)> {
         let Some(base) = self.of(tool) else {
             return Vec::new();
         };
         let head = head.of(tool);
         base.iter()
             .filter_map(|(rule, &was)| {
-                let how = match head.and_then(|h| h.get(rule)) {
-                    None => "it is no longer set".to_string(),
-                    Some(&now) if now < was => {
-                        format!("it goes from {} to {}", was.name(), now.name())
-                    }
+                let how: Change = match head.and_then(|h| h.get(rule)) {
+                    None => "it is no longer set".into(),
+                    Some(&now) if now < was => Change::Lowered {
+                        how: "it goes".into(),
+                        from: was.name().into(),
+                        to: now.name().into(),
+                    },
                     Some(_) => return None,
                 };
                 Some((format!("lints.{}.{rule}", tool.name()), how))
