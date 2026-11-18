@@ -613,8 +613,7 @@ fn has_commit(dir: &Path, commit: &str) -> bool {
 /// Brings the cached clone up to date, tags that moved included. One worktree fetches at a
 /// time, so two never fight over the clone's refs.
 fn fetch(dir: &Path) -> Result<()> {
-    let lock = std::fs::File::create(dir.with_extension("lock"))?;
-    lock.lock()?;
+    let _lock = crate::lease::Lease::take(&dir.with_extension("lock"), crate::lease::Mode::Only)?;
     git(
         Some(dir),
         &[

@@ -5,7 +5,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use sha2::{Digest as _, Sha256};
 
 use crate::config::{Check, Config, Env};
 use crate::env::EnvCtx;
@@ -411,7 +410,8 @@ fn build(
     let afters = media_proofs(after);
     // A short hash keeps `a/b.png` and `a_b.png` apart.
     let copy = |side: &str, run: &RunResult, p: &MediaProof| -> Result<String, String> {
-        let tag = hex::encode(&Sha256::digest(p.file.as_bytes())[..4]);
+        let mut tag = crate::files::sha256_hex(&p.file);
+        tag.truncate(8);
         let name = p.file.rsplit('/').next().unwrap_or(&p.file);
         // A text is kept as `.txt` whatever its own extension, the one type of text the proof
         // host serves, as plain text a browser never runs.

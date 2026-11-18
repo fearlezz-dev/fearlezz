@@ -530,7 +530,7 @@ fn run_curl(cmd: &mut Command, token: &str, method: &str, url: &str) -> Result<V
         e @ crate::process::Failed::Start { .. } => {
             anyhow::Error::new(e).context("talking to the proof host needs curl")
         }
-        e => e.into(),
+        e @ crate::process::Failed::Late { .. } => e.into(),
     })
 }
 

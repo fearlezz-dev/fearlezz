@@ -186,12 +186,14 @@ pub(crate) fn read_fed(
             program: cmd.get_program().to_string_lossy().into_owned(),
             error,
         })?;
-    if let Some(mut stdin) = child.stdin.take() {
-        // A program that stops reading early has said what it will say; its exit tells.
-        drop(stdin.write_all(input));
-    }
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
+    if let Some(mut stdin) = child.stdin.take() {
+        // On a thread of its own, so a program that prints before it reads all of its input
+        // never blocks; one that stops reading early has said what it will say.
+        let input = input.to_vec();
+        std::thread::spawn(move || drop(stdin.write_all(&input)));
+    }
     let status = match budget {
         None => child.wait(),
         Some(budget) => {

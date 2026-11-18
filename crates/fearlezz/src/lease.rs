@@ -90,7 +90,9 @@ mod tests {
         assert!(Lease::try_take(&path, Mode::Shared).unwrap().is_none());
         assert!(Lease::held(&path));
         drop(lease);
-        assert!(!Lease::held(&path));
+        // Taken again by waiting: a program another test starts may hold the lock for the
+        // moment between its fork and its exec.
+        Lease::take(&path, Mode::Only).unwrap();
     }
 
     #[test]

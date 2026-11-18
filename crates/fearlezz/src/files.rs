@@ -1,6 +1,7 @@
 //! Small file and folder facts every module shares: hashes, the per user folders, reads that
 //! tell a missing file from a broken one, and writes that never leave half a file.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -101,14 +102,12 @@ pub(crate) fn remove_if_exists(path: &Path) -> Result<()> {
 pub(crate) fn write_atomic(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir).with_context(|| format!("making {}", dir.display()))?;
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy())
-        .unwrap_or_default();
-    let temp = dir.join(format!(".{name}.fearlezz-{}", std::process::id()));
-    std::fs::write(&temp, content)
-        .and_then(|()| std::fs::rename(&temp, path))
-        .inspect_err(|_| drop(std::fs::remove_file(&temp)))
+    // A temporary file of its own for every write, removed when anything fails.
+    let mut temp = tempfile::NamedTempFile::new_in(dir)
+        .and_then(|mut temp| temp.write_all(content.as_ref()).map(|()| temp))
+        .with_context(|| format!("writing {}", path.display()))?;
+    temp.persist(path)
+        .map(drop)
         .with_context(|| format!("writing {}", path.display()))
 }
 
