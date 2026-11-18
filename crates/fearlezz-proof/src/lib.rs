@@ -307,14 +307,6 @@ impl Proof {
         }
     }
 
-    /// The proof of one look alone, for its own page.
-    pub fn of_look(look: Look) -> Proof {
-        Proof {
-            looks: vec![look],
-            ..Proof::new(String::new(), String::new(), String::new())
-        }
-    }
-
     /// The check `id`, to add what it showed.
     pub fn check_mut(&mut self, id: &str) -> Option<&mut Check> {
         self.checks.iter_mut().find(|c| c.id == id)
