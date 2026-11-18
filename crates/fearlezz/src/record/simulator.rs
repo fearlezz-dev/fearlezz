@@ -389,28 +389,27 @@ impl Simulator {
         }
     }
 
-    /// A device keeps the recording of a client that was killed and then refuses every new
-    /// one. A trial film finds that while the device is leased, before the check's command
-    /// starts, and booting the device again ends it.
+    /// A device keeps the recording of a client that was killed, or that died of its
+    /// interrupt on a busy Mac, and then refuses every new one. A trial film finds that while
+    /// the device is leased, before the check's command starts, and booting the device again
+    /// ends it. The trial must end well itself, or it leaves the device holding its recording.
     fn free_recorder(&self, log: &mut impl std::io::Write) -> Result<()> {
         let trial = tempfile::Builder::new().suffix(".mp4").tempfile()?;
-        match self.start_film(trial.path()) {
-            Ok(film) => {
-                drop(film);
-                Ok(())
-            }
+        let held = match self.start_film(trial.path()) {
+            Ok(mut film) => match end(&mut film.child, film.started, FILM_END) {
+                Ok(status) if status.success() => return Ok(()),
+                Ok(status) => format!("ended its trial recording with {status}"),
+                Err(e) => format!("did not end its trial recording: {e:#}"),
+            },
             Err(e) if format!("{e:#}").contains("already in progress") => {
-                writeln!(
-                    log,
-                    "record: {} still held a recording a stopped run left; booting it again",
-                    self.name
-                )?;
-                simctl(&["shutdown", &self.udid])?;
-                simctl_within(&["boot", &self.udid], BOOT)?;
-                self.boot_status()
+                "still held a recording a stopped run left".into()
             }
-            Err(e) => Err(e),
-        }
+            Err(e) => return Err(e),
+        };
+        writeln!(log, "record: {} {held}; booting it again", self.name)?;
+        simctl(&["shutdown", &self.udid])?;
+        simctl_within(&["boot", &self.udid], BOOT)?;
+        self.boot_status()
     }
 
     /// The primary display of a device with several, which `simctl io` asks to be named:
