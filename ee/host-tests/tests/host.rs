@@ -422,6 +422,10 @@ fn main() {
             the_page_says_what_each_person_can_do,
         ),
         (
+            "a_long_line_scrolls_inside_its_box",
+            a_long_line_scrolls_inside_its_box,
+        ),
+        (
             "a_note_needs_a_session_write_access_and_a_picture_of_the_run",
             notes::a_note_needs_a_session_write_access_and_a_picture_of_the_run,
         ),
@@ -551,6 +555,9 @@ fn main() {
         .map(|&(name, test)| Trial::test(name, move || run(test)))
         .collect();
     trials.push(Trial::test("pictures", || run(pictures)).with_ignored_flag(true));
+    trials.push(
+        Trial::test("long_line_pictures", || run(long_line_pictures)).with_ignored_flag(true),
+    );
     let conclusion = libtest_mimic::run(&args, trials);
     if let Some(world) = WORLD.get() {
         if conclusion.has_failed() {
@@ -3475,6 +3482,129 @@ fn the_page_says_what_each_person_can_do() {
     admin.eval("document.querySelector('button[data-accept]').click()");
     admin.wait_for(r#"document.querySelector('[data-weakenings]').dataset.accepted === "true""#);
     reader.wait_for(r#"document.querySelector('[data-weakenings]').dataset.accepted === "true""#);
+}
+
+/// A part of the config with a line far wider than the page, as a weakening shows it.
+fn long_weakenings() -> Value {
+    let globs: Vec<String> = (0..24)
+        .map(|i| format!("\"crates/part{i}/**/*.rs\""))
+        .collect();
+    let inputs = format!("inputs = [{}]", globs.join(", "));
+    json!([{
+        "check": "tests",
+        "hows": ["it no longer runs on macos"],
+        "was": format!("[check.tests]\n{inputs}\non = [\"linux\", \"macos\"]\nrun = \"cargo test\"\n"),
+        "now": format!("[check.tests]\n{inputs}\nrun = \"cargo test\"\n"),
+    }])
+}
+
+/// Whether the code box `code` keeps inside the card `card` and the page never scrolls
+/// sideways, beside the runs column when the page is wide enough to show it there.
+fn fits(code: &str, card: &str) -> String {
+    format!(
+        "(() => {{
+            const code = document.querySelector('{code}').getBoundingClientRect();
+            const card = document.querySelector('{card}').getBoundingClientRect();
+            const runs = document.querySelector('aside.runs').getBoundingClientRect();
+            const page = document.documentElement;
+            const beside = runs.top < card.bottom && runs.left > card.left;
+            return JSON.stringify({{
+                inCard: code.right <= card.right + 0.5,
+                pageScrolls: page.scrollWidth > page.clientWidth,
+                underRuns: beside && card.right > runs.left,
+            }});
+        }})()"
+    )
+}
+
+fn fitted() -> Value {
+    json!(r#"{"inCard":true,"pageScrolls":false,"underRuns":false}"#)
+}
+
+/// Pull request `number`'s page, its weakening of `long_weakenings()` opened to show the change.
+fn long_weakening_page(number: u64) -> browser::Browser {
+    let branch = format!("review/long-{number}");
+    review_with_pictures(number, &branch, &json!({ "weakened": long_weakenings() }));
+    let mut browser = browser::Browser::start();
+    browser.open(&format!(
+        "{}/owner/review/pull/{number}",
+        world().worker.url
+    ));
+    browser.wait_for("!!document.querySelector('button[data-show-change]')");
+    browser.eval("document.querySelector('button[data-show-change]').click()");
+    browser.wait_for("!!document.querySelector('[data-weakenings] [data-diff]')");
+    browser
+}
+
+fn a_long_line_scrolls_inside_its_box() {
+    // A weakening's part of the config, shown on request.
+    let mut browser = long_weakening_page(192);
+    for (width, height, mobile) in [(1280, 900, false), (390, 844, true)] {
+        browser.view(width, height, mobile, false);
+        assert_eq!(
+            browser.eval(&fits("[data-weakenings] [data-diff]", "[data-weakenings]")),
+            fitted(),
+            "the weakening at {width} wide"
+        );
+    }
+    drop(browser);
+    // A text of a look, in the same box. Its column already keeps its width, so this guards
+    // against a wrapper of the box that widens it; only the weakening above went red before.
+    let job = Job::push("owner/repo", "feat/long-text");
+    let run = job.open(&["render"]);
+    let line = format!("args: [{}]\n", vec!["\"--flag\""; 60].join(", "));
+    let before = format!("kind: ConfigMap\n{line}color: red\n").into_bytes();
+    let after = format!("kind: ConfigMap\n{line}color: blue\n").into_bytes();
+    let files = [
+        ("looks/render/media/before-long.yaml.txt", before.as_slice()),
+        ("looks/render/media/after-long.yaml.txt", after.as_slice()),
+    ];
+    let look = look_of(
+        "render",
+        &[json!({
+            "name": "long", "kind": "text", "change": "changed",
+            "summary": "1 line added, 1 removed",
+            "before": files[0].0, "after": files[1].0, "comparison": null,
+        })],
+    );
+    let answer = job.finished_with_look(&run.id, &entry("render", "passed"), &files, &look);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    for (_, bytes) in &files {
+        job.send(bytes);
+    }
+    let mut browser = browser::Browser::start();
+    browser.open(&format!(
+        "{}/owner/repo/work/feat/long-text",
+        world().worker.url
+    ));
+    browser.wait_for("!!document.querySelector('[data-stage] [data-diff]')");
+    for (width, height, mobile) in [(1280, 900, false), (390, 844, true)] {
+        browser.view(width, height, mobile, false);
+        assert_eq!(
+            browser.eval(&fits("[data-stage] [data-diff]", "[data-pictures]")),
+            fitted(),
+            "the text at {width} wide"
+        );
+    }
+}
+
+/// Not a test of behaviour: pictures of a work page whose weakening has a line far wider than
+/// the page, wide and at phone width, written to `ee/target/tmp` for a person to look at.
+/// `cargo test --manifest-path ee/Cargo.toml --test host -- --ignored long_line_pictures`.
+fn long_line_pictures() {
+    let mut browser = long_weakening_page(193);
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    for (view, (width, height, mobile)) in
+        [("wide", (1280, 900, false)), ("phone", (390, 844, true))]
+    {
+        browser.view(width, height, mobile, false);
+        // Motion settles before the picture.
+        std::thread::sleep(Duration::from_millis(900));
+        let path = dir.join(format!("page-long-line-{view}.png"));
+        let written = std::fs::write(&path, browser.screenshot());
+        assert!(written.is_ok(), "{}: {written:?}", path.display());
+        eprintln!("{}", path.display());
+    }
 }
 
 /// Not a test of behaviour: pictures of the page with a changed still, a new still and a
