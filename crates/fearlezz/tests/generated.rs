@@ -142,6 +142,27 @@ fn ci_names_out_of_date_generated_files_as_the_blocker() {
 }
 
 #[test]
+fn dropping_generates_weakens_the_proof() {
+    let repo = repo();
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{}\n[settings.skill]\nagents = []\n\n[settings.hooks]\nagents = []\n",
+            CONFIG.replace("generates = [\"gen/**\"]\n", "")
+        ),
+    );
+    repo.commit("check no generated files");
+    let out = repo.fz(&["run", "--ci"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("it no longer checks generated files (gen/**)"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn narrowing_generates_weakens_the_proof() {
     let repo = repo();
     repo.write(

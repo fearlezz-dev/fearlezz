@@ -4,10 +4,10 @@
 //! the checks, never which files they read.
 
 use anyhow::Result;
-use fearlezz_proof::floor::{PAST, Part, Weakening};
+use fearlezz_proof::floor::{Change, PAST, Part, Weakening, names_diff};
 use fearlezz_proof::review::Accept;
 
-use crate::config::{self, Builtin, Config, Env, Ports, Widening};
+use crate::config::{self, Builtin, Config, Env, Ports};
 use crate::findings::Scope;
 use crate::state::Worktree;
 
@@ -42,7 +42,8 @@ impl Floor {
         }
         let base = Config::load(&base.root, &git.common)?;
         let mut weakened: Vec<Weakening> = Vec::new();
-        for (part, how) in weakenings(&base, head, &wt.files) {
+        for (part, change) in weakenings(&base, head, &wt.files) {
+            let how = change.to_string();
             if let Some(w) = weakened.iter_mut().find(|w| w.part == part) {
                 if !w.hows.contains(&how) {
                     w.hows.push(how);
@@ -126,122 +127,15 @@ fn gone_with_its_folder(base: &Config, head: &Config, check: &config::Check) -> 
 /// [`config::Pictures::weakenings`]), rules covering fewer of `files`, and new `no_proof` globs
 /// or dropped negations, each as the part and how, in the order found. Which files a check
 /// reads is only a speed hint, so it never weakens.
-fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, String)> {
-    let mut found = Vec::new();
+fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Change)> {
     // A scheduled check has a floor too: its run proves the default branch on a schedule.
-    for b in base.every_check() {
-        let mut say = |how: String| found.push((Part::Check(b.id.clone()), how));
-        let Some(h) = head.every_check().find(|h| h.id == b.id) else {
-            if !gone_with_its_folder(base, head, b) {
-                say("it is gone".into());
-            }
-            continue;
-        };
-        if h.steps != b.steps {
-            say("it runs another command".into());
-        }
-        for platform in b.on.iter().filter(|p| !h.on.contains(p)) {
-            say(format!("it no longer runs on {platform}"));
-        }
-        if h.schedule && !b.schedule {
-            say("it runs on a schedule instead of for each change".into());
-        }
-        if h.dir != b.dir {
-            let at = |dir: &Option<String>| dir.clone().unwrap_or_else(|| "the root".into());
-            say(format!(
-                "it runs in another folder ({}, now {})",
-                at(&b.dir),
-                at(&h.dir)
-            ));
-        }
-        let base_stage = base.stages.name(b.stage);
-        if head.stages.find(base_stage).is_none_or(|s| h.stage > s) {
-            say(format!("it moves to a later stage than {base_stage}"));
-        }
-        match (&b.findings, &h.findings) {
-            (Some(_), None) => say("it no longer reports findings".into()),
-            (Some(bf), Some(hf)) => {
-                if bf.read != hf.read {
-                    say(format!(
-                        "its findings are read another way ({}, now {})",
-                        bf.read.name(),
-                        hf.read.name()
-                    ));
-                }
-                for tool in bf.tools.iter().filter(|t| !hf.tools.contains(t)) {
-                    say(format!(
-                        "its findings no longer get the levels of [lints.{}]",
-                        tool.name()
-                    ));
-                }
-                if bf.on == Scope::Everywhere && hf.on == Scope::Changed {
-                    say("its findings count only on changed lines".into());
-                }
-            }
-            (None, _) => {}
-        }
-        // Leaving the simulator or a Linux display moves the check to a screen CI cannot
-        // record (this machine's window) or another system's runner.
-        if b.screen.owned()
-            && std::mem::discriminant(&b.screen) != std::mem::discriminant(&h.screen)
-        {
-            say(format!(
-                "it runs on another screen ({}, now {})",
-                b.screen.describe(),
-                h.screen.describe()
-            ));
-        }
-        for how in b.pictures.weakenings(&h.pictures) {
-            say(how);
-        }
-        if let Some(how) = h.flaky_tests.widened(&b.flaky_tests, "tests") {
-            say(how);
-        }
-        let (bg, hg) = (b.generates.patterns(), h.generates.patterns());
-        if !bg.is_empty() && !b.generates.widenings(&h.generates).is_empty() {
-            say(if hg.is_empty() {
-                format!("it no longer checks generated files ({})", bg.join(", "))
-            } else {
-                format!(
-                    "it checks fewer generated files ({}, now {})",
-                    bg.join(", "),
-                    hg.join(", ")
-                )
-            });
-        }
-        if b.tests.is_some() && h.tests.is_none() {
-            say("it no longer counts its tests".into());
-        }
-        // Which files are tests decides what runs on the base commit, so any change to it
-        // could hide a fix whose tests do not fail there. Naming them the first time is fine,
-        // unless the check measures coverage, which never counts a test file.
-        let measured = b.coverage.is_some() && h.coverage.is_some();
-        if (measured || !b.test_files.is_empty()) && h.test_files != b.test_files {
-            say("it names other test files".into());
-        }
-        // What a check sees can change what it proves (a variable that skips the slow tests,
-        // a key without which they skip themselves), so either list changing weakens it.
-        let env = names_diff(&b.env, &h.env);
-        if !env.is_empty() {
-            say(format!("it sees other environment variables ({env})"));
-        }
-        let secrets = names_diff(&b.secrets, &h.secrets);
-        if !secrets.is_empty() {
-            say(format!("it gets other secrets ({secrets})"));
-        }
-        if let (Some(bf), Some(hf)) = (&b.findings, &h.findings) {
-            for tool in bf.tools.iter().filter(|t| hf.tools.contains(t)) {
-                found.extend(settings(bf.levels.weakenings(&hf.levels, *tool)));
-            }
-        }
-        found.extend(coverage(b, h));
-        if let (Some(Builtin::Rules(br)), Some(Builtin::Rules(hr))) = (&b.builtin, &h.builtin) {
-            found.extend(settings(br.weakenings(hr, files)));
-        }
-    }
+    let mut found: Vec<(Part, Change)> = base
+        .every_check()
+        .flat_map(|b| check_weakenings(base, head, b, files))
+        .collect();
     // Checks that share a lints table would name its weakenings once each.
     let mut seen = std::collections::BTreeSet::new();
-    found.retain(|w: &(Part, String)| seen.insert(w.clone()));
+    found.retain(|w: &(Part, Change)| seen.insert(w.clone()));
     found.extend(settings(base.settings.weakenings(&head.settings)));
     found.extend(settings(env_weakenings(&base.env, &head.env)));
     for b in &base.platforms {
@@ -255,36 +149,145 @@ fn weakenings(base: &Config, head: &Config, files: &[String]) -> Vec<(Part, Stri
             _ => {}
         }
     }
-    for w in head.no_proof.widenings(&base.no_proof) {
-        let how = match w {
-            Widening::Added(glob) => format!("it newly says {glob} needs no proof"),
-            Widening::Dropped(glob) => format!(
-                "it no longer takes {} back from needing no proof",
-                glob.trim_start_matches('!')
-            ),
-            Widening::Reordered => "it reorders its globs so more files need no proof".into(),
-        };
-        found.push((Part::Setting("no_proof".into()), how));
+    for name in head.no_proof.widenings(&base.no_proof) {
+        found.push((Part::Setting("no_proof".into()), Change::Exempts(name)));
     }
     found
 }
 
-/// The names `head` adds (`+NAME`) and drops (`-NAME`) from `base`, joined, or empty.
-fn names_diff(base: &[String], head: &[String]) -> String {
-    let added = head
-        .iter()
-        .filter(|v| !base.contains(v))
-        .map(|v| format!("+{v}"));
-    let dropped = base
-        .iter()
-        .filter(|v| !head.contains(v))
-        .map(|v| format!("-{v}"));
-    added.chain(dropped).collect::<Vec<_>>().join(", ")
+/// How `head` proves less than `base` of the base's check `b`, each as the part and how.
+fn check_weakenings(
+    base: &Config,
+    head: &Config,
+    b: &config::Check,
+    files: &[String],
+) -> Vec<(Part, Change)> {
+    let mut found = Vec::new();
+    let mut say = |how: Change| found.push((Part::Check(b.id.clone()), how));
+    let Some(h) = head.every_check().find(|h| h.id == b.id) else {
+        if !gone_with_its_folder(base, head, b) {
+            say("it is gone".into());
+        }
+        return found;
+    };
+    if h.steps != b.steps {
+        say("it runs another command".into());
+    }
+    for platform in b.on.iter().filter(|p| !h.on.contains(p)) {
+        say(format!("it no longer runs on {platform}").into());
+    }
+    if h.schedule && !b.schedule {
+        say("it runs on a schedule instead of for each change".into());
+    }
+    if h.dir != b.dir {
+        let at = |dir: &Option<String>| dir.clone().unwrap_or_else(|| "the root".into());
+        say(Change::replaced(
+            "it runs in another folder",
+            at(&b.dir),
+            at(&h.dir),
+        ));
+    }
+    let base_stage = base.stages.name(b.stage);
+    if head.stages.find(base_stage).is_none_or(|s| h.stage > s) {
+        say(format!("it moves to a later stage than {base_stage}").into());
+    }
+    for how in findings(b, h) {
+        say(how);
+    }
+    // Leaving the simulator or a Linux display moves the check to a screen CI cannot
+    // record (this machine's window) or another system's runner.
+    if b.screen.owned() && std::mem::discriminant(&b.screen) != std::mem::discriminant(&h.screen) {
+        say(Change::replaced(
+            "it runs on another screen",
+            b.screen.describe(),
+            h.screen.describe(),
+        ));
+    }
+    for how in b.pictures.weakenings(&h.pictures) {
+        say(how);
+    }
+    if let Some(how) = h.flaky_tests.widened(&b.flaky_tests, "tests") {
+        say(how);
+    }
+    let (bg, hg) = (b.generates.patterns(), h.generates.patterns());
+    if !bg.is_empty() && !b.generates.widenings(&h.generates).is_empty() {
+        say(if hg.is_empty() {
+            format!("it no longer checks generated files ({})", bg.join(", ")).into()
+        } else {
+            Change::replaced(
+                "it checks fewer generated files",
+                bg.join(", "),
+                hg.join(", "),
+            )
+        });
+    }
+    if b.tests.is_some() && h.tests.is_none() {
+        say("it no longer counts its tests".into());
+    }
+    // Which files are tests decides what runs on the base commit, so any change to it
+    // could hide a fix whose tests do not fail there. Naming them the first time is fine,
+    // unless the check measures coverage, which never counts a test file.
+    let measured = b.coverage.is_some() && h.coverage.is_some();
+    if (measured || !b.test_files.is_empty()) && h.test_files != b.test_files {
+        say("it names other test files".into());
+    }
+    // What a check sees can change what it proves (a variable that skips the slow tests,
+    // a key without which they skip themselves), so either list changing weakens it.
+    for (how, was, now) in [
+        ("it sees other environment variables", &b.env, &h.env),
+        ("it gets other secrets", &b.secrets, &h.secrets),
+    ] {
+        if let Some(how) = Change::names(how, names_diff(was, now)) {
+            say(how);
+        }
+    }
+    if let (Some(bf), Some(hf)) = (&b.findings, &h.findings) {
+        for tool in bf.tools.iter().filter(|t| hf.tools.contains(t)) {
+            found.extend(settings(bf.levels.weakenings(&hf.levels, *tool)));
+        }
+    }
+    found.extend(coverage(b, h));
+    if let (Some(Builtin::Rules(br)), Some(Builtin::Rules(hr))) = (&b.builtin, &h.builtin) {
+        found.extend(settings(br.weakenings(hr, files)));
+    }
+    found
+}
+
+/// How the head's check reports findings less than the base's: not at all, read another way,
+/// without a lints table's levels, or only on changed lines.
+fn findings(b: &config::Check, h: &config::Check) -> Vec<Change> {
+    let mut found = Vec::new();
+    match (&b.findings, &h.findings) {
+        (Some(_), None) => found.push("it no longer reports findings".into()),
+        (Some(bf), Some(hf)) => {
+            if bf.read != hf.read {
+                found.push(Change::replaced(
+                    "its findings are read another way",
+                    bf.read.name(),
+                    hf.read.name(),
+                ));
+            }
+            for tool in bf.tools.iter().filter(|t| !hf.tools.contains(t)) {
+                found.push(
+                    format!(
+                        "its findings no longer get the levels of [lints.{}]",
+                        tool.name()
+                    )
+                    .into(),
+                );
+            }
+            if bf.on == Scope::Everywhere && hf.on == Scope::Changed {
+                found.push("its findings count only on changed lines".into());
+            }
+        }
+        (None, _) => {}
+    }
+    found
 }
 
 /// What the head's check measures of coverage less than the base's: none at all, another
 /// report format, a lower target, or a lower level for `[lints.coverage]`.
-fn coverage(b: &config::Check, h: &config::Check) -> Vec<(Part, String)> {
+fn coverage(b: &config::Check, h: &config::Check) -> Vec<(Part, Change)> {
     let part = || Part::Check(b.id.clone());
     match (&b.coverage, &h.coverage) {
         (Some(_), None) => vec![(part(), "it no longer measures coverage".into())],
@@ -294,13 +297,15 @@ fn coverage(b: &config::Check, h: &config::Check) -> Vec<(Part, String)> {
                 "it reads its coverage as {} instead of {}",
                 hc.read.name(),
                 bc.read.name()
-            ),
+            )
+            .into(),
         )],
         (Some(bc), Some(hc)) => (hc.target < bc.target)
             .then(|| {
-                let how = format!(
-                    "its coverage target is lower ({}%, now {}%)",
-                    bc.target, hc.target
+                let how = Change::replaced(
+                    "its coverage target is lower",
+                    format!("{}%", bc.target),
+                    format!("{}%", hc.target),
                 );
                 (part(), how)
             })
@@ -315,7 +320,7 @@ fn coverage(b: &config::Check, h: &config::Check) -> Vec<(Part, String)> {
 }
 
 /// Weakenings of parts of the config other than a check, each as its path and how.
-fn settings(found: Vec<(String, String)>) -> impl Iterator<Item = (Part, String)> {
+fn settings(found: Vec<(String, Change)>) -> impl Iterator<Item = (Part, Change)> {
     found
         .into_iter()
         .map(|(path, how)| (Part::Setting(path), how))
@@ -324,7 +329,7 @@ fn settings(found: Vec<(String, String)>) -> impl Iterator<Item = (Part, String)
 /// How `head` makes checks run in another environment: any command, variable, cloned folder
 /// or port source changed, since Fearlezz cannot tell which way that weakens them. Each as
 /// `env.<field>` and how.
-fn env_weakenings(base: &Env, head: &Env) -> Vec<(String, String)> {
+fn env_weakenings(base: &Env, head: &Env) -> Vec<(String, Change)> {
     let ports = |p: &Option<Ports>| {
         p.as_ref().map(|p| match p {
             Ports::Command(cmd) => cmd.clone(),
@@ -342,13 +347,9 @@ fn env_weakenings(base: &Env, head: &Env) -> Vec<(String, String)> {
     ];
     let mut found = Vec::new();
     for (field, was, now) in commands {
-        let how = match (was, now) {
-            (Some(b), Some(h)) if b != h => format!("it changes from {b} to {h}"),
-            (None, Some(h)) => format!("it is added ({h})"),
-            (Some(b), None) => format!("it is removed (was {b})"),
-            _ => continue,
-        };
-        found.push((format!("env.{field}"), how));
+        if let Some(how) = Change::set(was, now) {
+            found.push((format!("env.{field}"), how));
+        }
     }
     let lists = [
         ("clone", &base.clone, &head.clone),
@@ -357,21 +358,8 @@ fn env_weakenings(base: &Env, head: &Env) -> Vec<(String, String)> {
         ("secrets", &base.secrets, &head.secrets),
     ];
     for (field, was, now) in lists {
-        let changes: Vec<String> = now
-            .iter()
-            .filter(|v| !was.contains(v))
-            .map(|v| format!("+{v}"))
-            .chain(
-                was.iter()
-                    .filter(|v| !now.contains(v))
-                    .map(|v| format!("-{v}")),
-            )
-            .collect();
-        if !changes.is_empty() {
-            found.push((
-                format!("env.{field}"),
-                format!("it changes ({})", changes.join(", ")),
-            ));
+        if let Some(how) = Change::names("it changes", names_diff(was, now)) {
+            found.push((format!("env.{field}"), how));
         }
     }
     found

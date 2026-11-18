@@ -134,6 +134,37 @@ fn recording_less_weakens_the_proof() {
 }
 
 #[test]
+fn recording_another_window_for_a_set_time_and_cutting_more_weakens_the_proof() {
+    let base = CONFIG.replace(
+        "record = { film = \"home\", seconds = 2 }",
+        "record = { film = \"home\" }",
+    );
+    let repo = Repo::new(&base, &[(".gitignore", ".runs/\n"), ("app/main.txt", "v1")]);
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/change");
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{}\n[settings.skill]\nagents = []\n\n[settings.hooks]\nagents = []\n",
+            base.replace(
+                "record = { film = \"home\" }",
+                "record = { film = \"home\", seconds = 5, window = \"Other\", crop_top = 28 }"
+            )
+        ),
+    );
+    repo.commit("change");
+    let out = repo.fz_env(&["run", "--ci"], &[OFF]);
+    assert!(!out.ok, "{}", out.stdout);
+    for how in [
+        "it records another window (the app its command starts, now Other)",
+        "it records for less time (until its command ends, now 5 s)",
+        "it cuts more from the top (0 points, now 28)",
+    ] {
+        assert!(out.stdout.contains(how), "{how}: {}", out.stdout);
+    }
+}
+
+#[test]
 fn an_empty_window_name_is_refused_since_it_would_match_any_window() {
     let repo = Repo::new(
         "[check.look]\nrun = \"true\"\nstage = \"look\"\nrecord = { film = \"app\", window = \" \" }\n",
