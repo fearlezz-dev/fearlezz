@@ -57,6 +57,30 @@ pub struct Finding {
     pub anywhere: bool,
 }
 
+impl Finding {
+    /// A finding on one line that counts only where the change is, with no fix or reason;
+    /// a reader sets the rest with struct update syntax.
+    pub fn new(
+        file: impl Into<String>,
+        line: u32,
+        level: Level,
+        rule: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Finding {
+        Finding {
+            file: file.into(),
+            line,
+            end_line: None,
+            level,
+            rule: rule.into(),
+            message: message.into(),
+            fix: None,
+            why: None,
+            anywhere: false,
+        }
+    }
+}
+
 impl fmt::Display for Finding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let level = self.level.name();

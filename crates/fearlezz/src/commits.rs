@@ -124,12 +124,6 @@ impl Commits {
                     ),
                 };
                 Finding {
-                    file: String::new(),
-                    line: 0,
-                    end_line: None,
-                    level: Level::Gate,
-                    rule: CHECK.into(),
-                    message,
                     fix: Some(format!(
                         "{fix} as `<type>(<scope>)!: <what it does>`, such as `feat: ...` or \
                          `fix: ...`; types are {}",
@@ -139,6 +133,7 @@ impl Commits {
                         "release notes and versions are made from the commit messages".into(),
                     ),
                     anywhere: true,
+                    ..Finding::new("", 0, Level::Gate, CHECK, message)
                 }
             })
             .collect())

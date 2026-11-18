@@ -4,29 +4,27 @@
 //! Two readers cover every runner: JUnit reports, which most runners write, and a pattern for
 //! the summary line a runner prints. The language pieces set the right one.
 
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-
 use anyhow::{Context as _, Result, bail};
-use globset::{GlobBuilder, GlobMatcher};
+use quick_xml::events::{BytesStart, Event};
 use regex::Regex;
+
+use crate::read::{Glob, Run, Source};
 
 /// Where a check's test runner says how many tests ran.
 #[derive(Clone)]
 pub(crate) enum Reader {
     /// The test cases, not skipped, in the JUnit reports matching the glob that this run wrote.
-    Junit { glob: String, matcher: GlobMatcher },
+    Junit(Glob),
     /// The tests a pattern finds in the output: the numbers it captures, or one per match;
     /// and the failed tests another pattern names, by its first capture.
     Count { count: Regex, failed: Option<Regex> },
 }
 
-/// Only what was written, since this is part of a check's key: the compiled matcher's form
-/// changes with the glob library.
+/// Only what was written, since this is part of a check's key.
 impl std::fmt::Debug for Reader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Reader::Junit { glob, .. } => f.debug_tuple("Junit").field(glob).finish(),
+            Reader::Junit(glob) => f.debug_tuple("Junit").field(glob).finish(),
             Reader::Count { count, failed } => {
                 let mut tuple = f.debug_tuple("Count");
                 tuple.field(&count.as_str());
@@ -51,10 +49,11 @@ impl Reader {
         let regex = |key: &str, pattern: &str| {
             Regex::new(pattern).with_context(|| format!("tests {key} \"{pattern}\""))
         };
+        let junit = |glob: &str| Glob::parse(glob, "tests junit").map(Reader::Junit);
         let len = table.map_or(0, toml::Table::len);
         match (raw.as_str(), text("junit"), text("count"), text("failed")) {
-            (Some("junit"), ..) => Reader::junit(OUT_REPORT),
-            (_, Some(glob), None, None) if len == 1 => Reader::junit(glob),
+            (Some("junit"), ..) => junit(OUT_REPORT),
+            (_, Some(glob), None, None) if len == 1 => junit(glob),
             (_, None, Some(count), failed) if len == 1 + usize::from(failed.is_some()) => {
                 Ok(Reader::Count {
                     count: regex("count", count)?,
@@ -68,35 +67,16 @@ impl Reader {
         }
     }
 
-    fn junit(glob: &str) -> Result<Reader> {
-        let pattern = glob.strip_prefix("$FEARLEZZ_OUT/").unwrap_or(glob);
-        let matcher = GlobBuilder::new(pattern)
-            .literal_separator(true)
-            .build()
-            .with_context(|| format!("tests junit \"{glob}\""))?
-            .compile_matcher();
-        Ok(Reader::Junit {
-            glob: glob.to_string(),
-            matcher,
-        })
-    }
-
     /// How many tests ran and the cases it names (from JUnit reports each case that ran, from
-    /// a `failed` pattern each failed test once), or why there is no count. `outputs` are the files the check's output went to, `out` its `$FEARLEZZ_OUT`,
-    /// `root` the checkout, and `since` when the run started.
-    pub(crate) fn count(
-        &self,
-        outputs: &[&Path],
-        out: &Path,
-        root: &Path,
-        since: SystemTime,
-    ) -> Result<(u64, Vec<Case>), String> {
+    /// a `failed` pattern each failed test once), or why there is no count. A JUnit glob
+    /// names reports from the repository root, whatever folder the check runs in.
+    pub(crate) fn count(&self, run: &Run<'_>) -> Result<(u64, Vec<Case>), String> {
         match self {
             Reader::Count { count: re, failed } => {
-                let text: String = outputs
-                    .iter()
-                    .filter_map(|p| std::fs::read(p).ok())
-                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                let text: String = Source::Output
+                    .read(run, "output")?
+                    .into_iter()
+                    .map(|r| r.text)
                     .collect();
                 let mut found = None;
                 for caps in re.captures_iter(&text) {
@@ -135,62 +115,18 @@ impl Reader {
                     )
                 })
             }
-            Reader::Junit { glob, matcher } => {
-                let base = if glob.starts_with("$FEARLEZZ_OUT/") {
-                    out
-                } else {
-                    root
+            Reader::Junit(glob) => {
+                let at_root = Run {
+                    folder: None,
+                    ..*run
                 };
-                let mut reports = Vec::new();
-                find(base, base, matcher, since, &mut reports);
-                if reports.is_empty() {
-                    return Err(format!(
-                        "no JUnit report matching {glob} written by this run; the runner wrote \
-                         none, or wrote it elsewhere"
-                    ));
-                }
-                let cases: Vec<Case> = reports
+                let cases: Vec<Case> = Source::Glob(glob)
+                    .read(&at_root, "JUnit report")?
                     .iter()
-                    .flat_map(|(_, text)| junit_cases(text))
+                    .flat_map(|r| junit_cases(&r.text))
                     .collect();
                 Ok((u64::try_from(cases.len()).unwrap_or(u64::MAX), cases))
             }
-        }
-    }
-}
-
-/// The path and text of every file under `dir` matching `matcher` (from `base`) and changed after
-/// `since`. Hidden folders and installed packages are skipped.
-pub(crate) fn find(
-    base: &Path,
-    dir: &Path,
-    matcher: &GlobMatcher,
-    since: SystemTime,
-    out: &mut Vec<(PathBuf, String)>,
-) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let Ok(meta) = entry.metadata() else {
-            continue;
-        };
-        if meta.is_dir() {
-            if !name.starts_with('.') && name != "node_modules" {
-                find(base, &path, matcher, since, out);
-            }
-            continue;
-        }
-        let rel = path.strip_prefix(base).unwrap_or(&path);
-        let fresh = meta.modified().is_ok_and(|m| m >= since);
-        if fresh
-            && matcher.is_match(rel)
-            && let Ok(text) = std::fs::read_to_string(&path)
-        {
-            out.push((path, text));
         }
     }
 }
@@ -216,99 +152,97 @@ pub(crate) fn is_from(case: &Case, path: &str) -> bool {
     class == path || class == module || class.starts_with(&format!("{module}.")) || last == stem
 }
 
-/// The test cases of one report that were not skipped: those with a `<failure` or `<error`
-/// inside failed, and those with a `<flakyFailure` or `<flakyError` (Surefire's word for a
-/// failed attempt before a pass, which Playwright and nextest write too) passed only on a
-/// rerun. A `<rerunFailure` comes after a `<failure`, so a test that failed its reruns too is
-/// a failure.
-fn junit_cases(text: &str) -> Vec<Case> {
-    let mut cases = Vec::new();
-    let mut rest = text;
-    while let Some((_, after)) = rest.split_once("<testcase") {
-        rest = after;
-        if !rest.starts_with(|c: char| c.is_whitespace() || c == '>' || c == '/') {
-            continue;
-        }
-        let (attrs, after) = start_tag(rest);
-        rest = after;
-        let body = if attrs.ends_with('/') {
-            ""
-        } else {
-            let (body, after) = rest.split_once("</testcase>").unwrap_or((rest, ""));
-            rest = after;
-            body
-        };
-        if body.contains("<skipped") {
-            continue;
-        }
-        let name = attr(attrs, "name").unwrap_or_default();
-        let name = match attr(attrs, "classname").filter(|c| !c.is_empty()) {
-            Some(class) => format!("{class}::{name}"),
-            None => name,
-        };
-        let flaky = body.contains("<flakyFailure") || body.contains("<flakyError");
-        cases.push(Case {
-            name,
-            file: attr(attrs, "file"),
-            // nextest, by default, writes a `<failure` beside the flaky attempts as well (and
-            // exits non zero, which fails the check on its own).
-            failed: !flaky && (body.contains("<failure") || body.contains("<error")),
-            flaky,
-        });
-    }
-    cases
+/// The value of the attribute `name` of an XML element, unescaped.
+pub(crate) fn attr(tag: &BytesStart<'_>, name: &str) -> Option<String> {
+    let a = tag.try_get_attribute(name).ok()??;
+    Some(
+        match a.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
+            Ok(v) => v.into_owned(),
+            // An entity XML does not define (such as `&nbsp;`) is left as written.
+            Err(_) => a.value.into_owned(),
+        },
+    )
 }
 
-/// A start tag's attributes and the text after it: split at the first `>` outside quotes.
-fn start_tag(text: &str) -> (&str, &str) {
-    let mut quote = None;
-    for (i, c) in text.char_indices() {
-        match (quote, c) {
-            (None, '"' | '\'') => quote = Some(c),
-            (Some(q), c) if q == c => quote = None,
-            (None, '>') => {
-                let (attrs, rest) = text.split_at(i);
-                return (attrs, rest.strip_prefix('>').unwrap_or(rest));
+/// The test cases of one report that were not skipped: those with a `<failure>` or `<error>`
+/// inside failed, and those with a `<flakyFailure>` or `<flakyError>` (Surefire's word for a
+/// failed attempt before a pass, which Playwright and nextest write too) passed only on a
+/// rerun. A `<rerunFailure>` comes after a `<failure>`, so a test that failed its reruns too
+/// is a failure. A report cut short (a runner that crashed) gives the cases up to the cut.
+fn junit_cases(text: &str) -> Vec<Case> {
+    #[derive(Default)]
+    struct Open {
+        case: Option<Case>,
+        skipped: bool,
+        failed: bool,
+    }
+    let mut reader = quick_xml::Reader::from_str(text);
+    reader.config_mut().check_end_names = false;
+    let mut cases = Vec::new();
+    let mut open = Open::default();
+    loop {
+        let at = reader.buffer_position();
+        let event = reader.read_event();
+        // A careless reporter (an unescaped `<` in its output) is read past where it can be.
+        if event.is_err() && reader.buffer_position() > at {
+            continue;
+        }
+        let (tag, empty) = match event {
+            Ok(Event::Start(tag)) => (tag, false),
+            Ok(Event::Empty(tag)) => (tag, true),
+            Ok(Event::End(ref tag)) if tag.local_name().as_ref() != "testcase" => continue,
+            Ok(Event::End(_) | Event::Eof) | Err(_) => {
+                let Open {
+                    case,
+                    skipped,
+                    failed,
+                } = std::mem::take(&mut open);
+                if let (Some(mut case), false) = (case, skipped) {
+                    // nextest, by default, writes a `<failure>` beside the flaky attempts as
+                    // well (and exits non zero, which fails the check on its own).
+                    case.failed = failed && !case.flaky;
+                    cases.push(case);
+                }
+                if matches!(event, Ok(Event::End(_))) {
+                    continue;
+                }
+                break;
+            }
+            Ok(_) => continue,
+        };
+        match tag.local_name().as_ref() {
+            "testcase" => {
+                let name = attr(&tag, "name").unwrap_or_default();
+                let name = match attr(&tag, "classname").filter(|c| !c.is_empty()) {
+                    Some(class) => format!("{class}::{name}"),
+                    None => name,
+                };
+                let case = Case {
+                    name,
+                    file: attr(&tag, "file"),
+                    failed: false,
+                    flaky: false,
+                };
+                if empty {
+                    cases.push(case);
+                } else {
+                    open = Open {
+                        case: Some(case),
+                        ..Open::default()
+                    };
+                }
+            }
+            "skipped" => open.skipped = true,
+            "failure" | "error" => open.failed = true,
+            "flakyFailure" | "flakyError" => {
+                if let Some(case) = &mut open.case {
+                    case.flaky = true;
+                }
             }
             _ => {}
         }
     }
-    (text, "")
-}
-
-/// The unescaped value of the attribute `name` in a start tag's attributes.
-pub(crate) fn attr(attrs: &str, name: &str) -> Option<String> {
-    let mut rest = attrs;
-    loop {
-        let (before, after) = rest.split_once(name)?;
-        rest = after;
-        if before
-            .chars()
-            .next_back()
-            .is_some_and(|c| !c.is_whitespace())
-        {
-            continue;
-        }
-        let Some(value) = rest.trim_start().strip_prefix('=') else {
-            continue;
-        };
-        let value = value.trim_start();
-        let Some((quote, value)) = ['"', '\'']
-            .into_iter()
-            .find_map(|q| Some((q, value.strip_prefix(q)?)))
-        else {
-            continue;
-        };
-        let (value, _) = value.split_once(quote)?;
-        return Some(
-            value
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&quot;", "\"")
-                .replace("&apos;", "'")
-                .replace("&amp;", "&"),
-        );
-    }
+    cases
 }
 
 #[cfg(test)]
@@ -324,7 +258,7 @@ mod tests {
     #[test]
     fn a_pattern_sums_the_numbers_it_captures() {
         let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("log");
+        let log = dir.path().join(crate::read::LOG);
         std::fs::write(
             &log,
             "test result: FAILED. 3 passed; 2 failed\ntest result: ok. 4 passed; 0 failed\n",
@@ -332,11 +266,41 @@ mod tests {
         .unwrap();
         let raw: toml::Value = toml::from_str(r"count = '(\d+) passed; (\d+) failed'").unwrap();
         let reader = Reader::parse(&raw).unwrap();
-        let since = std::time::SystemTime::UNIX_EPOCH;
+        let run = crate::read::Run {
+            out: dir.path(),
+            root: dir.path(),
+            folder: None,
+            since: std::time::SystemTime::UNIX_EPOCH,
+        };
+        assert_eq!(reader.count(&run), Ok((9, Vec::new())));
+    }
+
+    #[test]
+    fn a_pattern_reads_output_that_is_not_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = b"caf\xe9\n".to_vec();
+        log.extend_from_slice(b"test result: ok. 2 passed; 0 failed\n");
+        std::fs::write(dir.path().join(crate::read::LOG), log).unwrap();
+        let raw: toml::Value = toml::from_str(r"count = '(\d+) passed; (\d+) failed'").unwrap();
+        let run = crate::read::Run {
+            out: dir.path(),
+            root: dir.path(),
+            folder: None,
+            since: std::time::SystemTime::UNIX_EPOCH,
+        };
         assert_eq!(
-            reader.count(&[&log], dir.path(), dir.path(), since),
-            Ok((9, Vec::new()))
+            Reader::parse(&raw).unwrap().count(&run),
+            Ok((2, Vec::new()))
         );
+    }
+
+    #[test]
+    fn a_careless_junit_report_is_read_past_its_mistake() {
+        let report = r#"<testsuite><testcase name="a"><system-out>a < b</system-out></testcase>
+<testcase name="b"><failure/></testcase></testsuite>"#;
+        let cases = super::junit_cases(report);
+        let names: Vec<(&str, bool)> = cases.iter().map(|c| (c.name.as_str(), c.failed)).collect();
+        assert_eq!(names, [("a", false), ("b", true)]);
     }
 
     #[test]
