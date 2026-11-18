@@ -105,7 +105,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 - **Sync never removes a setting a piece dropped.** Biome's `linter.rules` is written whole, so a dropped rule leaves `biome.json`; every other setting merges into the tool's file, so one a piece no longer sets (a tsconfig option, Biome's `files`, a clippy.toml key) stays there.
 - **Secrets are fetched once per check run.** Each named secret is one `secretspec get` in the `[env] shell`, for every check, folder of an `each` check, and base or red before green run, so a check with two secrets over ten folders asks SecretSpec twenty times. Keeping the values in memory for one `fearlezz run` would ask once per name.
 - **A note on a text is about the whole text.** The host takes no note on a line or a range of lines of a text's diff, and `fearlezz --notes` saves the noted text as it is.
-- **About 85 lint flags** in the code, mostly possible panics from indexing, numeric casts in the recorder and long functions (`run_checks`). They do not block.
+- **About 85 lint flags** in the code, mostly possible panics from indexing, numeric casts in the recorder and long functions (`look::build`). They do not block.
 
 ## Goldens
 

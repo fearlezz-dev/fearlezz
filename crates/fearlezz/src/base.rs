@@ -64,9 +64,10 @@ impl Base {
 
     /// The base commit's own `[env]`: its code ran in that environment, so its checkouts are
     /// prepared, their services run and their checks run inside its shell by it, never by
-    /// the change's. None when it has no config.
-    pub(crate) fn env(&self) -> Option<&Env> {
-        self.config.as_ref().map(|c| &c.env)
+    /// the change's. Empty when it has no config.
+    pub(crate) fn env(&self) -> &Env {
+        static NONE: std::sync::LazyLock<Env> = std::sync::LazyLock::new(Env::default);
+        self.config.as_ref().map_or(&NONE, |c| &c.env)
     }
 
     /// The plain checkout to run checks in, compared by `head`. Look and red before green
@@ -108,7 +109,7 @@ impl Base {
     }
 
     fn read(&self, git: Git, head: &Config) -> Result<Worktree> {
-        Worktree::read_in(git, head, self.env().unwrap_or(&Env::default()))
+        Worktree::read_in(git, head, self.env())
     }
 }
 

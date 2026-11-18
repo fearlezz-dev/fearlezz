@@ -7,14 +7,11 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::base::{Base, Checkout};
-use crate::config::{Check, Env};
+use crate::config::Check;
 use crate::env::EnvCtx;
 use crate::media::{self, Verdict};
-use crate::run;
+use crate::prove::{Reuse, Site, prove};
 use crate::store::{Outcome, RunResult, Store};
-
-/// The journal name base runs are recorded under.
-pub(crate) const BASE_JOURNAL: &str = "(base)";
 
 pub(crate) use fearlezz_proof::look::{Change, DiffLine, Item, Look};
 
@@ -177,8 +174,8 @@ pub(crate) fn has_media(result: &RunResult) -> bool {
 
 /// Compares the stills and films of `result`, a run of a check that takes pictures, with the
 /// same check run on the base commit. A run without any is compared too, so pictures the
-/// change removed all show as gone. Runs the check on the base only when no result exists for
-/// its inputs there.
+/// change removed all show as gone. Runs the check on the base only when no result that got
+/// going exists for its inputs there.
 pub(crate) fn look(
     store: &Store,
     check: &Check,
@@ -195,10 +192,8 @@ pub(crate) fn look(
             LookOutcome::NoMedia
         });
     }
-    let before = match store.latest_that_ran(&inputs.key) {
-        Some(r) => r,
-        None => run_on_base(store, check, &inputs, (base, site), stage, env)?,
-    };
+    let on_base = Site::base(base, &mut *site, stage);
+    let (before, _) = prove(store, env, check, &inputs, on_base, &Reuse::Ran)?;
     if !has_media(result) && (before.outcome == Outcome::Failed || !has_media(&before)) {
         return Ok(LookOutcome::NoMedia);
     }
@@ -257,85 +252,6 @@ fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf 
         .join("fearlezz")
         .join("looks")
         .join(format!("{}-{}", check.id, &pair[..10]))
-}
-
-/// Runs a check on the base checkout: prepared like any checkout, with its own services
-/// for this one run and inside its shell, all by the base commit's own `[env]`.
-pub(crate) fn run_on_base(
-    store: &Store,
-    check: &Check,
-    inputs: &crate::store::Inputs,
-    (base, site): (&Base, &mut Checkout),
-    stage: &str,
-    env: &EnvCtx<'_>,
-) -> Result<RunResult> {
-    // Heavy work waits its turn on this machine; another worktree may run the base meanwhile.
-    let label = format!("{} on the base commit", check.id);
-    let _slot = if check.light {
-        None
-    } else {
-        match crate::queue::turn(&label, || store.for_key(&inputs.key).pop())? {
-            crate::queue::Turn::Go(slot) => slot,
-            crate::queue::Turn::Done(found) => return Ok(found),
-        }
-    };
-    let none = Env::default();
-    let base_env = base.env().unwrap_or(&none);
-    let root = site.wt.git.root.clone();
-    if !site.prepared {
-        if let Some(line) = env.state.prepare(base_env, &env.main, &root)? {
-            println!("base {line}");
-        }
-        site.prepared = true;
-    }
-    let mut vars = std::collections::BTreeMap::new();
-    if check.needs_services() {
-        let (services, line) =
-            env.state
-                .ensure_up(base_env, &root, BASE_JOURNAL, false, env.now)?;
-        if let Some(line) = line {
-            println!("base {line}");
-        }
-        vars = services.ports;
-    }
-    // The base is deployed by its own `[env]` as the change is, so pictures of its preview
-    // compare with pictures of the change's.
-    let mut undeployed = None;
-    if check.needs_preview() {
-        // Named by its tree: a red before green checkout of the same commit holds the change's
-        // tests, so it is another deploy. Base checkouts are shared by worktrees, so the deploy
-        // holds the checkout.
-        let name = format!("base-{}", site.wt.tree.get(..7).unwrap_or(&site.wt.tree));
-        let _held = env.state.hold(&root)?;
-        match env.state.preview(base_env, &root, &site.wt.tree, &name)? {
-            Ok(deployed) => {
-                if let Some(line) = deployed.line {
-                    println!("base {line}");
-                }
-                vars.insert("FEARLEZZ_PREVIEW_URL".to_string(), deployed.url);
-            }
-            Err(u) => undeployed = Some(u),
-        }
-    }
-    let at = run::Where {
-        root: &root,
-        shell: site.wt.env.shell.as_deref(),
-        tree: &site.wt.tree,
-        journal: BASE_JOURNAL,
-        stage,
-        vars: &vars,
-        changed: &site.wt.lines,
-        no_preview: undeployed.as_ref(),
-    };
-    let result = run::execute(store, check, inputs, &at);
-    let stopped = if check.needs_services() {
-        env.state.stop(base_env, &root)
-    } else {
-        Ok(())
-    };
-    let result = result?;
-    stopped?;
-    Ok(result)
 }
 
 fn build(

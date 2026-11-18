@@ -20,8 +20,8 @@ use crate::config::{Check, Config};
 use crate::counts::{Case, Reader};
 use crate::env::EnvCtx;
 use crate::git::Git;
-use crate::look;
 use crate::proof::{RED_NEXT, Red, Verdict};
+use crate::prove::{Reuse, Site, prove};
 use crate::state::Worktree;
 use crate::store::{Outcome, RunResult, Store};
 
@@ -129,10 +129,8 @@ fn on_base(
     env: &EnvCtx<'_>,
 ) -> Result<RunResult> {
     let inputs = site.wt.inputs(check)?;
-    match store.latest_that_ran(&inputs.key) {
-        Some(r) => Ok(r),
-        None => look::run_on_base(store, check, &inputs, (base, site), stage, env),
-    }
+    let site = Site::base(base, site, stage);
+    Ok(prove(store, env, check, &inputs, site, &Reuse::Ran)?.0)
 }
 
 /// The names of `cases`, each once, in report order.

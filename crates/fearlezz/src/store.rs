@@ -346,15 +346,6 @@ impl Store {
     }
 
     /// Every result for these inputs, oldest first.
-    /// The latest run for `key` that got going, for reusing a run on the base commit: one
-    /// that could not find its command or get a secret may go another way the next time.
-    pub(crate) fn latest_that_ran(&self, key: &str) -> Option<RunResult> {
-        self.for_key(key)
-            .into_iter()
-            .rev()
-            .find(|r| !r.proves_nothing())
-    }
-
     pub(crate) fn for_key(&self, key: &str) -> Vec<RunResult> {
         let Ok(entries) = fs::read_dir(self.root.join(key)) else {
             return Vec::new();

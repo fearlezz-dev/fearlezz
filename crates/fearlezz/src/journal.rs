@@ -108,10 +108,6 @@ impl Journal {
         }
     }
 
-    pub(crate) fn is_in_memory(&self) -> bool {
-        self.file.is_none()
-    }
-
     pub(crate) fn all(common: &Path) -> Result<Vec<Journal>> {
         let Ok(dirs) = fs::read_dir(journals_dir(common)) else {
             return Ok(Vec::new());

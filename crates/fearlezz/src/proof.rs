@@ -47,8 +47,46 @@ pub(crate) fn ran(
     }
 }
 
-/// The entry of a check that could not run here, and why.
-pub(crate) fn not_run(check: &crate::config::Check, stage: &str, why: &str) -> Check {
+/// Why a check did not run here.
+pub(crate) enum Away {
+    /// This machine cannot run it and need not: CI's runners cannot record a window, so a
+    /// developer's machine proves it.
+    Skipped(String),
+    /// This machine cannot run it and should, which fails the run: `why` as the proof holds
+    /// it, `said` as the terminal gives it, and the `fix`.
+    Cannot {
+        why: String,
+        said: String,
+        fix: String,
+    },
+    /// Nothing proved it: CI without legs cannot stand in for its platform, or its leg did
+    /// not finish.
+    Unproven(Item),
+}
+
+impl Away {
+    /// What the terminal says of it.
+    pub(crate) fn lines(&self, id: &str) -> Vec<String> {
+        match self {
+            Away::Skipped(why) => vec![format!("not run {id}: {why}")],
+            Away::Cannot { said, fix, .. } => {
+                vec![format!("fail {id}: {said}"), format!("  fix: {fix}")]
+            }
+            Away::Unproven(item) => vec![
+                format!("blocked: {}: {}", item.what, item.why),
+                format!("  fix: {}", item.fix),
+            ],
+        }
+    }
+}
+
+/// The entry of a check that did not run here: not run with why, or failed with its item when
+/// nothing proved it.
+pub(crate) fn not_run(check: &crate::config::Check, stage: &str, away: &Away) -> Check {
+    let (outcome, not_run, failure) = match away {
+        Away::Skipped(why) | Away::Cannot { why, .. } => (Ran::NotRun, Some(why.clone()), None),
+        Away::Unproven(item) => (Ran::Failed, None, Some(item.clone())),
+    };
     Check {
         id: check.id.clone(),
         platform: None,
@@ -56,7 +94,7 @@ pub(crate) fn not_run(check: &crate::config::Check, stage: &str, why: &str) -> C
         reused: None,
         run: check.run().trim().to_string(),
         stage: stage.to_string(),
-        outcome: Ran::NotRun,
+        outcome,
         seconds: 0.0,
         exit_code: None,
         tests: None,
@@ -64,8 +102,8 @@ pub(crate) fn not_run(check: &crate::config::Check, stage: &str, why: &str) -> C
         findings: Vec::new(),
         findings_elsewhere: 0,
         output: None,
-        failure: None,
-        not_run: Some(why.to_string()),
+        failure,
+        not_run,
         unstable: false,
         red: None,
         log: None,
