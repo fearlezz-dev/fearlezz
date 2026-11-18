@@ -561,3 +561,46 @@ fn an_ios_simulator_records_the_app_the_command_launches() {
     assert!(h > w && w > 300, "a phone's screen: {w}x{h}");
     assert!(log.contains("record: film home.mp4 of "), "{log}");
 }
+
+/// A check that records is stopped at its `timeout` like any other, even while the recorder
+/// still waits for a window: on a screen of Fearlezz's own, so no window of the developer's
+/// counts.
+#[test]
+fn a_recording_check_over_its_budget_is_stopped_and_fails() {
+    let (screen, have) = if cfg!(target_os = "macos") {
+        let runtimes = std::process::Command::new("/usr/bin/xcrun")
+            .args(["simctl", "list", "runtimes"])
+            .output();
+        let have = runtimes.is_ok_and(|o| {
+            o.status.success() && String::from_utf8_lossy(&o.stdout).contains("iOS")
+        });
+        ("ios", have)
+    } else {
+        let have = std::process::Command::new("Xvfb")
+            .arg("-help")
+            .output()
+            .is_ok();
+        ("linux", have)
+    };
+    if !have {
+        skip_off_ci("no screen of Fearlezz's own on this machine");
+        return;
+    }
+    let repo = Repo::new(
+        &format!(
+            "[check.app-look]\nrun = \"sleep 120\"\nstage = \"look\"\nneeds = [\"{screen}\"]\n\
+             timeout = \"2s\"\nrecord = {{ film = \"home\", wait = 120 }}\n"
+        ),
+        &[],
+    );
+    let clock = std::time::Instant::now();
+    let out = repo.fz(&["run", "--ci", "--proof", "proof"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(clock.elapsed().as_secs() < 100, "it waited for the window");
+    assert!(
+        out.stdout.contains("exceeded its 2s budget"),
+        "{}\n{}",
+        out.stdout,
+        recorder_log(&repo)
+    );
+}

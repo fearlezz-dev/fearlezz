@@ -347,9 +347,9 @@ fn spawn(
     }
 }
 
-/// Runs `cmd` to its end, or stops it at the check's budget when it has one.
-fn budgeted(check: &Check, mut cmd: Command, out: File) -> Result<Ended> {
-    let Some(budget) = &check.timeout else {
+/// Runs `cmd` to its end, or stops it at `until`, when the check's budget runs out.
+fn budgeted(check: &Check, mut cmd: Command, until: Option<Instant>, out: File) -> Result<Ended> {
+    let Some(until) = until else {
         let status = cmd
             .status()
             .with_context(|| format!("starting check {}", check.id))?;
@@ -361,24 +361,28 @@ fn budgeted(check: &Check, mut cmd: Command, out: File) -> Result<Ended> {
     let mut child = cmd
         .spawn()
         .with_context(|| format!("starting check {}", check.id))?;
-    let until = Instant::now() + budget.time;
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(Ended::of(status));
         }
         if Instant::now() >= until {
             crate::record::stop(&mut child)?;
-            use std::io::Write as _;
-            let mut log = out;
-            writeln!(
-                log,
-                "fearlezz: {} exceeded its {budget} budget and was stopped",
-                check.id
-            )?;
-            return Ok(Ended::STOPPED);
+            return over_budget(check, out);
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Says in the check's log that it ran out of its budget and was stopped; it fails.
+fn over_budget(check: &Check, mut log: File) -> Result<Ended> {
+    if let Some(budget) = &check.timeout {
+        writeln!(
+            log,
+            "fearlezz: {} exceeded its {budget} budget and was stopped",
+            check.id
+        )?;
+    }
+    Ok(Ended::STOPPED)
 }
 
 /// Says in the check's log why its screen or recording failed; the check fails.
@@ -437,24 +441,24 @@ impl Run<'_> {
         let Some((last, before)) = check.steps.split_last() else {
             bail!("check {} has no command to run", check.id);
         };
+        // One budget for all its steps and its recording, from when the first starts.
+        let until = check.timeout.as_ref().map(|b| Instant::now() + b.time);
         for step in before {
-            let status = self
-                .command(step, out.try_clone()?, &out, env)?
-                .status()
-                .with_context(|| format!("starting check {}", check.id))?;
-            if !status.success() {
-                return Ok(Ended::of(status));
+            let cmd = self.command(step, out.try_clone()?, &out, env)?;
+            let ended = budgeted(check, cmd, until, out.try_clone()?)?;
+            if !matches!(ended, Ended::Ran { passed: true, .. }) {
+                return Ok(ended);
             }
         }
         let cmd = self.command(last, stdout, &out, env)?;
         let Some(record) = &check.pictures.record else {
-            let ran = budgeted(check, cmd, out);
+            let ran = budgeted(check, cmd, until, out);
             drop(owned);
             return ran;
         };
         match owned {
-            Some(screen) => self.recording(cmd, record, screen, out),
-            None => self.recording(cmd, record, crate::record::System::default(), out),
+            Some(screen) => self.recording(cmd, record, screen, until, out),
+            None => self.recording(cmd, record, crate::record::System::default(), until, out),
         }
     }
 
@@ -464,6 +468,7 @@ impl Run<'_> {
         mut cmd: Command,
         record: &crate::record::Spec,
         screen: S,
+        until: Option<Instant>,
         mut log: File,
     ) -> Result<Ended> {
         let Run { check, dir, at, .. } = self;
@@ -472,7 +477,7 @@ impl Run<'_> {
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
         // The windows open before the command starts are never recorded.
-        let mut recorder = match crate::record::Recorder::new(screen, record, place) {
+        let mut recorder = match crate::record::Recorder::new(screen, record, place, until) {
             Ok(r) => r,
             Err(e) => return failed(&mut log, "record", &e),
         };
@@ -521,6 +526,7 @@ impl Run<'_> {
         };
         let code = match &recorded.ended {
             crate::record::Ended::Exited(status) => status.code(),
+            crate::record::Ended::OverBudget => return over_budget(check, log),
             crate::record::Ended::AfterSeconds | crate::record::Ended::WaitedTooLong => None,
         };
         Ok(Ended::Ran {
