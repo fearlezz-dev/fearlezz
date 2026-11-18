@@ -147,6 +147,9 @@ pub(crate) fn summary(
         "### Fearlezz\n\n**{word}**: commit {}, {passed} of {ran} checks passed\n",
         proof.commit
     )?;
+    if let Some(url) = &proof.preview {
+        writeln!(text, "Preview: {url}\n")?;
+    }
     if let Some(url) = page {
         writeln!(
             text,

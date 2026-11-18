@@ -179,6 +179,9 @@ pub struct Review {
     /// The work's open notes, oldest first: they follow the work, not the head.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
+    /// Where the preview deploy of the head lives, as its proof names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 /// A CI job that waits for a runner, before Fearlezz in it opens a run.
@@ -315,6 +318,12 @@ pub fn review(
             }
         }
     }
+    // A proof is a CI run's word, and the preview becomes a link on the page and in the
+    // pull request's comment, so only a plain web address is taken.
+    let preview = live
+        .iter()
+        .find_map(|(_, proof)| proof.as_ref()?.preview.clone())
+        .filter(|url| web_address(url));
     let accept = accept
         .filter(|a| !weakened.is_empty() && a.covers(head, &weakened))
         .cloned();
@@ -351,7 +360,24 @@ pub fn review(
         weakened,
         accept,
         notes: open.into_iter().cloned().collect(),
+        preview,
     }
+}
+
+/// Whether `url` is a plain `http://` or `https://` address with a host: nothing that runs
+/// script, breaks a line or reads as Markdown.
+fn web_address(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    !rest.is_empty()
+        && !rest.starts_with('/')
+        && !rest
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "\"'<>()[]{}`\\".contains(c))
 }
 
 /// A run with its proof once done.

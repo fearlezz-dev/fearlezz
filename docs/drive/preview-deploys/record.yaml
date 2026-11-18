@@ -1,0 +1,40 @@
+# docs/drive/preview-deploys/record.yaml: the working state of one piece of work.
+goal: A preview deploy becomes proof (a check against the deployed preview, its pictures, its URL on the host page).
+
+pieces:
+  - id: deploy
+    status: done
+  - id: checks-against-preview
+    status: done
+  - id: link
+    status: done
+
+decided:
+  - id: shape
+    what: "A preview is a service that lives remotely: [env] preview runs the deploy; checks with needs = [\"preview\"] get FEARLEZZ_PREVIEW_URL."
+    why: Same shape as needs = ["services"]; checks run against the real deploy.
+  - id: link
+    what: The link shows in the job summary, and with the host in its existing pull request comment and on the page. No new write to GitHub.
+  - id: name
+    what: FEARLEZZ_PREVIEW_NAME is the branch made safe for a URL, pr-<number> for a pull request in CI, commit-<sha> when detached, base-<tree> for the base checkout.
+    why: One preview per branch that each push updates; a pull request number never collides across forks, and base-<tree> keeps the base apart from a red before green checkout of the same commit.
+  - id: url
+    what: The URL is the last http(s) URL the deploy prints after it starts; deployed once per tree per checkout, in a clean environment like a check's.
+    why: A review found the deploy saw every token Fearlezz had, and a shell banner's URL could be taken.
+  - id: one-field
+    what: The host takes the URL from the head's proof into Review.preview, which feeds both the comment and the page.
+    why: The comment is written from the stored review and the page already receives it; one field, one source.
+
+open: []
+
+slices:
+  - id: core
+    tests: [tests/preview.rs (17 tests), env::tests (URL and name)]
+    status: done
+  - id: host
+    tests:
+      - fearlezz-proof review::the_review_names_the_preview_its_proof_deployed
+      - host-tests host::the_comment_and_the_page_name_the_preview_the_proof_deployed
+    status: done
+
+next: Proof, PR stacked on scheduled proof.

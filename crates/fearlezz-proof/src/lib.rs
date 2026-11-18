@@ -65,6 +65,9 @@ pub struct Proof {
     pub accepted: Option<Accept>,
     /// Every comparison of pictures with the base commit, unchanged ones too.
     pub looks: Vec<Look>,
+    /// Where the preview deploy of the proven tree lives, when a check needed one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 /// The pull request a run proves: enough to know which one a page belongs to.
@@ -299,6 +302,7 @@ impl Proof {
             weakened: Vec::new(),
             accepted: None,
             looks: Vec::new(),
+            preview: None,
         }
     }
 

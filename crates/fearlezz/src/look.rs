@@ -315,6 +315,25 @@ pub(crate) fn run_on_base(
         }
         vars = services.ports;
     }
+    // The base is deployed by its own `[env]` as the change is, so pictures of its preview
+    // compare with pictures of the change's.
+    let mut undeployed = None;
+    if check.needs_preview() {
+        // Named by its tree: a red before green checkout of the same commit holds the change's
+        // tests, so it is another deploy. Base checkouts are shared by worktrees, so the deploy
+        // holds the checkout.
+        let name = format!("base-{}", base.wt.tree.get(..7).unwrap_or(&base.wt.tree));
+        let _held = env.state.hold(&root)?;
+        match env.state.preview(&base.env, &root, &base.wt.tree, &name)? {
+            Ok(deployed) => {
+                if let Some(line) = deployed.line {
+                    println!("base {line}");
+                }
+                vars.insert("FEARLEZZ_PREVIEW_URL".to_string(), deployed.url);
+            }
+            Err(u) => undeployed = Some(u),
+        }
+    }
     let at = run::Where {
         root: &root,
         shell: base.wt.shell.as_deref(),
@@ -323,6 +342,7 @@ pub(crate) fn run_on_base(
         stage,
         vars: &vars,
         changed: &base.wt.lines,
+        no_preview: undeployed.as_ref(),
     };
     let result = run::execute(store, check, inputs, &at);
     let stopped = if check.needs_services() {

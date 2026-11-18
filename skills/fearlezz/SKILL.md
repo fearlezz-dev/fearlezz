@@ -255,6 +255,19 @@ stage = "look"
 needs = ["services"]
 ```
 
+A preview deploy is a service that lives remotely. `[env] preview` deploys the checkout and prints its URL; a check with `needs = ["preview"]` gets the last URL it printed as `FEARLEZZ_PREVIEW_URL`. It runs at the checkout root in the `[env] shell` with a clean environment, like a check: the base variables, the `[env] env` names, the `[env] secrets` (fetched and masked as a check's are) and `FEARLEZZ_PREVIEW_NAME` (the branch made safe for a URL, `pr-<number>` for a pull request in CI, `commit-<sha>` on a detached HEAD, `base-<tree>` for the base a look compares with). Print a URL tied to this deploy (a version URL), not only an alias another deploy can move; the last URL printed after the deploy starts counts, so a banner the shell prints first never does. A checkout deploys each tree once; a later check or run in it reuses that URL. A preview that fails or prints no URL fails each check that needs it, without running it, with the fix. In CI the job summary and the proof name the URL. Changing `preview` or `secrets` weakens the proof, as any `[env]` part does.
+
+```toml
+[env]
+preview = "wrangler versions upload --preview-alias $FEARLEZZ_PREVIEW_NAME"
+secrets = ["CLOUDFLARE_API_TOKEN"]
+
+[check.site-look]
+run = "playwright test"
+stage = "look"
+needs = ["preview"]
+```
+
 ## Releases
 
 `[release.<place>]` names a place a release goes to. Its `dry` run becomes the check `release/<place>` at the last stage, so a release pull request proves the bumped version will publish. `fearlezz run --release` (CI, after the release is tagged) publishes to every place that does not have its version yet and waits until each shows it; places that have it are skipped, so running it again finishes a half done release. The version is the one in the place's own file (`Cargo.toml`, `package.json`, `pubspec.yaml`), which release-please bumps.

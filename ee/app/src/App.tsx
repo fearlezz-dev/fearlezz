@@ -217,8 +217,22 @@ function Standing(props: { run: Run; review: Review | undefined; viewer: Viewer 
     <p class={`standing ${kind()}`} data-standing={kind()} title={text()}>
       <span class="pill">{word()}</span>
       <code class="head">{head()}</code>
+      {/* The deploy its proof made of this head, which a person can open and try. */}
+      <Show when={props.review?.head === props.run.head && webAddress(props.review?.preview)}>
+        {(url) => (
+          <a class="preview" data-preview href={url()} target="_blank" rel="noopener noreferrer">
+            Preview
+          </a>
+        )}
+      </Show>
     </p>
   );
+}
+
+/** The address itself when it is a plain web address; the host takes no other, and a link never
+ * runs script. */
+function webAddress(url: string | null | undefined): string | undefined {
+  return url && /^https?:\/\/[^\s/]/.test(url) ? url : undefined;
 }
 
 /** What the change weakens, waiting for an admin's accept of its head, and who can give it. */
