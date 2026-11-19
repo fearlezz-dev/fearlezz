@@ -206,12 +206,11 @@ fn a_failed_down_keeps_the_services_known_so_down_can_try_again() {
 }
 
 #[test]
-fn services_get_the_env_secrets_masked_in_their_log() {
-    const VALUE: &str = "sk-test-0123456789";
+fn only_the_preview_gets_the_env_secrets() {
     let config = CONFIG
         .replace(
             "up = 'mkdir -p .svc &&",
-            "up = 'echo \"key is $SVC_KEY\"; test -n \"$SVC_KEY\" || exit 1; mkdir -p .svc &&",
+            "up = 'test -z \"$SVC_KEY\" || exit 1; mkdir -p .svc &&",
         )
         .replace(
             "env = [\"LOG\"]\n\n[check.e2e]",
@@ -223,17 +222,9 @@ fn services_get_the_env_secrets_masked_in_their_log() {
     s.fz(&["run", "--stage", "working", "--no-run"]);
     let out = s
         .repo
-        .fz_env(&["run", "e2e"], &[("LOG", &s.log), ("SVC_KEY", VALUE)]);
+        .fz_env(&["run", "e2e"], &[("LOG", &s.log), ("SVC_KEY", "sk-test-0123456789")]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(s.events().contains(&"up".to_string()), "{:?}", s.events());
-    assert!(!out.stdout.contains(VALUE) && !out.stderr.contains(VALUE));
-    let logs = s.repo.path(".git/fearlezz/env/logs");
-    let up = std::fs::read_dir(&logs)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .find(|p| p.to_string_lossy().ends_with("-up.log"))
-        .unwrap();
-    let text = std::fs::read_to_string(&up).unwrap();
-    assert!(text.contains("key is ***"), "{text}");
 }
 
 #[test]

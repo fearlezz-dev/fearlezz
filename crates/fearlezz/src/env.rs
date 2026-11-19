@@ -269,7 +269,10 @@ impl EnvState {
         }
         let log = self.fresh_log(root, "preview")?;
         let clock = std::time::Instant::now();
-        let command = env.command(cmd);
+        let command = crate::config::Command {
+            secrets: env.secrets.clone(),
+            ..env.command(cmd)
+        };
         let call = Call::new("the preview deploy of Fearlezz").var("FEARLEZZ_PREVIEW_NAME", name);
         let ran = Project::new(root, env.shell.as_deref())
             .run(&command, call, Output::Log(&log))

@@ -80,18 +80,16 @@ pub(crate) struct Env {
     /// Deploys the checkout somewhere remote and prints its URL: a service that lives
     /// remotely, deployed once per tree.
     pub preview: Option<String>,
-    /// Secrets every command above gets, by name, as a check gets its own, masked in their
-    /// logs.
+    /// Secrets the preview gets from SecretSpec, by name, as a check gets its own.
     pub secrets: Vec<String>,
 }
 
 impl Env {
-    /// One of its commands: at the root, with its variables and its secrets.
+    /// One of its commands: at the root, with its variables.
     pub(crate) fn command(&self, script: &str) -> Command {
         Command {
             steps: vec![script.to_string()],
             env: self.vars.clone(),
-            secrets: self.secrets.clone(),
             ..Command::default()
         }
     }
@@ -705,7 +703,7 @@ impl Config {
         env.ports = env.written_ports.take().map(RawPorts::read).transpose()?;
         if let Some(name) = env.secrets.iter().find(|n| replaces_given(n)) {
             bail!(
-                "[env] secrets: the secret {name} would replace a variable the [env] commands get; \
+                "[env] secrets: the secret {name} would replace a variable the preview gets; \
                  give it another name in secretspec.toml"
             );
         }
