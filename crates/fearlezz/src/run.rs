@@ -158,10 +158,10 @@ fn start(
 ) -> Result<(Ended, Option<Vec<crate::findings::Finding>>)> {
     if let Some(builtin) = &check.builtin {
         let found = run_builtin(builtin, at, listed, out)?;
-        let ended = Ended::Ran {
+        let ended = Ended::Ran(Exit::Ended {
             passed: true,
             code: Some(0),
-        };
+        });
         return Ok((ended, Some(found)));
     }
     let ended = if let Some(undeployed) = at.no_preview {
@@ -178,10 +178,10 @@ fn start(
                 vars.insert("KUBEBUILDER_ASSETS".into(), assets);
                 run_command(check, &Where { vars: &vars, ..*at }, dir, out)?
             }
-            Err(code) => Ended::Ran {
+            Err(code) => Ended::Ran(Exit::Ended {
                 passed: false,
                 code,
-            },
+            }),
         }
     } else {
         run_command(check, at, dir, out)?
@@ -253,9 +253,8 @@ fn count_tests(
 
 /// How a check's command ended.
 enum Ended {
-    /// It ran: whether it passed, and its exit code (none when a signal or Fearlezz stopped
-    /// it, or its screen failed).
-    Ran { passed: bool, code: Option<i32> },
+    /// It ran, and ended so; without an exit code when its screen failed.
+    Ran(Exit),
     /// It never ran, for this reason.
     Never(Why),
 }
@@ -264,7 +263,7 @@ impl Ended {
     /// Whether it passed, and its exit code.
     fn exit(&self) -> (bool, Option<i32>) {
         match self {
-            Ended::Ran { passed, code } => (*passed, *code),
+            Ended::Ran(exit) => (exit.success(), exit.code()),
             Ended::Never(_) => (false, None),
         }
     }
@@ -273,19 +272,12 @@ impl Ended {
     fn never(self, log: &Path) -> Option<Why> {
         match self {
             Ended::Never(why) => Some(why),
-            Ended::Ran {
-                code: Some(NOT_FOUND),
-                ..
-            } => missing_command(log).map(Why::MissingTool),
-            Ended::Ran { .. } => None,
+            Ended::Ran(exit) if exit.code() == Some(NOT_FOUND) => {
+                missing_command(log).map(Why::MissingTool)
+            }
+            Ended::Ran(_) => None,
         }
     }
-
-    /// A command that failed without an exit code.
-    const STOPPED: Ended = Ended::Ran {
-        passed: false,
-        code: None,
-    };
 }
 
 /// Gets the check's secrets and runs its command with them in a clean env, inside the
@@ -320,7 +312,7 @@ fn run_command(check: &Check, at: &Where<'_>, dir: &Path, mut out: File) -> Resu
         Target::Linux { size } => {
             let display = match crate::record::display::Display::start(*size) {
                 Ok(d) => d,
-                Err(e) => return failed(&mut out, "a Linux display", &e),
+                Err(e) => return failed(&mut out, "a Linux display", &e).map(Ended::Ran),
             };
             // GTK and others take Wayland when they find it; this display is X.
             let call = call
@@ -340,7 +332,7 @@ fn run_command(check: &Check, at: &Where<'_>, dir: &Path, mut out: File) -> Resu
                 &mut out,
             ) {
                 Ok(s) => s,
-                Err(e) => return failed(&mut out, "the iOS simulator", &e),
+                Err(e) => return failed(&mut out, "the iOS simulator", &e).map(Ended::Ran),
             };
             let call = call.var("FEARLEZZ_DEVICE", simulator.udid());
             Steps::new(check, at, dir, &out, Some(simulator))?.run(&call, &secrets)
@@ -348,29 +340,14 @@ fn run_command(check: &Check, at: &Where<'_>, dir: &Path, mut out: File) -> Resu
     }
 }
 
-/// Says in the check's log that it ran out of its budget and was stopped; it fails.
-fn over_budget(check: &Check, mut log: File) -> Result<Ended> {
-    if let Some(budget) = &check.command.timeout {
-        writeln!(
-            log,
-            "fearlezz: {} exceeded its {budget} budget and was stopped",
-            check.id
-        )?;
-    }
-    Ok(Ended::STOPPED)
-}
-
 /// Says in the check's log why its screen or recording failed; the check fails.
-fn failed(log: &mut File, what: &str, e: &anyhow::Error) -> Result<Ended> {
+fn failed(log: &mut File, what: &str, e: &anyhow::Error) -> Result<Exit> {
     writeln!(log, "{what}: {e:#}")?;
-    Ok(Ended::STOPPED)
+    Ok(Exit::Ended {
+        passed: false,
+        code: None,
+    })
 }
-
-/// A step that failed without an exit code.
-const STOPPED: Exit = Exit::Ended {
-    passed: false,
-    code: None,
-};
 
 /// A check's steps as they start: their output into its log (the last one's stdout into
 /// `stdout`), each with a free `FEARLEZZ_PORT`, the last recording `screen` (a screen of
@@ -419,10 +396,15 @@ impl<'a, S: crate::record::Screen> Steps<'a, S> {
             secrets,
             Output::Started(&mut self, dir),
         )?;
-        match ran.exit {
-            Exit::Ended { passed, code } => Ok(Ended::Ran { passed, code }),
-            Exit::OverBudget => over_budget(check, self.log),
+        // Its log says it ran out of its budget and was stopped; it fails.
+        if let (Exit::OverBudget, Some(budget)) = (&ran.exit, &check.command.timeout) {
+            writeln!(
+                self.log,
+                "fearlezz: {} exceeded its {budget} budget and was stopped",
+                check.id
+            )?;
         }
+        Ok(Ended::Ran(ran.exit))
     }
 }
 
@@ -461,7 +443,7 @@ impl<S> Steps<'_, S> {
         // The windows open before the command starts are never recorded.
         let mut recorder = match crate::record::Recorder::new(screen, record, place, until) {
             Ok(r) => r,
-            Err(e) => return failed(&mut log, "record", &e).map(|_| STOPPED),
+            Err(e) => return failed(&mut log, "record", &e),
         };
         let mut child = cmd
             .spawn()
@@ -503,7 +485,7 @@ impl<S> Steps<'_, S> {
             Ok(r) => r,
             Err(e) => {
                 crate::record::stop(&mut child)?;
-                return failed(&mut log, "record", &e).map(|_| STOPPED);
+                return failed(&mut log, "record", &e);
             }
         };
         let code = match &recorded.ended {
