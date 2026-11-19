@@ -46,18 +46,18 @@ open: []
 slices:
   - id: secret-source
     tests: [tests/secrets.rs a secret set in the environment reaches the check without secretspec]
-    status: todo
+    status: done
   - id: type-and-runner
     tests: [tests/secrets.rs, tests/legs.rs, tests/record.rs stay green]
-    status: todo
+    status: done
   - id: env-commands
     tests: [tests/env.rs up sees an [env] secret, masked in its log]
-    status: todo
+    status: done
   - id: release
     tests: [tests/release.rs publish masks a place secret and shows env as is; a dry run sees the place env]
-    status: todo
+    status: done
   - id: docs
     tests: []
-    status: todo
+    status: done
 
-next: build the slices once refactor/health has merged, since both touch run.rs
+next: review the branch refactor/command and open its pull request
