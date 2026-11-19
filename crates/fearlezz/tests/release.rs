@@ -216,8 +216,8 @@ fn what_publish_prints_hides_its_secrets_and_shows_its_env() {
 }
 
 #[test]
-fn a_dry_run_sees_the_env_of_its_place_but_not_its_secrets() {
-    let config = "[release.shop]\ndry = 'test \"$SHOP_REGION\" = eu-west-1 && test -z \"$SHOP_TOKEN\"'\npublish = \"false\"\nlanded = \"false\"\nenv = [\"SHOP_REGION\"]\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+fn a_dry_run_sees_neither_the_env_nor_the_secrets_of_its_place() {
+    let config = "[release.shop]\ndry = 'test -z \"$SHOP_REGION\" && test -z \"$SHOP_TOKEN\"'\npublish = \"false\"\nlanded = \"false\"\nenv = [\"SHOP_REGION\"]\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
     let repo = Repo::new(
         config,
         &[(

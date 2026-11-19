@@ -35,7 +35,8 @@ pub(crate) struct Place {
     pub name: String,
     pub publish: String,
     pub landed: Landed,
-    /// Variables its commands and its dry run see, shown as they are.
+    /// Variables its publish and landed commands see, shown as they are. Its dry run sees
+    /// none, so a token kept here never reaches a check's log or proof.
     pub env: Vec<String>,
     /// Secrets its publish and landed commands get, such as its token, masked in what they
     /// print. Its dry run gets none, so it never needs a token.
@@ -199,12 +200,7 @@ pub(crate) fn add_dry_checks(
         if let Some(run) = place.get("dry").and_then(toml::Value::as_str)
             && !off.contains(&id)
         {
-            dry.push((
-                id,
-                run.to_string(),
-                place.get("dir").cloned(),
-                place.get("env").cloned(),
-            ));
+            dry.push((id, run.to_string(), place.get("dir").cloned()));
         }
     }
     if dry.is_empty() {
@@ -216,7 +212,7 @@ pub(crate) fn add_dry_checks(
     let Some(checks) = checks.as_table_mut() else {
         return;
     };
-    for (id, run, dir, env) in dry {
+    for (id, run, dir) in dry {
         let check = checks
             .entry(id)
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -231,9 +227,6 @@ pub(crate) fn add_dry_checks(
             .or_insert_with(|| toml::Value::String(last.clone()));
         if let Some(dir) = dir {
             check.entry("dir").or_insert(dir);
-        }
-        if let Some(env) = env {
-            check.entry("env").or_insert(env);
         }
     }
 }
