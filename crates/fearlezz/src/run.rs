@@ -7,13 +7,13 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use jiff::Timestamp;
 
 use fearlezz_proof::why::{Generated, Why};
 
 use crate::config::Check;
-use crate::process::{Call, Exit, Output, Ready};
+use crate::process::{Call, Exit, Output};
 use crate::record::Target;
 use crate::store::{Inputs, Outcome, RunResult, Store};
 
@@ -281,14 +281,6 @@ impl Ended {
         }
     }
 
-    /// A command that ended with `status`.
-    fn of(status: std::process::ExitStatus) -> Ended {
-        Ended::Ran {
-            passed: status.success(),
-            code: status.code(),
-        }
-    }
-
     /// A command that failed without an exit code.
     const STOPPED: Ended = Ended::Ran {
         passed: false,
@@ -296,11 +288,18 @@ impl Ended {
     };
 }
 
-/// Gets the check's secrets and runs its command with them, masking them in its files before
-/// anything reads those, since they are kept, shown and uploaded.
-fn run_command(check: &Check, at: &Where<'_>, dir: &Path, out: File) -> Result<Ended> {
+/// Gets the check's secrets and runs its command with them in a clean env, inside the
+/// environment's shell if any, on the screen it needs: this machine's own, or a Linux display
+/// or iOS simulator of Fearlezz's own kept until its last step ends. Its secrets are masked in
+/// its files before anything reads those, since they are kept, shown and uploaded.
+fn run_command(check: &Check, at: &Where<'_>, dir: &Path, mut out: File) -> Result<Ended> {
     let reason = format!("the Fearlezz check {}", check.id);
-    let mut call = Call::new(&reason);
+    let project = crate::process::Project::new(at.root, at.shell);
+    let secrets = match project.secrets(&check.command, &reason, Some(&out))? {
+        Ok(secrets) => secrets,
+        Err(unfetched) => return Ok(Ended::Never(unfetched.why())),
+    };
+    let mut call = Call::default();
     call.vars.extend(
         at.vars
             .iter()
@@ -314,46 +313,20 @@ fn run_command(check: &Check, at: &Where<'_>, dir: &Path, out: File) -> Result<E
         .var("FEARLEZZ_OUT", dir)
         .var("FEARLEZZ_CHECK", &check.id)
         .var("FEARLEZZ_STAGE", at.stage);
-    let project = crate::process::Project::new(at.root, at.shell);
-    Ok(match project.ready(&check.command, call, Some(&out))? {
-        Ok(ready) => {
-            let ended = spawn(check, &ready, dir, out, at)?;
-            ready.mask(dir)?;
-            ended
-        }
-        Err(unfetched) => Ended::Never(unfetched.why()),
-    })
-}
-
-/// Runs the check's command in a clean env, inside the environment's shell if any, on the
-/// screen it needs: this machine's own, or a Linux display or iOS simulator of Fearlezz's own
-/// kept until its last step ends.
-fn spawn(
-    check: &Check,
-    ready: &Ready<'_>,
-    dir: &Path,
-    mut out: File,
-    at: &Where<'_>,
-) -> Result<Ended> {
-    let run = Run {
-        check,
-        ready,
-        dir,
-        at,
-    };
     match &check.needs.screen {
-        Target::Window => run.on(None::<crate::record::System>, &[], out),
+        Target::Window => {
+            Steps::new(check, at, dir, &out, None::<crate::record::System>)?.run(&call, &secrets)
+        }
         Target::Linux { size } => {
             let display = match crate::record::display::Display::start(*size) {
                 Ok(d) => d,
                 Err(e) => return failed(&mut out, "a Linux display", &e),
             };
             // GTK and others take Wayland when they find it; this display is X.
-            let env = [
-                ("DISPLAY", display.name()),
-                ("GDK_BACKEND", "x11".to_string()),
-            ];
-            run.on(Some(display), &env, out)
+            let call = call
+                .var("DISPLAY", display.name())
+                .var("GDK_BACKEND", "x11");
+            Steps::new(check, at, dir, &out, Some(display))?.run(&call, &secrets)
         }
         Target::Ios { device } => {
             let films = check
@@ -369,20 +342,9 @@ fn spawn(
                 Ok(s) => s,
                 Err(e) => return failed(&mut out, "the iOS simulator", &e),
             };
-            let env = [("FEARLEZZ_DEVICE", simulator.udid().to_string())];
-            run.on(Some(simulator), &env, out)
+            let call = call.var("FEARLEZZ_DEVICE", simulator.udid());
+            Steps::new(check, at, dir, &out, Some(simulator))?.run(&call, &secrets)
         }
-    }
-}
-
-/// Runs `cmd`, one of the check's steps, to its end, or stops it at `until`, when the check's
-/// budget runs out.
-fn budgeted(check: &Check, mut cmd: Command, until: Option<Instant>, out: File) -> Result<Ended> {
-    match crate::process::wait(&mut cmd, until)
-        .with_context(|| format!("starting check {}", check.id))?
-    {
-        Exit::Ended(status) => Ok(Ended::of(status)),
-        Exit::OverBudget => over_budget(check, out),
     }
 }
 
@@ -404,81 +366,94 @@ fn failed(log: &mut File, what: &str, e: &anyhow::Error) -> Result<Ended> {
     Ok(Ended::STOPPED)
 }
 
-/// A check about to run, with what its commands get.
-struct Run<'a> {
+/// A step that failed without an exit code.
+const STOPPED: Exit = Exit::Ended {
+    passed: false,
+    code: None,
+};
+
+/// A check's steps as they start: their output into its log (the last one's stdout into
+/// `stdout`), each with a free `FEARLEZZ_PORT`, the last recording `screen` (a screen of
+/// Fearlezz's own kept until the steps end, or this machine's own without one) when the check
+/// has `record`.
+struct Steps<'a, S> {
     check: &'a Check,
-    ready: &'a Ready<'a>,
     dir: &'a Path,
     at: &'a Where<'a>,
+    stdout: File,
+    log: File,
+    screen: Option<S>,
 }
 
-impl Run<'_> {
-    /// One step as a command, with what its screen gives it in `env`.
-    fn command(
-        &self,
-        step: &str,
-        stdout: File,
+impl<'a, S: crate::record::Screen> Steps<'a, S> {
+    fn new(
+        check: &'a Check,
+        at: &'a Where<'a>,
+        dir: &'a Path,
         log: &File,
-        env: &[(&str, String)],
-    ) -> Result<Command> {
-        let mut cmd = self.ready.step(step);
-        cmd.stdout(stdout).stderr(log.try_clone()?);
-        cmd.env("FEARLEZZ_PORT", free_port()?.to_string());
-        cmd.envs(env.iter().map(|(name, value)| (name, value)));
-        Ok(cmd)
-    }
-
-    /// Runs its steps on `owned`, a screen of Fearlezz's own kept until the last step ends, or
-    /// on this machine's own screen without one; recording the last when the check has
-    /// `record`, and stopping it at its budget otherwise.
-    fn on<S: crate::record::Screen>(
-        self,
-        owned: Option<S>,
-        env: &[(&str, String)],
-        out: File,
-    ) -> Result<Ended> {
-        let check = self.check;
+        screen: Option<S>,
+    ) -> Result<Self> {
         // A tool that prints findings on stdout keeps them apart from its log; only the last
         // step's stdout holds them, the steps before it prepare.
-        let stdout_path = self.dir.join(crate::read::STDOUT);
         let stdout = match &check.findings {
-            Some(f) if f.read.reads_stdout() => File::create(&stdout_path)?,
-            _ => out.try_clone()?,
+            Some(f) if f.read.reads_stdout() => File::create(dir.join(crate::read::STDOUT))?,
+            _ => log.try_clone()?,
         };
-        let Some((last, before)) = check.command.steps.split_last() else {
-            bail!("check {} has no command to run", check.id);
-        };
-        // One budget for all its steps and its recording, from when the first starts.
-        let until = self.ready.until();
-        for step in before {
-            let cmd = self.command(step, out.try_clone()?, &out, env)?;
-            let ended = budgeted(check, cmd, until, out.try_clone()?)?;
-            if !matches!(ended, Ended::Ran { passed: true, .. }) {
-                return Ok(ended);
-            }
-        }
-        let cmd = self.command(last, stdout, &out, env)?;
-        let Some(record) = &check.pictures.record else {
-            let ran = budgeted(check, cmd, until, out);
-            drop(owned);
-            return ran;
-        };
-        match owned {
-            Some(screen) => self.recording(cmd, record, screen, until, out),
-            None => self.recording(cmd, record, crate::record::System::default(), until, out),
-        }
+        Ok(Steps {
+            check,
+            dir,
+            at,
+            stdout,
+            log: log.try_clone()?,
+            screen,
+        })
     }
 
+    /// Runs the check's steps with `call` and `secrets`, within its budget, started when the
+    /// first step starts; how they ended.
+    fn run(mut self, call: &Call<'_>, secrets: &crate::process::Secrets) -> Result<Ended> {
+        let (check, dir, at) = (self.check, self.dir, self.at);
+        let ran = crate::process::Project::new(at.root, at.shell).run(
+            &check.command,
+            call,
+            secrets,
+            Output::Started(&mut self, dir),
+        )?;
+        match ran.exit {
+            Exit::Ended { passed, code } => Ok(Ended::Ran { passed, code }),
+            Exit::OverBudget => over_budget(check, self.log),
+        }
+    }
+}
+
+impl<S: crate::record::Screen> crate::process::Start for Steps<'_, S> {
+    fn start(&mut self, mut cmd: Command, last: bool, until: Option<Instant>) -> Result<Exit> {
+        let stdout = if last { &self.stdout } else { &self.log };
+        cmd.stdout(stdout.try_clone()?)
+            .stderr(self.log.try_clone()?)
+            .env("FEARLEZZ_PORT", free_port()?.to_string());
+        match &self.check.pictures.record {
+            Some(record) if last => match self.screen.take() {
+                Some(screen) => self.recording(cmd, record, screen, until),
+                None => self.recording(cmd, record, crate::record::System::default(), until),
+            },
+            _ => crate::process::wait(&mut cmd, until)
+                .with_context(|| format!("starting check {}", self.check.id)),
+        }
+    }
+}
+
+impl<S> Steps<'_, S> {
     /// Runs `cmd` while recording `screen`.
-    fn recording<S: crate::record::Screen>(
-        self,
+    fn recording<R: crate::record::Screen>(
+        &self,
         mut cmd: Command,
         record: &crate::record::Spec,
-        screen: S,
+        screen: R,
         until: Option<Instant>,
-        mut log: File,
-    ) -> Result<Ended> {
-        let Run { check, dir, at, .. } = self;
+    ) -> Result<Exit> {
+        let (check, dir, at) = (self.check, self.dir, self.at);
+        let mut log = self.log.try_clone()?;
         let place = crate::record::Place::of(&check.needs.screen);
         // Its own process group, so stopping it after `seconds` stops the app it started too.
         #[cfg(unix)]
@@ -486,7 +461,7 @@ impl Run<'_> {
         // The windows open before the command starts are never recorded.
         let mut recorder = match crate::record::Recorder::new(screen, record, place, until) {
             Ok(r) => r,
-            Err(e) => return failed(&mut log, "record", &e),
+            Err(e) => return failed(&mut log, "record", &e).map(|_| STOPPED),
         };
         let mut child = cmd
             .spawn()
@@ -528,15 +503,15 @@ impl Run<'_> {
             Ok(r) => r,
             Err(e) => {
                 crate::record::stop(&mut child)?;
-                return failed(&mut log, "record", &e);
+                return failed(&mut log, "record", &e).map(|_| STOPPED);
             }
         };
         let code = match &recorded.ended {
             crate::record::Ended::Exited(status) => status.code(),
-            crate::record::Ended::OverBudget => return over_budget(check, log),
+            crate::record::Ended::OverBudget => return Ok(Exit::OverBudget),
             crate::record::Ended::AfterSeconds | crate::record::Ended::WaitedTooLong => None,
         };
-        Ok(Ended::Ran {
+        Ok(Exit::Ended {
             passed: recorded.passed(),
             code,
         })
@@ -616,17 +591,17 @@ fn envtest_assets(
         env: check.command.env.clone(),
         ..crate::config::Command::default()
     };
-    let call = Call::new("envtest")
+    let call = Call::default()
         .var("FEARLEZZ_K8S", &version)
         .var("FEARLEZZ_ENVTEST", &bin);
-    let project = crate::process::Project::new(at.root, at.shell);
-    let Ok(ran) = project
-        .run(&command, call, Output::Read(log))
-        .context("starting setup-envtest")?
-    else {
-        // It names no secrets, so it always has them.
-        return Ok(Err(None));
-    };
+    let ran = crate::process::Project::new(at.root, at.shell)
+        .run(
+            &command,
+            &call,
+            &crate::process::Secrets::default(),
+            Output::Read(log),
+        )
+        .context("starting setup-envtest")?;
     let assets = String::from_utf8_lossy(&ran.printed).trim().to_string();
     if !ran.exit.success() || assets.is_empty() {
         writeln!(

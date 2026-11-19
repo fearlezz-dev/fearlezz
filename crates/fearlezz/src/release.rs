@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::config::Command;
 use crate::host::{self, Body, Limit};
 use crate::names::Named;
-use crate::process::{Call, Output, Project, Ready};
+use crate::process::{Call, Output, Project, Secrets};
 
 /// The prefix of the check a place's dry run becomes: `release/<place>`.
 pub(crate) const CHECK_PREFIX: &str = "release/";
@@ -362,16 +362,15 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
     let reason = format!("the Fearlezz release to {}", place.name);
     let call = Call {
         args: &files,
-        ..Call::new(&reason)
+        ..Call::default()
     }
     .var("FEARLEZZ_VERSION", &release.package.version)
     .var("FEARLEZZ_TAG", &release.tag);
-    let command = place.command(&place.publish);
     let project = Project::new(at.root, at.shell);
     // Its secrets are fetched once, when a command of the place first needs them.
-    let ready = || -> Result<Ready<'_>> {
-        match project.ready(&command, call.clone(), None)? {
-            Ok(ready) => Ok(ready),
+    let commands = || -> Result<Commands<'_>> {
+        let secrets = match project.secrets(&place.command(""), &reason, None)? {
+            Ok(secrets) => secrets,
             Err(unfetched) => {
                 let why = unfetched.why();
                 let fix = why
@@ -379,22 +378,28 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
                     .unwrap_or_default();
                 bail!("its commands did not run{}\n  fix: {fix}", why.line())
             }
-        }
+        };
+        Ok(Commands {
+            place,
+            project,
+            call: call.clone(),
+            secrets,
+        })
     };
     let early = match place.landed {
-        Landed::Command(_) => Some(ready()?),
+        Landed::Command(_) => Some(commands()?),
         Landed::Read { .. } => None,
     };
     if landed(place, &release, at, early.as_ref())?.is_ok() {
         return Ok(format!("{shown} is already there"));
     }
-    let ready = match early {
-        Some(ready) => ready,
-        None => ready()?,
+    let commands = match early {
+        Some(commands) => commands,
+        None => commands()?,
     };
     println!("{}: publishing {shown}", place.name);
-    let ran = ready
-        .run(&command.steps, Output::Terminal)
+    let ran = commands
+        .run(&place.publish, Output::Terminal)
         .with_context(|| format!("starting the publish command of {}", place.name))?;
     if !ran.exit.success() {
         let code = ran
@@ -406,7 +411,7 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(place.wait);
     loop {
         // A registry that stumbles once (a 502, a rate limit) is asked again until the end.
-        let why = match landed(place, &release, at, Some(&ready)) {
+        let why = match landed(place, &release, at, Some(&commands)) {
             Ok(Ok(())) => return Ok(format!("{shown} landed")),
             Ok(Err(why)) => why,
             Err(e) => Some(format!("{e:#}")),
@@ -420,19 +425,37 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
     }
 }
 
+/// A place's commands for one release: with its version, tag and files, and the place's
+/// secrets.
+struct Commands<'a> {
+    place: &'a Place,
+    project: Project<'a>,
+    call: Call<'a>,
+    secrets: Secrets,
+}
+
+impl Commands<'_> {
+    /// Runs `script`, one of the place's commands.
+    fn run(&self, script: &str, output: Output<'_>) -> Result<crate::process::Ran> {
+        let command = self.place.command(script);
+        self.project
+            .run(&command, &self.call, &self.secrets, output)
+    }
+}
+
 /// Whether the place has the release: Ok, or Err with why not when the reader can say. A
-/// landed command runs as `ready`, the place's commands with their secrets.
+/// landed command runs as one of `commands`.
 fn landed(
     place: &Place,
     release: &Release,
     at: &At<'_>,
-    ready: Option<&Ready<'_>>,
+    commands: Option<&Commands<'_>>,
 ) -> Result<Result<(), Option<String>>> {
     match &place.landed {
         Landed::Command(script) => {
-            let ready = ready.context("the landed command has no secrets")?;
-            let ran = ready
-                .run(std::slice::from_ref(script), Output::Nowhere)
+            let commands = commands.context("the landed command has no secrets")?;
+            let ran = commands
+                .run(script, Output::Nowhere)
                 .with_context(|| format!("starting the landed command of {}", place.name))?;
             Ok(if ran.exit.success() {
                 Ok(())

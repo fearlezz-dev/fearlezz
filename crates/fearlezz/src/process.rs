@@ -135,30 +135,18 @@ impl<'a> Project<'a> {
 }
 
 /// How a project's command runs, besides what its config says.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct Call<'a> {
-    /// Why it asks SecretSpec for its secrets, for the person SecretSpec asks.
-    pub reason: &'a str,
     /// The variables Fearlezz gives it, such as `FEARLEZZ_OUT`.
     pub vars: Vec<(String, OsString)>,
     /// What reaches its script as its arguments (`"$@"`).
     pub args: &'a [String],
     /// Whether it starts outside the `[env]` shell, as the preparation and the services do,
-    /// since they start it. SecretSpec is asked inside it all the same.
+    /// since they start it.
     pub outside: bool,
 }
 
-impl<'a> Call<'a> {
-    /// A call that gives SecretSpec `reason`, with no variables or arguments of Fearlezz's.
-    pub(crate) fn new(reason: &'a str) -> Self {
-        Call {
-            reason,
-            vars: Vec::new(),
-            args: &[],
-            outside: false,
-        }
-    }
-
+impl Call<'_> {
     /// With the variable `name` set to `value`.
     pub(crate) fn var(mut self, name: &str, value: impl AsRef<OsStr>) -> Self {
         self.vars
@@ -167,8 +155,14 @@ impl<'a> Call<'a> {
     }
 }
 
+/// A step a caller starts itself, as a check does on its screen.
+pub(crate) trait Start {
+    /// Starts `cmd`, a step with its folder and variables set, and waits for it to end, or
+    /// stops it with what it started at `until`; `last` for the command's last step.
+    fn start(&mut self, cmd: Command, last: bool, until: Option<Instant>) -> Result<Exit>;
+}
+
 /// Where a project's command's output goes.
-#[derive(Clone, Copy)]
 pub(crate) enum Output<'a> {
     /// Stdout and stderr appended to the file at this path, masked once it ends. Appended, so
     /// a process it leaves running keeps writing at the end, as do other writers of the file.
@@ -179,26 +173,38 @@ pub(crate) enum Output<'a> {
     Terminal,
     /// Nowhere.
     Nowhere,
+    /// Wherever the caller starting each step sends it, every text file in the folder at this
+    /// path masked once it ends.
+    Started(&'a mut dyn Start, &'a Path),
 }
 
 /// How a project's command ended.
 pub(crate) enum Exit {
-    /// It ended with this status: the last step's, or the first that failed.
-    Ended(ExitStatus),
+    /// It ended: whether it passed, and its exit code (none when a signal stopped it): the
+    /// last step's, or the first that failed.
+    Ended { passed: bool, code: Option<i32> },
     /// It ran out of its budget and was stopped, with what it started.
     OverBudget,
 }
 
 impl Exit {
+    /// A step that ended with `status`.
+    pub(crate) fn of(status: ExitStatus) -> Exit {
+        Exit::Ended {
+            passed: status.success(),
+            code: status.code(),
+        }
+    }
+
     /// Whether it passed.
     pub(crate) fn success(&self) -> bool {
-        matches!(self, Exit::Ended(status) if status.success())
+        matches!(self, Exit::Ended { passed: true, .. })
     }
 
     /// Its exit code: none when a signal or its budget stopped it.
     pub(crate) fn code(&self) -> Option<i32> {
         match self {
-            Exit::Ended(status) => status.code(),
+            Exit::Ended { code, .. } => *code,
             Exit::OverBudget => None,
         }
     }
@@ -208,7 +214,7 @@ impl Exit {
 pub(crate) struct Ran {
     pub exit: Exit,
     /// What it printed, masked: its stdout for [`Output::Read`], what it wrote into the log
-    /// for [`Output::Log`] (not what SecretSpec said before it), else nothing.
+    /// for [`Output::Log`], else nothing.
     pub printed: Vec<u8>,
 }
 
@@ -221,157 +227,39 @@ pub(crate) enum Unfetched {
 }
 
 impl Unfetched {
-    /// Why the command could not run, as a check's failure says it.
+    /// Why a check could not run.
     pub(crate) fn why(self) -> fearlezz_proof::why::Why {
+        use fearlezz_proof::why::Why;
         match self {
-            Unfetched::Secret(name) => fearlezz_proof::why::Why::Secret(name),
-            Unfetched::NoSecretSpec => fearlezz_proof::why::Why::MissingTool("secretspec".into()),
+            Unfetched::Secret(name) => Why::Secret(name),
+            Unfetched::NoSecretSpec => Why::MissingTool("secretspec".into()),
+        }
+    }
+
+    /// Why the preview could not deploy.
+    pub(crate) fn preview(self) -> fearlezz_proof::why::NoPreview {
+        use fearlezz_proof::why::NoPreview;
+        match self {
+            Unfetched::Secret(name) => NoPreview::Secret { name },
+            Unfetched::NoSecretSpec => NoPreview::NoSecretSpec,
         }
     }
 }
 
-/// A project's command with its secrets fetched, ready to run its steps.
-pub(crate) struct Ready<'a> {
-    project: Project<'a>,
-    command: &'a crate::config::Command,
-    call: Call<'a>,
-    secrets: Vec<(String, String)>,
-    /// Every form of every secret's value, longest first.
+/// A command's secrets, fetched once: each name with its value, and every form of every value,
+/// longest first, masked in what a command wrote.
+#[derive(Default)]
+pub(crate) struct Secrets {
+    values: Vec<(String, String)>,
     forms: Vec<Vec<u8>>,
 }
 
-impl<'a> Project<'a> {
-    /// Runs `command`'s steps in order, the first that fails ending it, with `call`'s
-    /// variables and arguments and the command's secrets, all of them within its budget, its
-    /// output going to `output`, every secret masked in it.
-    pub(crate) fn run(
-        &self,
-        command: &'a crate::config::Command,
-        call: Call<'a>,
-        output: Output<'_>,
-    ) -> Result<Result<Ran, Unfetched>> {
-        let said = match output {
-            Output::Log(path) | Output::Read(path) => Some(appended(path)?),
-            Output::Terminal | Output::Nowhere => None,
-        };
-        Ok(match self.ready(command, call, said.as_ref())? {
-            Ok(ready) => Ok(ready.run(&command.steps, output)?),
-            Err(unfetched) => Err(unfetched),
-        })
-    }
-
-    /// `command` with its secrets fetched once, SecretSpec's own words going to `said` (or
-    /// Fearlezz's own output without it), for a caller that runs its steps itself.
-    pub(crate) fn ready(
-        &self,
-        command: &'a crate::config::Command,
-        call: Call<'a>,
-        said: Option<&File>,
-    ) -> Result<Result<Ready<'a>, Unfetched>> {
-        let folder = command
-            .dir
-            .as_ref()
-            .map_or_else(|| self.root.to_path_buf(), |d| self.root.join(d));
-        Ok(
-            match fetch_secrets(&command.secrets, call.reason, &folder, self, said)? {
-                Ok(secrets) => Ok(Ready {
-                    project: *self,
-                    command,
-                    call,
-                    forms: masked_forms(&secrets),
-                    secrets,
-                }),
-                Err(unfetched) => Err(unfetched),
-            },
-        )
-    }
-}
-
-impl Ready<'_> {
-    /// `script` as one of its steps: through `sh -c` in its folder (inside the `[env]` shell
-    /// unless the call starts outside it), in a clean env of [`BASE_ENV`], its variables, the
-    /// call's and its secrets, with the call's arguments.
-    pub(crate) fn step(&self, script: &str) -> Command {
-        let project = if self.call.outside {
-            Project::new(self.project.root, None)
-        } else {
-            self.project
-        };
-        let mut cmd = project.clean(
-            self.command.dir.as_deref(),
-            script,
-            &self.command.env,
-            self.call.args,
-        );
-        cmd.envs(self.call.vars.iter().map(|(name, value)| (name, value)));
-        cmd.envs(self.secrets.iter().map(|(name, value)| (name, value)));
-        cmd
-    }
-
-    /// When its budget, started now, runs out.
-    pub(crate) fn until(&self) -> Option<Instant> {
-        self.command
-            .timeout
-            .as_ref()
-            .map(|b| Instant::now() + b.time)
-    }
-
-    /// Runs `steps` in order, the first that fails ending them, within its budget.
-    pub(crate) fn run(&self, steps: &[String], output: Output<'_>) -> Result<Ran> {
-        let until = self.until();
-        let mut exit = None;
-        let mut printed = Vec::new();
-        let log = match output {
-            Output::Log(path) | Output::Read(path) => Some((path, fs::metadata(path)?.len())),
-            Output::Terminal | Output::Nowhere => None,
-        };
-        for step in steps {
-            let mut cmd = self.step(step);
-            let ended = match output {
-                Output::Log(path) => {
-                    let file = appended(path)?;
-                    cmd.stdout(file.try_clone()?).stderr(file);
-                    wait(&mut cmd, until)?
-                }
-                Output::Nowhere => {
-                    cmd.stdout(Stdio::null()).stderr(Stdio::null());
-                    wait(&mut cmd, until)?
-                }
-                Output::Read(path) => {
-                    cmd.stdout(Stdio::piped()).stderr(appended(path)?);
-                    let mut child = spawn(&mut cmd, until)?;
-                    let out = drain(child.stdout.take());
-                    let ended = finish(&mut child, until)?;
-                    printed.extend(masked(&out.join().unwrap_or_default(), &self.forms));
-                    ended
-                }
-                Output::Terminal => {
-                    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-                    let mut child = spawn(&mut cmd, until)?;
-                    let out = pass_masked(child.stdout.take(), self.forms.clone(), std::io::stdout);
-                    let err = pass_masked(child.stderr.take(), self.forms.clone(), std::io::stderr);
-                    let ended = finish(&mut child, until)?;
-                    drop(out.join());
-                    drop(err.join());
-                    ended
-                }
-            };
-            let passed = ended.success();
-            exit = Some(ended);
-            if !passed {
-                break;
-            }
+impl Secrets {
+    fn of(values: Vec<(String, String)>) -> Self {
+        Secrets {
+            forms: masked_forms(&values),
+            values,
         }
-        if let Some((path, from)) = log {
-            let own = self.mask_from(path, from)?;
-            if matches!(output, Output::Log(_)) {
-                printed = own;
-            }
-        }
-        Ok(Ran {
-            exit: exit.context("the command has no step to run")?,
-            printed,
-        })
     }
 
     /// Masks every secret in the file at `path`, and returns what was written into it from
@@ -389,11 +277,128 @@ impl Ready<'_> {
         }
         Ok(own)
     }
+}
 
-    /// Masks every secret in the text files at `path`, a file or a folder of them, before
-    /// anything reads them, since they are kept, shown and uploaded.
-    pub(crate) fn mask(&self, path: &Path) -> Result<()> {
-        mask(path, &self.forms)
+impl Project<'_> {
+    /// The secrets `command` names, fetched once, SecretSpec's own words going to `said` (or
+    /// Fearlezz's own output without it), giving it `reason`.
+    pub(crate) fn secrets(
+        &self,
+        command: &crate::config::Command,
+        reason: &str,
+        said: Option<&File>,
+    ) -> Result<Result<Secrets, Unfetched>> {
+        let folder = command
+            .dir
+            .as_ref()
+            .map_or_else(|| self.root.to_path_buf(), |d| self.root.join(d));
+        Ok(fetch_secrets(&command.secrets, reason, &folder, self, said)?.map(Secrets::of))
+    }
+
+    /// Runs `command`'s steps in order, the first that fails ending them, with `call`'s
+    /// variables and arguments and `secrets`, all of them within its budget, started when the
+    /// first step starts. Its output goes to `output`, every secret masked in it.
+    pub(crate) fn run(
+        &self,
+        command: &crate::config::Command,
+        call: &Call<'_>,
+        secrets: &Secrets,
+        mut output: Output<'_>,
+    ) -> Result<Ran> {
+        let log = match output {
+            Output::Log(path) | Output::Read(path) => Some((path, appended(path)?.metadata()?.len())),
+            _ => None,
+        };
+        let mut printed = Vec::new();
+        let exit = self.steps(command, call, secrets, &mut output, &mut printed)?;
+        let masked = match (log, &output) {
+            (Some((path, from)), _) => secrets.mask_from(path, from).map(|own| {
+                if matches!(output, Output::Log(_)) {
+                    printed = own;
+                }
+            }),
+            (None, Output::Started(_, dir)) => mask(dir, &secrets.forms),
+            (None, _) => Ok(()),
+        };
+        masked?;
+        Ok(Ran { exit, printed })
+    }
+
+    /// The steps of [`Project::run`], before masking.
+    fn steps(
+        &self,
+        command: &crate::config::Command,
+        call: &Call<'_>,
+        secrets: &Secrets,
+        output: &mut Output<'_>,
+        printed: &mut Vec<u8>,
+    ) -> Result<Exit> {
+        let until = command.timeout.as_ref().map(|b| Instant::now() + b.time);
+        let mut exit = None;
+        for (at, step) in command.steps.iter().enumerate() {
+            let mut cmd = self.step(command, call, secrets, step);
+            let ended = match output {
+                Output::Log(path) => {
+                    let file = appended(path)?;
+                    cmd.stdout(file.try_clone()?).stderr(file);
+                    wait(&mut cmd, until)?
+                }
+                Output::Nowhere => {
+                    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+                    wait(&mut cmd, until)?
+                }
+                Output::Read(path) => {
+                    cmd.stdout(Stdio::piped()).stderr(appended(path)?);
+                    let mut child = spawn(&mut cmd, until)?;
+                    let out = drain(child.stdout.take());
+                    let ended = finish(&mut child, until)?;
+                    printed.extend(masked(&out.join().unwrap_or_default(), &secrets.forms));
+                    ended
+                }
+                Output::Terminal => {
+                    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+                    let mut child = spawn(&mut cmd, until)?;
+                    let out =
+                        pass_masked(child.stdout.take(), secrets.forms.clone(), std::io::stdout);
+                    let err =
+                        pass_masked(child.stderr.take(), secrets.forms.clone(), std::io::stderr);
+                    let ended = finish(&mut child, until)?;
+                    drop(out.join());
+                    drop(err.join());
+                    ended
+                }
+                Output::Started(start, _) => {
+                    start.start(cmd, at + 1 == command.steps.len(), until)?
+                }
+            };
+            let passed = ended.success();
+            exit = Some(ended);
+            if !passed {
+                break;
+            }
+        }
+        exit.context("the command has no step to run")
+    }
+
+    /// `script`, one of `command`'s steps: through `sh -c` in its folder (inside the `[env]`
+    /// shell unless the call starts outside it), in a clean env of [`BASE_ENV`], its
+    /// variables, the call's and `secrets`, with the call's arguments.
+    fn step(
+        &self,
+        command: &crate::config::Command,
+        call: &Call<'_>,
+        secrets: &Secrets,
+        script: &str,
+    ) -> Command {
+        let project = if call.outside {
+            Project::new(self.root, None)
+        } else {
+            *self
+        };
+        let mut cmd = project.clean(command.dir.as_deref(), script, &command.env, call.args);
+        cmd.envs(call.vars.iter().map(|(name, value)| (name, value)));
+        cmd.envs(secrets.values.iter().map(|(name, value)| (name, value)));
+        cmd
     }
 }
 
@@ -417,11 +422,11 @@ fn spawn(cmd: &mut Command, until: Option<Instant>) -> Result<Child> {
 /// Waits for `child` to end, or stops it with what it started at `until`.
 fn finish(child: &mut Child, until: Option<Instant>) -> Result<Exit> {
     let Some(until) = until else {
-        return Ok(Exit::Ended(child.wait()?));
+        return Ok(Exit::of(child.wait()?));
     };
     loop {
         if let Some(status) = child.try_wait()? {
-            return Ok(Exit::Ended(status));
+            return Ok(Exit::of(status));
         }
         if Instant::now() >= until {
             crate::record::stop(child)?;

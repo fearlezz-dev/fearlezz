@@ -15,7 +15,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::config::{Env, Ports};
 use crate::lease::{Lease, Mode};
-use crate::process::{Call, Exit, Output, Project, Ran};
+use crate::process::{Call, Exit, Output, Project, Ran, Secrets};
 use crate::run;
 
 /// Services unused this long are stopped by the next Fearlezz command of another journal.
@@ -177,28 +177,13 @@ impl EnvState {
         output: Output<'_>,
     ) -> Result<Ran> {
         let log = self.log(root, what);
-        let reason = format!("the [env] {what} of Fearlezz");
-        let command = env.command(cmd);
         let call = Call {
             outside: true,
-            ..Call::new(&reason)
+            ..Call::default()
         };
         let ran = Project::new(root, env.shell.as_deref())
-            .run(&command, call, output)
+            .run(&env.command(cmd), &call, &Secrets::default(), output)
             .with_context(|| format!("starting [env] {what}"))?;
-        let ran = match ran {
-            Ok(ran) => ran,
-            Err(unfetched) => {
-                let why = unfetched.why();
-                let fix = why.fix_here(what, run::install).unwrap_or_default();
-                bail!(
-                    "[env] {what} did not run in {}{}\n  fix: {fix}\n  log: {}",
-                    root.display(),
-                    why.line(),
-                    log.display()
-                );
-            }
-        };
         check_status(&ran.exit, what, root, &log)?;
         Ok(ran)
     }
@@ -273,25 +258,25 @@ impl EnvState {
             secrets: env.secrets.clone(),
             ..env.command(cmd)
         };
-        let call = Call::new("the preview deploy of Fearlezz").var("FEARLEZZ_PREVIEW_NAME", name);
-        let ran = Project::new(root, env.shell.as_deref())
-            .run(&command, call, Output::Log(&log))
-            .context("starting [env] preview")?;
-        let ran = match ran {
-            Ok(ran) => ran,
-            Err(crate::process::Unfetched::Secret(name)) => {
+        let call = Call::default().var("FEARLEZZ_PREVIEW_NAME", name);
+        let project = Project::new(root, env.shell.as_deref());
+        let asked = project.secrets(
+            &command,
+            "the preview deploy of Fearlezz",
+            Some(&crate::process::appended(&log)?),
+        )?;
+        let secrets = match asked {
+            Ok(secrets) => secrets,
+            Err(unfetched) => {
                 return Ok(Err(Undeployed {
-                    why: NoPreview::Secret { name },
-                    log,
-                }));
-            }
-            Err(crate::process::Unfetched::NoSecretSpec) => {
-                return Ok(Err(Undeployed {
-                    why: NoPreview::NoSecretSpec,
+                    why: unfetched.preview(),
                     log,
                 }));
             }
         };
+        let ran = project
+            .run(&command, &call, &secrets, Output::Log(&log))
+            .context("starting [env] preview")?;
         if !ran.exit.success() {
             return Ok(Err(Undeployed {
                 why: NoPreview::Failed {
