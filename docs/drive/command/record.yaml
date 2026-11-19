@@ -40,6 +40,15 @@ decided:
   - id: drop-env-mask
     what: drop the mask-all-env rule for release once tokens move to secrets
     why: one rule, env shown and secrets masked
+  - id: release-secret-may-be-missing
+    what: a release place's secret neither Fearlezz's env nor SecretSpec gives is left out, so publish and landed run without it and the tool falls back to its own login; a given one is still masked; checks and the preview stay strict
+    why: chosen by the developer after the review; OIDC trusted publishing and a tool's own login set no token, and a rerun of a landed release no longer fails without one
+  - id: dry-run-no-env
+    what: a release dry run gets no env, as before this change
+    why: chosen by the developer after the review; a token kept in a place's env must never reach a dry run's log, proof, stored parts or the host
+  - id: env-secrets-preview-only
+    what: "[env] secrets stay the preview's only, as before; prepare, up, down, reset and ports run through the runner without secrets"
+    why: chosen by the developer after the review; a background service could write a secret into its log after masking, and every [env] command would ask SecretSpec
 
 open: []
 
@@ -51,10 +60,10 @@ slices:
     tests: [tests/secrets.rs, tests/legs.rs, tests/record.rs stay green]
     status: done
   - id: env-commands
-    tests: [tests/env.rs up sees an [env] secret, masked in its log]
+    tests: [tests/env.rs only the preview gets the [env] secrets]
     status: done
   - id: release
-    tests: [tests/release.rs publish masks a place secret and shows env as is; a dry run sees the place env]
+    tests: [tests/release.rs publish masks a place secret and shows env as is; a publish whose secret nobody gives still runs; a dry run sees neither the place env nor its secrets]
     status: done
   - id: docs
     tests: []
