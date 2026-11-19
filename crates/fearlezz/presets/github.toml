@@ -13,4 +13,5 @@
 [release.github]
 publish = "gh release upload \"$FEARLEZZ_TAG\" \"$@\" --clobber"
 landed = { read = "github" }
-env = ["GH_TOKEN", "GITHUB_TOKEN", "GH_REPO"]
+env = ["GH_REPO"]
+secrets = ["GH_TOKEN"]

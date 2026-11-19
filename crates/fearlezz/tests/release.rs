@@ -192,8 +192,8 @@ fn publish_sees_only_its_env_and_the_version() {
 }
 
 #[test]
-fn what_publish_prints_hides_the_values_of_its_env() {
-    let config = "[release.shop]\npublish = 'echo \"publishing with $SHOP_TOKEN\"; echo \"again $SHOP_TOKEN\" >&2; touch .published'\nlanded = \"test -f .published\"\nenv = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+fn what_publish_prints_hides_its_secrets_and_shows_its_env() {
+    let config = "[release.shop]\npublish = 'echo \"publishing with $SHOP_TOKEN to $SHOP_REGION\"; echo \"again $SHOP_TOKEN\" >&2; touch .published'\nlanded = \"test -f .published\"\nenv = [\"SHOP_REGION\"]\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
     let repo = Repo::new(
         config,
         &[
@@ -204,12 +204,32 @@ fn what_publish_prints_hides_the_values_of_its_env() {
             (".gitignore", ".published\n"),
         ],
     );
-    let out = repo.fz_env(&["run", "--release"], &[("SHOP_TOKEN", "s3cret-token")]);
+    let out = repo.fz_env(
+        &["run", "--release"],
+        &[("SHOP_TOKEN", "s3cret-token"), ("SHOP_REGION", "eu-west-1")],
+    );
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let all = format!("{}{}", out.stdout, out.stderr);
     assert!(!all.contains("s3cret-token"), "{all}");
-    assert!(all.contains("publishing with ***"), "{all}");
+    assert!(all.contains("publishing with *** to eu-west-1"), "{all}");
     assert!(all.contains("again ***"), "{all}");
+}
+
+#[test]
+fn a_dry_run_sees_the_env_of_its_place_but_not_its_secrets() {
+    let config = "[release.shop]\ndry = 'test \"$SHOP_REGION\" = eu-west-1 && test -z \"$SHOP_TOKEN\"'\npublish = \"false\"\nlanded = \"false\"\nenv = [\"SHOP_REGION\"]\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+    let repo = Repo::new(
+        config,
+        &[(
+            "package.json",
+            "{\"name\": \"widget\", \"version\": \"0.9.1\"}\n",
+        )],
+    );
+    let out = repo.fz_env(
+        &["run", "release/shop"],
+        &[("SHOP_TOKEN", "s3cret-token"), ("SHOP_REGION", "eu-west-1")],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
 }
 
 #[test]

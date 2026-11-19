@@ -842,7 +842,7 @@ impl Config {
 }
 
 /// Whether a secret named `name` would replace a variable Fearlezz itself gives every command.
-fn replaces_given(name: &str) -> bool {
+pub(crate) fn replaces_given(name: &str) -> bool {
     name.starts_with("FEARLEZZ_") || crate::process::BASE_ENV.contains(&name)
 }
 

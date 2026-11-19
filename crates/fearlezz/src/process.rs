@@ -135,6 +135,7 @@ impl<'a> Project<'a> {
 }
 
 /// How a project's command runs, besides what its config says.
+#[derive(Clone)]
 pub(crate) struct Call<'a> {
     /// Why it asks SecretSpec for its secrets, for the person SecretSpec asks.
     pub reason: &'a str,
@@ -505,7 +506,7 @@ const UNMASKED: [&str; 9] = [
 /// Every form a secret's value can take in a command's text: as it is, as JSON escapes it
 /// (findings, SARIF, logs), and each of its lines, for a value of several lines (a PEM key)
 /// printed line by line.
-pub(crate) fn masked_forms(values: &[(String, String)]) -> Vec<Vec<u8>> {
+fn masked_forms(values: &[(String, String)]) -> Vec<Vec<u8>> {
     let mut forms: Vec<String> = Vec::new();
     for (_, value) in values {
         forms.push(value.clone());
@@ -550,7 +551,7 @@ fn mask(path: &Path, forms: &[Vec<u8>]) -> Result<()> {
 }
 
 /// `bytes` with every form of a secret's value replaced by [`MASK`].
-pub(crate) fn masked(bytes: &[u8], forms: &[Vec<u8>]) -> Vec<u8> {
+fn masked(bytes: &[u8], forms: &[Vec<u8>]) -> Vec<u8> {
     forms
         .iter()
         .fold(bytes.to_vec(), |masked, form| replace(&masked, form, MASK))

@@ -9,15 +9,16 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::config::Command;
 use crate::host::{self, Body, Limit};
 use crate::names::Named;
+use crate::process::{Call, Output, Project, Ready};
 
 /// The prefix of the check a place's dry run becomes: `release/<place>`.
 pub(crate) const CHECK_PREFIX: &str = "release/";
@@ -34,8 +35,11 @@ pub(crate) struct Place {
     pub name: String,
     pub publish: String,
     pub landed: Landed,
-    /// Variables the publish command may see, such as its token.
+    /// Variables its commands and its dry run see, shown as they are.
     pub env: Vec<String>,
+    /// Secrets its publish and landed commands get, such as its token, masked in what they
+    /// print. Its dry run gets none, so it never needs a token.
+    pub secrets: Vec<String>,
     /// The folder of the repository the package lives in; the root without one.
     pub dir: Option<String>,
     /// The file the version comes from, relative to the root; without one, the reader's own
@@ -102,6 +106,8 @@ struct RawPlace {
     landed: RawLanded,
     #[serde(default)]
     env: Vec<String>,
+    #[serde(default)]
+    secrets: Vec<String>,
     dir: Option<String>,
     version: Option<String>,
     #[serde(default)]
@@ -141,11 +147,18 @@ pub(crate) fn parse(table: Option<&toml::Value>) -> Result<Vec<Place>> {
         if !tag.contains("{version}") {
             bail!("release.{name}: tag needs {{version}}, such as tag = \"v{{version}}\"");
         }
+        if let Some(secret) = p.secrets.iter().find(|n| crate::config::replaces_given(n)) {
+            bail!(
+                "release.{name}: the secret {secret} would replace a variable every command \
+                 gets; give it another name in secretspec.toml"
+            );
+        }
         places.push(Place {
             name,
             publish: p.publish,
             landed,
             env: p.env,
+            secrets: p.secrets,
             dir: p.dir,
             version: p.version,
             files: p.files,
@@ -186,7 +199,12 @@ pub(crate) fn add_dry_checks(
         if let Some(run) = place.get("dry").and_then(toml::Value::as_str)
             && !off.contains(&id)
         {
-            dry.push((id, run.to_string(), place.get("dir").cloned()));
+            dry.push((
+                id,
+                run.to_string(),
+                place.get("dir").cloned(),
+                place.get("env").cloned(),
+            ));
         }
     }
     if dry.is_empty() {
@@ -198,7 +216,7 @@ pub(crate) fn add_dry_checks(
     let Some(checks) = checks.as_table_mut() else {
         return;
     };
-    for (id, run, dir) in dry {
+    for (id, run, dir, env) in dry {
         let check = checks
             .entry(id)
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -213,6 +231,22 @@ pub(crate) fn add_dry_checks(
             .or_insert_with(|| toml::Value::String(last.clone()));
         if let Some(dir) = dir {
             check.entry("dir").or_insert(dir);
+        }
+        if let Some(env) = env {
+            check.entry("env").or_insert(env);
+        }
+    }
+}
+
+impl Place {
+    /// `script` as one of its commands: in its folder, with its variables and its secrets.
+    fn command(&self, script: &str) -> Command {
+        Command {
+            steps: vec![script.to_string()],
+            dir: self.dir.clone(),
+            env: self.env.clone(),
+            secrets: self.secrets.clone(),
+            timeout: None,
         }
     }
 }
@@ -326,17 +360,50 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
         package,
     };
     let shown = release.shown(place);
-    if landed(place, &release, at)?.is_ok() {
+    // Absolute, so a command that runs in the place's folder finds them too.
+    let files: Vec<String> = release
+        .files
+        .iter()
+        .map(|f| at.root.join(f).display().to_string())
+        .collect();
+    let reason = format!("the Fearlezz release to {}", place.name);
+    let call = Call {
+        args: &files,
+        ..Call::new(&reason)
+    }
+    .var("FEARLEZZ_VERSION", &release.package.version)
+    .var("FEARLEZZ_TAG", &release.tag);
+    let command = place.command(&place.publish);
+    let project = Project::new(at.root, at.shell);
+    // Its secrets are fetched once, when a command of the place first needs them.
+    let ready = || -> Result<Ready<'_>> {
+        match project.ready(&command, call.clone(), None)? {
+            Ok(ready) => Ok(ready),
+            Err(unfetched) => {
+                let why = unfetched.why();
+                let fix = why.fix_here(&place.name, crate::run::install).unwrap_or_default();
+                bail!("its commands did not run{}\n  fix: {fix}", why.line())
+            }
+        }
+    };
+    let early = match place.landed {
+        Landed::Command(_) => Some(ready()?),
+        Landed::Read { .. } => None,
+    };
+    if landed(place, &release, at, early.as_ref())?.is_ok() {
         return Ok(format!("{shown} is already there"));
     }
+    let ready = match early {
+        Some(ready) => ready,
+        None => ready()?,
+    };
     println!("{}: publishing {shown}", place.name);
-    let status = shown_masked(
-        command(place, &place.publish, &release, at),
-        &env_values(&place.env),
-    )
-    .with_context(|| format!("starting the publish command of {}", place.name))?;
-    if !status.success() {
-        let code = status
+    let ran = ready
+        .run(&command.steps, Output::Terminal)
+        .with_context(|| format!("starting the publish command of {}", place.name))?;
+    if !ran.exit.success() {
+        let code = ran
+            .exit
             .code()
             .map_or_else(|| "a signal".to_string(), |c| format!("exit code {c}"));
         bail!("publish ended with {code}");
@@ -344,7 +411,7 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(place.wait);
     loop {
         // A registry that stumbles once (a 502, a rate limit) is asked again until the end.
-        let why = match landed(place, &release, at) {
+        let why = match landed(place, &release, at, Some(&ready)) {
             Ok(Ok(())) => return Ok(format!("{shown} landed")),
             Ok(Err(why)) => why,
             Err(e) => Some(format!("{e:#}")),
@@ -358,105 +425,21 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
     }
 }
 
-/// The values of the variables a place names, which may be tokens: a release cannot tell a
-/// token from a plain value, so every one is hidden in what its publish prints.
-fn env_values(names: &[String]) -> Vec<(String, String)> {
-    names
-        .iter()
-        .filter_map(|n| std::env::var(n).ok().map(|v| (n.clone(), v)))
-        .collect()
-}
-
-/// Runs `cmd`, printing each line it prints on its own stdout or stderr as it comes, with
-/// every form of `values` masked.
-fn shown_masked(
-    mut cmd: std::process::Command,
-    values: &[(String, String)],
-) -> std::io::Result<std::process::ExitStatus> {
-    let forms = crate::process::masked_forms(values);
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-    let out = pass_masked(child.stdout.take(), forms.clone(), std::io::stdout);
-    let err = pass_masked(child.stderr.take(), forms, std::io::stderr);
-    let status = child.wait();
-    drop(out.join());
-    drop(err.join());
-    status
-}
-
-/// Copies `pipe` into `to` as it comes, masked, on a thread of its own. Only an end that may
-/// be the start of a value waits for what follows, so a question without a newline shows.
-fn pass_masked<W: std::io::Write + 'static>(
-    pipe: Option<impl std::io::Read + Send + 'static>,
-    forms: Vec<Vec<u8>>,
-    to: fn() -> W,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let Some(mut pipe) = pipe else { return };
-        let (mut held, mut chunk) = (Vec::new(), [0u8; 8192]);
-        loop {
-            let n = pipe.read(&mut chunk).unwrap_or(0);
-            held.extend_from_slice(chunk.get(..n).unwrap_or_default());
-            let masked = crate::process::masked(&held, &forms);
-            let keep = if n == 0 {
-                0
-            } else {
-                open_start(&masked, &forms)
-            };
-            let (shown, open) = masked.split_at(masked.len().saturating_sub(keep));
-            let mut to = to();
-            drop(to.write_all(shown));
-            drop(to.flush());
-            if n == 0 {
-                return;
-            }
-            held = open.to_vec();
-        }
-    })
-}
-
-/// How many bytes at the end of `bytes` begin one of `forms` without completing it.
-fn open_start(bytes: &[u8], forms: &[Vec<u8>]) -> usize {
-    let longest = forms.iter().map(Vec::len).max().unwrap_or(0);
-    (1..longest.min(bytes.len() + 1))
-        .rev()
-        .find(|&k| {
-            forms
-                .iter()
-                .any(|f| f.len() > k && f.get(..k).is_some_and(|start| bytes.ends_with(start)))
-        })
-        .unwrap_or(0)
-}
-
-/// A command of the place run as a check runs, with the variables it names and the release's
-/// version, tag and files.
-fn command(place: &Place, script: &str, release: &Release, at: &At<'_>) -> std::process::Command {
-    // Absolute, so a command that runs in the place's folder finds them too.
-    let files: Vec<String> = release
-        .files
-        .iter()
-        .map(|f| at.root.join(f).display().to_string())
-        .collect();
-    let mut cmd = crate::process::Project::new(at.root, at.shell).clean(
-        place.dir.as_deref(),
-        script,
-        &place.env,
-        &files,
-    );
-    cmd.env("FEARLEZZ_VERSION", &release.package.version)
-        .env("FEARLEZZ_TAG", &release.tag);
-    cmd
-}
-
-/// Whether the place has the release: Ok, or Err with why not when the reader can say.
-fn landed(place: &Place, release: &Release, at: &At<'_>) -> Result<Result<(), Option<String>>> {
+/// Whether the place has the release: Ok, or Err with why not when the reader can say. A
+/// landed command runs as `ready`, the place's commands with their secrets.
+fn landed(
+    place: &Place,
+    release: &Release,
+    at: &At<'_>,
+    ready: Option<&Ready<'_>>,
+) -> Result<Result<(), Option<String>>> {
     match &place.landed {
         Landed::Command(script) => {
-            let status = command(place, script, release, at)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
+            let ready = ready.context("the landed command has no secrets")?;
+            let ran = ready
+                .run(std::slice::from_ref(script), Output::Nowhere)
                 .with_context(|| format!("starting the landed command of {}", place.name))?;
-            Ok(if status.success() { Ok(()) } else { Err(None) })
+            Ok(if ran.exit.success() { Ok(()) } else { Err(None) })
         }
         Landed::Read { reader, url } => {
             let url = url.as_deref().map(|u| u.trim_end_matches('/'));

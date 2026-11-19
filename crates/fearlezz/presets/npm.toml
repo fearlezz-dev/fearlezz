@@ -7,4 +7,5 @@
 dry = "npm publish --dry-run"
 publish = "npm publish"
 landed = { read = "npm" }
-env = ["NODE_AUTH_TOKEN", "NPM_CONFIG_USERCONFIG"]
+env = ["NPM_CONFIG_USERCONFIG"]
+secrets = ["NODE_AUTH_TOKEN"]
