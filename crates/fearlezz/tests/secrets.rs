@@ -1,6 +1,7 @@
-//! Checks that need secrets: a check names them, Fearlezz fetches each from SecretSpec and
-//! hands only those to the check, and their values never show in what Fearlezz keeps or prints.
-//! The tests use SecretSpec's `env` provider, so the values come from Fearlezz's own env.
+//! Checks that need secrets: a check names them, Fearlezz takes each from its own env or else
+//! fetches it from SecretSpec, hands only those to the check, and their values never show in
+//! what Fearlezz keeps or prints. The tests use SecretSpec's `env` provider, so SecretSpec's
+//! values come from Fearlezz's own env too.
 
 // Clippy applies its test allowances (unwrap, expect, panic) only to cfg(test) code.
 #![cfg(test)]
@@ -73,7 +74,12 @@ secrets = ["EVAL_API_KEY"]
     assert!(out.stdout.contains("key is ***"), "{}", out.stdout);
     assert!(!out.stdout.contains(VALUE), "{}", out.stdout);
     assert!(!out.stderr.contains(VALUE), "{}", out.stderr);
-    let mut kept = vec![repo.cache.clone()];
+    never_kept(&repo);
+}
+
+/// Fails when any file Fearlezz keeps for `repo` holds the secret's value.
+fn never_kept(repo: &Repo) {
+    let mut kept = vec![repo.cache.clone(), repo.path(".git/fearlezz")];
     while let Some(path) = kept.pop() {
         if path.is_dir() {
             kept.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
@@ -86,6 +92,45 @@ secrets = ["EVAL_API_KEY"]
             );
         }
     }
+}
+
+#[test]
+fn a_secret_is_masked_when_a_later_step_cannot_start() {
+    // The first step removes its own folder, so the second cannot start in it.
+    let repo = Repo::new(
+        r#"
+[check.eval]
+run = ['echo "key is $EVAL_API_KEY" > "$FEARLEZZ_OUT/note.txt"; echo "$EVAL_API_KEY"; cd .. && rm -rf sub', 'true']
+dir = "sub"
+stage = "working"
+secrets = ["EVAL_API_KEY"]
+"#,
+        &[("secretspec.toml", SECRETSPEC), ("sub/lib.txt", "a")],
+    );
+    repo.branch("feat/eval");
+    repo.write("sub/lib.txt", "b");
+    let out = run(&repo, Some(VALUE));
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains(VALUE) && !out.stderr.contains(VALUE));
+    never_kept(&repo);
+}
+
+#[test]
+fn a_secret_set_in_fearlezz_env_reaches_the_check_without_secretspec() {
+    let repo = repo(&format!(
+        r#"
+[check.eval]
+run = 'echo "key is $EVAL_API_KEY"; test "$EVAL_API_KEY" = "{VALUE}"'
+stage = "working"
+secrets = ["EVAL_API_KEY"]
+"#
+    ));
+    let out = repo.fz_env(
+        &["run", "--stage", "working"],
+        &[("PATH", "/usr/bin:/bin"), ("EVAL_API_KEY", VALUE)],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    never_kept(&repo);
 }
 
 #[test]

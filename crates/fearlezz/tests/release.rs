@@ -192,8 +192,8 @@ fn publish_sees_only_its_env_and_the_version() {
 }
 
 #[test]
-fn what_publish_prints_hides_the_values_of_its_env() {
-    let config = "[release.shop]\npublish = 'echo \"publishing with $SHOP_TOKEN\"; echo \"again $SHOP_TOKEN\" >&2; touch .published'\nlanded = \"test -f .published\"\nenv = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+fn what_publish_prints_hides_its_secrets_and_shows_its_env() {
+    let config = "[release.shop]\npublish = 'echo \"publishing with $SHOP_TOKEN to $SHOP_REGION\"; echo \"again $SHOP_TOKEN\" >&2; touch .published'\nlanded = \"test -f .published\"\nenv = [\"SHOP_REGION\"]\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
     let repo = Repo::new(
         config,
         &[
@@ -204,12 +204,59 @@ fn what_publish_prints_hides_the_values_of_its_env() {
             (".gitignore", ".published\n"),
         ],
     );
-    let out = repo.fz_env(&["run", "--release"], &[("SHOP_TOKEN", "s3cret-token")]);
+    let out = repo.fz_env(
+        &["run", "--release"],
+        &[("SHOP_TOKEN", "s3cret-token"), ("SHOP_REGION", "eu-west-1")],
+    );
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let all = format!("{}{}", out.stdout, out.stderr);
     assert!(!all.contains("s3cret-token"), "{all}");
-    assert!(all.contains("publishing with ***"), "{all}");
+    assert!(all.contains("publishing with *** to eu-west-1"), "{all}");
     assert!(all.contains("again ***"), "{all}");
+}
+
+#[test]
+fn a_secret_nobody_gives_leaves_the_publish_to_its_own_login() {
+    // Neither Fearlezz's env nor SecretSpec gives the token: the tool logs in its own way.
+    let config = "[release.shop]\npublish = 'test -z \"$SHOP_TOKEN\" && touch .published'\nlanded = \"test -f .published\"\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+    let repo = Repo::new(
+        config,
+        &[
+            (
+                "package.json",
+                "{\"name\": \"widget\", \"version\": \"0.9.1\"}\n",
+            ),
+            (".gitignore", ".published\n"),
+        ],
+    );
+    let out = repo.fz(&["run", "--release"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(repo.path(".published").exists());
+    // A rerun finds it landed, still without the token.
+    let again = repo.fz(&["run", "--release"]);
+    assert!(again.ok, "{}\n{}", again.stdout, again.stderr);
+    assert!(
+        again.stdout.contains("is already there"),
+        "{}",
+        again.stdout
+    );
+}
+
+#[test]
+fn a_dry_run_sees_neither_the_env_nor_the_secrets_of_its_place() {
+    let config = "[release.shop]\ndry = 'test -z \"$SHOP_REGION\" && test -z \"$SHOP_TOKEN\"'\npublish = \"false\"\nlanded = \"false\"\nenv = [\"SHOP_REGION\"]\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+    let repo = Repo::new(
+        config,
+        &[(
+            "package.json",
+            "{\"name\": \"widget\", \"version\": \"0.9.1\"}\n",
+        )],
+    );
+    let out = repo.fz_env(
+        &["run", "release/shop"],
+        &[("SHOP_TOKEN", "s3cret-token"), ("SHOP_REGION", "eu-west-1")],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
 }
 
 #[test]
@@ -418,6 +465,72 @@ fn a_github_release_has_landed_when_every_file_is_there_with_its_digest() {
     assert!(
         out.stdout
             .contains("github: widget v1.2.0 is already there"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_github_token_secretspec_gives_reaches_the_landed_reader() {
+    let reg = FakeRegistry::start();
+    let tar = "the binary";
+    reg.put(
+        RELEASE_PATH,
+        &github_release(&[("widget.tar.gz", &sha256(tar.as_bytes()))]),
+    );
+    reg.put(&format!("{RELEASE_PATH}.auth"), "Bearer gh-from-secretspec");
+    let config = format!("{}secrets = [\"GH_TOKEN\"]\n", github_place(&reg, "false"));
+    let repo = Repo::new(
+        &config,
+        &[
+            ("Cargo.toml", CARGO),
+            ("dist/widget.tar.gz", tar),
+            (
+                "secretspec.toml",
+                "[project]\nname = \"widget\"\nrevision = \"1.0\"\n\n[profiles.default]\nGH_TOKEN = { description = \"releases\", required = true }\n",
+            ),
+            (".env", "GH_TOKEN=gh-from-secretspec\n"),
+            (".gitignore", ".env\n"),
+        ],
+    );
+    let out = repo.fz_env(
+        &["run", "--release"],
+        &[
+            ("GITHUB_REPOSITORY", "acme/widget"),
+            ("SECRETSPEC_PROVIDER", "dotenv"),
+        ],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("github: widget v1.2.0 is already there"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_secret_secretspec_fails_to_give_is_said_and_the_publish_runs_without_it() {
+    let config = "[release.shop]\npublish = 'touch .published'\nlanded = \"test -f .published\"\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+    let repo = Repo::new(
+        config,
+        &[
+            (
+                "package.json",
+                "{\"name\": \"widget\", \"version\": \"0.9.1\"}\n",
+            ),
+            (
+                "secretspec.toml",
+                "[project]\nname = \"widget\"\nrevision = \"1.0\"\n\n[profiles.default]\nSHOP_TOKEN = { description = \"the shop\", required = true }\n",
+            ),
+            (".gitignore", ".published\n"),
+        ],
+    );
+    let out = repo.fz_env(&["run", "--release"], &[("SECRETSPEC_PROVIDER", "env")]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("SHOP_TOKEN not given, so its tool uses its own login"),
         "{}",
         out.stdout
     );

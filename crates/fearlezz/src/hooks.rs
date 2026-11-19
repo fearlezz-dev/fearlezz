@@ -263,7 +263,7 @@ fn check_run_by_hand(config: &Config, line: &str) -> Option<String> {
         .iter()
         .filter(|c| c.builtin.is_none())
         .find(|c| {
-            c.steps.last().is_some_and(|step| {
+            c.command.steps.last().is_some_and(|step| {
                 let start: Vec<&str> = step.split_whitespace().take(2).collect();
                 start.len() == 2 && commands.iter().any(|w| w.starts_with(&start))
             })

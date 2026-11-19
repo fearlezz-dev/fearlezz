@@ -8,4 +8,4 @@
 dry = "cargo publish --dry-run"
 publish = "cargo publish"
 landed = { read = "crates" }
-env = ["CARGO_REGISTRY_TOKEN"]
+secrets = ["CARGO_REGISTRY_TOKEN"]

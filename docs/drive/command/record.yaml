@@ -1,0 +1,72 @@
+# The working state of the one command shape refactor.
+goal: "plan the one command shape refactor": every command a project's config names takes one shape (run, dir, env, secrets), run one way.
+
+pieces:
+  - id: inventory
+    status: done
+    tries:
+      - id: read-call-sites
+        what: list every command built from a project's config and how each takes its folder, variables, secrets, masking and budget
+        taught: seven commands, five shapes. Only a check and the preview take secrets; only a check has a budget; release tokens travel unmasked in env; release dry runs get the place's dir but not its env; prepare and services run outside the [env] shell on purpose.
+        state: picked
+        evidence:
+          - crates/fearlezz/src/run.rs:217 (check step), run.rs:745 (envtest), run.rs:564 (secretspec)
+          - crates/fearlezz/src/env.rs:185 (prepare, up, down, reset, ports), env.rs:276 (preview)
+          - crates/fearlezz/src/release.rs:439 (publish, landed), release.rs:164 (dry run as a check)
+  - id: secret-source
+    status: done
+    tries:
+      - id: env-then-secretspec
+        what: a secret set in Fearlezz's own environment is taken from there, else SecretSpec is asked
+        taught: release tokens CI gives become secrets with no setup; one list keeps one meaning
+        state: picked
+        why: chosen by the developer over naming the source or SecretSpec only
+  - id: shape
+    status: done
+    tries:
+      - id: command-and-runner
+        what: one Command (run, dir, env, secrets, timeout) filled from checks, [env], release and envtest; one Project::run that fetches secrets, builds the clean env, budgets and masks
+        state: picked
+        why: removes five shapes and the release mask every env patch, with no key renamed
+        evidence: [docs/drive/command/plan.md]
+
+decided:
+  - id: scope
+    what: project commands only; Fearlezz's own tools (git, curl, ffmpeg, simctl, ast-grep) and `fearlezz run -- <command>` stay as they are
+    why: they take no config, so they have no env or secrets to unify
+  - id: secret-source
+    what: "A: env, then SecretSpec"
+    why: presets move to secrets with no setup
+  - id: drop-env-mask
+    what: drop the mask-all-env rule for release once tokens move to secrets
+    why: one rule, env shown and secrets masked
+  - id: release-secret-may-be-missing
+    what: a release place's secret neither Fearlezz's env nor SecretSpec gives is left out, so publish and landed run without it and the tool falls back to its own login; a given one is still masked; checks and the preview stay strict
+    why: chosen by the developer after the review; OIDC trusted publishing and a tool's own login set no token, and a rerun of a landed release no longer fails without one
+  - id: dry-run-no-env
+    what: a release dry run gets no env, as before this change
+    why: chosen by the developer after the review; a token kept in a place's env must never reach a dry run's log, proof, stored parts or the host
+  - id: env-secrets-preview-only
+    what: "[env] secrets stay the preview's only, as before; prepare, up, down, reset and ports run through the runner without secrets"
+    why: chosen by the developer after the review; a background service could write a secret into its log after masking, and every [env] command would ask SecretSpec
+
+open: []
+
+slices:
+  - id: secret-source
+    tests: [tests/secrets.rs a secret set in the environment reaches the check without secretspec]
+    status: done
+  - id: type-and-runner
+    tests: [tests/secrets.rs, tests/legs.rs, tests/record.rs stay green]
+    status: done
+  - id: env-commands
+    tests: [tests/env.rs only the preview gets the [env] secrets]
+    status: done
+  - id: release
+    tests: [tests/release.rs publish masks a place secret and shows env as is; a publish whose secret nobody gives still runs; a dry run sees neither the place env nor its secrets]
+    status: done
+  - id: docs
+    tests: []
+    status: done
+
+next: review the branch refactor/command and open its pull request

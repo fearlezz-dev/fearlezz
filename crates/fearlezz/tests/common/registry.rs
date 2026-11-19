@@ -27,8 +27,13 @@ impl FakeRegistry {
             let stumble = std::fs::read_to_string(format!("{}.status", file.display()))
                 .ok()
                 .and_then(|s| s.trim().parse().ok());
+            // A `<path>.auth` file makes the path answer only a request that carries that
+            // Authorization header, as a private repository does; others get 404.
+            let locked = std::fs::read_to_string(format!("{}.auth", file.display()))
+                .is_ok_and(|auth| request.auth.as_deref() != Some(auth.trim()));
             let (status, body) = match (stumble, std::fs::read(&file)) {
                 (Some(status), _) => (status, b"{}".to_vec()),
+                _ if locked => (404, b"{}".to_vec()),
                 (None, Ok(body)) if file.is_file() => (200, body),
                 _ => (404, b"{}".to_vec()),
             };

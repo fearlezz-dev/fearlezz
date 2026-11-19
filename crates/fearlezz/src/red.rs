@@ -30,7 +30,7 @@ use crate::store::{Outcome, RunResult, Store};
 /// can run: a test elsewhere passes on the base commit too, whatever the change does.
 pub(crate) fn test_files(check: &Check, wt: &Worktree) -> Vec<String> {
     let inside = |p: &str| {
-        check.dir.as_deref().is_none_or(|dir| {
+        check.command.dir.as_deref().is_none_or(|dir| {
             let dir = dir.trim_end_matches('/');
             dir == "."
                 || p.strip_prefix(dir)

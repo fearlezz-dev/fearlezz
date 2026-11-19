@@ -206,6 +206,28 @@ fn a_failed_down_keeps_the_services_known_so_down_can_try_again() {
 }
 
 #[test]
+fn only_the_preview_gets_the_env_secrets() {
+    let config = CONFIG
+        .replace(
+            "up = 'mkdir -p .svc &&",
+            "up = 'test -z \"$SVC_KEY\" || exit 1; mkdir -p .svc &&",
+        )
+        .replace(
+            "env = [\"LOG\"]\n\n[check.e2e]",
+            "env = [\"LOG\"]\nsecrets = [\"SVC_KEY\"]\n\n[check.e2e]",
+        );
+    let s = Setup::new(&config, &[]);
+    s.repo.branch("feat/x");
+    s.change();
+    s.fz(&["run", "--stage", "working", "--no-run"]);
+    let out = s
+        .repo
+        .fz_env(&["run", "e2e"], &[("LOG", &s.log), ("SVC_KEY", "given")]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(s.events().contains(&"up".to_string()), "{:?}", s.events());
+}
+
+#[test]
 fn a_start_that_never_finished_is_stopped_before_the_next_start() {
     // The first up kills Fearlezz itself, like a closed terminal would.
     let config = CONFIG.replace(

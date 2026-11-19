@@ -206,13 +206,13 @@ impl Hasher {
         if let Some(digest) = changed_lines {
             parts.insert("(changed lines)".into(), digest.to_string());
         }
-        for name in &check.env {
+        for name in &check.command.env {
             let value = std::env::var(name).unwrap_or_default();
             parts.insert(format!("${name}"), sha256_hex(value.as_bytes()));
         }
         // Only the names: even a digest of a secret's value is not kept on disk.
-        if !check.secrets.is_empty() {
-            let mut names = check.secrets.clone();
+        if !check.command.secrets.is_empty() {
+            let mut names = check.command.secrets.clone();
             names.sort();
             parts.insert("(secrets)".into(), sha256_hex(names.join("\n").as_bytes()));
         }
@@ -267,7 +267,7 @@ impl Hasher {
             parts.insert("(shell)".into(), sha256_hex(shell.as_bytes()));
         }
         // Each folder's copy of a check runs the same command on other files.
-        if let Some(dir) = &check.dir {
+        if let Some(dir) = &check.command.dir {
             parts.insert("(dir)".into(), sha256_hex(dir.as_bytes()));
         }
         // The simulator's device type or the display's size shape what the check sees.
@@ -296,8 +296,8 @@ impl Hasher {
         key.update(b"\0");
         // Steps apart, so they never key like one script of the same lines.
         key.update(check.run().as_bytes());
-        if check.steps.len() > 1 {
-            key.update(format!("\0{} steps", check.steps.len()).as_bytes());
+        if check.command.steps.len() > 1 {
+            key.update(format!("\0{} steps", check.command.steps.len()).as_bytes());
         }
         for (name, hash) in &parts {
             key.update(b"\0");

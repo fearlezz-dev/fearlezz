@@ -122,7 +122,7 @@ A check that needs two commands lists them as steps, each a plain command, never
 
 A check runs at the repository root. `dir = "shell"` runs it in that folder; `each = "Cargo.toml"` makes it one check per project folder holding that file (outside `no_proof`, and not inside another such folder; for Cargo.toml, any manifest no workspace above names a member, as Cargo decides): the root's keeps the check's name, one in a folder is `<check>/<folder>`, and `[check."clippy/shell"]` tunes that one alone. A folder's check reads every file until its own table names `inputs`, since the check's own `inputs` name the root project's files. The rust piece's checks have `each = "Cargo.toml"`, so a repository with several separate Cargo projects gets fmt, clippy and tests for each, and `setup sync` writes the lint tables into each project's Cargo.toml. A project folder that goes takes its checks with it; moving a check to another `dir` weakens the proof.
 
-A check that needs a secret names it: `secrets = ["EVAL_API_KEY"]`. Fearlezz asks SecretSpec for each name (in the `[env] shell` and the check's folder, so the project's `secretspec.toml` and provider apply) and hands only those values to the check; the provider's own token never reaches it. Never put a secret in `env` or a `.env` file. A value never shows in the check's log or files, where it reads `***` (also as JSON escapes it and line by line; pictures and values under 4 characters are left as they are). A secret may not be named like a variable every check gets (`PATH`, `FEARLEZZ_*`). A secret SecretSpec cannot give fails the check with the fix, without running it; in CI, give the job the provider's token (for 1Password, `OP_SERVICE_ACCOUNT_TOKEN`). Changing a check's `secrets` weakens the proof, as changing its `env` does.
+A check that needs a secret names it: `secrets = ["EVAL_API_KEY"]`. Fearlezz takes each name from its own environment when it is set there (CI's own tokens, such as `GH_TOKEN`, need no setup), and asks SecretSpec for the others (in the `[env] shell` and the check's folder, so the project's `secretspec.toml` and provider apply); it hands only those values to the check, and the provider's own token never reaches it. Never put a secret in `env` or a `.env` file. A value never shows in the check's log or files, where it reads `***` (also as JSON escapes it and line by line; pictures and values under 4 characters are left as they are). A secret may not be named like a variable every check gets (`PATH`, `FEARLEZZ_*`). A secret SecretSpec cannot give fails the check with the fix, without running it; in CI, give the job the provider's token (for 1Password, `OP_SERVICE_ACCOUNT_TOKEN`). Changing a check's `secrets` weakens the proof, as changing its `env` does.
 
 A check too slow, costly or reliant on real infrastructure to run for each change gets `schedule = true`: no change needs it, `fearlezz --plan` lists it apart, and a scheduled workflow proves the default branch with it through `fearlezz run --ci --scheduled` (the action's `scheduled: true`, with `issue-on-failure: true` to open an issue when it fails). `fearlezz run <check>` still runs it by name while you work on it. Putting an existing check on a schedule weakens the proof, so ask the developer first.
 
@@ -334,9 +334,11 @@ files = ["dist/*.tar.gz"]      # built before the release; landed when each is t
 
 [release.shop]                 # a place of your own
 dry = "shop check"
-publish = "shop push"          # sees FEARLEZZ_VERSION, FEARLEZZ_TAG and env; the files are its arguments ("$@")
+publish = "shop push"          # sees FEARLEZZ_VERSION, FEARLEZZ_TAG, env and secrets; the files are its arguments ("$@")
 landed = "shop has \"$FEARLEZZ_VERSION\""   # exits 0 once the place has it
 version = "package.json"
-env = ["SHOP_TOKEN"]           # a token CI gives the job; every value shows as *** in what publish prints
+env = ["SHOP_REGION"]          # seen by publish and landed, shown as it is; never by the dry run
+secrets = ["SHOP_TOKEN"]       # a token CI gives the job, for publish and landed only; shows as *** in what they print;
+                               # without it the tool logs in its own way (cargo login, OIDC trusted publishing)
 # wait = 600                   seconds it may take to show the version
 ```
