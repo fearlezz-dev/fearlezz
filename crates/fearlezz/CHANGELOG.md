@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.1](https://github.com/fearlezz-dev/fearlezz/compare/v0.5.0...v0.5.1) (2026-11-19)
+
+
+### Features
+
+* one command shape, secrets from the environment first and for release places ([#58](https://github.com/fearlezz-dev/fearlezz/issues/58)) ([18d13c1](https://github.com/fearlezz-dev/fearlezz/commit/18d13c13175a374869ca487a58454d0cd5420ac8))
+
+
+### Bug Fixes
+
+* a failed test's output shows on CI, and a film on a new iOS simulator gets 60 s to start ([#55](https://github.com/fearlezz-dev/fearlezz/issues/55)) ([953d4f3](https://github.com/fearlezz-dev/fearlezz/commit/953d4f3d8f636d7bdba09e927145fac175c2b6c7))
+
 ## [0.5.0](https://github.com/fearlezz-dev/fearlezz/compare/v0.4.0...v0.5.0) (2026-11-18)
 
 
