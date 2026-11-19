@@ -43,8 +43,8 @@ pub(crate) fn execute(
     let id = format!("{nanos:024}-{}", std::process::id());
     let dir = store.new_run_dir(&inputs.key, &id)?;
     let log = dir.join(crate::read::LOG);
-    // Appended, as everything that writes into it appends.
-    let out = fs::OpenOptions::new().create(true).append(true).open(&log)?;
+    // Appended, as everything else that writes into it.
+    let out = crate::process::appended(&log)?;
 
     let started_at = Timestamp::now();
     // Reports from before this moment are another run's, never proof of this one.
@@ -301,8 +301,11 @@ impl Ended {
 fn run_command(check: &Check, at: &Where<'_>, dir: &Path, out: File) -> Result<Ended> {
     let reason = format!("the Fearlezz check {}", check.id);
     let mut call = Call::new(&reason);
-    call.vars
-        .extend(at.vars.iter().map(|(name, value)| (name.clone(), value.into())));
+    call.vars.extend(
+        at.vars
+            .iter()
+            .map(|(name, value)| (name.clone(), value.into())),
+    );
     // A Fearlezz the check starts runs under this slot instead of waiting for it.
     if crate::queue::holding() {
         call = call.var(crate::queue::HELD, "1");
@@ -375,7 +378,9 @@ fn spawn(
 /// Runs `cmd`, one of the check's steps, to its end, or stops it at `until`, when the check's
 /// budget runs out.
 fn budgeted(check: &Check, mut cmd: Command, until: Option<Instant>, out: File) -> Result<Ended> {
-    match Ready::wait(&mut cmd, until).with_context(|| format!("starting check {}", check.id))? {
+    match crate::process::wait(&mut cmd, until)
+        .with_context(|| format!("starting check {}", check.id))?
+    {
         Exit::Ended(status) => Ok(Ended::of(status)),
         Exit::OverBudget => over_budget(check, out),
     }

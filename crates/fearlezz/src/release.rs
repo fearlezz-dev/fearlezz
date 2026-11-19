@@ -381,7 +381,9 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
             Ok(ready) => Ok(ready),
             Err(unfetched) => {
                 let why = unfetched.why();
-                let fix = why.fix_here(&place.name, crate::run::install).unwrap_or_default();
+                let fix = why
+                    .fix_here(&place.name, crate::run::install)
+                    .unwrap_or_default();
                 bail!("its commands did not run{}\n  fix: {fix}", why.line())
             }
         }
@@ -439,7 +441,11 @@ fn landed(
             let ran = ready
                 .run(std::slice::from_ref(script), Output::Nowhere)
                 .with_context(|| format!("starting the landed command of {}", place.name))?;
-            Ok(if ran.exit.success() { Ok(()) } else { Err(None) })
+            Ok(if ran.exit.success() {
+                Ok(())
+            } else {
+                Err(None)
+            })
         }
         Landed::Read { reader, url } => {
             let url = url.as_deref().map(|u| u.trim_end_matches('/'));

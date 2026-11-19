@@ -310,13 +310,10 @@ impl Ready<'_> {
 
     /// When its budget, started now, runs out.
     pub(crate) fn until(&self) -> Option<Instant> {
-        self.command.timeout.as_ref().map(|b| Instant::now() + b.time)
-    }
-
-    /// Runs `cmd`, one of its steps, to its end, or stops it with what it started at `until`.
-    pub(crate) fn wait(cmd: &mut Command, until: Option<Instant>) -> Result<Exit> {
-        let mut child = spawn(cmd, until)?;
-        finish(&mut child, until)
+        self.command
+            .timeout
+            .as_ref()
+            .map(|b| Instant::now() + b.time)
     }
 
     /// Runs `steps` in order, the first that fails ending them, within its budget.
@@ -334,18 +331,18 @@ impl Ready<'_> {
                 Output::Log(path) => {
                     let file = appended(path)?;
                     cmd.stdout(file.try_clone()?).stderr(file);
-                    Self::wait(&mut cmd, until)?
+                    wait(&mut cmd, until)?
                 }
                 Output::Nowhere => {
                     cmd.stdout(Stdio::null()).stderr(Stdio::null());
-                    Self::wait(&mut cmd, until)?
+                    wait(&mut cmd, until)?
                 }
                 Output::Read(path) => {
                     cmd.stdout(Stdio::piped()).stderr(appended(path)?);
                     let mut child = spawn(&mut cmd, until)?;
                     let out = drain(child.stdout.take());
                     let ended = finish(&mut child, until)?;
-                    printed.extend(out.join().unwrap_or_default());
+                    printed.extend(masked(&out.join().unwrap_or_default(), &self.forms));
                     ended
                 }
                 Output::Terminal => {
@@ -373,7 +370,7 @@ impl Ready<'_> {
         }
         Ok(Ran {
             exit: exit.context("the command has no step to run")?,
-            printed: masked(&printed, &self.forms),
+            printed,
         })
     }
 
@@ -398,6 +395,13 @@ impl Ready<'_> {
     pub(crate) fn mask(&self, path: &Path) -> Result<()> {
         mask(path, &self.forms)
     }
+}
+
+/// Runs `cmd`, a step of a project's command, to its end, or stops it with what it started at
+/// `until`.
+pub(crate) fn wait(cmd: &mut Command, until: Option<Instant>) -> Result<Exit> {
+    let mut child = spawn(cmd, until)?;
+    finish(&mut child, until)
 }
 
 /// Starts `cmd`; with a budget, in a process group of its own, so stopping it stops what it
@@ -428,7 +432,7 @@ fn finish(child: &mut Child, until: Option<Instant>) -> Result<Exit> {
 }
 
 /// The file at `path` opened to append, made when missing.
-fn appended(path: &Path) -> Result<File> {
+pub(crate) fn appended(path: &Path) -> Result<File> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }

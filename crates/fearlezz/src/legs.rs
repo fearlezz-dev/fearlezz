@@ -410,7 +410,12 @@ pub(crate) fn entry(leg: &Leg<'_>, planned: &[String]) -> Value {
     let minutes = leg
         .checks
         .iter()
-        .map(|c| c.command.timeout.as_ref().map(|b| b.time.as_secs().div_ceil(60)))
+        .map(|c| {
+            c.command
+                .timeout
+                .as_ref()
+                .map(|b| b.time.as_secs().div_ceil(60))
+        })
         .sum::<Option<u64>>()
         .map_or(GITHUB_MINUTES, |m| m + SETUP_MINUTES);
     entry.insert("timeout-minutes".into(), minutes.into());

@@ -239,8 +239,16 @@ fn check_weakenings(
     // What a check sees can change what it proves (a variable that skips the slow tests,
     // a key without which they skip themselves), so either list changing weakens it.
     for (how, was, now) in [
-        ("it sees other environment variables", &b.command.env, &h.command.env),
-        ("it gets other secrets", &b.command.secrets, &h.command.secrets),
+        (
+            "it sees other environment variables",
+            &b.command.env,
+            &h.command.env,
+        ),
+        (
+            "it gets other secrets",
+            &b.command.secrets,
+            &h.command.secrets,
+        ),
     ] {
         if let Some(how) = Change::names(how, names_diff(was, now)) {
             say(how);
