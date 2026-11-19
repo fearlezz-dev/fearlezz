@@ -4,8 +4,8 @@
 use std::fs::{self, File};
 use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::process::Command;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
 use jiff::Timestamp;
@@ -13,6 +13,7 @@ use jiff::Timestamp;
 use fearlezz_proof::why::{Generated, Why};
 
 use crate::config::Check;
+use crate::process::{Call, Exit, Output, Ready, Unfetched};
 use crate::record::Target;
 use crate::store::{Inputs, Outcome, RunResult, Store};
 
@@ -42,7 +43,8 @@ pub(crate) fn execute(
     let id = format!("{nanos:024}-{}", std::process::id());
     let dir = store.new_run_dir(&inputs.key, &id)?;
     let log = dir.join(crate::read::LOG);
-    let out = File::create(&log)?;
+    // Appended, as everything that writes into it appends.
+    let out = fs::OpenOptions::new().create(true).append(true).open(&log)?;
 
     let started_at = Timestamp::now();
     // Reports from before this moment are another run's, never proof of this one.
@@ -64,7 +66,7 @@ pub(crate) fn execute(
     let run = crate::read::Run {
         out: &dir,
         root: at.root,
-        folder: check.dir.as_deref(),
+        folder: check.command.dir.as_deref(),
         since: started,
     };
 
@@ -170,7 +172,7 @@ fn start(
         }
         Ended::Never(Why::Preview(undeployed.why.clone()))
     } else if check.needs.envtest {
-        match envtest_assets(check, at, &out)? {
+        match envtest_assets(check, at, &out, &dir.join(crate::read::LOG))? {
             Ok(assets) => {
                 let mut vars = at.vars.clone();
                 vars.insert("KUBEBUILDER_ASSETS".into(), assets);
@@ -249,38 +251,6 @@ fn count_tests(
     (tests, cases)
 }
 
-/// One step of a check as a command in a clean env, inside the environment's shell if any.
-fn command(
-    check: &Check,
-    step: &str,
-    dir: &Path,
-    stdout: File,
-    log: &File,
-    at: &Where<'_>,
-    secrets: &[(String, String)],
-) -> Result<Command> {
-    let mut cmd = crate::process::Project::new(at.root, at.shell).clean(
-        check.dir.as_deref(),
-        step,
-        &check.env,
-        &[],
-    );
-    cmd.stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(log.try_clone()?);
-    cmd.env("FEARLEZZ_PORT", free_port()?.to_string());
-    cmd.envs(at.vars);
-    cmd.envs(secrets.iter().map(|(name, value)| (name, value)));
-    // A Fearlezz the check starts runs under this slot instead of waiting for it.
-    if crate::queue::holding() {
-        cmd.env(crate::queue::HELD, "1");
-    }
-    cmd.env("FEARLEZZ_OUT", dir)
-        .env("FEARLEZZ_CHECK", &check.id)
-        .env("FEARLEZZ_STAGE", at.stage);
-    Ok(cmd)
-}
-
 /// How a check's command ended.
 enum Ended {
     /// It ran: whether it passed, and its exit code (none when a signal or Fearlezz stopped
@@ -328,24 +298,24 @@ impl Ended {
 
 /// Gets the check's secrets and runs its command with them, masking them in its files before
 /// anything reads those, since they are kept, shown and uploaded.
-fn run_command(check: &Check, at: &Where<'_>, dir: &Path, mut out: File) -> Result<Ended> {
-    let folder = check
-        .dir
-        .as_ref()
-        .map_or_else(|| at.root.to_path_buf(), |d| at.root.join(d));
+fn run_command(check: &Check, at: &Where<'_>, dir: &Path, out: File) -> Result<Ended> {
     let reason = format!("the Fearlezz check {}", check.id);
-    let asked = fetch_secrets(
-        &check.secrets,
-        &reason,
-        &folder,
-        at.root,
-        at.shell,
-        &mut out,
-    )?;
-    Ok(match asked {
-        Ok(secrets) => {
-            let ended = spawn(check, &secrets, dir, out, at)?;
-            mask(dir, &masked_forms(&secrets))?;
+    let mut call = Call::new(&reason);
+    call.vars
+        .extend(at.vars.iter().map(|(name, value)| (name.clone(), value.into())));
+    // A Fearlezz the check starts runs under this slot instead of waiting for it.
+    if crate::queue::holding() {
+        call = call.var(crate::queue::HELD, "1");
+    }
+    let call = call
+        .var("FEARLEZZ_OUT", dir)
+        .var("FEARLEZZ_CHECK", &check.id)
+        .var("FEARLEZZ_STAGE", at.stage);
+    let project = crate::process::Project::new(at.root, at.shell);
+    Ok(match project.ready(&check.command, call, Some(&out))? {
+        Ok(ready) => {
+            let ended = spawn(check, &ready, dir, out, at)?;
+            ready.mask(dir)?;
             ended
         }
         Err(Unfetched::NoSecretSpec) => Ended::Never(Why::MissingTool("secretspec".into())),
@@ -358,14 +328,14 @@ fn run_command(check: &Check, at: &Where<'_>, dir: &Path, mut out: File) -> Resu
 /// kept until its last step ends.
 fn spawn(
     check: &Check,
-    secrets: &[(String, String)],
+    ready: &Ready<'_>,
     dir: &Path,
     mut out: File,
     at: &Where<'_>,
 ) -> Result<Ended> {
     let run = Run {
         check,
-        secrets,
+        ready,
         dir,
         at,
     };
@@ -403,35 +373,18 @@ fn spawn(
     }
 }
 
-/// Runs `cmd` to its end, or stops it at `until`, when the check's budget runs out.
+/// Runs `cmd`, one of the check's steps, to its end, or stops it at `until`, when the check's
+/// budget runs out.
 fn budgeted(check: &Check, mut cmd: Command, until: Option<Instant>, out: File) -> Result<Ended> {
-    let Some(until) = until else {
-        let status = cmd
-            .status()
-            .with_context(|| format!("starting check {}", check.id))?;
-        return Ok(Ended::of(status));
-    };
-    // Its own process group, so stopping it stops what it started too.
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("starting check {}", check.id))?;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Ended::of(status));
-        }
-        if Instant::now() >= until {
-            crate::record::stop(&mut child)?;
-            return over_budget(check, out);
-        }
-        std::thread::sleep(Duration::from_millis(50));
+    match Ready::wait(&mut cmd, until).with_context(|| format!("starting check {}", check.id))? {
+        Exit::Ended(status) => Ok(Ended::of(status)),
+        Exit::OverBudget => over_budget(check, out),
     }
 }
 
 /// Says in the check's log that it ran out of its budget and was stopped; it fails.
 fn over_budget(check: &Check, mut log: File) -> Result<Ended> {
-    if let Some(budget) = &check.timeout {
+    if let Some(budget) = &check.command.timeout {
         writeln!(
             log,
             "fearlezz: {} exceeded its {budget} budget and was stopped",
@@ -450,7 +403,7 @@ fn failed(log: &mut File, what: &str, e: &anyhow::Error) -> Result<Ended> {
 /// A check about to run, with what its commands get.
 struct Run<'a> {
     check: &'a Check,
-    secrets: &'a [(String, String)],
+    ready: &'a Ready<'a>,
     dir: &'a Path,
     at: &'a Where<'a>,
 }
@@ -464,15 +417,9 @@ impl Run<'_> {
         log: &File,
         env: &[(&str, String)],
     ) -> Result<Command> {
-        let mut cmd = command(
-            self.check,
-            step,
-            self.dir,
-            stdout,
-            log,
-            self.at,
-            self.secrets,
-        )?;
+        let mut cmd = self.ready.step(step);
+        cmd.stdout(stdout).stderr(log.try_clone()?);
+        cmd.env("FEARLEZZ_PORT", free_port()?.to_string());
         cmd.envs(env.iter().map(|(name, value)| (name, value)));
         Ok(cmd)
     }
@@ -494,11 +441,11 @@ impl Run<'_> {
             Some(f) if f.read.reads_stdout() => File::create(&stdout_path)?,
             _ => out.try_clone()?,
         };
-        let Some((last, before)) = check.steps.split_last() else {
+        let Some((last, before)) = check.command.steps.split_last() else {
             bail!("check {} has no command to run", check.id);
         };
         // One budget for all its steps and its recording, from when the first starts.
-        let until = check.timeout.as_ref().map(|b| Instant::now() + b.time);
+        let until = self.ready.until();
         for step in before {
             let cmd = self.command(step, out.try_clone()?, &out, env)?;
             let ended = budgeted(check, cmd, until, out.try_clone()?)?;
@@ -592,149 +539,6 @@ impl Run<'_> {
     }
 }
 
-/// Why a check or the preview did not get its secrets.
-pub(crate) enum Unfetched {
-    /// SecretSpec could not give this one; its reason is in the log.
-    Secret(String),
-    /// The shell found no `secretspec` to ask.
-    NoSecretSpec,
-}
-
-/// Takes each secret in `names` from Fearlezz's own env when it is set there (CI hands its
-/// tokens over this way), and fetches the others from SecretSpec, giving it `reason`, outside
-/// a check's clean env: in `shell` (the environment's, started at `root`) and `folder`, so the project's
-/// SecretSpec and provider settings apply, and with Fearlezz's own variables, so the
-/// provider's token (such as 1Password's `OP_SERVICE_ACCOUNT_TOKEN`) reaches SecretSpec but
-/// never the check. One name at a time, since SecretSpec refuses a whole profile when any
-/// required secret in it is missing. SecretSpec's own words go to `out`.
-pub(crate) fn fetch_secrets(
-    names: &[String],
-    reason: &str,
-    folder: &Path,
-    root: &Path,
-    shell: Option<&str>,
-    out: &mut File,
-) -> Result<std::result::Result<Vec<(String, String)>, Unfetched>> {
-    // The value goes to a file of its own, so nothing the shell prints on entering can mix in.
-    let get = r#"secretspec get "$FEARLEZZ_SECRET" --reason "$FEARLEZZ_REASON" --caller fearlezz > "$FEARLEZZ_SECRET_FILE""#;
-    let project = crate::process::Project::new(root, shell);
-    let mut secrets = Vec::new();
-    for name in names {
-        if let Some(value) = std::env::var(name).ok().filter(|v| !v.is_empty()) {
-            secrets.push((name.clone(), value));
-            continue;
-        }
-        let file = tempfile::NamedTempFile::new()?;
-        let mut cmd = project.inherited(folder, get);
-        cmd.stdout(out.try_clone()?)
-            .stderr(out.try_clone()?)
-            .env("FEARLEZZ_SECRET", name)
-            .env("FEARLEZZ_SECRET_FILE", file.path())
-            .env("FEARLEZZ_REASON", reason);
-        let status = cmd
-            .status()
-            .with_context(|| format!("asking SecretSpec for {name}"))?;
-        if status.code() == Some(NOT_FOUND) {
-            return Ok(Err(Unfetched::NoSecretSpec));
-        }
-        if !status.success() {
-            return Ok(Err(Unfetched::Secret(name.clone())));
-        }
-        let Ok(value) = String::from_utf8(fs::read(file.path())?) else {
-            writeln!(out, "SecretSpec gave {name} as bytes that are not text")?;
-            return Ok(Err(Unfetched::Secret(name.clone())));
-        };
-        secrets.push((name.clone(), value));
-    }
-    Ok(Ok(secrets))
-}
-
-/// What stands in for a secret's value in a run's files.
-const MASK: &[u8] = b"***";
-
-/// Values shorter than this are not masked: replacing a word as short as `dev` everywhere
-/// would garble every report, and a value that short protects nothing.
-const MASKED_FROM: usize = 4;
-
-/// Pictures hold no text a tool printed, and masking would break them.
-const UNMASKED: [&str; 9] = [
-    "png", "jpg", "jpeg", "gif", "webp", "mp4", "webm", "mov", "mkv",
-];
-
-/// Every form a secret's value can take in a run's text files: as it is, as JSON escapes it
-/// (findings, SARIF, logs), and each of its lines, for a value of several lines (a PEM key)
-/// printed line by line.
-pub(crate) fn masked_forms(values: &[(String, String)]) -> Vec<Vec<u8>> {
-    let mut forms: Vec<String> = Vec::new();
-    for (_, value) in values {
-        forms.push(value.clone());
-        let json = serde_json::to_string(value).unwrap_or_default();
-        forms.push(json.trim_matches('"').to_string());
-        if value.contains('\n') {
-            forms.extend(value.lines().map(str::to_string));
-        }
-    }
-    forms.retain(|f| f.len() >= MASKED_FROM);
-    // The longest first, so a line never masks part of the whole value before it is matched.
-    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
-    forms.dedup();
-    forms.into_iter().map(String::into_bytes).collect()
-}
-
-/// Replaces every form of a secret's value in the files under `dir` with [`MASK`].
-fn mask(dir: &Path, forms: &[Vec<u8>]) -> Result<()> {
-    if forms.is_empty() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            mask(&path, forms)?;
-            continue;
-        }
-        let picture = path
-            .extension()
-            .and_then(|x| x.to_str())
-            .is_some_and(|x| UNMASKED.contains(&x.to_ascii_lowercase().as_str()));
-        if picture {
-            continue;
-        }
-        mask_file(&path, forms)?;
-    }
-    Ok(())
-}
-
-/// Replaces every form of a secret's value in the file at `path` with [`MASK`].
-fn mask_file(path: &Path, forms: &[Vec<u8>]) -> Result<()> {
-    let bytes = fs::read(path)?;
-    let masked = masked(&bytes, forms);
-    if masked != bytes {
-        fs::write(path, masked)?;
-    }
-    Ok(())
-}
-
-/// `bytes` with every form of a secret's value replaced by [`MASK`].
-pub(crate) fn masked(bytes: &[u8], forms: &[Vec<u8>]) -> Vec<u8> {
-    forms
-        .iter()
-        .fold(bytes.to_vec(), |masked, form| replace(&masked, form, MASK))
-}
-
-/// `bytes` with every `from` replaced by `to`.
-fn replace(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut rest = bytes;
-    while let Some(at) = rest.windows(from.len()).position(|w| w == from) {
-        let (before, found) = rest.split_at(at);
-        out.extend_from_slice(before);
-        out.extend_from_slice(to);
-        rest = found.get(from.len()..).unwrap_or_default();
-    }
-    out.extend_from_slice(rest);
-    out
-}
-
 /// A port nothing listens on right now, for a server the check starts itself (such as
 /// Playwright's `webServer`), so checks in two worktrees or on the base never collide. The
 /// system picks it from its wide ephemeral range, so another process taking it in the
@@ -782,38 +586,50 @@ fn kubernetes_version(go_mod: &str) -> Option<String> {
 fn envtest_assets(
     check: &Check,
     at: &Where<'_>,
-    log: &File,
+    out: &File,
+    log: &Path,
 ) -> Result<Result<String, Option<i32>>> {
-    use std::io::Write as _;
     let folder = check
+        .command
         .dir
         .as_ref()
         .map_or(at.root.to_path_buf(), |d| at.root.join(d));
     let go_mod = fs::read_to_string(folder.join("go.mod")).unwrap_or_default();
     let Some(version) = kubernetes_version(&go_mod) else {
         writeln!(
-            &*log,
+            &*out,
             "envtest: go.mod in {} requires no k8s.io/api, so the Kubernetes version is unknown",
             folder.display()
         )?;
         return Ok(Err(None));
     };
     let bin = crate::files::UserDir::Cache.path()?.join("envtest");
-    let command = "setup-envtest use \"$FEARLEZZ_K8S\" --bin-dir \"$FEARLEZZ_ENVTEST\" -p path";
     // The check's own variables too, such as a proxy the download needs.
-    let mut cmd =
-        crate::process::Project::new(at.root, at.shell).clean(None, command, &check.env, &[]);
-    cmd.stderr(log.try_clone()?);
-    cmd.env("FEARLEZZ_K8S", &version)
-        .env("FEARLEZZ_ENVTEST", &bin);
-    let output = cmd.output().context("starting setup-envtest")?;
-    let assets = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !output.status.success() || assets.is_empty() {
+    let command = crate::config::Command {
+        steps: vec![
+            "setup-envtest use \"$FEARLEZZ_K8S\" --bin-dir \"$FEARLEZZ_ENVTEST\" -p path".into(),
+        ],
+        env: check.command.env.clone(),
+        ..crate::config::Command::default()
+    };
+    let call = Call::new("envtest")
+        .var("FEARLEZZ_K8S", &version)
+        .var("FEARLEZZ_ENVTEST", &bin);
+    let project = crate::process::Project::new(at.root, at.shell);
+    let Ok(ran) = project
+        .run(&command, call, Output::Read(log))
+        .context("starting setup-envtest")?
+    else {
+        // It names no secrets, so it always has them.
+        return Ok(Err(None));
+    };
+    let assets = String::from_utf8_lossy(&ran.printed).trim().to_string();
+    if !ran.exit.success() || assets.is_empty() {
         writeln!(
-            &*log,
+            &*out,
             "envtest: setup-envtest found no binaries for Kubernetes {version}"
         )?;
-        return Ok(Err(output.status.code()));
+        return Ok(Err(ran.exit.code()));
     }
     Ok(Ok(assets))
 }
@@ -1004,34 +820,6 @@ pub(crate) fn tail(log: &Path, lines: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_secret_is_masked_as_it_is_as_json_escapes_it_and_line_by_line() {
-        let value = "first-line\"quoted\nsecond-line";
-        let dir = tempfile::tempdir().unwrap();
-        let text = format!(
-            "raw {value} json {} lines {} {} short ab\n",
-            serde_json::to_string(value).unwrap(),
-            "first-line\"quoted",
-            "second-line"
-        );
-        fs::write(dir.path().join("log.txt"), &text).unwrap();
-        fs::write(dir.path().join("still.png"), value).unwrap();
-        let secrets = [
-            ("KEY".to_string(), value.to_string()),
-            ("SHORT".to_string(), "ab".to_string()),
-        ];
-        mask(dir.path(), &masked_forms(&secrets)).unwrap();
-        assert_eq!(
-            fs::read_to_string(dir.path().join("log.txt")).unwrap(),
-            "raw *** json \"***\" lines *** *** short ab\n"
-        );
-        assert_eq!(
-            fs::read_to_string(dir.path().join("still.png")).unwrap(),
-            value,
-            "pictures are left whole"
-        );
-    }
 
     #[test]
     fn the_kubernetes_version_follows_k8s_io_api_and_its_replacement() {

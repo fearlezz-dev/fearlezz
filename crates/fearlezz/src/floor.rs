@@ -106,7 +106,7 @@ impl Floor {
 /// the check goes with its folder. Removing `each` itself, or one folder's check while its
 /// folder stays, is gone.
 fn gone_with_its_folder(base: &Config, head: &Config, check: &config::Check) -> bool {
-    let folder = check.dir.as_deref().unwrap_or(".");
+    let folder = check.command.dir.as_deref().unwrap_or(".");
     base.fanned.iter().any(|(id, folders)| {
         let named = if folder == "." {
             check.id == *id
@@ -171,7 +171,7 @@ fn check_weakenings(
         }
         return found;
     };
-    if h.steps != b.steps {
+    if h.command.steps != b.command.steps {
         say("it runs another command".into());
     }
     for platform in b.on.iter().filter(|p| !h.on.contains(p)) {
@@ -180,12 +180,12 @@ fn check_weakenings(
     if h.schedule && !b.schedule {
         say("it runs on a schedule instead of for each change".into());
     }
-    if h.dir != b.dir {
+    if h.command.dir != b.command.dir {
         let at = |dir: &Option<String>| dir.clone().unwrap_or_else(|| "the root".into());
         say(Change::replaced(
             "it runs in another folder",
-            at(&b.dir),
-            at(&h.dir),
+            at(&b.command.dir),
+            at(&h.command.dir),
         ));
     }
     let base_stage = base.stages.name(b.stage);
@@ -239,8 +239,8 @@ fn check_weakenings(
     // What a check sees can change what it proves (a variable that skips the slow tests,
     // a key without which they skip themselves), so either list changing weakens it.
     for (how, was, now) in [
-        ("it sees other environment variables", &b.env, &h.env),
-        ("it gets other secrets", &b.secrets, &h.secrets),
+        ("it sees other environment variables", &b.command.env, &h.command.env),
+        ("it gets other secrets", &b.command.secrets, &h.command.secrets),
     ] {
         if let Some(how) = Change::names(how, names_diff(was, now)) {
             say(how);

@@ -186,27 +186,40 @@ pub(crate) struct Stages(Vec<String>);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Stage(usize);
 
+/// A command the project's config names: what it runs, where, and what it may see. Checks,
+/// `[env]`, release places and envtest each fill one, and [`crate::process::Project::run`]
+/// runs every one of them the same way.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Command {
+    /// The plain commands it runs in order, the first that fails ending it.
+    pub steps: Vec<String>,
+    /// The folder of the repository it runs in; the root without one.
+    pub dir: Option<String>,
+    /// Variables it sees from Fearlezz's own, shown as they are.
+    pub env: Vec<String>,
+    /// Secrets it gets by name, from Fearlezz's own env or else SecretSpec, masked in
+    /// everything it wrote.
+    pub secrets: Vec<String>,
+    /// How long it may run, all its steps together, before Fearlezz stops it.
+    pub timeout: Option<crate::legs::Budget>,
+}
+
 #[derive(Default)]
 pub(crate) struct Check {
     pub id: String,
-    /// The plain commands it runs in order, the first that fails ending the check; a
-    /// reader of stdout reads only the last one's. Empty for a built in check.
-    pub steps: Vec<String>,
-    /// The folder of the repository it runs in, from `each` or written; the root without one.
-    pub dir: Option<String>,
+    /// What it runs: its steps (empty for a built in check; a reader of stdout reads only the
+    /// last one's), its folder (from `each` or written), its variables (their values part of
+    /// its inputs), its secrets (their names part of its inputs, never their values) and its
+    /// budget.
+    pub command: Command,
     pub stage: Stage,
     /// What it reads, the key its results are reused by: the files `inputs` names, or
     /// without them every file outside `no_proof`. Only a speed hint; it never decides
     /// whether the check is needed.
     inputs: Globs,
-    /// Environment variables the check may see. Their values are part of its inputs.
-    pub env: Vec<String>,
     /// Too slow, costly or reliant on real infrastructure to run for each change: only a
     /// scheduled run (`fearlezz run --ci --scheduled`) or naming it runs it.
     pub schedule: bool,
-    /// Secrets it gets from SecretSpec, by name. Their names are part of its inputs, never
-    /// their values.
-    pub secrets: Vec<String>,
     pub needs: Needs,
     /// For a check that reports findings: where they come from and which count.
     pub findings: Option<FindingsSpec>,
@@ -234,8 +247,6 @@ pub(crate) struct Check {
     /// The CI job it runs in on each platform, with the other checks of that job; without one,
     /// the platform's shared job.
     pub job: Option<String>,
-    /// How long it may run before Fearlezz stops it and it fails.
-    pub timeout: Option<crate::legs::Budget>,
     /// Quick enough never to wait in the machine's heavy queue (`light = true`).
     pub light: bool,
 }
@@ -939,12 +950,6 @@ impl RawCheck {
             inputs: globs(own.iter().chain(shell_inputs)).context("inputs")?,
             on: crate::legs::Platform::on(at.platforms, self.on, needs.screen.os())?,
             job: crate::legs::job(self.job)?,
-            timeout: self
-                .timeout
-                .as_deref()
-                .map(crate::legs::Budget::parse)
-                .transpose()
-                .context("timeout")?,
             tests: self
                 .tests
                 .as_ref()
@@ -961,17 +966,25 @@ impl RawCheck {
             },
             flaky_tests: globs(&self.flaky_tests).context("flaky_tests")?,
             generates: globs(&self.generates).context("generates")?,
-            dir: self
-                .dir
-                .map(|dir| folder(&dir))
-                .transpose()
-                .context("dir")?,
             findings: self.findings.map(|f| f.resolve(at.lints)).transpose()?,
             light: self.light,
-            steps,
+            command: Command {
+                steps,
+                dir: self
+                    .dir
+                    .map(|dir| folder(&dir))
+                    .transpose()
+                    .context("dir")?,
+                env: self.env,
+                secrets: self.secrets,
+                timeout: self
+                    .timeout
+                    .as_deref()
+                    .map(crate::legs::Budget::parse)
+                    .transpose()
+                    .context("timeout")?,
+            },
             stage,
-            env: self.env,
-            secrets: self.secrets,
             schedule: self.schedule,
             needs,
             ..Check::default()
@@ -1296,7 +1309,7 @@ impl Check {
         if self.builtin.is_some() {
             format!("(fearlezz {})", self.id)
         } else {
-            self.steps.join("\n")
+            self.command.steps.join("\n")
         }
     }
 
@@ -1308,7 +1321,7 @@ impl Check {
 
     /// Whether `path`, from the root, is a file its `generates` names.
     pub(crate) fn generated(&self, path: &str) -> bool {
-        match &self.dir {
+        match &self.command.dir {
             Some(dir) => path
                 .strip_prefix(dir.as_str())
                 .and_then(|p| p.strip_prefix('/'))

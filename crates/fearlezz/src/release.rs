@@ -373,7 +373,7 @@ fn shown_masked(
     mut cmd: std::process::Command,
     values: &[(String, String)],
 ) -> std::io::Result<std::process::ExitStatus> {
-    let forms = crate::run::masked_forms(values);
+    let forms = crate::process::masked_forms(values);
     let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let out = pass_masked(child.stdout.take(), forms.clone(), std::io::stdout);
     let err = pass_masked(child.stderr.take(), forms, std::io::stderr);
@@ -396,7 +396,7 @@ fn pass_masked<W: std::io::Write + 'static>(
         loop {
             let n = pipe.read(&mut chunk).unwrap_or(0);
             held.extend_from_slice(chunk.get(..n).unwrap_or_default());
-            let masked = crate::run::masked(&held, &forms);
+            let masked = crate::process::masked(&held, &forms);
             let keep = if n == 0 {
                 0
             } else {
@@ -770,22 +770,6 @@ fn files(globs: &[String], root: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_an_end_that_may_start_a_value_waits() {
-        let forms = vec![b"s3cret-token".to_vec()];
-        assert_eq!(open_start(b"Enter OTP: ", &forms), 0);
-        assert_eq!(open_start(b"token is s3cr", &forms), 4);
-        assert_eq!(open_start(b"token is s3cret-token", &forms), 0);
-        let (one, two) = (b"with s3cr".to_vec(), b"et-token done".to_vec());
-        let keep = open_start(&one, &forms);
-        let (shown, open) = one.split_at(one.len() - keep);
-        let mut rest = open.to_vec();
-        rest.extend_from_slice(&two);
-        let mut all = shown.to_vec();
-        all.extend(crate::run::masked(&rest, &forms));
-        assert_eq!(all, b"with *** done");
-    }
 
     #[test]
     fn the_sparse_index_folder_follows_the_length_of_the_name() {

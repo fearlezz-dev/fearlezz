@@ -244,25 +244,24 @@ impl EnvState {
         if let Some(dir) = log.parent() {
             fs::create_dir_all(dir)?;
         }
-        let mut out = fs::File::create(&log)?;
+        let out = fs::File::create(&log)?;
         let clock = std::time::Instant::now();
-        let asked = run::fetch_secrets(
+        let asked = crate::process::fetch_secrets(
             &env.secrets,
             "the preview deploy of Fearlezz",
             root,
-            root,
-            env.shell.as_deref(),
-            &mut out,
+            &crate::process::Project::new(root, env.shell.as_deref()),
+            Some(&out),
         )?;
         let secrets = match asked {
             Ok(secrets) => secrets,
-            Err(run::Unfetched::Secret(name)) => {
+            Err(crate::process::Unfetched::Secret(name)) => {
                 return Ok(Err(Undeployed {
                     why: NoPreview::Secret { name },
                     log,
                 }));
             }
-            Err(run::Unfetched::NoSecretSpec) => {
+            Err(crate::process::Unfetched::NoSecretSpec) => {
                 return Ok(Err(Undeployed {
                     why: NoPreview::NoSecretSpec,
                     log,
@@ -286,11 +285,11 @@ impl EnvState {
             .envs(secrets.iter().map(|(secret, value)| (secret, value)));
         let status = command.status().context("starting [env] preview")?;
         // Split before masking, which changes the length of what SecretSpec said.
-        let forms = run::masked_forms(&secrets);
+        let forms = crate::process::masked_forms(&secrets);
         let text = fs::read(&log)?;
         let (asked, printed) = text.split_at(usize::try_from(asked_len)?.min(text.len()));
-        let printed = run::masked(printed, &forms);
-        fs::write(&log, [run::masked(asked, &forms), printed.clone()].concat())?;
+        let printed = crate::process::masked(printed, &forms);
+        fs::write(&log, [crate::process::masked(asked, &forms), printed.clone()].concat())?;
         if !status.success() {
             return Ok(Err(Undeployed {
                 why: NoPreview::Failed {
