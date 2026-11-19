@@ -216,6 +216,33 @@ fn what_publish_prints_hides_its_secrets_and_shows_its_env() {
 }
 
 #[test]
+fn a_secret_nobody_gives_leaves_the_publish_to_its_own_login() {
+    // Neither Fearlezz's env nor SecretSpec gives the token: the tool logs in its own way.
+    let config = "[release.shop]\npublish = 'test -z \"$SHOP_TOKEN\" && touch .published'\nlanded = \"test -f .published\"\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+    let repo = Repo::new(
+        config,
+        &[
+            (
+                "package.json",
+                "{\"name\": \"widget\", \"version\": \"0.9.1\"}\n",
+            ),
+            (".gitignore", ".published\n"),
+        ],
+    );
+    let out = repo.fz(&["run", "--release"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(repo.path(".published").exists());
+    // A rerun finds it landed, still without the token.
+    let again = repo.fz(&["run", "--release"]);
+    assert!(again.ok, "{}\n{}", again.stdout, again.stderr);
+    assert!(
+        again.stdout.contains("is already there"),
+        "{}",
+        again.stdout
+    );
+}
+
+#[test]
 fn a_dry_run_sees_neither_the_env_nor_the_secrets_of_its_place() {
     let config = "[release.shop]\ndry = 'test -z \"$SHOP_REGION\" && test -z \"$SHOP_TOKEN\"'\npublish = \"false\"\nlanded = \"false\"\nenv = [\"SHOP_REGION\"]\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
     let repo = Repo::new(

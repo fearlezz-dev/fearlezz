@@ -39,7 +39,8 @@ pub(crate) struct Place {
     /// none, so a token kept here never reaches a check's log or proof.
     pub env: Vec<String>,
     /// Secrets its publish and landed commands get, such as its token, masked in what they
-    /// print. Its dry run gets none, so it never needs a token.
+    /// print. One nobody gives is left out, so the tool falls back to its own login (`cargo
+    /// login`, OIDC trusted publishing). Its dry run gets none, so it never needs a token.
     pub secrets: Vec<String>,
     /// The folder of the repository the package lives in; the root without one.
     pub dir: Option<String>,
@@ -369,21 +370,11 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
     let project = Project::new(at.root, at.shell);
     // Its secrets are fetched once, when a command of the place first needs them.
     let commands = || -> Result<Commands<'_>> {
-        let secrets = match project.secrets(&place.command(""), &reason, None)? {
-            Ok(secrets) => secrets,
-            Err(unfetched) => {
-                let why = unfetched.why();
-                let fix = why
-                    .fix_here(&place.name, crate::run::install)
-                    .unwrap_or_default();
-                bail!("its commands did not run{}\n  fix: {fix}", why.line())
-            }
-        };
         Ok(Commands {
             place,
             project,
             call: call.clone(),
-            secrets,
+            secrets: project.given(&place.command(&place.publish), &reason)?,
         })
     };
     let early = match place.landed {

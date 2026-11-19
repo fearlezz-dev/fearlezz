@@ -220,9 +220,10 @@ fn only_the_preview_gets_the_env_secrets() {
     s.repo.branch("feat/x");
     s.change();
     s.fz(&["run", "--stage", "working", "--no-run"]);
-    let out = s
-        .repo
-        .fz_env(&["run", "e2e"], &[("LOG", &s.log), ("SVC_KEY", "sk-test-0123456789")]);
+    let out = s.repo.fz_env(
+        &["run", "e2e"],
+        &[("LOG", &s.log), ("SVC_KEY", "sk-test-0123456789")],
+    );
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(s.events().contains(&"up".to_string()), "{:?}", s.events());
 }

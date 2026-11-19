@@ -288,11 +288,38 @@ impl Project<'_> {
         reason: &str,
         said: Option<&File>,
     ) -> Result<Result<Secrets, Unfetched>> {
-        let folder = command
+        let mut values = Vec::new();
+        for name in &command.secrets {
+            match fetch_secret(name, reason, &self.folder(command), self, said)? {
+                Ok(value) => values.push((name.clone(), value)),
+                Err(unfetched) => return Ok(Err(unfetched)),
+            }
+        }
+        Ok(Ok(Secrets::of(values)))
+    }
+
+    /// The secrets `command` names that are given, the others left out, so its tool falls back
+    /// to its own login, as a release place's do. What SecretSpec says of one it cannot give is
+    /// dropped, since a missing one is no error.
+    pub(crate) fn given(&self, command: &crate::config::Command, reason: &str) -> Result<Secrets> {
+        let dropped = tempfile::tempfile()?;
+        let mut values = Vec::new();
+        for name in &command.secrets {
+            if let Ok(value) =
+                fetch_secret(name, reason, &self.folder(command), self, Some(&dropped))?
+            {
+                values.push((name.clone(), value));
+            }
+        }
+        Ok(Secrets::of(values))
+    }
+
+    /// The folder `command` runs in.
+    fn folder(&self, command: &crate::config::Command) -> PathBuf {
+        command
             .dir
             .as_ref()
-            .map_or_else(|| self.root.to_path_buf(), |d| self.root.join(d));
-        Ok(fetch_secrets(&command.secrets, reason, &folder, self, said)?.map(Secrets::of))
+            .map_or_else(|| self.root.to_path_buf(), |d| self.root.join(d))
     }
 
     /// Runs `command`'s steps in order, the first that fails ending them, with `call`'s
@@ -307,7 +334,9 @@ impl Project<'_> {
         mut output: Output<'_>,
     ) -> Result<Ran> {
         let log = match output {
-            Output::Log(path) | Output::Read(path) => Some((path, appended(path)?.metadata()?.len())),
+            Output::Log(path) | Output::Read(path) => {
+                Some((path, appended(path)?.metadata()?.len()))
+            }
             _ => None,
         };
         let mut printed = Vec::new();
@@ -450,56 +479,51 @@ pub(crate) fn appended(path: &Path) -> Result<File> {
         .with_context(|| format!("opening {}", path.display()))
 }
 
-/// Takes each secret in `names` from Fearlezz's own env when it is set there (CI hands its
-/// tokens over this way), and fetches the others from SecretSpec, giving it `reason`, outside
-/// a command's clean env: in the project's shell and `folder`, so the project's SecretSpec and
-/// provider settings apply, and with Fearlezz's own variables, so the provider's token (such
-/// as 1Password's `OP_SERVICE_ACCOUNT_TOKEN`) reaches SecretSpec but never the command. One
-/// name at a time, since SecretSpec refuses a whole profile when any required secret in it is
+/// Takes the secret `name` from Fearlezz's own env when it is set there (CI hands its tokens
+/// over this way), or else fetches it from SecretSpec, giving it `reason`, outside a command's
+/// clean env: in the project's shell and `folder`, so the project's SecretSpec and provider
+/// settings apply, and with Fearlezz's own variables, so the provider's token (such as
+/// 1Password's `OP_SERVICE_ACCOUNT_TOKEN`) reaches SecretSpec but never the command. One name
+/// at a time, since SecretSpec refuses a whole profile when any required secret in it is
 /// missing. SecretSpec's own words go to `said`, or Fearlezz's own output without it.
-fn fetch_secrets(
-    names: &[String],
+fn fetch_secret(
+    name: &str,
     reason: &str,
     folder: &Path,
     project: &Project<'_>,
     said: Option<&File>,
-) -> Result<std::result::Result<Vec<(String, String)>, Unfetched>> {
+) -> Result<std::result::Result<String, Unfetched>> {
+    if let Some(value) = std::env::var(name).ok().filter(|v| !v.is_empty()) {
+        return Ok(Ok(value));
+    }
     // The value goes to a file of its own, so nothing the shell prints on entering can mix in.
     let get = r#"secretspec get "$FEARLEZZ_SECRET" --reason "$FEARLEZZ_REASON" --caller fearlezz > "$FEARLEZZ_SECRET_FILE""#;
-    let mut secrets = Vec::new();
-    for name in names {
-        if let Some(value) = std::env::var(name).ok().filter(|v| !v.is_empty()) {
-            secrets.push((name.clone(), value));
-            continue;
-        }
-        let file = tempfile::NamedTempFile::new()?;
-        let mut cmd = project.inherited(folder, get);
-        if let Some(said) = said {
-            cmd.stdout(said.try_clone()?).stderr(said.try_clone()?);
-        }
-        cmd.env("FEARLEZZ_SECRET", name)
-            .env("FEARLEZZ_SECRET_FILE", file.path())
-            .env("FEARLEZZ_REASON", reason);
-        let status = cmd
-            .status()
-            .with_context(|| format!("asking SecretSpec for {name}"))?;
-        if status.code() == Some(crate::run::NOT_FOUND) {
-            return Ok(Err(Unfetched::NoSecretSpec));
-        }
-        if !status.success() {
-            return Ok(Err(Unfetched::Secret(name.clone())));
-        }
-        let Ok(value) = String::from_utf8(fs::read(file.path())?) else {
-            let line = format!("SecretSpec gave {name} as bytes that are not text\n");
-            match said {
-                Some(mut said) => said.write_all(line.as_bytes())?,
-                None => eprint!("{line}"),
-            }
-            return Ok(Err(Unfetched::Secret(name.clone())));
-        };
-        secrets.push((name.clone(), value));
+    let file = tempfile::NamedTempFile::new()?;
+    let mut cmd = project.inherited(folder, get);
+    if let Some(said) = said {
+        cmd.stdout(said.try_clone()?).stderr(said.try_clone()?);
     }
-    Ok(Ok(secrets))
+    cmd.env("FEARLEZZ_SECRET", name)
+        .env("FEARLEZZ_SECRET_FILE", file.path())
+        .env("FEARLEZZ_REASON", reason);
+    let status = cmd
+        .status()
+        .with_context(|| format!("asking SecretSpec for {name}"))?;
+    if status.code() == Some(crate::run::NOT_FOUND) {
+        return Ok(Err(Unfetched::NoSecretSpec));
+    }
+    if !status.success() {
+        return Ok(Err(Unfetched::Secret(name.to_string())));
+    }
+    let Ok(value) = String::from_utf8(fs::read(file.path())?) else {
+        let line = format!("SecretSpec gave {name} as bytes that are not text\n");
+        match said {
+            Some(mut said) => said.write_all(line.as_bytes())?,
+            None => eprint!("{line}"),
+        }
+        return Ok(Err(Unfetched::Secret(name.to_string())));
+    };
+    Ok(Ok(value))
 }
 
 /// What stands in for a secret's value in what a command wrote.
