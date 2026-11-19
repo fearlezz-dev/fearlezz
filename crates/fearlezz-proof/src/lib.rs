@@ -202,6 +202,9 @@ pub struct Case {
     /// It failed, then passed when the runner ran it again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flaky: bool,
+    /// What a failed test printed, from its runner's output, cut short: why it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
 }
 
 impl Case {

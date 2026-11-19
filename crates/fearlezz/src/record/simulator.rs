@@ -36,8 +36,11 @@ fn simctl_path() -> Result<&'static Path> {
     .as_deref()
     .context("xcrun finds no simctl")
 }
-/// How long `recordVideo` gets to start recording.
-const FILM_START: Duration = Duration::from_secs(15);
+/// How long `recordVideo` gets to start recording. A new device on CI's runners stays busy
+/// with its first launches for minutes after it says it booted, and in bursts a film took up
+/// to 28 s to start; waiting for it to settle first did not help, since the bursts come at
+/// random.
+const FILM_START: Duration = Duration::from_secs(60);
 /// How long the simulator gets to finish writing a film once it stopped.
 const FILM_WRITE: Duration = Duration::from_secs(30);
 /// How long `recordVideo` gets to end once interrupted. On CI's runners it sometimes never
@@ -329,59 +332,12 @@ impl Simulator {
     /// Starts `recordVideo`, which says "Recording started" once frames are being written,
     /// or why it cannot before it exits.
     fn start_film(&self, path: &Path) -> Result<Film> {
-        let mut child = Command::new(simctl_path()?)
-            .args(self.io(
-                "recordVideo",
-                &["--codec=h264", "--force", &path.to_string_lossy()],
-            ))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("starting simctl recordVideo")?;
-        let stderr = child.stderr.take().context("recordVideo's output")?;
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            // Every line, read to the end, so recordVideo never writes into a closed pipe;
-            // None once it closed its output.
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                drop(tx.send(Some(line)));
-            }
-            drop(tx.send(None));
-        });
-        let deadline = std::time::Instant::now() + FILM_START;
-        let mut said = Vec::new();
-        let mut film = Film {
-            child,
-            path: path.to_path_buf(),
-            started: std::time::Instant::now(),
-        };
-        loop {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
-            match rx.recv_timeout(left) {
-                Ok(Some(line)) if line.contains("Recording started") => {
-                    film.started = std::time::Instant::now();
-                    return Ok(film);
-                }
-                Ok(Some(line)) => said.push(line),
-                Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    drop(end(&mut film.child, film.started, FILM_END));
-                    bail!(
-                        "simctl recordVideo ended before recording: {}",
-                        said.join(" ")
-                    );
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    // Dropping the film interrupts it, so the device ends the recording too.
-                    drop(film);
-                    bail!(
-                        "simctl recordVideo did not start in {} s: {}",
-                        FILM_START.as_secs(),
-                        said.join(" ")
-                    );
-                }
-            }
-        }
+        let mut recorder = Command::new(simctl_path()?);
+        recorder.args(self.io(
+            "recordVideo",
+            &["--codec=h264", "--force", &path.to_string_lossy()],
+        ));
+        start_recording(recorder, path, FILM_START)
     }
 
     /// A device keeps the recording of a client that was killed, or that died of its
@@ -408,11 +364,13 @@ impl Simulator {
     }
 
     /// The primary display of a device with several, which `simctl io` asks to be named:
-    /// a trial still says which there are.
+    /// a trial still says which there are. Right after a boot on CI's runners a still took
+    /// up to 131 s, so it gets the boot's time.
     fn primary_display(&self) -> Result<Option<String>> {
         let trial = tempfile::Builder::new().suffix(".png").tempfile()?;
         let path = trial.path().to_string_lossy().into_owned();
-        let Err(e) = simctl(&["io", &self.udid, "screenshot", "--type=png", &path]) else {
+        let Err(e) = simctl_within(&["io", &self.udid, "screenshot", "--type=png", &path], BOOT)
+        else {
             return Ok(None);
         };
         Ok(Some(primary_in(&format!("{e:#}")).with_context(|| {
@@ -601,6 +559,60 @@ impl super::Screen for Simulator {
 
     fn put_back(&mut self) -> Result<usize> {
         Ok(0)
+    }
+}
+
+/// Starts `recorder` (`simctl io recordVideo`), which says "Recording started" once frames are
+/// being written, or why it cannot before it exits, within `limit`.
+fn start_recording(mut recorder: Command, path: &Path, limit: Duration) -> Result<Film> {
+    let mut child = recorder
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("starting simctl recordVideo")?;
+    let stderr = child.stderr.take().context("recordVideo's output")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // Every line, read to the end, so recordVideo never writes into a closed pipe;
+        // None once it closed its output.
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            drop(tx.send(Some(line)));
+        }
+        drop(tx.send(None));
+    });
+    let deadline = std::time::Instant::now() + limit;
+    let mut said = Vec::new();
+    let mut film = Film {
+        child,
+        path: path.to_path_buf(),
+        started: std::time::Instant::now(),
+    };
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(Some(line)) if line.contains("Recording started") => {
+                film.started = std::time::Instant::now();
+                return Ok(film);
+            }
+            Ok(Some(line)) => said.push(line),
+            Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                drop(end(&mut film.child, film.started, FILM_END));
+                bail!(
+                    "simctl recordVideo ended before recording: {}",
+                    said.join(" ")
+                );
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Dropping the film interrupts it, so the device ends the recording too.
+                drop(film);
+                bail!(
+                    "simctl recordVideo did not start in {} s: {}",
+                    limit.as_secs(),
+                    said.join(" ")
+                );
+            }
+        }
     }
 }
 
@@ -827,6 +839,19 @@ mod tests {
         )
         .unwrap();
         assert!(status.success(), "{status}");
+    }
+
+    #[test]
+    fn a_film_that_starts_slowly_on_a_busy_runner_is_waited_for() {
+        // Like recordVideo on a new device on CI's runners, which took up to 28 s to start.
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder = Command::new("sh");
+        recorder.args([
+            "-c",
+            "sleep 16; echo 'Recording started' >&2; trap 'exit 0' INT; while :; do sleep 0.1; done",
+        ]);
+        let film = start_recording(recorder, &dir.path().join("home.mp4"), FILM_START);
+        assert!(film.is_ok(), "{:#}", film.err().unwrap());
     }
 
     #[test]

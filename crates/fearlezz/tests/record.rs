@@ -393,6 +393,20 @@ fn skip_off_ci(why: &str) {
     eprintln!("skipped: {why}");
 }
 
+/// How many seconds the recorder says making its screen took: booting a simulator.
+fn made_in(log: &str) -> u64 {
+    log.lines()
+        .filter(|l| l.starts_with("record: ") && l.contains(" booted "))
+        .filter_map(|l| {
+            l.strip_suffix(" s")?
+                .rsplit(' ')
+                .next()?
+                .parse::<u64>()
+                .ok()
+        })
+        .sum()
+}
+
 /// The size of the still `home.png` the recorder says it wrote.
 fn still_size(log: &str) -> (u32, u32) {
     log.lines()
@@ -596,7 +610,12 @@ fn a_recording_check_over_its_budget_is_stopped_and_fails() {
     let clock = std::time::Instant::now();
     let out = repo.fz(&["run", "--ci", "--proof", "proof"]);
     assert!(!out.ok, "{}", out.stdout);
-    assert!(clock.elapsed().as_secs() < 100, "it waited for the window");
+    // A screen that had to be made first (a new simulator boots) is not the wait.
+    let made = made_in(&recorder_log(&repo));
+    assert!(
+        clock.elapsed().as_secs() < 100 + made,
+        "it waited for the window"
+    );
     assert!(
         out.stdout.contains("exceeded its 2s budget"),
         "{}\n{}",

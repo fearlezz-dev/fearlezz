@@ -280,6 +280,16 @@ fn tests(proof: &Proof, text: &mut String) -> std::fmt::Result {
         if !lines.is_empty() {
             writeln!(text, "\n**{}**: {}", cell(&check.id), lines.join(", "))?;
         }
+        // Why the first few failed, in their own words.
+        for c in failed.iter().take(3) {
+            let Some(output) = &c.output else { continue };
+            writeln!(
+                text,
+                "\n<details><summary>What <code>{}</code> printed</summary>\n\n```\n{}\n```\n\n</details>",
+                cell(&c.name),
+                output.replace("```", "'''")
+            )?;
+        }
     }
     Ok(())
 }

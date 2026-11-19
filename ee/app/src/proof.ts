@@ -859,7 +859,11 @@ failed: boolean,
 /**
  * It failed, then passed when the runner ran it again.
  */
-flaky?: boolean, };
+flaky?: boolean, 
+/**
+ * What a failed test printed, from its runner's output, cut short: why it failed.
+ */
+output?: string | null, };
 
 export type Finding = { 
 /**
