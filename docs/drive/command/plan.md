@@ -35,7 +35,7 @@ Out of scope: Fearlezz's own tools (git, curl, ffmpeg, simctl, ast-grep) and `fe
 
 - A secret set in Fearlezz's environment is used without asking SecretSpec.
 - Release places take `secrets`; the built in pieces move their tokens there (`CARGO_REGISTRY_TOKEN`, `NODE_AUTH_TOKEN`, `PUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`), and the mask every `env` value patch goes. A place of a project's own that keeps a token in `env` shows it again, as every `env` value does; the skill already says a secret never goes in `env`.
-- A release place's secret that neither Fearlezz's environment nor SecretSpec gives is left out: its publish and landed commands run without it, so the tool falls back to its own login (`cargo login`, `npm login`, `gh auth login`, OIDC trusted publishing that sets no token). A secret that is given is still masked. Checks and the preview stay strict. A rerun of a release that landed no longer fails without its token.
+- A release place's secret that neither Fearlezz's environment nor SecretSpec gives is left out: its publish and landed commands run without it, so the tool falls back to its own login (`cargo login`, `npm login`, `gh auth login`, OIDC trusted publishing that sets no token). A secret that is given is still masked. Checks and the preview stay strict. A rerun of a release that landed no longer fails without its token. One SecretSpec declares but fails to give is said (`<NAME> not given, so its tool uses its own login`, with SecretSpec's words); without SecretSpec nothing is said. The github reader asks with the place's token too, so a private repository's release lands with a token from SecretSpec.
 - A check's secrets are masked in its files also when a later step cannot start.
 
 No key is renamed or removed, so no config breaks.

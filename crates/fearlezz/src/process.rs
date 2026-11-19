@@ -51,20 +51,14 @@ impl<'a> Project<'a> {
     /// [`BASE_ENV`] and the variables `vars` names from Fearlezz's own, and the project's tool
     /// folders in front of PATH. `args` reach the script as its arguments (`"$@"`), whole,
     /// whatever they hold.
-    pub(crate) fn clean(
-        &self,
-        dir: Option<&str>,
-        script: &str,
-        vars: &[String],
-        args: &[String],
-    ) -> Command {
+    fn clean(&self, dir: Option<&str>, script: &str, vars: &[String], args: &[String]) -> Command {
         let folder = dir.map(|d| self.root.join(d));
         self.shaped(folder.as_deref(), script, Some(vars), args)
     }
 
     /// `script` as [`Project::clean`] runs it, but with all of Fearlezz's own variables: only
     /// for asking SecretSpec, whose provider's token must reach it and never a check.
-    pub(crate) fn inherited(&self, dir: &Path, script: &str) -> Command {
+    fn inherited(&self, dir: &Path, script: &str) -> Command {
         self.shaped(Some(dir), script, None, &[])
     }
 
@@ -255,6 +249,14 @@ pub(crate) struct Secrets {
 }
 
 impl Secrets {
+    /// The value of the secret `name`, when it was given.
+    pub(crate) fn get(&self, name: &str) -> Option<&str> {
+        self.values
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+
     fn of(values: Vec<(String, String)>) -> Self {
         Secrets {
             forms: masked_forms(&values),
@@ -299,16 +301,29 @@ impl Project<'_> {
     }
 
     /// The secrets `command` names that are given, the others left out, so its tool falls back
-    /// to its own login, as a release place's do. What SecretSpec says of one it cannot give is
-    /// dropped, since a missing one is no error.
+    /// to its own login, as a release place's do. A missing one is no error, but one SecretSpec
+    /// failed to give is said with SecretSpec's own words, so a broken provider shows; without
+    /// SecretSpec nothing is said.
     pub(crate) fn given(&self, command: &crate::config::Command, reason: &str) -> Result<Secrets> {
-        let dropped = tempfile::tempfile()?;
         let mut values = Vec::new();
         for name in &command.secrets {
-            if let Ok(value) =
-                fetch_secret(name, reason, &self.folder(command), self, Some(&dropped))?
-            {
-                values.push((name.clone(), value));
+            let said = tempfile::NamedTempFile::new()?;
+            match fetch_secret(
+                name,
+                reason,
+                &self.folder(command),
+                self,
+                Some(said.as_file()),
+            )? {
+                Ok(value) => values.push((name.clone(), value)),
+                Err(Unfetched::NoSecretSpec) => {}
+                Err(Unfetched::Secret(_)) => {
+                    let words = fs::read_to_string(said.path()).unwrap_or_default();
+                    println!("{name} not given, so its tool uses its own login");
+                    for line in words.lines().filter(|l| !l.trim().is_empty()) {
+                        println!("  {line}");
+                    }
+                }
             }
         }
         Ok(Secrets::of(values))
@@ -350,8 +365,9 @@ impl Project<'_> {
             (None, Output::Started(_, dir)) => mask(dir, &secrets.forms),
             (None, _) => Ok(()),
         };
-        let exit = exit?;
+        // A secret left unmasked matters more than why a step did not start.
         masked?;
+        let exit = exit?;
         Ok(Ran { exit, printed })
     }
 

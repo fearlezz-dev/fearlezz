@@ -471,6 +471,72 @@ fn a_github_release_has_landed_when_every_file_is_there_with_its_digest() {
 }
 
 #[test]
+fn a_github_token_secretspec_gives_reaches_the_landed_reader() {
+    let reg = FakeRegistry::start();
+    let tar = "the binary";
+    reg.put(
+        RELEASE_PATH,
+        &github_release(&[("widget.tar.gz", &sha256(tar.as_bytes()))]),
+    );
+    reg.put(&format!("{RELEASE_PATH}.auth"), "Bearer gh-from-secretspec");
+    let config = format!("{}secrets = [\"GH_TOKEN\"]\n", github_place(&reg, "false"));
+    let repo = Repo::new(
+        &config,
+        &[
+            ("Cargo.toml", CARGO),
+            ("dist/widget.tar.gz", tar),
+            (
+                "secretspec.toml",
+                "[project]\nname = \"widget\"\nrevision = \"1.0\"\n\n[profiles.default]\nGH_TOKEN = { description = \"releases\", required = true }\n",
+            ),
+            (".env", "GH_TOKEN=gh-from-secretspec\n"),
+            (".gitignore", ".env\n"),
+        ],
+    );
+    let out = repo.fz_env(
+        &["run", "--release"],
+        &[
+            ("GITHUB_REPOSITORY", "acme/widget"),
+            ("SECRETSPEC_PROVIDER", "dotenv"),
+        ],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("github: widget v1.2.0 is already there"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_secret_secretspec_fails_to_give_is_said_and_the_publish_runs_without_it() {
+    let config = "[release.shop]\npublish = 'touch .published'\nlanded = \"test -f .published\"\nsecrets = [\"SHOP_TOKEN\"]\nversion = \"package.json\"\n";
+    let repo = Repo::new(
+        config,
+        &[
+            (
+                "package.json",
+                "{\"name\": \"widget\", \"version\": \"0.9.1\"}\n",
+            ),
+            (
+                "secretspec.toml",
+                "[project]\nname = \"widget\"\nrevision = \"1.0\"\n\n[profiles.default]\nSHOP_TOKEN = { description = \"the shop\", required = true }\n",
+            ),
+            (".gitignore", ".published\n"),
+        ],
+    );
+    let out = repo.fz_env(&["run", "--release"], &[("SECRETSPEC_PROVIDER", "env")]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("SHOP_TOKEN not given, so its tool uses its own login"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn a_github_file_with_other_bytes_is_published_again_with_its_path_whole() {
     let reg = FakeRegistry::start();
     let tar = "the binary";

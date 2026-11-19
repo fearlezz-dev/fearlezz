@@ -377,17 +377,10 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
             secrets: project.given(&place.command(&place.publish), &reason)?,
         })
     };
-    let early = match place.landed {
-        Landed::Command(_) => Some(commands()?),
-        Landed::Read { .. } => None,
-    };
-    if landed(place, &release, at, early.as_ref())?.is_ok() {
+    let commands = commands()?;
+    if landed(place, &release, at, &commands)?.is_ok() {
         return Ok(format!("{shown} is already there"));
     }
-    let commands = match early {
-        Some(commands) => commands,
-        None => commands()?,
-    };
     println!("{}: publishing {shown}", place.name);
     let ran = commands
         .run(&place.publish, Output::Terminal)
@@ -402,7 +395,7 @@ fn release(place: &Place, at: &At<'_>) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(place.wait);
     loop {
         // A registry that stumbles once (a 502, a rate limit) is asked again until the end.
-        let why = match landed(place, &release, at, Some(&commands)) {
+        let why = match landed(place, &release, at, &commands) {
             Ok(Ok(())) => return Ok(format!("{shown} landed")),
             Ok(Err(why)) => why,
             Err(e) => Some(format!("{e:#}")),
@@ -435,16 +428,15 @@ impl Commands<'_> {
 }
 
 /// Whether the place has the release: Ok, or Err with why not when the reader can say. A
-/// landed command runs as one of `commands`.
+/// landed command runs as one of `commands`, and a reader asks with their tokens.
 fn landed(
     place: &Place,
     release: &Release,
     at: &At<'_>,
-    commands: Option<&Commands<'_>>,
+    commands: &Commands<'_>,
 ) -> Result<Result<(), Option<String>>> {
     match &place.landed {
         Landed::Command(script) => {
-            let commands = commands.context("the landed command has no secrets")?;
             let ran = commands
                 .run(script, Output::Nowhere)
                 .with_context(|| format!("starting the landed command of {}", place.name))?;
@@ -467,7 +459,7 @@ fn landed(
                         p.name, p.version
                     ))
                 }
-                Reader::Github => github_has(url, release, at),
+                Reader::Github => github_has(url, release, at, &commands.secrets),
             }
         }
     }
@@ -547,15 +539,22 @@ fn github_has(
     url: Option<&str>,
     release: &Release,
     at: &At<'_>,
+    secrets: &Secrets,
 ) -> Result<Result<(), Option<String>>> {
     let root = at.root;
     let api = url.unwrap_or(&at.github.api);
     let repository = at.github.repository.as_deref().context(
         "no GitHub repository: set GITHUB_REPOSITORY, or give the checkout a github.com origin remote",
     )?;
+    // The place's own token first, which SecretSpec may have given, then Fearlezz's.
     let token = ["GITHUB_TOKEN", "GH_TOKEN"]
         .iter()
-        .find_map(|n| std::env::var(n).ok().filter(|v| !v.is_empty()))
+        .find_map(|n| {
+            secrets
+                .get(n)
+                .map(str::to_string)
+                .or_else(|| std::env::var(n).ok().filter(|v| !v.is_empty()))
+        })
         .unwrap_or_default();
     let url = format!(
         "{}/repos/{repository}/releases/tags/{}",
