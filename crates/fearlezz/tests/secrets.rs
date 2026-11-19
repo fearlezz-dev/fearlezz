@@ -79,7 +79,7 @@ secrets = ["EVAL_API_KEY"]
 
 /// Fails when any file Fearlezz keeps for `repo` holds the secret's value.
 fn never_kept(repo: &Repo) {
-    let mut kept = vec![repo.cache.clone()];
+    let mut kept = vec![repo.cache.clone(), repo.path(".git/fearlezz")];
     while let Some(path) = kept.pop() {
         if path.is_dir() {
             kept.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
@@ -92,6 +92,27 @@ fn never_kept(repo: &Repo) {
             );
         }
     }
+}
+
+#[test]
+fn a_secret_is_masked_when_a_later_step_cannot_start() {
+    // The first step removes its own folder, so the second cannot start in it.
+    let repo = Repo::new(
+        r#"
+[check.eval]
+run = ['echo "key is $EVAL_API_KEY" > "$FEARLEZZ_OUT/note.txt"; echo "$EVAL_API_KEY"; cd .. && rm -rf sub', 'true']
+dir = "sub"
+stage = "working"
+secrets = ["EVAL_API_KEY"]
+"#,
+        &[("secretspec.toml", SECRETSPEC), ("sub/lib.txt", "a")],
+    );
+    repo.branch("feat/eval");
+    repo.write("sub/lib.txt", "b");
+    let out = run(&repo, Some(VALUE));
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains(VALUE) && !out.stderr.contains(VALUE));
+    never_kept(&repo);
 }
 
 #[test]

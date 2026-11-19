@@ -297,7 +297,8 @@ impl Project<'_> {
 
     /// Runs `command`'s steps in order, the first that fails ending them, with `call`'s
     /// variables and arguments and `secrets`, all of them within its budget, started when the
-    /// first step starts. Its output goes to `output`, every secret masked in it.
+    /// first step starts. Its output goes to `output`, every secret masked in it, also when a
+    /// step fails to start.
     pub(crate) fn run(
         &self,
         command: &crate::config::Command,
@@ -310,7 +311,7 @@ impl Project<'_> {
             _ => None,
         };
         let mut printed = Vec::new();
-        let exit = self.steps(command, call, secrets, &mut output, &mut printed)?;
+        let exit = self.steps(command, call, secrets, &mut output, &mut printed);
         let masked = match (log, &output) {
             (Some((path, from)), _) => secrets.mask_from(path, from).map(|own| {
                 if matches!(output, Output::Log(_)) {
@@ -320,6 +321,7 @@ impl Project<'_> {
             (None, Output::Started(_, dir)) => mask(dir, &secrets.forms),
             (None, _) => Ok(()),
         };
+        let exit = exit?;
         masked?;
         Ok(Ran { exit, printed })
     }
