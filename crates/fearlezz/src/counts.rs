@@ -94,16 +94,25 @@ impl Reader {
                     *found.get_or_insert(0) += n;
                 }
                 let mut cases: Vec<Case> = Vec::new();
-                for caps in failed.iter().flat_map(|f| f.captures_iter(&text)) {
+                let all: Vec<regex::Captures<'_>> =
+                    failed.iter().flat_map(|f| f.captures_iter(&text)).collect();
+                for (i, caps) in all.iter().enumerate() {
                     let Some(name) = caps.get(1).map(|m| m.as_str()) else {
                         continue;
                     };
                     if !cases.iter().any(|c| c.name == name) {
+                        let start = caps
+                            .get(0)
+                            .and_then(|m| text.get(..m.start()))
+                            .and_then(|before| before.rfind('\n'))
+                            .map_or(0, |n| n + 1);
+                        let next = all.get(i + 1).and_then(|c| c.get(0)).map(|m| m.start());
                         cases.push(Case {
                             name: name.to_string(),
                             file: None,
                             failed: true,
                             flaky: false,
+                            output: said(&text, start, next, re),
                         });
                     }
                 }
@@ -132,6 +141,73 @@ impl Reader {
 }
 
 pub(crate) use fearlezz_proof::Case;
+
+/// How many lines of what a failed test printed its case keeps.
+const SAID: usize = 40;
+/// How many characters of each of those lines it keeps.
+const SAID_WIDTH: usize = 300;
+
+/// What the failed test whose line a `failed` pattern matched (starting at `at`) printed,
+/// cut to [`SAID`] lines of [`SAID_WIDTH`] characters. A matched line the count also matches
+/// is the test's result (`--- FAIL: TestA` from `go test -v`), which ends its output: the lines
+/// since the result before it. Any other matched line starts it (`---- a stdout ----` from
+/// `cargo test`): the lines up to the next failed test's (`next`) or the count's line. None
+/// when it printed nothing besides the matched line.
+fn said(text: &str, at: usize, next: Option<usize>, count: &Regex) -> Option<String> {
+    let rest = text.get(at..)?;
+    let matched = rest.lines().next()?;
+    let mut lines: Vec<&str> = if count.is_match(matched) {
+        let mut before: Vec<&str> = text
+            .get(..at)?
+            .lines()
+            .rev()
+            .take_while(|l| !count.is_match(l))
+            .collect();
+        before.reverse();
+        before.push(matched);
+        before
+    } else {
+        let until = next.and_then(|n| n.checked_sub(at)).unwrap_or(usize::MAX);
+        let mut from = 0;
+        let mut after = Vec::new();
+        for (i, raw) in rest.split_inclusive('\n').enumerate() {
+            let line = raw.trim_end_matches(['\n', '\r']);
+            if from >= until || (i > 0 && count.is_match(line)) {
+                break;
+            }
+            from += raw.len();
+            after.push(line);
+        }
+        after
+    };
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    while lines.first().is_some_and(|l| l.trim().is_empty()) {
+        lines.remove(0);
+    }
+    if lines.len() < 2 {
+        return None;
+    }
+    let width = |line: &str| match line.char_indices().nth(SAID_WIDTH) {
+        Some((cut, _)) => format!("{}...", line.get(..cut).unwrap_or(line)),
+        None => line.to_string(),
+    };
+    let more = lines.len().saturating_sub(SAID);
+    Some(if count.is_match(matched) {
+        let kept: Vec<String> = lines.iter().skip(more).map(|l| width(l)).collect();
+        match more {
+            0 => kept.join("\n"),
+            more => format!("({more} earlier lines)\n{}", kept.join("\n")),
+        }
+    } else {
+        let kept: Vec<String> = lines.iter().take(SAID).map(|l| width(l)).collect();
+        match more {
+            0 => kept.join("\n"),
+            more => format!("{}\n({more} more lines)", kept.join("\n")),
+        }
+    })
+}
 
 /// Whether `case` comes from the test file `path`: the report names that file, or its class
 /// is the file, the file's module (`tests.test_a`), or ends in the file's stem
@@ -222,6 +298,7 @@ fn junit_cases(text: &str) -> Vec<Case> {
                     file: attr(&tag, "file"),
                     failed: false,
                     flaky: false,
+                    output: None,
                 };
                 if empty {
                     cases.push(case);

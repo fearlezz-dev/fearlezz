@@ -388,8 +388,11 @@ pub(crate) fn print_failure(f: &RunResult) {
     }
     // The diff and the findings say what blocks; otherwise the end of the log does.
     if !matches!(why, Why::Gate(_) | Why::Generated(_)) {
-        for line in run::tail(&f.log, 12) {
-            println!("  {line}");
+        // A failed test's own output says more than the runner's last lines.
+        if !f.cases.iter().any(|c| c.failed && c.output.is_some()) {
+            for line in run::tail(&f.log, 12) {
+                println!("  {line}");
+            }
         }
         println!("  log: {}", f.log.display());
     }
@@ -405,9 +408,19 @@ pub(crate) const SHOWN: usize = 10;
 /// Each test a run names as failed or flaky, the failed ones first and cut short, and what to
 /// do about a flaky one its check does not list.
 pub(crate) fn print_cases(r: &RunResult) {
+    // What a failed test printed, for the first few: enough to see why on CI.
+    const SAID: usize = 3;
     let failed: Vec<&counts::Case> = r.cases.iter().filter(|c| c.failed).collect();
-    for case in failed.iter().take(SHOWN) {
+    for (i, case) in failed.iter().take(SHOWN).enumerate() {
         println!("  {}", case.line().unwrap_or_default());
+        for line in case
+            .output
+            .iter()
+            .filter(|_| i < SAID)
+            .flat_map(|o| o.lines())
+        {
+            println!("    {line}");
+        }
     }
     if failed.len() > SHOWN {
         println!("  and {} more failed", failed.len() - SHOWN);

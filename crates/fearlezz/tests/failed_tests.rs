@@ -9,20 +9,24 @@
 
 mod common;
 
+use std::fmt::Write as _;
+
 use common::Repo;
 use serde_json::Value;
 
 /// A runner that prints what `cargo test --quiet` prints, failing each test named in
-/// `src/failing.txt`.
+/// `src/failing.txt` with a panic that names it, and as many lines of other output after them
+/// as `src/noise.txt` has.
 const CARGO: &str = r#"
 [check.tests]
 run = '''
 n=0
 while read -r name; do
   [ -n "$name" ] || continue
-  printf -- '---- %s stdout ----\n\nthread panicked\n\n' "$name"
+  printf -- '---- %s stdout ----\n\nthread %s panicked: it broke\n\n' "$name" "$name"
   n=$((n + 1))
 done < src/failing.txt
+test -e src/noise.txt && cat src/noise.txt
 echo 'failures:'
 sed 's/^/    /' src/failing.txt
 echo "test result: ok. 3 passed; $n failed; 0 ignored; 0 measured; 0 filtered out"
@@ -125,6 +129,139 @@ fn the_cli_names_the_tests_a_failed_pattern_finds() {
         "{}",
         out.stdout
     );
+}
+
+/// Lines enough to push a panic out of the last lines of a check's output.
+fn noise() -> String {
+    (0..60).fold(String::new(), |mut all, i| {
+        writeln!(all, "other output {i}").unwrap();
+        all
+    })
+}
+
+#[test]
+fn the_cli_shows_what_a_failed_test_printed() {
+    let noise = noise();
+    let repo = repo(
+        CARGO,
+        &[
+            ("src/failing.txt", "tests::two\n"),
+            ("src/noise.txt", &noise),
+        ],
+    );
+    for args in [&["run", "tests"][..], &["run", "--ci"]] {
+        let out = repo.fz(args);
+        assert!(!out.ok, "{}", out.stdout);
+        let lines = out.lines();
+        let named = lines
+            .iter()
+            .position(|l| *l == "  failed: tests::two")
+            .unwrap_or_else(|| panic!("{}", out.stdout));
+        assert!(
+            lines[named..].contains(&"    thread tests::two panicked: it broke"),
+            "{}",
+            out.stdout
+        );
+    }
+}
+
+#[test]
+fn ci_keeps_what_a_failed_test_printed_in_the_proof_and_the_summary() {
+    let noise = noise();
+    let repo = repo(
+        CARGO,
+        &[
+            ("src/failing.txt", "tests::two\ncore::three\n"),
+            ("src/noise.txt", &noise),
+        ],
+    );
+    let (_, summary, check) = prove(&repo);
+    assert!(
+        summary.contains("thread tests::two panicked: it broke"),
+        "{summary}"
+    );
+    let output = |name: &str| {
+        check["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .and_then(|c| c["output"].as_str())
+            .unwrap_or_else(|| panic!("no output for {name}\n{check}"))
+            .to_string()
+    };
+    assert_eq!(
+        output("tests::two"),
+        "---- tests::two stdout ----\n\nthread tests::two panicked: it broke"
+    );
+    let last = output("core::three");
+    assert!(
+        last.starts_with("---- core::three stdout ----\n\nthread core::three panicked"),
+        "{last}"
+    );
+}
+
+/// A runner that prints what `go test -v` prints: each test's own lines before its result
+/// line, failing each test named in `src/failing.txt`, after a passing one.
+const GO: &str = r#"
+[check.tests]
+run = '''
+printf '=== RUN   TestFirst\n--- PASS: TestFirst (0.00s)\n'
+while read -r name; do
+  printf '=== RUN   %s\n    a_test.go:5: %s broke\n--- FAIL: %s (0.00s)\n' "$name" "$name" "$name"
+done < src/failing.txt
+printf '=== RUN   TestLast\n--- PASS: TestLast (0.00s)\nFAIL\n'
+exit 1
+'''
+stage = "working"
+inputs = ["src/**"]
+tests = { count = '(?m)^\s*--- (?:PASS|FAIL):', failed = '(?m)^\s*--- FAIL: (\S+)' }
+"#;
+
+/// What the tests check's proof entry keeps of the failed test `name`'s output.
+fn output_of(check: &Value, name: &str) -> String {
+    check["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == name)
+        .and_then(|c| c["output"].as_str())
+        .unwrap_or_else(|| panic!("no output for {name}\n{check}"))
+        .to_string()
+}
+
+#[test]
+fn a_runner_that_prints_a_tests_lines_before_its_result_keeps_those() {
+    let repo = repo(GO, &[("src/failing.txt", "TestA\nTestB\n")]);
+    let (_, _, check) = prove(&repo);
+    assert_eq!(
+        output_of(&check, "TestA"),
+        "=== RUN   TestA\n    a_test.go:5: TestA broke\n--- FAIL: TestA (0.00s)"
+    );
+    assert_eq!(
+        output_of(&check, "TestB"),
+        "=== RUN   TestB\n    a_test.go:5: TestB broke\n--- FAIL: TestB (0.00s)"
+    );
+}
+
+#[test]
+fn long_output_is_cut_short_and_says_how_much_more() {
+    let long = "x".repeat(5000);
+    let many = (0..60).fold(String::new(), |mut all, i| {
+        write!(all, "said {i}\\n").unwrap();
+        all
+    });
+    let repo = repo(
+        &CARGO.replace(
+            "thread %s panicked: it broke\\n\\n",
+            &format!("thread %s panicked: {long}\\n{many}\\n"),
+        ),
+        &[("src/failing.txt", "tests::two\n")],
+    );
+    let (_, _, check) = prove(&repo);
+    let output = output_of(&check, "tests::two");
+    assert!(output.len() < 4000, "{} bytes", output.len());
+    assert!(output.ends_with(" more lines)"), "{output}");
 }
 
 #[test]
