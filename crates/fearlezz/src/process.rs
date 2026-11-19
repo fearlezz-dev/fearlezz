@@ -337,7 +337,7 @@ impl Project<'_> {
             Output::Log(path) | Output::Read(path) => {
                 Some((path, appended(path)?.metadata()?.len()))
             }
-            _ => None,
+            Output::Terminal | Output::Nowhere | Output::Started(..) => None,
         };
         let mut printed = Vec::new();
         let exit = self.steps(command, call, secrets, &mut output, &mut printed);
