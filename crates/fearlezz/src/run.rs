@@ -600,8 +600,9 @@ pub(crate) enum Unfetched {
     NoSecretSpec,
 }
 
-/// Fetches each secret in `names` from SecretSpec, giving it `reason`, outside a check's clean
-/// env: in `shell` (the environment's, started at `root`) and `folder`, so the project's
+/// Takes each secret in `names` from Fearlezz's own env when it is set there (CI hands its
+/// tokens over this way), and fetches the others from SecretSpec, giving it `reason`, outside
+/// a check's clean env: in `shell` (the environment's, started at `root`) and `folder`, so the project's
 /// SecretSpec and provider settings apply, and with Fearlezz's own variables, so the
 /// provider's token (such as 1Password's `OP_SERVICE_ACCOUNT_TOKEN`) reaches SecretSpec but
 /// never the check. One name at a time, since SecretSpec refuses a whole profile when any
@@ -619,6 +620,10 @@ pub(crate) fn fetch_secrets(
     let project = crate::process::Project::new(root, shell);
     let mut secrets = Vec::new();
     for name in names {
+        if let Some(value) = std::env::var(name).ok().filter(|v| !v.is_empty()) {
+            secrets.push((name.clone(), value));
+            continue;
+        }
         let file = tempfile::NamedTempFile::new()?;
         let mut cmd = project.inherited(folder, get);
         cmd.stdout(out.try_clone()?)
