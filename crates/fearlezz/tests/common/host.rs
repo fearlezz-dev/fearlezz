@@ -6,11 +6,12 @@
 #![allow(dead_code, reason = "each test file uses only some of the helpers")]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{BufRead as _, BufReader, Read as _, Write as _};
-use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
+
+pub(crate) use super::server::Request;
+use super::server::{self, Answer};
 
 /// The OIDC token the fake's token endpoint hands out.
 pub(crate) const OIDC: &str = "oidc-token";
@@ -20,15 +21,6 @@ pub(crate) const REQUEST_TOKEN: &str = "request-token";
 pub(crate) const RUN: &str = "r1";
 /// The CLI token the fake's device flow hands out.
 pub(crate) const HOST_TOKEN: &str = "fzh_test_token";
-
-/// One request the fake took.
-#[derive(Clone, Debug)]
-pub(crate) struct Request {
-    pub method: String,
-    pub path: String,
-    pub auth: Option<String>,
-    pub body: Vec<u8>,
-}
 
 #[derive(Default)]
 pub(crate) struct State {
@@ -55,6 +47,8 @@ pub(crate) struct State {
     /// What `POST /api/v2/runs/r1/weakenings` answers as the admin's accept, whatever the run
     /// asks, so a test can show the CLI holds it to its own weakenings and head.
     pub accepted: Option<Value>,
+    /// Its own address, which the pages it names start with.
+    base: String,
 }
 
 pub(crate) struct FakeHost {
@@ -64,21 +58,13 @@ pub(crate) struct FakeHost {
 
 impl FakeHost {
     pub(crate) fn start() -> FakeHost {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
         let state = Arc::new(Mutex::new(State {
             installed: true,
             ..State::default()
         }));
         let shared = Arc::clone(&state);
-        let base = url.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let state = Arc::clone(&shared);
-                let base = base.clone();
-                std::thread::spawn(move || serve(stream, &state, &base));
-            }
-        });
+        let url = server::start(move |request| serve(request, &shared));
+        state.lock().unwrap().base.clone_from(&url);
         FakeHost { url, state }
     }
 
@@ -140,84 +126,32 @@ impl FakeHost {
     }
 }
 
-fn serve(stream: TcpStream, state: &Mutex<State>, base: &str) {
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut line = String::new();
-    if reader.read_line(&mut line).is_err() {
-        return;
-    }
-    let mut parts = line.split_whitespace();
-    let method = parts.next().unwrap_or_default().to_string();
-    let path = parts.next().unwrap_or_default().to_string();
-    let mut length = 0;
-    let mut auth = None;
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
-            break;
-        }
-        let (name, value) = header.split_once(':').unwrap_or_default();
-        let value = value.trim().to_string();
-        match name.to_ascii_lowercase().as_str() {
-            "content-length" => length = value.parse().unwrap_or(0),
-            "authorization" => auth = Some(value),
-            _ => {}
-        }
-    }
-    let mut body = vec![0; length];
-    if reader.read_exact(&mut body).is_err() {
-        return;
-    }
-    let (picture, hangs) = {
-        let mut s = state.lock().unwrap();
-        s.requests.push(Request {
-            method: method.clone(),
-            path: path.clone(),
-            auth: auth.clone(),
-            body: body.clone(),
-        });
-        let cli = auth.as_deref() == Some(&format!("Bearer {HOST_TOKEN}"));
-        let hangs = s.hangs && path.starts_with("/api/");
-        (s.pictures.get(&path).filter(|_| cli).cloned(), hangs)
-    };
-    if hangs {
+fn serve(request: Request, state: &Arc<Mutex<State>>) -> Answer {
+    let mut s = state.lock().unwrap();
+    s.requests.push(request.clone());
+    let Request {
+        method,
+        path,
+        auth,
+        body,
+    } = request;
+    if s.hangs && path.starts_with("/api/") {
         // Read until the caller hangs up, so the wait it gave the host is known.
-        let arrived = std::time::Instant::now();
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(60)))
-            .unwrap();
-        if let Err(e) = std::io::copy(&mut reader, &mut std::io::sink()) {
-            eprintln!("fake host: the caller never hung up: {e}");
-        }
-        state.lock().unwrap().hung_up.push(arrived.elapsed());
-        return;
+        let state = Arc::clone(state);
+        return Answer::Hang(Box::new(move |waited| {
+            state.lock().unwrap().hung_up.push(waited);
+        }));
     }
-    let mut stream = stream;
-    if let Some(bytes) = picture {
-        let sent = write!(
-            stream,
-            "HTTP/1.1 200 X\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            bytes.len()
-        )
-        .and_then(|()| stream.write_all(&bytes));
-        if let Err(e) = sent {
-            eprintln!("fake host: {e}");
-        }
-        return;
+    let cli = auth.as_deref() == Some(&format!("Bearer {HOST_TOKEN}"));
+    if let Some(bytes) = s.pictures.get(&path).filter(|_| cli) {
+        return Answer::Body {
+            status: 200,
+            kind: "image/png",
+            body: bytes.clone(),
+        };
     }
-    let (status, answer) = {
-        let mut s = state.lock().unwrap();
-        answer(&mut s, &method, &path, auth.as_deref(), &body, base)
-    };
-    let text = answer.to_string();
-    // The client may have gone; the request is recorded either way.
-    if let Err(e) = write!(
-        stream,
-        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
-        text.len()
-    ) {
-        eprintln!("fake host: {e}");
-    }
+    let (status, value) = answer(&mut s, &method, &path, auth.as_deref(), &body);
+    Answer::json(status, &value)
 }
 
 fn answer(
@@ -226,7 +160,6 @@ fn answer(
     path: &str,
     auth: Option<&str>,
     body: &[u8],
-    base: &str,
 ) -> (u16, Value) {
     let route = path.split('?').next().unwrap_or(path);
     if s.broken.contains(route) {
@@ -279,7 +212,7 @@ fn answer(
         return (401, json!({"error": "no token"}));
     }
     let sent: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let page = format!("{base}/owner/repo/work/feat/x");
+    let page = format!("{}/owner/repo/work/feat/x", s.base);
     match (method, route) {
         ("GET", "/api/v2/installed") if s.installed => (200, json!({"installed": true})),
         ("GET", "/api/v2/installed") => (

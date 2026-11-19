@@ -142,10 +142,10 @@ impl View {
             .collect();
         let count: usize = looks.iter().map(|l| l.to_look_at()).sum();
         let checks: Vec<&str> = looks.iter().map(|l| l.check.as_str()).collect();
-        let noun = if count == 1 { "picture" } else { "pictures" };
         (count > 0).then(|| {
             format!(
-                "{count} {noun} changed ({}): a person reviews them on the pull request",
+                "{} changed ({}): a person reviews them on the pull request",
+                fearlezz_proof::plural(count, "picture"),
                 checks.join(", ")
             )
         })
@@ -295,54 +295,15 @@ pub(crate) fn view(
             .due()
             .filter(|c| crate::legs::left_to_ci(config, c).is_none());
         for check in here {
-            let latest = latest_ran(journal, &check.id);
-            // Any change needs every check; its inputs only say whether a pass still holds.
-            if wt.changed.is_empty() && latest.is_none() {
-                continue;
-            }
-            let inputs = wt.inputs(check)?;
-            let passed = latest
-                .as_ref()
-                .filter(|ran| ran.key == inputs.key && ran.outcome == Outcome::Passed)
-                .and_then(|ran| store.get(ran.key, ran.result));
-            let compared = match &passed {
-                Some(run) => compared(config, wt, check, run, stage == final_stage, &mut fix)?,
-                None => Compared::default(),
-            };
-            let findings = latest
-                .as_ref()
-                .filter(|ran| ran.key == inputs.key)
-                .and_then(|ran| store.get(ran.key, ran.result))
-                .map(|r| r.findings)
-                .unwrap_or_default();
-            let state = match latest {
-                None => CheckState::Never,
-                Some(ran) if ran.key != inputs.key => {
-                    CheckState::Stale(changed_parts(store, ran, &inputs))
-                }
-                Some(_) if store.unstable(&inputs.key) => CheckState::Unstable,
-                Some(ran) if ran.outcome == Outcome::Failed => CheckState::Failed,
-                Some(ran) => {
-                    let fresh = store
-                        .get(ran.key, ran.result)
-                        .is_some_and(|r| r.made_at_final(&journal.name, stages.name(final_stage)));
-                    if stage == final_stage && !fresh {
-                        CheckState::NeedsFresh
-                    } else if compared.missing {
-                        CheckState::Uncompared
-                    } else {
-                        CheckState::Ok
-                    }
-                }
-            };
-            checks.push(CheckView {
-                id: check.id.clone(),
-                stage: check.stage,
-                state,
-                look: compared.look,
-                findings,
-                red: compared.red,
-            });
+            checks.extend(live_check(
+                config,
+                store,
+                journal,
+                wt,
+                check,
+                stage == final_stage,
+                &mut fix,
+            )?);
         }
         if stage == final_stage {
             red_next = red_hold(wt, &checks)?;
@@ -398,6 +359,67 @@ pub(crate) fn view(
     Ok(view)
 }
 
+/// Where `check` stands in a live worktree: none when the worktree has no change and the
+/// check never ran in this work. `fix` caches whether the change is a fix.
+fn live_check(
+    config: &Config,
+    store: &Store,
+    journal: &Journal,
+    wt: &mut Worktree,
+    check: &crate::config::Check,
+    at_final: bool,
+    fix: &mut Option<bool>,
+) -> Result<Option<CheckView>> {
+    let stages = &config.stages;
+    let latest = latest_ran(journal, &check.id);
+    // Any change needs every check; its inputs only say whether a pass still holds.
+    if wt.changed.is_empty() && latest.is_none() {
+        return Ok(None);
+    }
+    let inputs = wt.inputs(check)?;
+    let passed = latest
+        .as_ref()
+        .filter(|ran| ran.key == inputs.key && ran.outcome == Outcome::Passed)
+        .and_then(|ran| store.get(ran.key, ran.result));
+    let compared = match &passed {
+        Some(run) => compared(config, wt, check, run, at_final, fix)?,
+        None => Compared::default(),
+    };
+    let findings = latest
+        .as_ref()
+        .filter(|ran| ran.key == inputs.key)
+        .and_then(|ran| store.get(ran.key, ran.result))
+        .map(|r| r.findings)
+        .unwrap_or_default();
+    let state = match latest {
+        None => CheckState::Never,
+        Some(ran) if ran.key != inputs.key => CheckState::Stale(changed_parts(store, ran, &inputs)),
+        Some(_) if store.unstable(&inputs.key) => CheckState::Unstable,
+        Some(ran) if ran.outcome == Outcome::Failed => CheckState::Failed,
+        Some(ran) => {
+            let fresh = store
+                .get(ran.key, ran.result)
+                .is_some_and(|r| r.made_at_final(&journal.name, stages.name(stages.last())));
+            if at_final && !fresh {
+                CheckState::NeedsFresh
+            } else if compared.missing {
+                CheckState::Uncompared
+            } else {
+                CheckState::Ok
+            }
+        }
+    };
+    Ok(Some(CheckView {
+        id: check.id.clone(),
+        stage: check.stage,
+        state,
+        look: compared.look,
+        findings,
+        red: compared.red,
+    }))
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct Ran<'a> {
     pub key: &'a str,
     pub result: &'a str,
@@ -405,19 +427,24 @@ pub(crate) struct Ran<'a> {
 }
 
 fn latest_ran<'a>(journal: &'a Journal, check: &str) -> Option<Ran<'a>> {
-    journal.entries.iter().rev().find_map(|e| match &e.event {
-        Event::Ran {
+    journal.entries.iter().rev().find_map(|e| {
+        if let Event::Ran {
             check: c,
             key,
             result,
             outcome,
             ..
-        } if c == check => Some(Ran {
-            key,
-            result,
-            outcome: *outcome,
-        }),
-        _ => None,
+        } = &e.event
+            && c == check
+        {
+            Some(Ran {
+                key,
+                result,
+                outcome: *outcome,
+            })
+        } else {
+            None
+        }
     })
 }
 
@@ -568,7 +595,11 @@ fn now_line(config: &Config, v: &View) -> String {
         .filter_map(|c| match c.state {
             CheckState::Failed => Some(format!("{} failed", c.id)),
             CheckState::Unstable => Some(format!("{} unstable", c.id)),
-            _ => None,
+            CheckState::Ok
+            | CheckState::Stale(_)
+            | CheckState::NeedsFresh
+            | CheckState::Uncompared
+            | CheckState::Never => None,
         })
         .collect();
     if !bad.is_empty() {

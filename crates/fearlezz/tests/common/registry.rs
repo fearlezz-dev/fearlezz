@@ -4,9 +4,9 @@
 
 #![allow(dead_code, reason = "each test file uses only some of the helpers")]
 
-use std::io::{BufRead as _, BufReader, Write as _};
-use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use super::server::{self, Answer};
 
 pub(crate) struct FakeRegistry {
     pub url: String,
@@ -19,12 +19,23 @@ impl FakeRegistry {
     pub(crate) fn start() -> FakeRegistry {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().canonicalize().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
         let served = dir.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                serve(&stream, &served);
+        let url = server::start(move |request| {
+            let file = served.join(request.path.trim_start_matches('/'));
+            // A `<path>.status` file beside it makes the path answer with that status instead,
+            // as a registry that stumbles does.
+            let stumble = std::fs::read_to_string(format!("{}.status", file.display()))
+                .ok()
+                .and_then(|s| s.trim().parse().ok());
+            let (status, body) = match (stumble, std::fs::read(&file)) {
+                (Some(status), _) => (status, b"{}".to_vec()),
+                (None, Ok(body)) if file.is_file() => (200, body),
+                _ => (404, b"{}".to_vec()),
+            };
+            Answer::Body {
+                status,
+                kind: "application/json",
+                body,
             }
         });
         FakeRegistry {
@@ -39,47 +50,5 @@ impl FakeRegistry {
         let full = self.dir.join(path);
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
         std::fs::write(full, body).unwrap();
-    }
-}
-
-fn serve(stream: &TcpStream, dir: &Path) {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    if reader.read_line(&mut line).is_err() {
-        return;
-    }
-    let path = line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or_default()
-        .to_string();
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
-            break;
-        }
-    }
-    let file = dir.join(path.trim_start_matches('/'));
-    // A `<path>.status` file beside it makes the path answer with that status instead, as a
-    // registry that stumbles does.
-    let stumble = std::fs::read_to_string(format!("{}.status", file.display()))
-        .ok()
-        .map(|s| format!("{} Stumbled", s.trim()));
-    let (status, body) = match (stumble, std::fs::read(&file)) {
-        (Some(status), _) => (status, b"{}".to_vec()),
-        (None, Ok(body)) if file.is_file() => ("200 OK".to_string(), body),
-        _ => ("404 Not Found".to_string(), b"{}".to_vec()),
-    };
-    let mut stream = stream;
-    let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    if stream
-        .write_all(head.as_bytes())
-        .and_then(|()| stream.write_all(&body))
-        .is_err()
-    {
-        eprintln!("the fake registry could not answer");
     }
 }

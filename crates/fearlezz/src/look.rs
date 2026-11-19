@@ -83,11 +83,11 @@ fn compare_texts(before: &Path, after: &Path) -> Result<(Change, String, Option<
     }
     let (b, a) = (crate::text::readable(&b), crate::text::readable(&a));
     let (added, removed) = crate::text::counts(&b, &a);
-    let lines = |n: usize| if n == 1 { "line" } else { "lines" };
+    let lines = |n: usize| fearlezz_proof::plural(n, "line");
     let summary = match (added, removed) {
-        (0, r) => format!("{r} {} removed", lines(r)),
-        (a, 0) => format!("{a} {} added", lines(a)),
-        (a, r) => format!("{a} {} added, {r} removed", lines(a)),
+        (0, r) => format!("{} removed", lines(r)),
+        (a, 0) => format!("{} added", lines(a)),
+        (a, r) => format!("{} added, {r} removed", lines(a)),
     };
     Ok((
         Change::Changed,
@@ -248,10 +248,11 @@ pub(crate) fn without_before(
 fn look_dir(common: &Path, check: &Check, before: &str, after: &str) -> PathBuf {
     let flaky = check.pictures.flaky.patterns().join("\0");
     let pair = crate::files::sha256_hex(format!("{before}\0{after}\0{flaky}"));
-    common
-        .join("fearlezz")
-        .join("looks")
-        .join(format!("{}-{}", check.id, &pair[..10]))
+    common.join("fearlezz").join("looks").join(format!(
+        "{}-{}",
+        check.id,
+        pair.get(..10).unwrap_or(&pair)
+    ))
 }
 
 fn build(
@@ -344,74 +345,7 @@ fn build(
         ));
     }
 
-    // Decoding and comparing is heavy work, so it waits its turn on this machine, unless the
-    // check says it is light.
-    let _slot = if !check.light && pending.iter().any(|(_, pair)| pair.is_some()) {
-        crate::queue::slot(&format!("look {}", check.id))?
-    } else {
-        None
-    };
-    // Compare a few items at a time; each decodes two films in memory.
-    let width = std::thread::available_parallelism()
-        .map_or(2, std::num::NonZero::get)
-        .clamp(1, 4);
-    let mut items = Vec::new();
-    for chunk in pending.chunks(width) {
-        let done: Result<Vec<Item>> = std::thread::scope(|s| {
-            let handles: Vec<_> = chunk
-                .iter()
-                .map(|(item, pair)| {
-                    s.spawn(move || {
-                        let mut item = item.clone();
-                        if let (Some((b, a)), true) = (pair, item.kind == TEXT) {
-                            match compare_texts(b, a) {
-                                Ok((change, summary, diff)) => {
-                                    item.change = change;
-                                    item.summary = summary;
-                                    item.diff = diff;
-                                }
-                                Err(e) => {
-                                    item.change = Change::Unreadable;
-                                    item.summary = format!("{e:#}");
-                                }
-                            }
-                        } else if let Some((b, a)) = pair {
-                            let compared = media::decode_both(b, a)
-                                .and_then(|(fb, fa)| media::compare(&fb, &fa));
-                            match compared {
-                                Ok(c) => {
-                                    item.change = match c.verdict {
-                                        Verdict::Same => Change::Same,
-                                        Verdict::Timing => Change::Timing,
-                                        Verdict::Changed => Change::Changed,
-                                    };
-                                    item.summary = media::summary(&c);
-                                    item.comparison = Some(c);
-                                }
-                                Err(e) => {
-                                    item.change = Change::Unreadable;
-                                    item.summary = format!("{e:#}");
-                                }
-                            }
-                        }
-                        item
-                    })
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|h| {
-                    h.join().map_err(|panic| {
-                        anyhow::anyhow!(
-                            "comparing a still or film crashed: {}",
-                            crate::panic_text(&*panic)
-                        )
-                    })
-                })
-                .collect()
-        });
-        items.extend(done?);
-    }
+    let mut items = compare_all(check, &pending)?;
     items.sort_by(|a, b| a.change.cmp(&b.change).then(a.name.cmp(&b.name)));
 
     let look = Look {
@@ -428,4 +362,78 @@ fn build(
     fs::write(&part, serde_json::to_string_pretty(&look)?)?;
     fs::rename(&part, dir.join("look.json"))?;
     Ok(look)
+}
+
+/// Compares every item that has a before, a few at a time.
+fn compare_all(check: &Check, pending: &[(Item, Option<(PathBuf, PathBuf)>)]) -> Result<Vec<Item>> {
+    // Decoding and comparing is heavy work, so it waits its turn on this machine, unless the
+    // check says it is light.
+    let _slot = if !check.light && pending.iter().any(|(_, pair)| pair.is_some()) {
+        crate::queue::slot(&format!("look {}", check.id))?
+    } else {
+        None
+    };
+    // Compare a few items at a time; each decodes two films in memory.
+    let width = std::thread::available_parallelism()
+        .map_or(2, std::num::NonZero::get)
+        .clamp(1, 4);
+    let mut items = Vec::new();
+    for chunk in pending.chunks(width) {
+        let done: Result<Vec<Item>> = std::thread::scope(|s| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|(item, pair)| s.spawn(move || compare_one(item, pair.as_ref())))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join().map_err(|panic| {
+                        anyhow::anyhow!(
+                            "comparing a still or film crashed: {}",
+                            crate::panic_text(&*panic)
+                        )
+                    })
+                })
+                .collect()
+        });
+        items.extend(done?);
+    }
+    Ok(items)
+}
+
+/// One item compared with its before: a text by its lines, a still or film by its states. An
+/// item without a pair stays as it is.
+fn compare_one(item: &Item, pair: Option<&(PathBuf, PathBuf)>) -> Item {
+    let mut item = item.clone();
+    if let (Some((b, a)), true) = (pair, item.kind == TEXT) {
+        match compare_texts(b, a) {
+            Ok((change, summary, diff)) => {
+                item.change = change;
+                item.summary = summary;
+                item.diff = diff;
+            }
+            Err(e) => {
+                item.change = Change::Unreadable;
+                item.summary = format!("{e:#}");
+            }
+        }
+    } else if let Some((b, a)) = pair {
+        let compared = media::decode_both(b, a).and_then(|(fb, fa)| media::compare(&fb, &fa));
+        match compared {
+            Ok(c) => {
+                item.change = match c.verdict {
+                    Verdict::Same => Change::Same,
+                    Verdict::Timing => Change::Timing,
+                    Verdict::Changed => Change::Changed,
+                };
+                item.summary = media::summary(&c);
+                item.comparison = Some(c);
+            }
+            Err(e) => {
+                item.change = Change::Unreadable;
+                item.summary = format!("{e:#}");
+            }
+        }
+    }
+    item
 }

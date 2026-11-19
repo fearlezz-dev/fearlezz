@@ -549,7 +549,9 @@ fn weights(from: usize, to: usize) -> Vec<(usize, Vec<f32>)> {
                 .collect();
             let sum: f32 = ws.iter().sum();
             if sum > 0.0 {
-                ws.iter_mut().for_each(|v| *v /= sum);
+                for v in &mut ws {
+                    *v /= sum;
+                }
             }
             (lo, ws)
         })
@@ -737,7 +739,9 @@ fn blur(px: &[f32], w: usize, h: usize) -> Vec<f32> {
         .map(|x| (-0.5 * ((x as f32 - r as f32) / BLUR_SIGMA).powi(2)).exp())
         .collect();
     let sum: f32 = k.iter().sum();
-    k.iter_mut().for_each(|v| *v /= sum);
+    for v in &mut k {
+        *v /= sum;
+    }
     let reflect = |i: isize, n: usize| -> usize {
         let n = n as isize;
         let mut i = i;
@@ -985,11 +989,33 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
     let thumbs = |s: &[State]| s.iter().map(|k| k.thumb.clone()).collect::<Vec<_>>();
     let (path, cost) = warp(&thumbs(ko), &thumbs(kn));
 
-    // The path only moves forward, so each film needs the states one before to one after.
+    out.pairs = pairs(before, after, &path)?;
+    let max_shift = max_shift(ko, kn, &path, &cost);
+    out.max_shift = round3(max_shift.0);
+    out.max_shift_at = max_shift.1.map(round3);
+    out.moments = moments(&out.pairs, ko, kn);
+
+    out.verdict = if !out.moments.is_empty() {
+        Verdict::Changed
+    } else if !still
+        && ((after.total - before.total).abs() > TIMING_TOL || max_shift.0.abs() > TIMING_TOL)
+    {
+        Verdict::Timing
+    } else {
+        Verdict::Same
+    };
+    Ok(out)
+}
+
+/// Each pair of states the path visits, with what differs between them. The path only moves
+/// forward, so each film needs the states one before to one after.
+fn pairs(before: &Film, after: &Film, path: &[(usize, usize)]) -> Result<Vec<Pair>> {
+    let (ko, kn) = (&before.states, &after.states);
+    let mut pairs = Vec::new();
     let (mut wo, mut wn) = (Window::open(before)?, Window::open(after)?);
     let visited: BTreeSet<(usize, usize)> = path.iter().copied().collect();
     let mut cache: BTreeMap<(usize, usize), (usize, Vec<Box4>)> = BTreeMap::new();
-    for &(i, j) in &path {
+    for &(i, j) in path {
         wo.span(i.saturating_sub(1), i + 1)?;
         wn.span(j.saturating_sub(1), j + 1)?;
         cache.retain(|&(ci, cj), _| ci + 1 >= i && cj + 1 >= j);
@@ -1028,7 +1054,7 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
             }
         }
         let boxes = boxes.into_iter().map(|b| after.own_pixels(b)).collect();
-        out.pairs.push(Pair {
+        pairs.push(Pair {
             before: i,
             after: j,
             before_frame: ko[i].frame,
@@ -1039,10 +1065,19 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
             boxes,
         });
     }
+    Ok(pairs)
+}
 
-    // Timing: how much later each held state of the before film shows in the after film.
+/// Timing: how much later each held state of the before film shows in the after film, the
+/// largest shift and the moment of the before film it is at.
+fn max_shift(
+    ko: &[State],
+    kn: &[State],
+    path: &[(usize, usize)],
+    cost: &[Vec<f32>],
+) -> (f64, Option<f64>) {
     let mut best: BTreeMap<usize, usize> = BTreeMap::new();
-    for &(i, j) in &path {
+    for &(i, j) in path {
         let e = best.entry(i).or_insert(j);
         if cost[i][j] < cost[i][*e] {
             *e = j;
@@ -1059,12 +1094,14 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
             }
         }
     }
-    out.max_shift = round3(max_shift.0);
-    out.max_shift_at = max_shift.1.map(round3);
+    max_shift
+}
 
+/// The moments that changed: each run of pairs that differ, with the area they differ in.
+fn moments(pairs: &[Pair], ko: &[State], kn: &[State]) -> Vec<Moment> {
     let mut current: Option<(Moment, Vec<Box4>)> = None;
     let mut groups = Vec::new();
-    for p in &out.pairs {
+    for p in pairs {
         let (o, n) = (&ko[p.before], &kn[p.after]);
         if p.px == 0 {
             groups.extend(current.take());
@@ -1087,7 +1124,7 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
         boxes.extend(&p.boxes);
     }
     groups.extend(current.take());
-    out.moments = groups
+    groups
         .into_iter()
         .map(|(mut m, boxes)| {
             m.area = boxes.iter().fold([u32::MAX, u32::MAX, 0, 0], |a, b| {
@@ -1102,18 +1139,7 @@ pub(crate) fn compare(before: &Film, after: &Film) -> Result<Comparison> {
             m.after = (round3(m.after.0), round3(m.after.1));
             m
         })
-        .collect();
-
-    out.verdict = if !out.moments.is_empty() {
-        Verdict::Changed
-    } else if !still
-        && ((after.total - before.total).abs() > TIMING_TOL || max_shift.0.abs() > TIMING_TOL)
-    {
-        Verdict::Timing
-    } else {
-        Verdict::Same
-    };
-    Ok(out)
+        .collect()
 }
 
 fn round3(v: f64) -> f64 {

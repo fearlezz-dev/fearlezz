@@ -124,11 +124,7 @@ impl List {
             .context("the iOS simulator has no iOS runtime here")?;
         // By default the newest plain iPhone ("iPhone 17"), not a Pro, Air or foldable one,
         // on the newest runtime that has it.
-        let plain = |t: &&DeviceType| {
-            t.name
-                .strip_prefix("iPhone ")
-                .and_then(|n| n.parse::<u32>().ok())
-        };
+        let plain = |t: &&DeviceType| t.name.strip_prefix("iPhone ")?.parse::<u32>().ok();
         let name = match device {
             Some(name) => name,
             None => self
@@ -248,17 +244,16 @@ impl Simulator {
                 break;
             }
         }
-        let (udid, name, booted, lock) = match leased {
-            Some(l) => l,
-            None => {
-                let name = format!("{prefix}{}", ours.len() + 1);
-                let udid = simctl(&["create", &name, &kind.identifier, &runtime.identifier])?
-                    .trim()
-                    .to_string();
-                writeln!(log, "record: made the simulator {name} ({})", runtime.name)?;
-                let lock = lock_device(&udid)?.context("a new simulator is already leased")?;
-                (udid, name, false, lock)
-            }
+        let (udid, name, booted, lock) = if let Some(l) = leased {
+            l
+        } else {
+            let name = format!("{prefix}{}", ours.len() + 1);
+            let udid = simctl(&["create", &name, &kind.identifier, &runtime.identifier])?
+                .trim()
+                .to_string();
+            writeln!(log, "record: made the simulator {name} ({})", runtime.name)?;
+            let lock = lock_device(&udid)?.context("a new simulator is already leased")?;
+            (udid, name, false, lock)
         };
         drop(pool);
         let mut sim = Simulator {
@@ -548,11 +543,14 @@ fn written(path: &Path) -> bool {
 /// A PNG's width and height, from its header.
 fn png_size(path: &Path) -> Result<(usize, usize)> {
     let bytes = std::fs::read(path)?;
-    if bytes.len() < 24 || &bytes[1..4] != b"PNG" {
-        bail!("{} is not a PNG", path.display());
+    let at = |i: usize| {
+        let word = bytes.get(i..i + 4)?.try_into().ok()?;
+        usize::try_from(u32::from_be_bytes(word)).ok()
+    };
+    match (bytes.get(1..4), at(16), at(20)) {
+        (Some(b"PNG"), Some(width), Some(height)) => Ok((width, height)),
+        _ => bail!("{} is not a PNG", path.display()),
     }
-    let at = |i: usize| u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
-    Ok((at(16) as usize, at(20) as usize))
 }
 
 impl super::Screen for Simulator {

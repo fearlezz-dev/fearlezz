@@ -57,48 +57,9 @@ pub(crate) fn execute(
         root: at.root,
         files: std::cell::OnceCell::new(),
     };
-    let mut builtin_found = None;
-    let ended = if let Some(builtin) = &check.builtin {
-        builtin_found = Some(run_builtin(builtin, at, &listed, out)?);
-        Ended::Ran {
-            passed: true,
-            code: Some(0),
-        }
-    } else if let Some(undeployed) = at.no_preview {
-        // The check's log ends as the preview's did, so its failure shows why.
-        let mut out = out;
-        for line in tail(&undeployed.log, 12) {
-            writeln!(out, "{line}")?;
-        }
-        Ended::Never(Why::Preview(undeployed.why.clone()))
-    } else if check.needs.envtest {
-        match envtest_assets(check, at, &out)? {
-            Ok(assets) => {
-                let mut vars = at.vars.clone();
-                vars.insert("KUBEBUILDER_ASSETS".into(), assets);
-                run_command(check, &Where { vars: &vars, ..*at }, &dir, out)?
-            }
-            Err(code) => Ended::Ran {
-                passed: false,
-                code,
-            },
-        }
-    } else {
-        run_command(check, at, &dir, out)?
-    };
-    let (exit_ok, exit_code) = match ended {
-        Ended::Ran { passed, code } => (passed, code),
-        Ended::Never(_) => (false, None),
-    };
-    // What kept its command from running, the shell not finding it included.
-    let never = match ended {
-        Ended::Never(why) => Some(why),
-        Ended::Ran {
-            code: Some(NOT_FOUND),
-            ..
-        } => missing_command(&log).map(Why::MissingTool),
-        Ended::Ran { .. } => None,
-    };
+    let (ended, mut builtin_found) = start(check, at, &dir, &listed, out)?;
+    let (exit_ok, exit_code) = ended.exit();
+    let never = ended.never(&log);
     let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
     let run = crate::read::Run {
         out: &dir,
@@ -137,46 +98,16 @@ pub(crate) fn execute(
         findings = verdict.counted;
         findings_elsewhere = verdict.elsewhere;
     }
-    // Coverage adds findings but never excuses a failed run: only a gate of its own fails it.
-    let mut measured = None;
-    if let Some(coverage) = &check.coverage {
-        match listed
-            .code(check)
-            .and_then(|code| coverage.findings(&run, at.changed, &code))
-        {
-            Ok(m) => {
-                measured = Some(m.measured);
-                passed &= !m
-                    .found
-                    .iter()
-                    .any(|f| f.level == crate::findings::Level::Gate);
-                findings.extend(m.found);
-                append(&log, &m.log)?;
-                findings
-                    .sort_by(|a, b| (b.level, &a.file, a.line).cmp(&(a.level, &b.file, b.line)));
-            }
-            // First, as it is why the run failed.
-            Err(why) => {
-                errors.insert(0, why);
-                passed = false;
-            }
-        }
-    }
-    let mut cases = Vec::new();
-    let tests = check.tests.as_ref().map(|reader| match reader.count(&run) {
-        Ok((n, found)) => {
-            cases = found;
-            n
-        }
-        Err(why) => {
-            errors.push(why);
-            0
-        }
-    });
-    // A test that passed only on a rerun counts as failed unless the check lists it in `flaky_tests`.
-    for case in cases.iter_mut().filter(|c| c.flaky) {
-        case.failed = !check.flaky_tests.is_match(&case.name);
-    }
+    let measured = cover(
+        check,
+        &listed,
+        &run,
+        at.changed,
+        &mut passed,
+        &mut findings,
+        &mut errors,
+    )?;
+    let (tests, cases) = count_tests(check, &run, &mut errors);
     if tests == Some(0) || cases.iter().any(|c| c.failed) {
         passed = false;
     }
@@ -212,6 +143,110 @@ pub(crate) fn execute(
     };
     store.save(&result)?;
     Ok(result)
+}
+
+/// Runs the check to its end: a built in check in process (with its findings), the command,
+/// or nothing when the preview it needs could not deploy.
+fn start(
+    check: &Check,
+    at: &Where<'_>,
+    dir: &Path,
+    listed: &Listed<'_>,
+    out: File,
+) -> Result<(Ended, Option<Vec<crate::findings::Finding>>)> {
+    if let Some(builtin) = &check.builtin {
+        let found = run_builtin(builtin, at, listed, out)?;
+        let ended = Ended::Ran {
+            passed: true,
+            code: Some(0),
+        };
+        return Ok((ended, Some(found)));
+    }
+    let ended = if let Some(undeployed) = at.no_preview {
+        // The check's log ends as the preview's did, so its failure shows why.
+        let mut out = out;
+        for line in tail(&undeployed.log, 12) {
+            writeln!(out, "{line}")?;
+        }
+        Ended::Never(Why::Preview(undeployed.why.clone()))
+    } else if check.needs.envtest {
+        match envtest_assets(check, at, &out)? {
+            Ok(assets) => {
+                let mut vars = at.vars.clone();
+                vars.insert("KUBEBUILDER_ASSETS".into(), assets);
+                run_command(check, &Where { vars: &vars, ..*at }, dir, out)?
+            }
+            Err(code) => Ended::Ran {
+                passed: false,
+                code,
+            },
+        }
+    } else {
+        run_command(check, at, dir, out)?
+    };
+    Ok((ended, None))
+}
+
+/// The check's coverage: its findings join `findings` and its notes the check's log. Coverage
+/// adds findings but never excuses a failed run: only a gate of its own fails it, as does a
+/// report it cannot read, whose reason goes first in `errors`, as it is why the run failed.
+fn cover(
+    check: &Check,
+    listed: &Listed<'_>,
+    run: &crate::read::Run<'_>,
+    changed: &crate::findings::Changed,
+    passed: &mut bool,
+    findings: &mut Vec<crate::findings::Finding>,
+    errors: &mut Vec<String>,
+) -> Result<Option<crate::coverage::Measured>> {
+    let Some(coverage) = &check.coverage else {
+        return Ok(None);
+    };
+    match listed
+        .code(check)
+        .and_then(|code| coverage.findings(run, changed, &code))
+    {
+        Ok(m) => {
+            *passed &= !m
+                .found
+                .iter()
+                .any(|f| f.level == crate::findings::Level::Gate);
+            findings.extend(m.found);
+            append(&run.out.join(crate::read::LOG), &m.log)?;
+            findings.sort_by(|a, b| (b.level, &a.file, a.line).cmp(&(a.level, &b.file, b.line)));
+            Ok(Some(m.measured))
+        }
+        Err(why) => {
+            errors.insert(0, why);
+            *passed = false;
+            Ok(None)
+        }
+    }
+}
+
+/// How many tests the check ran and each case, a reason going to `errors` when they cannot be
+/// counted. A test that passed only on a rerun counts as failed unless the check lists it in
+/// `flaky_tests`.
+fn count_tests(
+    check: &Check,
+    run: &crate::read::Run<'_>,
+    errors: &mut Vec<String>,
+) -> (Option<u64>, Vec<crate::counts::Case>) {
+    let mut cases = Vec::new();
+    let tests = check.tests.as_ref().map(|reader| match reader.count(run) {
+        Ok((n, found)) => {
+            cases = found;
+            n
+        }
+        Err(why) => {
+            errors.push(why);
+            0
+        }
+    });
+    for case in cases.iter_mut().filter(|c| c.flaky) {
+        case.failed = !check.flaky_tests.is_match(&case.name);
+    }
+    (tests, cases)
 }
 
 /// One step of a check as a command in a clean env, inside the environment's shell if any.
@@ -256,6 +291,26 @@ enum Ended {
 }
 
 impl Ended {
+    /// Whether it passed, and its exit code.
+    fn exit(&self) -> (bool, Option<i32>) {
+        match self {
+            Ended::Ran { passed, code } => (*passed, *code),
+            Ended::Never(_) => (false, None),
+        }
+    }
+
+    /// What kept its command from running, the shell not finding it (named in `log`) included.
+    fn never(self, log: &Path) -> Option<Why> {
+        match self {
+            Ended::Never(why) => Some(why),
+            Ended::Ran {
+                code: Some(NOT_FOUND),
+                ..
+            } => missing_command(log).map(Why::MissingTool),
+            Ended::Ran { .. } => None,
+        }
+    }
+
     /// A command that ended with `status`.
     fn of(status: std::process::ExitStatus) -> Ended {
         Ended::Ran {
@@ -935,8 +990,8 @@ fn read_proofs(path: &Path) -> (Vec<serde_json::Value>, Vec<String>) {
 pub(crate) fn tail(log: &Path, lines: usize) -> Vec<String> {
     let text = fs::read_to_string(log).unwrap_or_default();
     let all: Vec<&str> = text.lines().collect();
-    all[all.len().saturating_sub(lines)..]
-        .iter()
+    all.iter()
+        .skip(all.len().saturating_sub(lines))
         .map(ToString::to_string)
         .collect()
 }

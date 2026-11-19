@@ -986,8 +986,8 @@ fn pretty_json(
     tail: usize,
     out: &mut String,
 ) {
-    let indent = layout.indent;
     use serde_json::Value as J;
+    let indent = layout.indent;
     let pad = |d: usize| indent.repeat(d);
     match value {
         J::Object(map) if !map.is_empty() => {
@@ -1004,8 +1004,8 @@ fn pretty_json(
             out.push('}');
         }
         J::Array(items) if !items.is_empty() => {
-            let line_start = out.rfind('\n').map_or(0, |n| n + 1);
-            let used = out[line_start..].replace('\t', "  ").chars().count();
+            let line = out.rsplit('\n').next().unwrap_or_default();
+            let used = line.replace('\t', "  ").chars().count();
             let flat = format!(
                 "[{}]",
                 items
@@ -1036,7 +1036,7 @@ fn pretty_json(
 /// The indentation of the first indented line: a tab or some spaces.
 fn json_indent(text: &str) -> &str {
     text.lines()
-        .map(|l| &l[..l.len() - l.trim_start_matches([' ', '\t']).len()])
+        .filter_map(|l| l.strip_suffix(l.trim_start_matches([' ', '\t'])))
         .find(|i| !i.is_empty())
         .map_or("  ", |i| if i.starts_with('\t') { "\t" } else { i })
 }
@@ -1351,8 +1351,12 @@ fn editorconfig(root: &Path, path: &str, table: &Table) -> Result<(String, Strin
     block.push('\n');
     let out = match (text.find(EDITORCONFIG_BEGIN), text.find(EDITORCONFIG_END)) {
         (Some(a), Some(b)) if a < b => {
-            let after = text[b..].find('\n').map_or(text.len(), |n| b + n + 1);
-            format!("{}{block}{}", &text[..a], &text[after..])
+            let before = text
+                .split_once(EDITORCONFIG_BEGIN)
+                .map_or("", |(before, _)| before);
+            let end = text.split_once(EDITORCONFIG_END).map_or("", |(_, end)| end);
+            let after = end.split_once('\n').map_or("", |(_, after)| after);
+            format!("{before}{block}{after}")
         }
         (None, None) if text.is_empty() => format!("root = true\n\n{block}"),
         (None, None) => format!("{}\n{block}", text.trim_end()),

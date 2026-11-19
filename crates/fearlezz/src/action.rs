@@ -15,7 +15,8 @@ use serde_json::Value;
 use crate::look::{Change, Item as Picture};
 use crate::proof::{Proof, Ran};
 
-/// Pictures listed in the job summary at most, so it stays readable.
+/// The items of one list the job summary shows at most, so it stays readable: pictures,
+/// failed tests.
 const SHOWN: usize = 20;
 
 /// What GitHub Actions tells every step of a run, read once from its environment and event
@@ -128,7 +129,6 @@ pub(crate) fn summary(
     page: Option<&str>,
     gate: &crate::floor::Gate,
 ) -> Result<String, std::fmt::Error> {
-    use crate::floor::Gate;
     let mut text = String::new();
     let blockers = proof.blockers();
     let ran = proof.ran_here().count();
@@ -169,30 +169,7 @@ pub(crate) fn summary(
         }
         writeln!(text)?;
     }
-    match (&proof.accepted, page) {
-        _ if proof.weakened.is_empty() => {}
-        (Some(accept), _) => {
-            writeln!(
-                text,
-                "What the change weakens was accepted by {} on the proof page:\n",
-                accept.by
-            )?;
-            for w in &proof.weakened {
-                writeln!(text, "- {}", cell(&w.to_string()))?;
-            }
-            writeln!(text)?;
-        }
-        (None, Some(_)) if matches!(gate, Gate::Unasked) => writeln!(
-            text,
-            "The proof host could not be asked, so what it weakens fails as without a host.\n"
-        )?,
-        (None, Some(url)) => writeln!(
-            text,
-            "An admin can accept what it weakens on [the proof page]({url}), which runs this \
-             job again.\n"
-        )?,
-        (None, None) => {}
-    }
+    weakened(proof, page, gate, &mut text)?;
     diffs(proof, &mut text)?;
     for note in proof.notes() {
         writeln!(text, "{note}\n")?;
@@ -219,6 +196,47 @@ pub(crate) fn summary(
         writeln!(text, "\nNo check reads what this commit changed.")?;
     }
     tests(proof, &mut text)?;
+    failing_logs(proof, &mut text)?;
+    Ok(text)
+}
+
+/// What the change weakens: who accepted it, or where an admin can.
+fn weakened(
+    proof: &Proof,
+    page: Option<&str>,
+    gate: &crate::floor::Gate,
+    text: &mut String,
+) -> std::fmt::Result {
+    use crate::floor::Gate;
+    match (&proof.accepted, page) {
+        _ if proof.weakened.is_empty() => {}
+        (Some(accept), _) => {
+            writeln!(
+                text,
+                "What the change weakens was accepted by {} on the proof page:\n",
+                accept.by
+            )?;
+            for w in &proof.weakened {
+                writeln!(text, "- {}", cell(&w.to_string()))?;
+            }
+            writeln!(text)?;
+        }
+        (None, Some(_)) if matches!(gate, Gate::Unasked) => writeln!(
+            text,
+            "The proof host could not be asked, so what it weakens fails as without a host.\n"
+        )?,
+        (None, Some(url)) => writeln!(
+            text,
+            "An admin can accept what it weakens on [the proof page]({url}), which runs this \
+             job again.\n"
+        )?,
+        (None, None) => {}
+    }
+    Ok(())
+}
+
+/// The end of what each failing check printed.
+fn failing_logs(proof: &Proof, text: &mut String) -> std::fmt::Result {
     for check in proof.checks.iter().filter(|c| c.outcome == Ran::Failed) {
         let Some(log) = &check.log else { continue };
         writeln!(
@@ -231,21 +249,23 @@ pub(crate) fn summary(
         }
         writeln!(text, "```\n\n</details>")?;
     }
-    Ok(text)
+    Ok(())
 }
 
 /// Each test a check names as failed or flaky, the failed ones first and cut short.
 fn tests(proof: &Proof, text: &mut String) -> std::fmt::Result {
-    const SHOWN: usize = 20;
     for check in proof.ran_here() {
         let failed: Vec<&fearlezz_proof::Case> = check.cases.iter().filter(|c| c.failed).collect();
         let flaky = check.cases.iter().filter(|c| c.flaky && !c.failed);
         let mut lines: Vec<String> = failed
             .iter()
             .take(SHOWN)
-            .map(|c| match c.flaky {
-                true => format!("`{}` passed only on a rerun", code(&c.name)),
-                false => format!("`{}` failed", code(&c.name)),
+            .map(|c| {
+                if c.flaky {
+                    format!("`{}` passed only on a rerun", code(&c.name))
+                } else {
+                    format!("`{}` failed", code(&c.name))
+                }
             })
             .collect();
         if failed.len() > SHOWN {

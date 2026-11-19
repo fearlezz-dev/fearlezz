@@ -388,17 +388,15 @@ impl Listed {
     /// and its counts: pictures without a verdict, open notes, and a weakening for an admin.
     /// Passed checks with any of those open wait for a person, they are not done.
     pub fn worded(self) -> Listed {
-        let count =
-            |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
         let mut waits = Vec::new();
         if self.pictures > 0 {
             waits.push(format!(
                 "{} to look at",
-                count(self.pictures, "picture", "pictures")
+                crate::plural(self.pictures, "picture")
             ));
         }
         if self.notes > 0 {
-            waits.push(count(self.notes, "open note", "open notes"));
+            waits.push(crate::plural(self.notes, "open note"));
         }
         if self.weakened {
             waits.push("a weakening to accept".to_owned());

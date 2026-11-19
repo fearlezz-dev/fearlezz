@@ -367,7 +367,9 @@ pub(crate) fn print_failure(f: &RunResult) {
     let why = f.failure();
     println!("fail {}{}", f.check, why.line());
     if let Why::NoTests(said) = &why {
-        said.iter().for_each(|line| println!("  {line}"));
+        for line in said {
+            println!("  {line}");
+        }
     } else if let Why::Generated(_) = &why {
         let path = f.dir.join(generated::DIFF);
         if let Ok(diff) = std::fs::read_to_string(&path) {
@@ -397,10 +399,12 @@ pub(crate) fn print_failure(f: &RunResult) {
     print_findings(f);
 }
 
+/// The items of one list the terminal shows at most: failed tests, findings.
+pub(crate) const SHOWN: usize = 10;
+
 /// Each test a run names as failed or flaky, the failed ones first and cut short, and what to
 /// do about a flaky one its check does not list.
 pub(crate) fn print_cases(r: &RunResult) {
-    const SHOWN: usize = 10;
     let failed: Vec<&counts::Case> = r.cases.iter().filter(|c| c.failed).collect();
     for case in failed.iter().take(SHOWN) {
         println!("  {}", case.line().unwrap_or_default());
@@ -422,7 +426,6 @@ pub(crate) fn print_cases(r: &RunResult) {
 
 /// The findings a run counted, worst first, with how many were left out.
 pub(crate) fn print_findings(r: &RunResult) {
-    const SHOWN: usize = 10;
     for f in r.findings.iter().take(SHOWN) {
         println!("  {f}");
     }

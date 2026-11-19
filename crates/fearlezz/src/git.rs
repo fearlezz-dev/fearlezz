@@ -337,13 +337,11 @@ impl Git {
     pub(crate) fn prune_bases(&self, keep_days: i64) -> Result<()> {
         let bases = self.bases_dir()?;
         let marker = bases.join("pruned");
-        let day = std::time::Duration::from_secs(24 * 3600);
+        let day = std::time::Duration::from_hours(24);
         let now = std::time::SystemTime::now();
         let age = |path: &Path| {
-            std::fs::metadata(path)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| now.duration_since(t).ok())
+            let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+            now.duration_since(modified).ok()
         };
         if !bases.exists() || age(&marker).is_some_and(|d| d < day) {
             return Ok(());
