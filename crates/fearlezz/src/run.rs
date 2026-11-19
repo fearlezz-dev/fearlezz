@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use fearlezz_proof::why::{Generated, Why};
 
 use crate::config::Check;
-use crate::process::{Call, Exit, Output, Ready, Unfetched};
+use crate::process::{Call, Exit, Output, Ready};
 use crate::record::Target;
 use crate::store::{Inputs, Outcome, RunResult, Store};
 
@@ -318,8 +318,7 @@ fn run_command(check: &Check, at: &Where<'_>, dir: &Path, out: File) -> Result<E
             ready.mask(dir)?;
             ended
         }
-        Err(Unfetched::NoSecretSpec) => Ended::Never(Why::MissingTool("secretspec".into())),
-        Err(Unfetched::Secret(name)) => Ended::Never(Why::Secret(name)),
+        Err(unfetched) => Ended::Never(unfetched.why()),
     })
 }
 

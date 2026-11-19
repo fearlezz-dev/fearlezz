@@ -219,6 +219,16 @@ pub(crate) enum Unfetched {
     NoSecretSpec,
 }
 
+impl Unfetched {
+    /// Why the command could not run, as a check's failure says it.
+    pub(crate) fn why(self) -> fearlezz_proof::why::Why {
+        match self {
+            Unfetched::Secret(name) => fearlezz_proof::why::Why::Secret(name),
+            Unfetched::NoSecretSpec => fearlezz_proof::why::Why::MissingTool("secretspec".into()),
+        }
+    }
+}
+
 /// A project's command with its secrets fetched, ready to run its steps.
 pub(crate) struct Ready<'a> {
     project: Project<'a>,
@@ -435,7 +445,7 @@ fn appended(path: &Path) -> Result<File> {
 /// as 1Password's `OP_SERVICE_ACCOUNT_TOKEN`) reaches SecretSpec but never the command. One
 /// name at a time, since SecretSpec refuses a whole profile when any required secret in it is
 /// missing. SecretSpec's own words go to `said`, or Fearlezz's own output without it.
-pub(crate) fn fetch_secrets(
+fn fetch_secrets(
     names: &[String],
     reason: &str,
     folder: &Path,

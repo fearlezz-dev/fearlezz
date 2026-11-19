@@ -206,6 +206,37 @@ fn a_failed_down_keeps_the_services_known_so_down_can_try_again() {
 }
 
 #[test]
+fn services_get_the_env_secrets_masked_in_their_log() {
+    const VALUE: &str = "sk-test-0123456789";
+    let config = CONFIG
+        .replace(
+            "up = 'mkdir -p .svc &&",
+            "up = 'echo \"key is $SVC_KEY\"; test -n \"$SVC_KEY\" || exit 1; mkdir -p .svc &&",
+        )
+        .replace(
+            "env = [\"LOG\"]\n\n[check.e2e]",
+            "env = [\"LOG\"]\nsecrets = [\"SVC_KEY\"]\n\n[check.e2e]",
+        );
+    let s = Setup::new(&config, &[]);
+    s.repo.branch("feat/x");
+    s.change();
+    s.fz(&["run", "--stage", "working", "--no-run"]);
+    let out = s
+        .repo
+        .fz_env(&["run", "e2e"], &[("LOG", &s.log), ("SVC_KEY", VALUE)]);
+    assert!(s.events().contains(&"up".to_string()), "{:?}", s.events());
+    assert!(!out.stdout.contains(VALUE) && !out.stderr.contains(VALUE));
+    let logs = s.repo.path(".git/fearlezz/env/logs");
+    let up = std::fs::read_dir(&logs)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.to_string_lossy().ends_with("-up.log"))
+        .unwrap();
+    let text = std::fs::read_to_string(&up).unwrap();
+    assert!(text.contains("key is ***"), "{text}");
+}
+
+#[test]
 fn a_start_that_never_finished_is_stopped_before_the_next_start() {
     // The first up kills Fearlezz itself, like a closed terminal would.
     let config = CONFIG.replace(

@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
 use jiff::Timestamp;
@@ -16,6 +15,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::config::{Env, Ports};
 use crate::lease::{Lease, Mode};
+use crate::process::{Call, Exit, Output, Project, Ran};
 use crate::run;
 
 /// Services unused this long are stopped by the next Fearlezz command of another journal.
@@ -151,39 +151,66 @@ impl EnvState {
         crate::files::remove_if_exists(&self.services_file(root))
     }
 
-    /// Runs one environment command in `root` with a clean env, all output to its log. A
-    /// process it starts in the background keeps writing there without holding Fearlezz up.
+    /// Runs one environment command in `root`, all output to its log. A process it starts in
+    /// the background keeps writing there without holding Fearlezz up.
     fn sh(&self, env: &Env, root: &Path, what: &str, cmd: &str) -> Result<()> {
-        let (mut command, log) = self.command(env, root, what, cmd)?;
-        let out = fs::File::create(&log)?;
-        command.stdout(out.try_clone()?).stderr(out);
-        let status = command
-            .status()
-            .with_context(|| format!("starting [env] {what}"))?;
-        check_status(status, what, root, &log)
+        let log = self.fresh_log(root, what)?;
+        self.outside(env, root, what, cmd, Output::Log(&log))
+            .map(drop)
     }
 
     /// Runs the command that prints the ports, returning its stdout; errors go to its log.
     fn sh_read(&self, env: &Env, root: &Path, what: &str, cmd: &str) -> Result<String> {
-        let (mut command, log) = self.command(env, root, what, cmd)?;
-        command
-            .stdout(Stdio::piped())
-            .stderr(fs::File::create(&log)?);
-        let output = command
-            .output()
-            .with_context(|| format!("starting [env] {what}"))?;
-        check_status(output.status, what, root, &log)?;
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        let log = self.fresh_log(root, what)?;
+        let ran = self.outside(env, root, what, cmd, Output::Read(&log))?;
+        Ok(String::from_utf8_lossy(&ran.printed).to_string())
     }
 
-    fn command(&self, env: &Env, root: &Path, what: &str, cmd: &str) -> Result<(Command, PathBuf)> {
+    /// Runs `cmd`, the `[env]` command `what`, outside the `[env]` shell, since the services
+    /// and the preparation start it themselves: an error when it fails.
+    fn outside(
+        &self,
+        env: &Env,
+        root: &Path,
+        what: &str,
+        cmd: &str,
+        output: Output<'_>,
+    ) -> Result<Ran> {
+        let log = self.log(root, what);
+        let reason = format!("the [env] {what} of Fearlezz");
+        let command = env.command(cmd);
+        let call = Call {
+            outside: true,
+            ..Call::new(&reason)
+        };
+        let ran = Project::new(root, env.shell.as_deref())
+            .run(&command, call, output)
+            .with_context(|| format!("starting [env] {what}"))?;
+        let ran = match ran {
+            Ok(ran) => ran,
+            Err(unfetched) => {
+                let why = unfetched.why();
+                let fix = why.fix_here(what, run::install).unwrap_or_default();
+                bail!(
+                    "[env] {what} did not run in {}{}\n  fix: {fix}\n  log: {}",
+                    root.display(),
+                    why.line(),
+                    log.display()
+                );
+            }
+        };
+        check_status(&ran.exit, what, root, &log)?;
+        Ok(ran)
+    }
+
+    /// The log of the `[env]` command `what` in `root`, emptied for a new run.
+    fn fresh_log(&self, root: &Path, what: &str) -> Result<PathBuf> {
         let log = self.log(root, what);
         if let Some(dir) = log.parent() {
             fs::create_dir_all(dir)?;
         }
-        // Outside the `[env]` shell: the services and the preparation start it themselves.
-        let command = crate::process::Project::new(root, None).clean(None, cmd, &env.vars, &[]);
-        Ok((command, log))
+        fs::File::create(&log)?;
+        Ok(log)
     }
 
     /// Holds the services of `root` for one command's checks: another command waits, and
@@ -221,9 +248,9 @@ impl EnvState {
 
     /// The URL of the preview of `tree` in `root`, deploying it with `[env] preview` first
     /// when this tree has none yet. The deploy runs at the root, inside the environment's
-    /// shell, in a clean env: the base variables, `[env] env`, the `[env] secrets` and
-    /// `FEARLEZZ_PREVIEW_NAME` set to `name`. Its URL is the last one it printed; the secrets
-    /// are masked in its log before anything reads it.
+    /// shell, as every `[env]` command does but with `FEARLEZZ_PREVIEW_NAME` set to `name`.
+    /// Its URL is the last one it printed; the secrets are masked in its log before anything
+    /// reads it.
     pub(crate) fn preview(
         &self,
         env: &Env,
@@ -231,30 +258,24 @@ impl EnvState {
         tree: &str,
         name: &str,
     ) -> Result<std::result::Result<Deployed, Undeployed>> {
-        let log = self.log(root, "preview");
         let Some(cmd) = &env.preview else {
             return Ok(Err(Undeployed {
                 why: NoPreview::Unset,
-                log,
+                log: self.log(root, "preview"),
             }));
         };
         if let Some(url) = self.preview_of(root, tree) {
             return Ok(Ok(Deployed { url, line: None }));
         }
-        if let Some(dir) = log.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        let out = fs::File::create(&log)?;
+        let log = self.fresh_log(root, "preview")?;
         let clock = std::time::Instant::now();
-        let asked = crate::process::fetch_secrets(
-            &env.secrets,
-            "the preview deploy of Fearlezz",
-            root,
-            &crate::process::Project::new(root, env.shell.as_deref()),
-            Some(&out),
-        )?;
-        let secrets = match asked {
-            Ok(secrets) => secrets,
+        let command = env.command(cmd);
+        let call = Call::new("the preview deploy of Fearlezz").var("FEARLEZZ_PREVIEW_NAME", name);
+        let ran = Project::new(root, env.shell.as_deref())
+            .run(&command, call, Output::Log(&log))
+            .context("starting [env] preview")?;
+        let ran = match ran {
+            Ok(ran) => ran,
             Err(crate::process::Unfetched::Secret(name)) => {
                 return Ok(Err(Undeployed {
                     why: NoPreview::Secret { name },
@@ -268,37 +289,16 @@ impl EnvState {
                 }));
             }
         };
-        // Only what the deploy prints holds its URL, not what SecretSpec said before it.
-        let asked_len = out.metadata()?.len();
-        // A clean env like the services' commands, so a deploy from the change's config never
-        // sees the provider's token or CI's own; it gets its settings from `[env] env`.
-        let mut command = crate::process::Project::new(root, env.shell.as_deref()).clean(
-            None,
-            cmd,
-            &env.vars,
-            &[],
-        );
-        command
-            .stdout(out.try_clone()?)
-            .stderr(out)
-            .env("FEARLEZZ_PREVIEW_NAME", name)
-            .envs(secrets.iter().map(|(secret, value)| (secret, value)));
-        let status = command.status().context("starting [env] preview")?;
-        // Split before masking, which changes the length of what SecretSpec said.
-        let forms = crate::process::masked_forms(&secrets);
-        let text = fs::read(&log)?;
-        let (asked, printed) = text.split_at(usize::try_from(asked_len)?.min(text.len()));
-        let printed = crate::process::masked(printed, &forms);
-        fs::write(&log, [crate::process::masked(asked, &forms), printed.clone()].concat())?;
-        if !status.success() {
+        if !ran.exit.success() {
             return Ok(Err(Undeployed {
                 why: NoPreview::Failed {
-                    code: status.code(),
+                    code: ran.exit.code(),
                 },
                 log,
             }));
         }
-        let Some(url) = last_url(&String::from_utf8_lossy(&printed)) else {
+        // Only what the deploy printed holds its URL, not what SecretSpec said before it.
+        let Some(url) = last_url(&String::from_utf8_lossy(&ran.printed)) else {
             return Ok(Err(Undeployed {
                 why: NoPreview::NoUrl,
                 log,
@@ -543,20 +543,15 @@ pub(crate) enum Idle {
     Forgotten,
 }
 
-fn check_status(
-    status: std::process::ExitStatus,
-    what: &str,
-    root: &Path,
-    log: &Path,
-) -> Result<()> {
-    if status.success() {
+fn check_status(exit: &Exit, what: &str, root: &Path, log: &Path) -> Result<()> {
+    if exit.success() {
         return Ok(());
     }
     let tail = run::tail(log, 6).join("\n  ");
     bail!(
         "[env] {what} failed in {} (exit {}):\n  {tail}\n  log: {}",
         root.display(),
-        status.code().map_or("signal".into(), |c| c.to_string()),
+        exit.code().map_or("signal".into(), |c| c.to_string()),
         log.display()
     );
 }
@@ -644,7 +639,7 @@ fn clone_dir(from: &Path, to: &Path) -> Result<()> {
             return Ok(());
         }
     }
-    let status = Command::new("cp")
+    let status = std::process::Command::new("cp")
         .args(if cfg!(target_os = "linux") {
             vec!["-a", "--reflink=auto"]
         } else {
