@@ -26,10 +26,20 @@ use crate::state::Worktree;
 use crate::store::{Outcome, RunResult, Store};
 
 /// The change's test files for `check`, by `test_files` alone: its inputs only decide reuse.
+/// A check run in a folder (`each`, or `dir`) takes only those in that folder, the ones it
+/// can run: a test elsewhere passes on the base commit too, whatever the change does.
 pub(crate) fn test_files(check: &Check, wt: &Worktree) -> Vec<String> {
+    let inside = |p: &str| {
+        check.dir.as_deref().is_none_or(|dir| {
+            let dir = dir.trim_end_matches('/');
+            dir == "."
+                || p.strip_prefix(dir)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+    };
     wt.changed
         .iter()
-        .filter(|p| check.is_test(p))
+        .filter(|p| inside(p) && check.is_test(p))
         .cloned()
         .collect()
 }

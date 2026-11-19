@@ -105,6 +105,42 @@ fn inputs_that_leave_the_tests_out_still_run_red_before_green() {
 }
 
 #[test]
+fn a_check_in_a_folder_takes_only_the_test_files_in_that_folder() {
+    // Like the proof host's tests in `ee/`: a check of its own folder that reads code the
+    // root shares, with test files at any depth.
+    let checks = format!(
+        "{CHECKS}\n[check.sub]\nrun = \"for t in tests/*.sh; do sh \\\"$t\\\" || exit 1; done\"\n\
+         dir = \"sub\"\nstage = \"working\"\ninputs = [\"sub/**\", \"src/**\"]\n\
+         test_files = [\"**/tests/**\"]\n"
+    );
+    let repo = Repo::new(
+        &checks,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("src/value", "1\n"),
+            ("tests/old.sh", "test -e src/value\n"),
+            ("sub/tests/old.sh", "test -e ../src/value\n"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("change");
+    change(&repo, SHOWS_IT, "fix: the value is two");
+    let (out, _) = ci(&repo);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("red before green tests: tests/new.sh fails on the base commit"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        !out.stdout.contains("red before green sub"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn a_fix_whose_new_test_passes_on_the_base_commit_is_not_proven() {
     let repo = repo();
     change(&repo, PASSES_ANYWAY, "fix: the value is two");
