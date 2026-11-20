@@ -49,6 +49,8 @@ pub(crate) struct Report {
     stream: Option<host::Stream>,
     /// The host's page of the work, once the host opened the run.
     page: Option<String>,
+    /// Why a job that could have had the host's page sent nothing, for the job summary.
+    unsent: Option<&'static str>,
     /// A folder for the proof bundle, when asked.
     bundle: Option<PathBuf>,
     /// Proving a commit for CI, not a local run.
@@ -135,16 +137,22 @@ impl Report {
             }),
         };
         // A host that fails never fails the proof: CI proves the commit anyway.
-        let stream =
-            host::Host::from_actions(ctx.config.host.as_deref()).and_then(|host| match open {
-                Ok(open) => open_on(host, &open),
-                Err(why) => {
-                    println!("proof page not sent: {why}");
-                    None
-                }
-            });
+        let host = host::Host::from_actions(ctx.config.host.as_deref());
+        // A job on GitHub Actions that may not request an OIDC token could have had the page.
+        let unsent = (host.is_none() && workflow.actions).then_some(host::NO_ID_TOKEN);
+        if let Some(why) = unsent {
+            println!("proof page not sent: {why}");
+        }
+        let stream = host.and_then(|host| match open {
+            Ok(open) => open_on(host, &open),
+            Err(why) => {
+                println!("proof page not sent: {why}");
+                None
+            }
+        });
         Ok(Report {
             page: stream.as_ref().map(|s| s.url.clone()),
+            unsent,
             stream,
             proof,
             bundle: out.proof,
@@ -181,6 +189,7 @@ impl Report {
         });
         Ok(Report {
             page: stream.as_ref().map(|s| s.url.clone()),
+            unsent: None,
             stream,
             proof,
             bundle: None,
@@ -252,7 +261,7 @@ impl Report {
             None => Gate::Job,
         };
         if self.ci {
-            summary(&self.proof, self.page.as_deref(), &gate)?;
+            summary(&self.proof, self.page.as_deref(), self.unsent, &gate)?;
         }
         if self.proof.leg.is_some() {
             if !floor.holds() {
@@ -349,10 +358,15 @@ pub(crate) fn ask_accept(stream: &host::Stream, proof: &mut Proof, floor: &Floor
 }
 
 /// Appends the job summary to the file GitHub Actions names, when it names one.
-pub(crate) fn summary(proof: &Proof, page: Option<&str>, gate: &Gate) -> Result<()> {
+pub(crate) fn summary(
+    proof: &Proof,
+    page: Option<&str>,
+    unsent: Option<&str>,
+    gate: &Gate,
+) -> Result<()> {
     use std::io::Write as _;
     if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-        let summary = action::summary(proof, page, gate)?;
+        let summary = action::summary(proof, page, unsent, gate)?;
         std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -363,7 +377,8 @@ pub(crate) fn summary(proof: &Proof, page: Option<&str>, gate: &Gate) -> Result<
 }
 
 /// Why a failed run failed, with the end of its log, its failed tests and its findings.
-pub(crate) fn print_failure(f: &RunResult) {
+/// `steps` are its check's commands, for the hint to split a step that joins several.
+pub(crate) fn print_failure(f: &RunResult, steps: &[String]) {
     let why = f.failure();
     println!("fail {}{}", f.check, why.line());
     if let Why::NoTests(said) = &why {
@@ -386,6 +401,14 @@ pub(crate) fn print_failure(f: &RunResult) {
     if let Some(fix) = why.fix_here(&f.check, run::install) {
         println!("  fix: {fix}");
     }
+    if let Some(split) = split_steps(steps) {
+        println!(
+            "  fix: list the commands of check {} as steps, run = {split}: each step is its own \
+             command, the first that fails ends the check, and a reader of stdout reads only the \
+             last one's",
+            f.check
+        );
+    }
     // The diff and the findings say what blocks; otherwise the end of the log does.
     if !matches!(why, Why::Gate(_) | Why::Generated(_)) {
         // A failed test's own output says more than the runner's last lines.
@@ -400,6 +423,20 @@ pub(crate) fn print_failure(f: &RunResult) {
         print_cases(f);
     }
     print_findings(f);
+}
+
+/// The steps of a check whose steps join commands with `&&`, as a TOML list with each
+/// command a step of its own; None when no step does.
+fn split_steps(steps: &[String]) -> Option<String> {
+    if !steps.iter().any(|step| step.contains("&&")) {
+        return None;
+    }
+    let split: Vec<String> = steps
+        .iter()
+        .flat_map(|step| step.split("&&"))
+        .map(|command| toml::Value::String(command.trim().to_owned()).to_string())
+        .collect();
+    Some(format!("[{}]", split.join(", ")))
 }
 
 /// The items of one list the terminal shows at most: failed tests, findings.

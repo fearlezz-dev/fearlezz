@@ -507,7 +507,7 @@ impl Run<'_> {
                     }
                     match result.outcome {
                         Outcome::Passed => green.push((*check, result)),
-                        Outcome::Failed => failures.push(result),
+                        Outcome::Failed => failures.push((*check, result)),
                     }
                 }
                 Came::Away(Away::Skipped(_)) => skipped += 1,
@@ -523,7 +523,9 @@ impl Run<'_> {
                 c.unstable = true;
             }
         }
-        failures.iter().copied().for_each(report::print_failure);
+        for (check, result) in &failures {
+            report::print_failure(result, &check.command.steps);
+        }
         for (_, r) in &green {
             report::print_cases(r);
             report::print_findings(r);

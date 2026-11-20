@@ -747,6 +747,12 @@ impl Config {
             .collect();
         let mut settings = Settings::parse(raw.settings.unwrap_or_default(), lints, &read)?;
         settings.cargo = found("Cargo.toml");
+        settings.biome_runs = checks.iter().any(|c| {
+            c.command.steps.iter().any(|step| {
+                step.split_whitespace()
+                    .any(|word| word == "biome" || word.ends_with("/biome"))
+            })
+        });
         let rules = Rules::parse(raw.rule.unwrap_or_default())?;
         let base = raw.base.unwrap_or_else(|| "main".into());
         let built_in = built_in(&settings, rules, raw.commits, &base, &stages, &platforms)?;

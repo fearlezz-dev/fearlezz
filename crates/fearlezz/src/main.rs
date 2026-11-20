@@ -236,7 +236,10 @@ fn main() -> ExitCode {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => return parse_failed(&e),
+    };
     if let Some(Cmd::Run { command, .. }) = &cli.command
         && !command.is_empty()
     {
@@ -264,6 +267,30 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// Prints what clap made of arguments it could not parse, as clap would, with its exit code.
+/// A word this binary does not know is often one a newer Fearlezz knows, while an older one
+/// comes first on PATH, so a usage error names this binary's version and path.
+fn parse_failed(e: &clap::Error) -> ExitCode {
+    use clap::error::ErrorKind;
+    drop(e.print());
+    let shown = matches!(
+        e.kind(),
+        ErrorKind::DisplayHelp
+            | ErrorKind::DisplayVersion
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    );
+    if !shown {
+        let path = std::env::current_exe()
+            .map_or_else(|_| "an unknown path".into(), |p| p.display().to_string());
+        eprintln!(
+            "\nnote: this is Fearlezz {} at {path}; an older Fearlezz may be first on PATH, \
+             compare with which -a fearlezz",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+    ExitCode::from(u8::try_from(e.exit_code()).unwrap_or(2))
 }
 
 fn ctx() -> Result<Ctx> {
@@ -510,7 +537,7 @@ fn ci_gate(dir: &Path, bundle: Option<&Path>, reuse: Option<&Path>) -> Result<bo
     if let Some(dir) = bundle {
         proof::write(&proof, dir)?;
     }
-    report::summary(&proof, None, &gate)?;
+    report::summary(&proof, None, None, &gate)?;
     let blockers = proof.blockers();
     // What weakens is said below, with how it gets past.
     let weakened: Vec<String> = proof
@@ -823,6 +850,17 @@ fn setup_sync() -> Result<()> {
     let wrote = !written.is_empty();
     for path in written {
         println!("wrote {path}");
+    }
+    if let Some(idle) = ctx.config.settings.idle_biome(&ctx.git.root)? {
+        println!("hint: {}; {}", idle.message, idle.fix.unwrap_or_default());
+    }
+    for (path, version) in hooks::older_on_path() {
+        println!(
+            "older fearlezz on PATH: {} is {version} while this one is {}; agents and hooks that run \
+             fearlezz from PATH run the first one there",
+            path.display(),
+            env!("CARGO_PKG_VERSION")
+        );
     }
     if wrote {
         println!("next: commit the written files with the change");

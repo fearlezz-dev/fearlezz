@@ -228,6 +228,30 @@ dir = "app"
 }
 
 #[test]
+fn a_failed_check_that_joins_commands_with_and_is_told_to_split_them_into_steps() {
+    let config = r#"
+[check.joined]
+run = "true && test ! -e src/broken"
+stage = "working"
+
+[check.steps]
+run = ["true", "test ! -e src/broken"]
+stage = "working"
+"#;
+    let repo = Repo::new(config, &[("src/lib.rs", "")]);
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    repo.write("src/broken", "x");
+    let out = repo.fz(&["run"]);
+    assert!(!out.ok, "{}", out.stdout);
+    let hint = "  fix: list the commands of check joined as steps, run = [\"true\", \"test ! -e \
+                src/broken\"]";
+    assert!(out.stdout.contains(hint), "{}", out.stdout);
+    // A check already in steps is told nothing of the kind.
+    assert_eq!(out.stdout.matches("as steps").count(), 1, "{}", out.stdout);
+}
+
+#[test]
 fn a_check_needs_at_least_one_step() {
     let repo = Repo::new("[check.a]\nrun = []\nstage = \"working\"\n", &[]);
     let out = repo.fz(&["--plan"]);
@@ -840,6 +864,47 @@ fn old_results_are_cleaned_up_but_what_is_read_stays() {
 }
 
 // The command line
+
+#[test]
+fn an_unknown_subcommand_names_this_fearlezz_so_an_older_one_on_path_shows() {
+    let repo = repo();
+    let out = repo.fz(&["setp"]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr.contains("unrecognized subcommand 'setp'"),
+        "{}",
+        out.stderr
+    );
+    let exe = assert_cmd::cargo::cargo_bin("fearlezz");
+    let line = format!(
+        "this is Fearlezz {} at {}",
+        env!("CARGO_PKG_VERSION"),
+        exe.display()
+    );
+    assert!(out.stderr.contains(&line), "{}", out.stderr);
+    assert!(out.stderr.contains("which -a fearlezz"), "{}", out.stderr);
+    let code = assert_cmd::Command::cargo_bin("fearlezz")
+        .unwrap()
+        .arg("setp")
+        .output()
+        .unwrap()
+        .status
+        .code();
+    assert_eq!(code, Some(2), "clap's exit code");
+
+    // Help and the version stay as clap prints them.
+    let out = repo.fz(&["--help"]);
+    assert!(out.ok, "{}", out.stderr);
+    assert!(out.stdout.contains("Usage: fearlezz"), "{}", out.stdout);
+    assert!(!out.stdout.contains("which -a"), "{}", out.stdout);
+    let out = repo.fz(&["--version"]);
+    assert!(out.ok, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        format!("fearlezz {}\n", env!("CARGO_PKG_VERSION"))
+    );
+    assert!(out.stderr.is_empty(), "{}", out.stderr);
+}
 
 #[test]
 fn fearlezz_alone_says_where_the_work_stands_and_teaches_the_first_step() {

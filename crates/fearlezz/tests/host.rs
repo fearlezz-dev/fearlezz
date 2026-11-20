@@ -281,6 +281,23 @@ fn without_the_id_token_permission_nothing_is_asked() {
         .filter(|c| !c.contains("/mark/"))
         .collect();
     assert!(asked.is_empty(), "{asked:?}");
+    // Off GitHub Actions nothing could be sent, so nothing is said.
+    assert!(!out.stdout.contains("id-token"), "{}", out.stdout);
+}
+
+#[test]
+fn on_github_actions_without_the_id_token_permission_it_says_why_there_is_no_page() {
+    let host = FakeHost::start();
+    let repo = repo(&host);
+    let (out, text) = ci(&repo, &[("GITHUB_ACTIONS".into(), "true".into())]);
+    assert!(out.ok, "the proof holds: {}", out.stdout);
+    let why = "proof page not sent: this job has no id-token: write, so it cannot sign in to the \
+               proof host; add it to the workflow's permissions to get the page";
+    assert!(out.stdout.contains(why), "{}", out.stdout);
+    assert!(!out.stdout.contains("::warning"), "{}", out.stdout);
+    assert!(text.contains("this job has no `id-token: write`"), "{text}");
+    assert!(text.contains("**Proven**"), "{text}");
+    assert!(host.api().is_empty(), "nothing is asked");
 }
 
 #[test]

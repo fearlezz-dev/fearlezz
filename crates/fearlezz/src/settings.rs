@@ -205,6 +205,8 @@ pub(crate) struct Settings {
     /// The folders of the repository's Cargo projects (`.` for the root), which the Rust lint
     /// tables are written into.
     pub cargo: Vec<String>,
+    /// A check runs Biome, through a piece or a command of the project's own.
+    pub biome_runs: bool,
 }
 
 impl Settings {
@@ -273,8 +275,9 @@ impl Settings {
             shipped,
             lints,
             read,
-            // Config::load finds them in the repository.
+            // Config::load finds them in the repository, and the checks that run Biome.
             cargo: Vec::new(),
+            biome_runs: false,
         })
     }
 
@@ -535,25 +538,41 @@ impl Settings {
                 &format!("add \"{piece}\" to use in fearlezz.toml"),
             ));
         }
-        // Biome left the typescript piece, so a project set up before keeps the biome.json
-        // Fearlezz wrote and would stop linting with Biome without a word. Fearlezz's decides
-        // every rule ("preset": "none"); a project's own biome.json is left alone.
-        if self.tools.contains_key(&Tool::Tsconfig) && !self.tools.contains_key(&Tool::Biome) {
-            let biome = Tool::Biome.resolve(root)?;
-            let written = read(root, &biome)?
-                .and_then(|text| {
-                    serde_json::from_str::<serde_json::Value>(&strip_jsonc(&text)).ok()
-                })
-                .is_some_and(|doc| doc["linter"]["rules"]["preset"] == "none");
-            if written {
-                found.push(finding(
-                    biome.clone(),
-                    format!("{biome} is here, but no piece gives Biome its rules"),
-                    "add \"biome\" to use in fearlezz.toml, or remove the file when another tool lints",
-                ));
-            }
-        }
+        found.extend(self.idle_biome(root)?);
         Ok(found)
+    }
+
+    /// A biome.json that no piece configures and no check runs: Biome left the typescript
+    /// piece, so a project set up before keeps the file and would stop linting with Biome
+    /// without a word. One Fearlezz wrote (it decides every rule, `"preset": "none"`) is a
+    /// gate; one the project wrote itself is a hint, since an editor may read it.
+    pub(crate) fn idle_biome(&self, root: &Path) -> Result<Option<Finding>> {
+        if self.tools.contains_key(&Tool::Biome) || self.biome_runs {
+            return Ok(None);
+        }
+        let biome = Tool::Biome.resolve(root)?;
+        let Some(text) = read(root, &biome)? else {
+            return Ok(None);
+        };
+        let written = serde_json::from_str::<serde_json::Value>(&strip_jsonc(&text))
+            .is_ok_and(|doc| doc.pointer("/linter/rules/preset") == Some(&"none".into()));
+        Ok(Some(Finding {
+            file: biome.clone(),
+            line: 1,
+            end_line: None,
+            level: if written { Level::Gate } else { Level::Hint },
+            rule: "settings".into(),
+            message: format!(
+                "{biome} is here, but no piece gives Biome its rules and no check runs Biome"
+            ),
+            fix: Some(
+                "add \"biome\" to use in fearlezz.toml (Biome's checks and rules come with the \
+                 biome piece since 0.5), or remove the file when another tool lints"
+                    .into(),
+            ),
+            why: Some("shared settings keep every project's tools alike".into()),
+            anywhere: true,
+        }))
     }
 
     /// Rust lint settings in a project without a `Cargo.toml` to hold them.

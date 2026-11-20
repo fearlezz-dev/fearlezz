@@ -11,6 +11,12 @@ use serde_json::{Value, json};
 use crate::config::Config;
 use crate::names::Named;
 
+/// What a session start hook that failed tells the agent. No single quote, since the hook
+/// prints it from a single quoted shell word.
+const HOOK_FAILED: &str = "fearlezz setup hook failed, so Fearlezz could not say where the work \
+                           stands. An older Fearlezz may be first on PATH: check which -a \
+                           fearlezz and fearlezz --version, and tell the developer.";
+
 /// An agent whose hooks Fearlezz writes and answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum Agent {
@@ -37,10 +43,25 @@ pub(crate) enum Event {
 }
 
 impl Agent {
-    /// The hooks this agent reads, as its settings file has them. Every command ends in
-    /// `|| true`, so a Fearlezz without this subcommand never blocks the agent.
+    /// The hooks this agent reads, as its settings file has them. A hook that fails never
+    /// blocks the agent: the session start's tells it, in the agent's own answer, that the
+    /// hook failed and how to find out why (an older Fearlezz first on PATH has no `setup
+    /// hook`); every other ends in `|| true`.
     pub(crate) fn settings(self) -> Value {
-        let command = |event: &str| format!("fearlezz setup hook {} {event} || true", self.name());
+        let command = |event: &str| {
+            let hook = format!("fearlezz setup hook {} {event}", self.name());
+            if event != "session-start" {
+                return format!("{hook} || true");
+            }
+            let told = render(
+                self,
+                Event::SessionStart,
+                Answer::Context(HOOK_FAILED.into()),
+            )
+            .map(|answer| answer.to_string())
+            .unwrap_or_default();
+            format!("{hook} || printf '%s\\n' '{told}'")
+        };
         match self {
             Agent::Claude | Agent::Codex => {
                 let handler =
@@ -269,4 +290,60 @@ fn check_run_by_hand(config: &Config, line: &str) -> Option<String> {
             })
         })
         .map(|c| c.id.clone())
+}
+
+/// Every other `fearlezz` on PATH older than this one, with the version it says it is. Agents
+/// and hooks run the first `fearlezz` on PATH, which need not be this one. Each answers
+/// `--version` within a short budget; one that cannot is passed over.
+pub(crate) fn older_on_path() -> Vec<(PathBuf, String)> {
+    let mine = version(env!("CARGO_PKG_VERSION"));
+    let this = std::env::current_exe().and_then(std::fs::canonicalize).ok();
+    let mut seen = Vec::new();
+    let mut older = Vec::new();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join("fearlezz");
+        let Ok(real) = std::fs::canonicalize(&candidate) else {
+            continue;
+        };
+        if this.as_ref() == Some(&real) || seen.contains(&real) || !executable(&real) {
+            continue;
+        }
+        seen.push(real);
+        let said = crate::process::read(
+            std::process::Command::new(&candidate).arg("--version"),
+            Some(std::time::Duration::from_secs(2)),
+        );
+        let Some(theirs) = said.ok().and_then(|out| {
+            let text = String::from_utf8_lossy(&out).into_owned();
+            text.split_whitespace().nth(1).map(str::to_owned)
+        }) else {
+            continue;
+        };
+        if version(&theirs) < mine {
+            older.push((candidate, theirs));
+        }
+    }
+    older
+}
+
+/// A version's numbers, for comparing; a part that is no number counts as 0.
+fn version(text: &str) -> Vec<u64> {
+    text.split(['.', '-', '+'])
+        .take(3)
+        .map(|part| part.parse().unwrap_or(0))
+        .collect()
+}
+
+/// A file anyone may run.
+fn executable(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
 }
