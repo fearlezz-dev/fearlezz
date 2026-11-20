@@ -421,6 +421,12 @@ impl Loader {
     }
 
     fn expand(&mut self, mut table: Table, origin: &Origin) -> Result<Table> {
+        // First, so a config for a newer Fearlezz names the version, not a field or piece this
+        // one does not know. It says which binary reads the config, no behaviour, so it leaves
+        // the merged table and the floor never sees it.
+        if let Some(needs) = table.remove("fearlezz") {
+            crate::version::meets(&needs)?;
+        }
         let uses = match table.remove("use") {
             None => Vec::new(),
             Some(Value::Array(items)) => items

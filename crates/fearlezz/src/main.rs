@@ -42,6 +42,7 @@ mod state;
 mod store;
 mod text;
 mod title;
+mod version;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -282,12 +283,10 @@ fn parse_failed(e: &clap::Error) -> ExitCode {
             | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
     );
     if !shown {
-        let path = std::env::current_exe()
-            .map_or_else(|_| "an unknown path".into(), |p| p.display().to_string());
         eprintln!(
-            "\nnote: this is Fearlezz {} at {path}; an older Fearlezz may be first on PATH, \
-             compare with which -a fearlezz",
-            env!("CARGO_PKG_VERSION")
+            "\nnote: this is {}; an older Fearlezz may be first on PATH, compare with which -a \
+             fearlezz",
+            version::this()
         );
     }
     ExitCode::from(u8::try_from(e.exit_code()).unwrap_or(2))
@@ -855,12 +854,12 @@ fn setup_sync() -> Result<()> {
     if let Some(idle) = ctx.config.settings.idle_biome(&ctx.git.root)? {
         println!("hint: {}; {}", idle.message, idle.fix.unwrap_or_default());
     }
-    for (path, version) in hooks::older_on_path() {
+    for (path, theirs) in hooks::older_on_path() {
         println!(
-            "older fearlezz on PATH: {} is {version} while this one is {}; agents and hooks that run \
+            "older fearlezz on PATH: {} is {theirs} while this one is {}; agents and hooks that run \
              fearlezz from PATH run the first one there",
             path.display(),
-            env!("CARGO_PKG_VERSION")
+            version::OURS
         );
     }
     if wrote {

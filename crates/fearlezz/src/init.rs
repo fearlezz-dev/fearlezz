@@ -331,6 +331,13 @@ fn starter(found: &[Found]) -> Result<String, std::fmt::Error> {
     let names: Vec<String> = found.iter().map(|p| format!("\"{}\"", p.piece)).collect();
     writeln!(
         text,
+        "# The lowest Fearlezz this config needs; an older one refuses it. Raise it when the\n\
+         # config uses something a newer Fearlezz added.\n\
+         fearlezz = \"{}\"\n",
+        crate::version::OURS
+    )?;
+    writeln!(
+        text,
         "# Built in pieces; override any field below, or drop a check with `off = true`.\n\
          # `safety` scans for leaked secrets with gitleaks; pick `trufflehog` or `betterleaks`\n\
          # instead, or add `osv-scanner` for vulnerable dependencies.\n\

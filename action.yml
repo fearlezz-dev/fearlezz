@@ -15,7 +15,8 @@ inputs:
     description: >-
       Fearlezz to install: a release tag (for example v0.2.0), `latest` (the release of the
       action's own tag when it is taken at one, otherwise the newest), or `installed` (the one
-      already on PATH).
+      already on PATH). A release older than the `fearlezz = "x.y.z"` that fearlezz.toml names
+      gives way to that one.
     default: latest
   devenv:
     description: Install Nix and devenv first, for projects whose checks run in a devenv shell.
@@ -76,17 +77,21 @@ runs:
       run: |
         # The action taken at a release tag installs that release, so the two always fit.
         if [ "$VERSION" = latest ] && [[ "$ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then VERSION=$ACTION_REF; fi
+        # A fearlezz.toml that names the lowest Fearlezz it needs (`fearlezz = "0.5.1"` before
+        # its first table) gets at least that release; an older binary would refuse it.
+        pin=$(awk -F'"' '/^[[:space:]]*\[/ { exit } /^[[:space:]]*fearlezz[[:space:]]*=/ { print $2; exit }' fearlezz.toml 2>/dev/null || true)
+        if [ -n "$pin" ]; then
+          while [ "$(tr -cd . <<< "$pin" | wc -c)" -lt 2 ]; do pin=$pin.0; done
+          if [ "$VERSION" != latest ] && [ "$VERSION" != installed ] \
+            && [ "$(printf '%s\n%s\n' "${VERSION#v}" "$pin" | sort -V | head -n 1)" != "$pin" ]; then
+            echo "::notice::fearlezz.toml needs Fearlezz $pin or newer, so the action installs v$pin instead of $VERSION."
+            VERSION=v$pin
+          fi
+        fi
         if [ "$VERSION" != installed ]; then
           if [ "$VERSION" != latest ]; then export FEARLEZZ_VERSION=$VERSION; fi
           sh "$GITHUB_ACTION_PATH/install.sh"
           echo "$FEARLEZZ_INSTALL_DIR" >> "$GITHUB_PATH"
-          PATH="$FEARLEZZ_INSTALL_DIR:$PATH"
-        fi
-        # Captured, not piped: grep -q would close the pipe early and kill fearlezz with SIGPIPE.
-        help=$(fearlezz run --help)
-        if [[ "$help" != *"GitHub Actions"* ]]; then
-          echo "::error::$(fearlezz --version) is too old for this action. Set version: to a newer release, or take the action at the tag of the release you install (fearlezz-dev/fearlezz@vX.Y.Z)."
-          exit 1
         fi
     # A pull request reuses passes from the proof its base commit's push kept: the gate's
     # bundle of the newest successful run of this workflow on that commit. None is fine.

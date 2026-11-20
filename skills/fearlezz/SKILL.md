@@ -134,7 +134,7 @@ no_proof = ["*.md", "docs/**"]
 
 ## Starting out
 
-In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter: the built in pieces of the languages at its root, and `no_proof` for prose. Commit it on the base branch first, then run `fearlezz setup sync`.
+In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter: the built in pieces of the languages at its root, `no_proof` for prose, and `fearlezz = "<version>"`, the lowest Fearlezz the config needs. Commit it on the base branch first, then run `fearlezz setup sync`. An older Fearlezz refuses the config and says which it needs; raise the pin when the config starts using something a newer Fearlezz added.
 
 ## Pieces
 
