@@ -922,7 +922,27 @@ fn without_gh_the_commits_decide() {
     ]);
     change(&repo, PASSES_ANYWAY, "fix: the value is two");
     let id = repo.git(&["rev-parse", "--short", "HEAD"]);
-    let out = repo.fz_env(FINAL, &[("PATH", "/usr/bin:/bin")]);
+    // The test's own PATH, with each folder that holds gh (CI's runners have it in /usr/bin)
+    // replaced by one of links to everything else in it.
+    let farm = std::env::temp_dir().join(format!("fearlezz-tests-no-gh-{}", std::process::id()));
+    let mut dirs = Vec::new();
+    for (i, dir) in std::env::split_paths(&std::env::var_os("PATH").unwrap()).enumerate() {
+        if !dir.join("gh").exists() {
+            dirs.push(dir);
+            continue;
+        }
+        let copy = farm.join(i.to_string());
+        std::fs::create_dir_all(&copy).unwrap();
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let link = copy.join(entry.file_name());
+            if entry.file_name() != "gh" && !link.exists() {
+                std::os::unix::fs::symlink(entry.path(), link).unwrap();
+            }
+        }
+        dirs.push(copy);
+    }
+    let path = std::env::join_paths(dirs).unwrap().into_string().unwrap();
+    let out = repo.fz_env(FINAL, &[("PATH", path.as_str())]);
     assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
         out.stdout.contains(&format!(
