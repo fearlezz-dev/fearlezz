@@ -350,32 +350,50 @@ URL is what opens it. The grant is
 `base64url(json).base64url(mac)`: the JSON names the repository, the run and an expiry one hour
 out, and the mac is HMAC-SHA256 with `SIGNING_KEY`. A missing, expired or altered grant, or one
 for another run, gets `404`. Files answer with `Content-Security-Policy: frame-ancestors
-<APP_ORIGIN>`.
+<APP_ORIGIN>`. Each file's `ETag` is its SHA-256: `If-None-Match` with it gets `304`, and a
+`Range` whose `If-Range` names another tag (or a date, since no file says when it changed) gets
+the whole file with `200`, so a cache never joins the bytes of two versions.
 
 ### README pictures
 
 `<FILES_ORIGIN>/readme/<owner>/<repo>/<check>/<picture>` is a stable address for a README to
-embed: the picture `<picture>` (its name in the check's look, its after) of the newest CI run of
-a push to the repository's default branch that ran the check and whose proof did not fail. It
+embed: the picture `<picture>` (its name in the check's look, its after) of the newest push to
+the repository's default branch whose done CI run ran the check and whose proof did not fail. It
 holds no grant, and a grant always holds a dot, so `readme` never names one.
 
-- **Which run.** Only a run whose OIDC token's ref was `refs/heads/<default branch>`: never a
-  pull request, another branch or a local run. Its proof must not have failed as review judges
-  it (`fearlezz_proof::review::failed`: nothing to fix, no failed check, and what it weakens
-  covered by the host's own accept of its head), so a newer push that failed leaves the older
-  picture, and a picture the newest proven run of the check no longer takes is `404`. The bar is
-  the run's proof, not the check alone: a README shows what the default branch proved. Of a
-  split proof, each leg's own run counts, since the gate does not stream to the host. The 20
-  newest done pushes that ran the check are looked through.
+- **Which run.** Only a run a push started: its OIDC token's `event_name` was `push`, its ref
+  `refs/heads/<default branch>`, and the commit it proves is the token's `sha`. The ref alone is
+  not enough: `pull_request_target`, `workflow_run`, `issue_comment`, `workflow_dispatch` and
+  `schedule` runs carry it too, and the first two often check out a fork's code. So a pull
+  request, another branch, another event, a run proving another commit and a local run never
+  count. Each run keeps its token's `event_name` and `sha` (`runs.event`, `runs.sha`); runs
+  opened before they were kept never count.
+- **Did not fail.** Its proof must not have failed as review judges it
+  (`fearlezz_proof::review::failed`: nothing to fix, no failed check, and what it weakens
+  covered by the host's own accept of its head, so an accepted weakening counts and one not
+  accepted does not). A newer push that failed, or whose run is not done, leaves the older
+  picture, and a picture the newest proven push no longer takes is `404`. The bar is the run's
+  proof, not the check alone: a README shows what the default branch proved. Of a split proof,
+  each leg's run counts on its own, since the gate does not stream to the host.
+- **Newest push.** Pushes are ordered by when their commit first ran on the host, not by when
+  a run opened: a run of an older push started again (after a flake, or by an admin's accept)
+  never brings its picture back over a newer push's. Of one push, its newest run that did not
+  fail counts. The 20 newest done runs of pushes that ran the check are looked through.
 - **Check and picture.** Both may hold slashes; the path names the longest check of the run its
   leading segments spell, and the rest is the picture.
+- **Only stills and films.** png, jpeg, webp, gif, avif, mp4 and webm; a text of a look is
+  `404`.
 - **Only public repositories.** A README's picture loads for anyone, through GitHub's image
   proxy, without a sign in. The app asks GitHub for the repository (`GET /repos/{owner}/{repo}`)
   and its default branch, kept 5 minutes like every answer of GitHub; a private repository, one
-  without the app, and anything not there is `404`.
-- **Caching.** `Cache-Control: public, max-age=300` and an `ETag` of the file's SHA-256, so a
-  cache that asks again with `If-None-Match` gets `304`; a push shows within five minutes. The
-  rest is what every file of this origin answers: the type its name pins, `nosniff`, `Range`.
+  without the app, and anything not there is `404`. An owner or name holding anything but
+  letters, digits, `.`, `_` and `-`, or that is `.` or `..`, is `404` without asking GitHub.
+- **Caching.** The host keeps which file an address names in the worker's cache
+  (`caches.default`, keyed by the address without its query) for five minutes, so a view looks
+  up neither GitHub nor the runs. The answer says `Cache-Control: public, max-age=300` and
+  carries the `ETag`, `If-Range` and `Range` handling of every file of this origin, the type its
+  name pins and `nosniff`. A push shows within five minutes, and a repository turned private can
+  stay visible through these caches for those few minutes.
 
 A light and a dark variant are two pictures, chosen in the README with
 `<picture><source media="(prefers-color-scheme: dark)" srcset="...">` (the root README shows it).

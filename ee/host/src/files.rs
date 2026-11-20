@@ -73,7 +73,9 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
 }
 
 /// The file `stored` as the files origin answers it, whole or the range a `Range` header asks
-/// for, kept by caches as `cache` says.
+/// for, kept by caches as `cache` says. Its `ETag` is its SHA-256: `If-None-Match` with it gets
+/// `304`, and a `Range` whose `If-Range` names another tag (or a date, as no file says when it
+/// changed) gets the whole file, so a cache never joins the bytes of two versions.
 pub(crate) async fn send(
     req: &Request,
     env: &Env,
@@ -82,7 +84,17 @@ pub(crate) async fn send(
     cache: &str,
 ) -> Answer {
     let size = stored.size;
+    let tag = format!("\"{}\"", stored.sha256);
     let headers = Headers::new();
+    headers.set("ETag", &tag)?;
+    headers.set("Cache-Control", cache)?;
+    let holds = req.headers().get("If-None-Match")?.is_some_and(|tags| {
+        tags.split(',')
+            .any(|t| t.trim().trim_start_matches("W/") == tag)
+    });
+    if holds {
+        return Ok(Response::empty()?.with_status(304).with_headers(headers));
+    }
     headers.set("Content-Type", stored.kind)?;
     headers.set("Accept-Ranges", "bytes")?;
     headers.set("X-Content-Type-Options", "nosniff")?;
@@ -97,10 +109,14 @@ pub(crate) async fn send(
     headers.set("X-Frame-Options", "SAMEORIGIN")?;
     // The page reads a text of a look to diff it; the grant in the URL is what opens it.
     headers.set("Access-Control-Allow-Origin", &config.app_origin)?;
-    headers.set("Cache-Control", cache)?;
+    let current = req
+        .headers()
+        .get("If-Range")?
+        .is_none_or(|t| t.trim() == tag);
     let range = req
         .headers()
         .get("Range")?
+        .filter(|_| current)
         .and_then(|r| byte_range(&r, size));
     let (status, range) = match range {
         Some(Err(())) => {

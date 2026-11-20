@@ -556,6 +556,38 @@ fn main() {
             readme::an_unknown_readme_picture_is_not_found,
         ),
         (
+            "a_readme_picture_comes_only_from_a_run_a_push_started",
+            readme::a_readme_picture_comes_only_from_a_run_a_push_started,
+        ),
+        (
+            "a_rerun_of_an_older_push_never_takes_the_readme_picture_back",
+            readme::a_rerun_of_an_older_push_never_takes_the_readme_picture_back,
+        ),
+        (
+            "a_readme_picture_counts_a_weakening_only_once_an_admin_accepted_it",
+            readme::a_readme_picture_counts_a_weakening_only_once_an_admin_accepted_it,
+        ),
+        (
+            "a_picture_the_newest_proven_push_no_longer_takes_is_not_found",
+            readme::a_picture_the_newest_proven_push_no_longer_takes_is_not_found,
+        ),
+        (
+            "a_readme_picture_names_the_longest_check_of_its_run",
+            readme::a_readme_picture_names_the_longest_check_of_its_run,
+        ),
+        (
+            "a_readme_film_answers_a_range",
+            readme::a_readme_film_answers_a_range,
+        ),
+        (
+            "a_readme_picture_waits_for_a_newer_push_to_finish",
+            readme::a_readme_picture_waits_for_a_newer_push_to_finish,
+        ),
+        (
+            "a_readme_serves_no_text_and_no_name_github_could_not_have",
+            readme::a_readme_serves_no_text_and_no_name_github_could_not_have,
+        ),
+        (
             "the_policy_decides_who_reads_a_private_repository",
             access::the_policy_decides_who_reads_a_private_repository,
         ),
@@ -3744,6 +3776,10 @@ struct Job {
     cli: Option<String>,
     /// The leg of a split proof it runs, and every leg of its plan.
     leg: Option<(String, Vec<String>)>,
+    /// The event its token names instead of the one its pull request or push gives.
+    event: Option<&'static str>,
+    /// The commit its token names instead of the one it proves.
+    sha: Option<String>,
 }
 
 /// The runner a job runs on unless a test names another.
@@ -3767,6 +3803,8 @@ impl Job {
             runner: RUNNER.to_owned(),
             cli: None,
             leg: None,
+            event: None,
+            sha: None,
         }
     }
 
@@ -3781,6 +3819,8 @@ impl Job {
             runner: RUNNER.to_owned(),
             cli: None,
             leg: None,
+            event: None,
+            sha: None,
         }
     }
 
@@ -3798,6 +3838,23 @@ impl Job {
         Job {
             head: head.to_owned(),
             workflow_run,
+            ..self.clone()
+        }
+    }
+
+    /// The same job in a workflow `event` started, which carries the same ref: a
+    /// `pull_request_target` run on the default branch, say.
+    fn by(&self, event: &'static str) -> Job {
+        Job {
+            event: Some(event),
+            ..self.clone()
+        }
+    }
+
+    /// The same job whose token names `sha` as the commit of its event, while it proves its own.
+    fn naming(&self, sha: &str) -> Job {
+        Job {
+            sha: Some(sha.to_owned()),
             ..self.clone()
         }
     }
@@ -3882,6 +3939,7 @@ impl Job {
             ),
             None => (format!("refs/heads/{}", self.branch), String::new(), "push"),
         };
+        let event = self.event.unwrap_or(event);
         json!({
             "iss": ISSUER,
             "aud": AUDIENCE,
@@ -3891,6 +3949,7 @@ impl Job {
             "ref": git_ref,
             "head_ref": head_ref,
             "event_name": event,
+            "sha": self.sha.as_deref().unwrap_or(&self.head),
             "iat": now,
             "nbf": now,
             "exp": now + 300,

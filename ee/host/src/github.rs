@@ -68,8 +68,30 @@ async fn app_jwt(config: &Config) -> Result<String> {
     Ok(format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature)))
 }
 
-/// The app's installation on a repository, if it is installed there.
+/// Whether `segment` may be an owner or a repository name as GitHub spells them: letters,
+/// digits, `.`, `_` and `-`, never `.` or `..`. Anything else is never put in a URL to GitHub,
+/// where it could name another path of its API.
+pub(crate) fn named(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// Whether `repo` is `owner/name`, each part `named`.
+fn repository(repo: &str) -> bool {
+    repo.split_once('/')
+        .is_some_and(|(owner, name)| named(owner) && named(name))
+}
+
+/// The app's installation on a repository, if it is installed there; None for a name GitHub
+/// could not have.
 pub async fn installation(config: &Config, repo: &str) -> Result<Option<u64>> {
+    if !repository(repo) {
+        return Ok(None);
+    }
     let jwt = app_jwt(config).await?;
     let url = format!("{}/repos/{repo}/installation", config.github_api);
     let reply = call(Method::Get, &url, Some(&jwt), None).await?;

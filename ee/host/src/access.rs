@@ -258,9 +258,10 @@ pub(crate) async fn speaker(
         .ok_or_else(|| Refusal::new(401, format!("sign in to {what}")))
 }
 
-/// The branch whose pictures a README shows: the default branch of `repo` (lowercased) when
-/// anyone may read it, None for a private repository or one without the app, since a README's
-/// picture loads for anyone, without a sign in. GitHub's word, kept like every other.
+/// The branch whose pictures a README shows: the default branch of `repo` (`owner/name` as
+/// the host keys it, in lower case) when anyone may read it, None for a private repository or
+/// one without the app, since a README's picture loads for anyone, without a sign in. GitHub's
+/// word, kept like every other.
 pub(crate) async fn readme_branch(
     env: &Env,
     config: &Config,

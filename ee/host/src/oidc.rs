@@ -19,6 +19,12 @@ pub struct Token {
     pub git_ref: String,
     /// A pull request's head branch; empty for any other event.
     pub head_ref: String,
+    /// The event that started the workflow (`push`, `pull_request`, `pull_request_target`,
+    /// `workflow_dispatch`, ...). Several events besides a push carry a branch's ref, and some
+    /// of them check out a fork's code.
+    pub event: String,
+    /// The commit the event names: for a push, the commit pushed.
+    pub sha: String,
 }
 
 impl Token {
@@ -91,6 +97,8 @@ pub async fn check(req: &Request, env: &Env, config: &Config) -> Result<Token, R
         repository: claims.repository,
         git_ref: claims.git_ref,
         head_ref: claims.head_ref,
+        event: claims.event_name,
+        sha: claims.sha,
     })
 }
 
@@ -112,6 +120,10 @@ struct Claims {
     git_ref: String,
     #[serde(default)]
     head_ref: String,
+    #[serde(default)]
+    event_name: String,
+    #[serde(default)]
+    sha: String,
 }
 
 /// GitHub keeps its keys for months and publishes a new one before signing with it.
