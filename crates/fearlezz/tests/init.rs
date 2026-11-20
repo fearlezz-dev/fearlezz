@@ -23,7 +23,9 @@ fn a_repository_without_config_is_led_to_init() {
         let out = repo.fz(args);
         assert!(!out.ok, "{args:?}: {}", out.stdout);
         assert!(
-            out.stderr.contains("no fearlezz.toml") && out.stderr.contains("fearlezz setup init"),
+            out.stderr.contains("no fearlezz.toml")
+                && out.stderr.contains("fearlezz setup init")
+                && out.stderr.contains("fearlezz setup guide"),
             "{args:?}: {}",
             out.stderr
         );
@@ -680,4 +682,23 @@ fn init_names_what_the_project_could_prove_too() {
         "{}",
         out.stdout
     );
+}
+
+#[test]
+fn setup_guide_prints_the_whole_guide_and_ends_with_next() {
+    let repo = project(&[("README.md", "# app\n")]);
+    let out = repo.fz(&["setup", "guide"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    for step in [
+        "fearlezz setup init --ci host",
+        "fearlezz setup init --ci plain",
+        "fearlezz setup sync",
+        "fearlezz setup login",
+        "id-token: write",
+        "fearlezz run",
+    ] {
+        assert!(out.stdout.contains(step), "{step}: {}", out.stdout);
+    }
+    let last = out.stdout.trim_end().lines().last().unwrap_or_default();
+    assert!(last.starts_with("next: "), "{last}");
 }

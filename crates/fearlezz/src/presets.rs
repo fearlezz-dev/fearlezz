@@ -268,8 +268,8 @@ fn read_config(root: &Path) -> Result<(String, Table)> {
     let path = root.join(FILE);
     let text = match std::fs::read_to_string(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!(
-            "no fearlezz.toml in {}; `fearlezz setup init` writes a starter from the languages \
-             it finds",
+            "no fearlezz.toml in {}; `fearlezz setup guide` walks an agent through setting \
+             Fearlezz up, or `fearlezz setup init` writes a starter from the languages it finds",
             root.display()
         ),
         r => r.with_context(|| format!("reading {}", path.display()))?,

@@ -1195,6 +1195,9 @@ fn dart_file(text: &str) -> String {
 
 /// The skill this binary ships. It is embedded, so it matches the version and needs no network.
 const SKILL: &str = include_str!("../../../skills/fearlezz/SKILL.md");
+/// The setup guide `fearlezz setup guide` prints, embedded like the skill so it matches the
+/// installed version.
+pub(crate) const GUIDE: &str = include_str!("../../../skills/fearlezz/GUIDE.md");
 const CLAUDE_SKILL: &str = ".claude/skills/fearlezz/SKILL.md";
 const AGENTS_SKILL: &str = ".agents/skills/fearlezz/SKILL.md";
 /// Each agent name of `[settings.skill] agents` and the file its agents read. Claude Code reads
