@@ -453,7 +453,8 @@ fn init_on_github_asks_whether_ci_sends_its_proof_to_the_host() {
         next.starts_with(
             "next: ask the developer whether CI should send its proof to the proof host"
         ) && next.contains("fearlezz setup init --ci host")
-            && next.contains("--ci plain"),
+            && next.contains("--ci plain")
+            && next.ends_with("then fearlezz setup sync"),
         "{}",
         out.stdout
     );
@@ -486,6 +487,11 @@ fn init_ci_plain_writes_the_proof_workflow_beside_the_starter() {
     }
     assert!(!workflow.contains("id-token"), "{workflow}");
     assert!(!workflow.contains("devenv"), "{workflow}");
+    // A push to the base branch is never cancelled; a newer push to a pull request is.
+    assert!(
+        workflow.contains("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
+        "{workflow}"
+    );
     assert!(!out.stdout.contains("GitHub App"), "{}", out.stdout);
     assert!(
         out.stdout.contains(&format!("wrote {WORKFLOW}")),
@@ -493,6 +499,53 @@ fn init_ci_plain_writes_the_proof_workflow_beside_the_starter() {
         out.stdout
     );
     assert!(out.last_line().starts_with("next: "), "{}", out.stdout);
+    // The repository chose no proof host, so runs never send to it or mention it.
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(config.contains("[host]\noff = true\n"), "{config}");
+    let plan = repo.fz(&["--plan"]);
+    assert!(plan.ok, "{}{}", plan.stdout, plan.stderr);
+}
+
+#[test]
+fn init_ci_plain_turns_the_host_off_in_a_config_that_is_there() {
+    let repo = on_github(&[]);
+    let config =
+        "# mine\nbase = \"trunk\"\n\n[check.tests]\nrun = \"true\" # kept\nstage = \"working\"\n";
+    repo.write("fearlezz.toml", config);
+    repo.commit("config");
+    let out = repo.fz(&["setup", "init", "--ci", "plain"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let now = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(now.starts_with(config), "{now}");
+    assert!(now.ends_with("[host]\noff = true\n"), "{now}");
+    assert!(out.stdout.contains("fearlezz.toml"), "{}", out.stdout);
+    let next = out.last_line();
+    assert!(
+        next.contains("fearlezz setup sync") && next.contains(WORKFLOW),
+        "{}",
+        out.stdout
+    );
+
+    // With the host, a new config says nothing about it.
+    let host = on_github(&[("README.md", "# app\n")]);
+    let out = host.fz(&["setup", "init", "--ci", "host"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let written = std::fs::read_to_string(host.path("fearlezz.toml")).unwrap();
+    assert!(!written.contains("[host]"), "{written}");
+
+    // A [host] table that is there gets off = true, its other keys kept.
+    let repo = on_github(&[]);
+    let config = "[host]\nurl = \"https://proof.example.com\"\n\n[check.tests]\nrun = \"true\"\nstage = \"working\"\n";
+    repo.write("fearlezz.toml", config);
+    repo.commit("config");
+    let out = repo.fz(&["setup", "init", "--ci", "plain"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let now = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(
+        now.contains("[host]\nurl = \"https://proof.example.com\"\noff = true\n")
+            && now.contains("[check.tests]\nrun = \"true\""),
+        "{now}"
+    );
 }
 
 #[test]
@@ -503,6 +556,7 @@ fn init_ci_host_adds_the_workflow_to_a_config_that_is_there() {
     repo.commit("config");
     let out = repo.fz(&["setup", "init", "--ci", "host"]);
     assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    // With the host, the config stays as it was.
     assert_eq!(
         std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap(),
         config
@@ -524,7 +578,11 @@ fn init_ci_host_adds_the_workflow_to_a_config_that_is_there() {
         "{}",
         out.stdout
     );
-    assert!(out.last_line().starts_with("next: "), "{}", out.stdout);
+    assert!(
+        out.last_line().contains("fearlezz setup sync"),
+        "{}",
+        out.stdout
+    );
 }
 
 #[test]

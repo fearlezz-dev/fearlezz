@@ -757,6 +757,10 @@ fn setup_init(ci: Option<init::Ci>) -> Result<()> {
         let names: Vec<String> = found.iter().map(ToString::to_string).collect();
         println!("wrote fearlezz.toml: uses {}", names.join(", "));
     }
+    // A repository whose CI only proves chose no proof host, so runs never send to it.
+    if ci == Some(init::Ci::Plain) && init::host_off(&git.root)? && had {
+        println!("wrote fearlezz.toml: [host] off = true, so nothing is sent to the proof host");
+    }
     let config = Config::load(&git.root, &git.common)?;
     // What a new config could prove too, one line each, for the agent to offer.
     let offers = if had {
@@ -785,7 +789,8 @@ fn setup_init(ci: Option<init::Ci>) -> Result<()> {
             println!(
                 "next: ask the developer {which}whether CI should send its proof to the proof \
                  host (a page per run where people review the pictures) or only prove{pick}, \
-                 then run fearlezz setup init --ci host or fearlezz setup init --ci plain"
+                 then run fearlezz setup init --ci host or fearlezz setup init --ci plain, then \
+                 fearlezz setup sync"
             );
         } else {
             println!("next: {add}fearlezz setup sync");
@@ -821,7 +826,10 @@ fn setup_init(ci: Option<init::Ci>) -> Result<()> {
         }
     }
     if had {
-        println!("next: commit {} with the change", init::WORKFLOW);
+        println!(
+            "next: fearlezz setup sync, then commit {} with the change",
+            init::WORKFLOW
+        );
     } else {
         println!("next: {add}fearlezz setup sync");
     }

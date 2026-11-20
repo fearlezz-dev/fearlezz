@@ -64,7 +64,7 @@ Agents: `fearlezz setup sync` writes [the skill](skills/fearlezz/SKILL.md) into 
 
 ## CI in your project
 
-One workflow proves every pull request and push; `fearlezz setup init --ci host` writes it (`--ci plain` without `id-token: write`, for a repository that does not send its proof to the proof host):
+One workflow proves every pull request and push; `fearlezz setup init --ci host` writes it (`--ci plain` without `id-token: write`, for a repository that does not send its proof to the proof host, and with `[host] off = true` in `fearlezz.toml`):
 
 ```yaml
 # .github/workflows/proof.yml
@@ -82,10 +82,11 @@ permissions:
 jobs:
   proof:
     runs-on: ubuntu-latest
-    # A newer push cancels the run of the one before it.
+    # A newer push to a pull request cancels the run of the one before it; each push to
+    # main is proven to its end.
     concurrency:
       group: proof-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -94,7 +95,7 @@ jobs:
       - uses: fearlezz-dev/fearlezz@v0
 ```
 
-The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. `edited` runs the proof again when the pull request is edited, since a title starting with `fix:` makes the change a fix that needs red before green, and another base is another comparison. Do not skip description edits with a job `if`: a required job that is skipped counts as passed. The action installs the release of its own tag (`version: v0.2.0` pins one; a newer `fearlezz = "x.y.z"` at the top of `fearlezz.toml`, the lowest Fearlezz the config needs, wins), runs `fearlezz run --ci --proof <dir>`, and keeps the proof bundle (every check's output and every picture, before and after) and the check logs as artifacts of the run. Set `devenv: true` when the checks run in a devenv shell. A workflow can also run `fearlezz run --ci` without the action: when a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg into the runner's tool cache.
+The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. `edited` runs the proof again when the pull request is edited, since a title starting with `fix:` makes the change a fix that needs red before green, and another base is another comparison. Do not skip description edits with a job `if`: a required job that is skipped counts as passed. The action installs the release of its own tag (`version: v0.2.0` pins one; a newer `fearlezz = "x.y.z"` at the top of `fearlezz.toml`, the lowest Fearlezz the config needs, wins; with `version: installed`, one on PATH older than it fails the step), runs `fearlezz run --ci --proof <dir>`, and keeps the proof bundle (every check's output and every picture, before and after) and the check logs as artifacts of the run. Set `devenv: true` when the checks run in a devenv shell. A workflow can also run `fearlezz run --ci` without the action: when a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg into the runner's tool cache.
 
 On [Namespace](https://namespace.so) runners the same job runs with their labels in `runs-on`. Cache Nix with `namespacelabs/nscloud-cache-action` only on Linux runners: with `cache: nix` it fails on macOS runners, whose system root is read only.
 

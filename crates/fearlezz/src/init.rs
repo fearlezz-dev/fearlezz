@@ -339,7 +339,7 @@ fn starter(found: &[Found]) -> Result<String, std::fmt::Error> {
         "# The lowest Fearlezz this config needs; an older one refuses it. Raise it when the\n\
          # config uses something a newer Fearlezz added.\n\
          fearlezz = \"{}\"\n",
-        crate::version::OURS
+        crate::version::release()
     )?;
     writeln!(
         text,
@@ -430,10 +430,11 @@ pub(crate) fn workflow(root: &Path, ci: Ci, base: &str) -> Result<()> {
          jobs:\n  \
          proof:\n    \
          runs-on: ubuntu-latest\n    \
-         # A newer push cancels the run of the one before it.\n    \
+         # A newer push to a pull request cancels the run of the one before it; each push to\n    \
+         # {base} is proven to its end.\n    \
          concurrency:\n      \
          group: proof-${{{{ github.event.pull_request.number || github.ref }}}}\n      \
-         cancel-in-progress: true\n    \
+         cancel-in-progress: ${{{{ github.event_name == 'pull_request' }}}}\n    \
          steps:\n      \
          - uses: actions/checkout@v5\n        \
          with:\n          \
@@ -447,4 +448,42 @@ pub(crate) fn workflow(root: &Path, ci: Ci, base: &str) -> Result<()> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
     std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Turns the proof host off in `fearlezz.toml` in `root` (`[host] off = true`), for a
+/// repository whose CI only proves, keeping everything else as written. Whether it changed
+/// the file: one that turns the host off already is left alone.
+pub(crate) fn host_off(root: &Path) -> Result<bool> {
+    let path = root.join(FILE);
+    let text = std::fs::read_to_string(&path).with_context(|| format!("reading {FILE}"))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .with_context(|| format!("{FILE} is not valid TOML"))?;
+    let new = match doc
+        .get_mut("host")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        Some(host) if host.get("off").and_then(toml_edit::Item::as_bool) == Some(true) => {
+            return Ok(false);
+        }
+        Some(host) => {
+            host.insert("off", toml_edit::value(true));
+            doc.to_string()
+        }
+        None => {
+            let gap = if text.is_empty() || text.ends_with("\n\n") {
+                ""
+            } else if text.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
+            format!(
+                "{text}{gap}# CI only proves (setup init --ci plain): nothing is sent to the proof \
+                 host.\n[host]\noff = true\n"
+            )
+        }
+    };
+    std::fs::write(&path, new).with_context(|| format!("writing {FILE}"))?;
+    Ok(true)
 }
