@@ -24,6 +24,7 @@ use crate::proof::{RED_NEXT, Red, Verdict};
 use crate::prove::{Reuse, Site, prove};
 use crate::state::Worktree;
 use crate::store::{Outcome, RunResult, Store};
+use crate::title::{NoTitle, Title};
 
 /// The change's test files for `check`, by `test_files` alone: its inputs only decide reuse.
 /// A check run in a folder (`each`, or `dir`) takes only those in that folder, the ones it
@@ -229,10 +230,11 @@ pub(crate) struct Fix {
 pub(crate) enum By {
     /// The pull request title, in CI or from `gh` locally.
     Title(String),
-    /// A commit since the base whose subject is a `fix:` commit: its short id and subject.
-    Commit(String, String),
-    /// No title, and no commit since the base is a `fix:` commit.
-    NoFixCommit,
+    /// No title, for this reason, and a commit since the base whose subject is a `fix:`
+    /// commit: its short id and subject.
+    Commit(NoTitle, String, String),
+    /// No title, for this reason, and no commit since the base is a `fix:` commit.
+    NoFixCommit(NoTitle),
 }
 
 impl Fix {
@@ -244,12 +246,12 @@ impl Fix {
             "red before green not needed"
         };
         match &self.by {
-            By::Title(title) => format!("{lead}: the pull request title is {title}"),
-            By::Commit(id, subject) => {
-                format!("{lead}: commit {id} is {subject} (no pull request title yet)")
+            By::Title(title) => format!("{lead}: the pull request title is \"{title}\""),
+            By::Commit(why, id, subject) => {
+                format!("{lead}: commit {id} is {subject} (no pull request title: {why})")
             }
-            By::NoFixCommit => {
-                format!("{lead}: no commit since the base is fix: (no pull request title yet)")
+            By::NoFixCommit(why) => {
+                format!("{lead}: no commit since the base is fix: (no pull request title: {why})")
             }
         }
     }
@@ -262,12 +264,15 @@ impl Fix {
 /// it one, so a later format or merge commit does not hide an earlier fix; uncommitted work
 /// with no commits of its own is not a fix yet.
 pub(crate) fn is_fix_change(git: &Git, base: &str) -> Result<Fix> {
-    if let Some(crate::title::Title(title)) = crate::title::of(git) {
-        return Ok(Fix {
-            is: is_fix(&title),
-            by: By::Title(title),
-        });
-    }
+    let why = match crate::title::of(git) {
+        Ok(Title(title)) => {
+            return Ok(Fix {
+                is: is_fix(&title),
+                by: By::Title(title),
+            });
+        }
+        Err(why) => why,
+    };
     let fix = git
         .commits_since(base)?
         .into_iter()
@@ -275,11 +280,11 @@ pub(crate) fn is_fix_change(git: &Git, base: &str) -> Result<Fix> {
     Ok(match fix {
         Some((id, subject)) => Fix {
             is: true,
-            by: By::Commit(id, subject),
+            by: By::Commit(why, id, subject),
         },
         None => Fix {
             is: false,
-            by: By::NoFixCommit,
+            by: By::NoFixCommit(why),
         },
     })
 }

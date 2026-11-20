@@ -179,3 +179,42 @@ fn locally_a_conventional_title_passes_over_a_plain_commit() {
     let out = repo.fz_env(&["run", "commits"], &[("PATH", &path)]);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
 }
+
+#[test]
+fn a_second_run_within_a_minute_keeps_the_title_gh_gave() {
+    let repo = repo();
+    let asked = repo.path(".git/gh-asked");
+    let path = repo.fake_gh(&format!(
+        "echo asked >> '{}'; printf '{{\"title\":\"feat: a is two\",\"state\":\"OPEN\"}}'",
+        asked.display()
+    ));
+    for _ in 0..2 {
+        let out = repo.fz_env(&["run", "commits"], &[("PATH", &path)]);
+        assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    }
+    assert_eq!(common::runs(&asked), 1);
+}
+
+#[test]
+fn a_push_on_github_actions_never_asks_gh() {
+    let repo = repo();
+    let asked = repo.path(".git/gh-asked");
+    let path = repo.fake_gh(&format!(
+        "touch '{}'; printf '{{\"title\":\"feat: a is two\",\"state\":\"OPEN\"}}'",
+        asked.display()
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let event = dir.path().join("event.json");
+    std::fs::write(&event, r#"{"ref": "refs/heads/feat/x"}"#).unwrap();
+    let out = repo.fz_env(
+        &["run", "commits"],
+        &[
+            ("PATH", &path),
+            ("GITHUB_ACTIONS", "true"),
+            ("GITHUB_EVENT_NAME", "push"),
+            ("GITHUB_EVENT_PATH", event.to_str().unwrap()),
+        ],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!asked.exists(), "gh was asked on a push");
+}

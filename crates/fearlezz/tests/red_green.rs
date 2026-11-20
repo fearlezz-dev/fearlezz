@@ -889,7 +889,7 @@ fn locally_the_open_pull_request_title_decides_as_in_ci() {
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
         out.stdout.contains(
-            "red before green not needed: the pull request title is chore: tidy the value"
+            "red before green not needed: the pull request title is \"chore: tidy the value\""
         ),
         "{}",
         out.stdout
@@ -905,7 +905,7 @@ fn locally_a_fix_title_holds_a_change_without_fix_commits() {
     assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
         out.stdout
-            .contains("red before green: the pull request title is fix: the value is two"),
+            .contains("red before green: the pull request title is \"fix: the value is two\""),
         "{}",
         out.stdout
     );
@@ -926,7 +926,8 @@ fn without_gh_the_commits_decide() {
     assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
         out.stdout.contains(&format!(
-            "red before green: commit {} is fix: the value is two (no pull request title yet)",
+            "red before green: commit {} is fix: the value is two (no pull request title: gh is not \
+             installed)",
             id.trim()
         )),
         "{}",
@@ -935,17 +936,35 @@ fn without_gh_the_commits_decide() {
 }
 
 #[test]
-fn a_gh_that_fails_means_no_title() {
-    // Not signed in, offline, or no pull request for the branch: gh exits with an error.
+fn a_branch_without_a_pull_request_has_no_title() {
     let repo = repo();
-    let path = repo.fake_gh("echo 'no pull requests found' >&2; exit 1");
+    let path = repo.fake_gh("echo 'no pull requests found for branch \"change\"' >&2; exit 1");
     change(&repo, PASSES_ANYWAY, "chore: tidy");
     let out = repo.fz_env(FINAL, &[("PATH", &path)]);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
         out.stdout.contains(
             "red before green not needed: no commit since the base is fix: (no pull request \
-             title yet)"
+             title: no open pull request)"
+        ),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_gh_that_fails_says_so() {
+    // Signed out or offline: gh exits with an error of its own, which the line names.
+    let repo = repo();
+    let path = repo
+        .fake_gh("echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4");
+    change(&repo, PASSES_ANYWAY, "chore: tidy");
+    let out = repo.fz_env(FINAL, &[("PATH", &path)]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains(
+            "(no pull request title: gh failed: To get started with GitHub CLI, please run:  gh \
+             auth login)"
         ),
         "{}",
         out.stdout
@@ -960,7 +979,8 @@ fn a_closed_pull_request_gives_no_title() {
     let out = repo.fz_env(FINAL, &[("PATH", &path)]);
     assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
-        out.stdout.contains("(no pull request title yet)"),
+        out.stdout
+            .contains("(no pull request title: no open pull request)"),
         "{}",
         out.stdout
     );

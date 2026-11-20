@@ -73,7 +73,7 @@ impl Commits {
 
     fn messages(&self, root: &Path) -> Result<Vec<Message>> {
         let git = crate::git::Git::discover(root)?;
-        if let Some(crate::title::Title(title)) = crate::title::of(&git) {
+        if let Ok(crate::title::Title(title)) = crate::title::of(&git) {
             return Ok(vec![Message {
                 commit: None,
                 subject: title,
