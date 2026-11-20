@@ -207,6 +207,11 @@ pub(crate) struct Settings {
     pub cargo: Vec<String>,
     /// A check runs Biome, through a piece or a command of the project's own.
     pub biome_runs: bool,
+    /// What the config proves already, against which the check names what the project could
+    /// prove but does not yet.
+    pub grow: crate::grow::Have,
+    /// The proof host's URL, which a README showing the proof's pictures names.
+    pub host: String,
 }
 
 impl Settings {
@@ -275,9 +280,12 @@ impl Settings {
             shipped,
             lints,
             read,
-            // Config::load finds them in the repository, and the checks that run Biome.
+            // Config::load finds them in the repository, the checks that run Biome, what the
+            // checks prove and the proof host.
             cargo: Vec::new(),
             biome_runs: false,
+            grow: crate::grow::Have::default(),
+            host: String::new(),
         })
     }
 
@@ -319,6 +327,8 @@ impl Settings {
         if self.tools.contains_key(&Tool::CargoLints) {
             globs.push("**/Cargo.toml".into());
         }
+        // The files that can make an opportunity timely, so a change to one runs it again.
+        globs.extend(crate::grow::GLOBS.iter().map(|g| (*g).to_string()));
         globs
     }
 
@@ -362,7 +372,10 @@ impl Settings {
     /// A stable text of the settings, part of the settings check's inputs. It holds the skill
     /// text, which can change between builds of one version.
     pub(crate) fn fingerprint(&self) -> String {
-        format!("{:?}{:?}{:?}{SKILL}", self.tools, self.shipped, self.lints)
+        format!(
+            "{:?}{:?}{:?}{:?}{}{SKILL}",
+            self.tools, self.shipped, self.lints, self.grow, self.host
+        )
     }
 
     /// Whether an agent would miss the skill, or read another version's. Only the skill files
@@ -540,6 +553,30 @@ impl Settings {
         }
         found.extend(self.idle_biome(root)?);
         Ok(found)
+    }
+
+    /// A hint for each kind of proof the project could add that the change, touching
+    /// `changed` among the repository's `files`, makes timely.
+    pub(crate) fn grow(&self, root: &Path, files: &[String], changed: &[&str]) -> Vec<Finding> {
+        crate::grow::hints(&self.opportunities(root, files), changed, &self.lints)
+    }
+
+    /// What the project in `root`, with `files`, could prove but does not yet, leaving out
+    /// the kinds `[lints.fearlezz]` turns off.
+    pub(crate) fn opportunities(
+        &self,
+        root: &Path,
+        files: &[String],
+    ) -> Vec<crate::grow::Opportunity> {
+        let levels = self.lints.of(lints::Tool::Fearlezz);
+        crate::grow::find(root, files, &self.grow, &self.host)
+            .into_iter()
+            .filter(|o| {
+                levels
+                    .and_then(|l| l.get(o.kind.rule()))
+                    .is_none_or(|l| l.is_on())
+            })
+            .collect()
     }
 
     /// A biome.json that no piece configures and no check runs: Biome left the typescript

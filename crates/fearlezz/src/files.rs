@@ -7,6 +7,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use sha2::{Digest as _, Sha256};
 
+/// Whether `path` ends in one of `extensions` (without the dot), in any case.
+pub(crate) fn has_extension(path: impl AsRef<Path>, extensions: &[&str]) -> bool {
+    path.as_ref()
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
 /// The SHA-256 of `bytes` as lowercase hex.
 pub(crate) fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(bytes))

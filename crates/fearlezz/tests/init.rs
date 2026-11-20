@@ -67,7 +67,17 @@ fn init_uses_the_pieces_of_the_languages_it_finds() {
         config.contains(r#"no_proof = ["*.md", "docs/**"]"#),
         "{config}"
     );
-    assert_eq!(out.last_line(), "next: fearlezz setup sync");
+    // A Flutter app no check takes pictures of is an offer for the developer.
+    assert!(
+        out.stdout.contains("could prove: a Flutter app"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.last_line().ends_with("then fearlezz setup sync"),
+        "{}",
+        out.stdout
+    );
 
     // What it wrote is a config every command reads.
     let plan = repo.fz(&["--plan"]);
@@ -556,6 +566,59 @@ fn init_ci_host_signed_in_says_whether_the_app_is_installed() {
     assert!(
         out.stdout
             .contains("the Fearlezz GitHub App is installed on acme/app"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn init_names_what_the_project_could_prove_too() {
+    let repo = project(&[
+        (
+            "package.json",
+            r#"{ "dependencies": { "react": "19.0.0" } }"#,
+        ),
+        ("deploy/kustomization.yaml", "resources: []\n"),
+    ]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let offers: Vec<&str> = out
+        .lines()
+        .into_iter()
+        .filter(|l| l.starts_with("could prove: "))
+        .collect();
+    assert_eq!(offers.len(), 2, "{}", out.stdout);
+    assert!(
+        offers[0].contains("a web UI (react in package.json)"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        offers[1].contains("kustomize/deploy renders output"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(
+        out.last_line(),
+        "next: ask the developer which of these to add and add them to fearlezz.toml, then \
+         fearlezz setup sync"
+    );
+
+    // Asked together with where CI sends its proof, on GitHub.
+    let repo = on_github(&[(
+        "pubspec.yaml",
+        "name: app\ndependencies:\n  flutter:\n    sdk: flutter\n",
+    )]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(
+        out.stdout.contains("could prove: a Flutter app"),
+        "{}",
+        out.stdout
+    );
+    let next = out.last_line();
+    assert!(
+        next.starts_with("next: ask the developer which of these to add and whether CI should send its proof to the proof host")
+            && next.contains("--ci plain"),
         "{}",
         out.stdout
     );

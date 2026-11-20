@@ -902,3 +902,89 @@ fn settings_results_are_keyed_on_what_the_binary_ships() {
         seen.push(now);
     }
 }
+
+/// A synced project on `feat/x` with `config` and `files`, whose settings check runs after
+/// the change writes `change`.
+fn grown(config: &str, files: &[(&str, &str)], change: &[(&str, &str)]) -> common::Output {
+    let repo = Repo::with_skill(config, files);
+    let sync = repo.fz(&["setup", "sync"]);
+    assert!(sync.ok, "{}\n{}", sync.stdout, sync.stderr);
+    repo.commit("synced");
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    for (path, text) in change {
+        repo.write(path, text);
+    }
+    repo.fz(&["run", "settings"])
+}
+
+const REACT: (&str, &str) = ("package.json", r#"{"dependencies": {"react": "19.0.0"}}"#);
+
+#[test]
+fn a_change_to_a_ui_no_check_takes_pictures_of_hints_at_them() {
+    let out = grown("", &[REACT], &[("src/App.tsx", "export {};\n")]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("hint src/App.tsx:1  pictures  this change could prove more: a web UI (react in package.json)")
+            && out.stdout.contains("use = [\"playwright\"]"),
+        "{}",
+        out.stdout
+    );
+
+    // Only a change to the UI makes it timely.
+    let out = grown("", &[REACT], &[("src/a.ts", "export {};\n")]);
+    assert!(!out.stdout.contains("pictures"), "{}", out.stdout);
+
+    // A check that takes stills is the proof it offers.
+    let stills = "[check.look]\nrun = \"true\"\nstage = \"look\"\nstills = \"stills/**/*.png\"\n";
+    let out = grown(stills, &[REACT], &[("src/App.tsx", "export {};\n")]);
+    assert!(!out.stdout.contains("pictures"), "{}", out.stdout);
+
+    // A repository turns it off through the lint levels.
+    let off = "[lints.fearlezz]\npictures = \"off\"\n";
+    let out = grown(off, &[REACT], &[("src/App.tsx", "export {};\n")]);
+    assert!(!out.stdout.contains("pictures"), "{}", out.stdout);
+}
+
+#[test]
+fn a_change_to_rendered_output_no_check_keeps_hints_at_texts() {
+    let config = "[check.kustomize]\nrun = \"true\"\nstage = \"working\"\n";
+    let out = grown(
+        config,
+        &[("deploy/kustomization.yaml", "resources: []\n")],
+        &[("deploy/app.yaml", "kind: List\n")],
+    );
+    assert!(out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("texts  this change could prove more: kustomize renders output"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_readme_without_the_proofs_pictures_hints_at_them() {
+    let config = "[check.look]\nrun = \"true\"\nstage = \"look\"\nstills = \"stills/**/*.png\"\n";
+    let readme = ("README.md", "# app\n");
+    let out = grown(
+        config,
+        &[readme],
+        &[("README.md", "# app\n\nIt shows a list.\n")],
+    );
+    assert!(
+        out.stdout
+            .contains("hint README.md:1  readme-media  this change could prove more"),
+        "{}",
+        out.stdout
+    );
+
+    // A README that shows pictures from the proof host has them.
+    let shown = "# app\n\n![home](https://fearlezz.seamlezz.com/a/b.png)\n";
+    let out = grown(
+        config,
+        &[("README.md", shown)],
+        &[("README.md", &format!("{shown}More.\n"))],
+    );
+    assert!(!out.stdout.contains("readme-media"), "{}", out.stdout);
+}

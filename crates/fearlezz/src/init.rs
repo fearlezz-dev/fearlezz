@@ -119,15 +119,19 @@ fn refine(root: &Path, piece: &'static str) -> &'static str {
     match piece {
         // The piece runs `svelte-kit sync` first; a Svelte app without SvelteKit keeps tsc.
         "typescript" if depends(root)("@sveltejs/kit") => "svelte",
-        "flutter" => {
-            let pubspec = std::fs::read_to_string(root.join("pubspec.yaml")).unwrap_or_default();
-            let flutter = pubspec
-                .lines()
-                .any(|line| line.trim().replace(' ', "") == "sdk:flutter");
-            if flutter { "flutter" } else { "dart" }
-        }
+        "flutter" if flutter_app(root) => "flutter",
+        "flutter" => "dart",
         _ => piece,
     }
+}
+
+/// Whether pubspec.yaml in `root` is a Flutter app's: it depends on the Flutter SDK.
+pub(crate) fn flutter_app(root: &Path) -> bool {
+    std::fs::read_to_string(root.join("pubspec.yaml")).is_ok_and(|pubspec| {
+        pubspec
+            .lines()
+            .any(|line| line.trim().replace(' ', "") == "sdk:flutter")
+    })
 }
 
 /// Whether go.mod in `root` requires `module`.
@@ -162,7 +166,7 @@ fn package_json(root: &Path) -> Option<serde_json::Value> {
 
 /// Whether `package.json` in `root` depends on a package (its dependencies or
 /// devDependencies). A file that cannot be read as JSON depends on none.
-fn depends(root: &Path) -> impl Fn(&str) -> bool {
+pub(crate) fn depends(root: &Path) -> impl Fn(&str) -> bool {
     let json = package_json(root);
     move |package| {
         json.as_ref().is_some_and(|json| {
@@ -367,7 +371,7 @@ pub(crate) fn proving_workflow(root: &Path) -> Option<String> {
     let mut names: Vec<String> = std::fs::read_dir(&dir)
         .ok()?
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter(|n| n.ends_with(".yml") || n.ends_with(".yaml"))
+        .filter(|n| crate::files::has_extension(n, &["yml", "yaml"]))
         .collect();
     names.sort();
     names.into_iter().find_map(|name| {

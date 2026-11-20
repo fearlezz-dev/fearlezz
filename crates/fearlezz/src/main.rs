@@ -14,6 +14,7 @@ mod findings;
 mod floor;
 mod generated;
 mod git;
+mod grow;
 mod hooks;
 mod host;
 mod init;
@@ -757,15 +758,37 @@ fn setup_init(ci: Option<init::Ci>) -> Result<()> {
         println!("wrote fearlezz.toml: uses {}", names.join(", "));
     }
     let config = Config::load(&git.root, &git.common)?;
+    // What a new config could prove too, one line each, for the agent to offer.
+    let offers = if had {
+        Vec::new()
+    } else {
+        config.settings.opportunities(&git.root, &git.files()?)
+    };
+    for o in &offers {
+        println!("could prove: {}", o.offer);
+    }
+    let add = if offers.is_empty() {
+        ""
+    } else {
+        "ask the developer which of these to add and add them to fearlezz.toml, then "
+    };
     let Some(ci) = ci else {
         if git.github_repository().is_some() && init::proving_workflow(&git.root).is_none() {
+            let (which, pick) = if offers.is_empty() {
+                ("", "")
+            } else {
+                (
+                    "which of these to add and ",
+                    "; add what they pick to fearlezz.toml",
+                )
+            };
             println!(
-                "next: ask the developer whether CI should send its proof to the proof host (a \
-                 page per run where people review the pictures) or only prove, then run \
-                 fearlezz setup init --ci host or fearlezz setup init --ci plain"
+                "next: ask the developer {which}whether CI should send its proof to the proof \
+                 host (a page per run where people review the pictures) or only prove{pick}, \
+                 then run fearlezz setup init --ci host or fearlezz setup init --ci plain"
             );
         } else {
-            println!("next: fearlezz setup sync");
+            println!("next: {add}fearlezz setup sync");
         }
         return Ok(());
     };
@@ -800,7 +823,7 @@ fn setup_init(ci: Option<init::Ci>) -> Result<()> {
     if had {
         println!("next: commit {} with the change", init::WORKFLOW);
     } else {
-        println!("next: fearlezz setup sync");
+        println!("next: {add}fearlezz setup sync");
     }
     Ok(())
 }

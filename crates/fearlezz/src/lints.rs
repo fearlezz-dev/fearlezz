@@ -78,6 +78,9 @@ pub(crate) enum Tool {
     Oxlint,
     /// Fearlezz's own reading of a coverage report: the rule `uncovered`.
     Coverage,
+    /// What a project could prove but does not yet (`grow`): `pictures`, `texts`,
+    /// `readme-media`, hints of the settings check.
+    Fearlezz,
 }
 
 impl Named for Tool {
@@ -93,6 +96,7 @@ impl Named for Tool {
         ("golangci", Tool::Golangci),
         ("oxlint", Tool::Oxlint),
         ("coverage", Tool::Coverage),
+        ("fearlezz", Tool::Fearlezz),
     ];
 }
 
@@ -129,7 +133,8 @@ impl Tool {
             | Tool::Ruff
             | Tool::Ktlint
             | Tool::Golangci
-            | Tool::Coverage => reported.to_string(),
+            | Tool::Coverage
+            | Tool::Fearlezz => reported.to_string(),
         };
         Some(name)
     }
@@ -156,7 +161,8 @@ impl Lints {
                 | Tool::Ruff
                 | Tool::Ktlint
                 | Tool::Golangci
-                | Tool::Coverage => None,
+                | Tool::Coverage
+                | Tool::Fearlezz => None,
             };
             if let Some(example) = example
                 && let Some(bare) = rules.keys().find(|r| !r.contains('/'))

@@ -138,6 +138,16 @@ no_proof = ["*.md", "docs/**"]
 
 In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter: the built in pieces of the languages at its root, `no_proof` for prose, and `fearlezz = "<version>"`, the lowest Fearlezz the config needs. Commit it on the base branch first, then run `fearlezz setup sync`. On GitHub, when no workflow proves with Fearlezz yet, ask the developer whether CI should send its proof to the proof host, then `fearlezz setup init --ci host` (or `--ci plain`) writes `.github/workflows/proof.yml`, also beside a `fearlezz.toml` that is there. An older Fearlezz refuses the config and says which it needs; raise the pin when the config starts using something a newer Fearlezz added.
 
+## Grow the proof
+
+Proof that people can see should grow with the project. When setting up, or when a change makes a new kind of proof possible (a first UI screen, a new rendered output, a README that describes the UI), offer it to the developer, with `fearlezz say ask` or directly, and add it when they agree:
+
+- A UI no check takes pictures of: `use = ["playwright"]` for a web app, `record` for a desktop window, `flutter-look` and `flutter-film` for a Flutter app, films for flows.
+- Rendered output (kustomize, helm, terraform) no check keeps: write it into `$FEARLEZZ_OUT` and name it with `texts`.
+- Checks that take stills and films while README.md shows none: offer to show the proof's stills and films in the README.
+
+`fearlezz setup init` lists what the project could prove, one `could prove:` line each. While working, the `settings` check gives one as a hint when the change touches files of that kind; it never blocks. `[lints.fearlezz]` turns one off for the repository: `pictures`, `texts` or `readme-media` = `"off"`.
+
 ## Pieces
 
 `use` pulls in pieces of config with the same shape as `fearlezz.toml`. The project file wins field by field, so write only what changes; `off = true` drops a check a piece brings in.
@@ -207,7 +217,7 @@ unwrap_used = "warn"       # tools: cargo-lints, dart-analysis, claude
 
 ## Lint levels
 
-Pieces decide every lint rule once under `[lints.<tool>]` (tools: clippy, rustc, dart, biome, eslint, ruff, ktlint, detekt, golangci, coverage) as `gate`, `flag`, `hint` or `off`; the project overrides any rule. A check names the tables its findings use, and each finding gets its rule's level; an off rule is never reported. `fearlezz setup sync` turns the rules on or off in the tool's own file: Cargo.toml, analysis_options.yaml, biome.json, eslint.fearlezz.mjs (spread it into eslint.config.* after the plugin configs), ruff.toml, a marked block in .editorconfig (ktlint), config/detekt/detekt.yml, .golangci.yml. When the project already keeps a tool's config in another file that tool reads first (biome.jsonc, .ruff.toml, pyproject.toml with `[tool.ruff]`, .golangci.yaml), sync writes into that file instead of adding one that shadows it.
+Pieces decide every lint rule once under `[lints.<tool>]` (tools: clippy, rustc, dart, biome, eslint, ruff, ktlint, detekt, golangci, coverage, fearlezz) as `gate`, `flag`, `hint` or `off`; the project overrides any rule. A check names the tables its findings use, and each finding gets its rule's level; an off rule is never reported. `fearlezz setup sync` turns the rules on or off in the tool's own file: Cargo.toml, analysis_options.yaml, biome.json, eslint.fearlezz.mjs (spread it into eslint.config.* after the plugin configs), ruff.toml, a marked block in .editorconfig (ktlint), config/detekt/detekt.yml, .golangci.yml. When the project already keeps a tool's config in another file that tool reads first (biome.jsonc, .ruff.toml, pyproject.toml with `[tool.ruff]`, .golangci.yaml), sync writes into that file instead of adding one that shadows it.
 
 ```toml
 [check.clippy]
