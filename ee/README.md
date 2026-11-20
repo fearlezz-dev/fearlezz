@@ -375,8 +375,8 @@ holds no grant, and a grant always holds a dot, so `readme` never names one.
   picture, and a picture the newest proven push no longer takes is `404`. The bar is the run's
   proof, not the check alone: a README shows what the default branch proved. Of a split proof,
   each leg's run counts on its own, since the gate does not stream to the host.
-- **Newest push.** Pushes are ordered by when their commit first ran on the host, not by when
-  a run opened: a run of an older push started again (after a flake, or by an admin's accept)
+- **Newest push.** Pushes are ordered as the host first saw their commit (its first run's
+  place in `runs`, since `opened` holds whole seconds), not by when a run opened: a run of an older push started again (after a flake, or by an admin's accept)
   never brings its picture back over a newer push's. Of one push, its newest run that did not
   fail counts. The 20 newest done runs of pushes that ran the check are looked through.
 - **Check and picture.** Both may hold slashes; the path names the longest check of the run its

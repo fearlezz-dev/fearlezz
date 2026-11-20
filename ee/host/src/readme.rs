@@ -14,9 +14,10 @@
 //! README shows what the default branch proved, so a newer push that failed leaves the older
 //! picture.
 //!
-//! Newest means the newest push, not the newest run: a commit counts from its first run, so a
-//! run of an older push started again (after a flake, or by an admin's accept) does not bring
-//! its picture back over a newer push's.
+//! Newest means the newest push, not the newest run: pushes are ordered as the host first saw
+//! each commit (its first run's place in `runs`, as `opened` holds whole seconds only), so a run
+//! of an older push started again (after a flake, or by an admin's accept) does not bring its
+//! picture back over a newer push's.
 //!
 //! The picture is the after of the look's item of that name: the commit's own picture. A check id
 //! and a picture name may both hold slashes, so the path names the longest check of the run that
@@ -145,25 +146,25 @@ async fn newest(
     let db = env.d1("DB")?;
 
     // The newest runs of pushes that ran one of the checks, by the `runs_by_work` index, each with
-    // when its commit first ran (`runs_by_head`): a push counts from then.
+    // its own place in `runs` and its commit's first (`runs_by_head`): a push counts from then.
     #[derive(Deserialize)]
     struct Candidate {
         run: String,
         work: String,
         head: String,
         proof: String,
-        opened: f64,
+        place: f64,
         pushed: f64,
     }
     let sql = format!(
-        "SELECT r.id AS run, r.work, r.head, r.proof, r.opened, \
-         (SELECT MIN(p.opened) FROM runs p WHERE p.work = r.work AND p.head = r.head AND p.event = 'push') AS pushed \
+        "SELECT r.id AS run, r.work, r.head, r.proof, r.rowid AS place, \
+         (SELECT MIN(p.rowid) FROM runs p WHERE p.work = r.work AND p.head = r.head AND p.event = 'push') AS pushed \
          FROM runs r \
          WHERE r.work = (SELECT id FROM works WHERE repo = ?1 AND branch = ?2) \
          AND r.git_ref = ?3 AND r.event = 'push' AND r.sha = r.head \
          AND r.state = 'done' AND r.proof IS NOT NULL \
          AND EXISTS (SELECT 1 FROM checks c WHERE c.run = r.id AND c.look IS NOT NULL AND c.id IN ({})) \
-         ORDER BY r.opened DESC LIMIT {NEWEST}",
+         ORDER BY r.opened DESC, r.rowid DESC LIMIT {NEWEST}",
         places(4)
     );
     let mut binds: Vec<JsValue> = vec![
@@ -182,7 +183,7 @@ async fn newest(
     candidates.sort_by(|a, b| {
         b.pushed
             .total_cmp(&a.pushed)
-            .then(b.opened.total_cmp(&a.opened))
+            .then(b.place.total_cmp(&a.place))
     });
 
     for candidate in candidates {
