@@ -86,5 +86,9 @@ in
     before = [ "devenv:enterShell" ];
   };
 
+  # The agent hooks `fearlezz setup sync` writes call a bare `fearlezz`, so this checkout's own
+  # build answers them, not an older copy elsewhere on PATH.
+  enterShell = ''export PATH="$DEVENV_ROOT/target/debug:$PATH"'';
+
   enterTest = "check";
 }
