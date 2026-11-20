@@ -98,16 +98,7 @@ impl<'a> Project<'a> {
                 _ => self.root,
             });
         if let Some(vars) = vars {
-            cmd.env_clear();
-            for name in BASE_ENV
-                .iter()
-                .copied()
-                .chain(vars.iter().map(String::as_str))
-            {
-                if let Some(value) = std::env::var_os(name) {
-                    cmd.env(name, value);
-                }
-            }
+            cleared(&mut cmd, vars);
         }
         if let Some(path) = self.path() {
             cmd.env("PATH", path);
@@ -132,6 +123,24 @@ impl<'a> Project<'a> {
         let rest = std::env::var_os("PATH").unwrap_or_default();
         std::env::join_paths(dirs.into_iter().chain(std::env::split_paths(&rest))).ok()
     }
+}
+
+/// Clears `cmd`'s environment down to [`BASE_ENV`] and the variables `vars` names, as
+/// Fearlezz has them: all a program the project chose may see, whether a project's command or
+/// a tool of the project's that Fearlezz runs itself, such as its ffmpeg. Fearlezz's own
+/// secrets (a provider's token, the runner's OIDC request token) never reach it.
+pub(crate) fn cleared<'c>(cmd: &'c mut Command, vars: &[String]) -> &'c mut Command {
+    cmd.env_clear();
+    for name in BASE_ENV
+        .iter()
+        .copied()
+        .chain(vars.iter().map(String::as_str))
+    {
+        if let Some(value) = std::env::var_os(name) {
+            cmd.env(name, value);
+        }
+    }
+    cmd
 }
 
 /// How a project's command runs, besides what its config says.

@@ -772,49 +772,127 @@ fn tool(dir: &std::path::Path, name: &str, script: &str) {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// A devenv project keeps ffmpeg in its shell, not on the PATH Fearlezz runs with; Fearlezz
-/// asks the shell once and compares with that ffmpeg.
-#[test]
-fn pictures_are_compared_with_the_ffmpeg_of_the_project_shell() {
-    let shell_tools = tempfile::tempdir().unwrap();
-    let calls = shell_tools.path().join("calls");
+/// A folder holding ffmpeg and ffprobe that run `before`, then the real program, and `calls`,
+/// the file each call is written to.
+fn wrapped(before: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let calls = dir.path().join("calls");
     for name in ["ffmpeg", "ffprobe"] {
-        let real = on_path(name);
         tool(
-            shell_tools.path(),
+            dir.path(),
             name,
             &format!(
-                "#!/bin/sh\necho \"{name} $*\" >> '{}'\nexec '{}' \"$@\"\n",
+                "#!/bin/sh\n{before}\necho \"{name} $*\" >> '{}'\nexec '{}' \"$@\"\n",
                 calls.display(),
-                real.display()
+                on_path(name).display()
             ),
         );
     }
-    let config = format!(
-        "{PIXEL}\n[env]\nshell = 'env \"PATH={}:$PATH\"'\n",
-        shell_tools.path().display()
-    );
-    let repo = pixel_repo(&config, &[]);
-    let out = repo.fz(&["run"]);
+    (dir, calls)
+}
+
+/// A shell that puts `dir` in front of PATH.
+fn shell_with(dir: &std::path::Path) -> String {
+    format!("\n[env]\nshell = 'env \"PATH={}:$PATH\"'\n", dir.display())
+}
+
+/// Asserts the look compared with the ffmpeg whose calls are written to `calls`.
+fn compared_with(out: &common::Output, calls: &std::path::Path) {
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
         out.stdout.contains("look screens: 1 changed"),
         "{}",
         out.stdout
     );
-    let calls = std::fs::read_to_string(&calls).unwrap_or_default();
+    let calls = std::fs::read_to_string(calls).unwrap_or_default();
     assert!(calls.contains("ffprobe -v error"), "{calls}");
     assert!(calls.contains("ffmpeg -v error -i"), "{calls}");
 }
 
-/// With no ffmpeg in the project's shell or on PATH, the look says what to do.
+/// A devenv project keeps ffmpeg in its shell, not on the PATH Fearlezz runs with; Fearlezz
+/// asks the shell once and compares with that ffmpeg.
 #[test]
-fn a_look_without_ffmpeg_says_to_add_it_to_the_shell() {
+fn pictures_are_compared_with_the_ffmpeg_of_the_project_shell() {
+    let (tools, calls) = wrapped("");
+    let repo = pixel_repo(&format!("{PIXEL}{}", shell_with(tools.path())), &[]);
+    compared_with(&repo.fz(&["run"]), &calls);
+}
+
+/// A shell may print a banner of its own before the answer, such as a path it entered.
+#[test]
+fn a_shell_that_prints_a_banner_still_names_its_ffmpeg() {
+    let (tools, calls) = wrapped("");
+    tool(
+        tools.path(),
+        "banner",
+        &format!(
+            "#!/bin/sh\necho /nix/store/the-shell-banner\necho entering the shell\nPATH='{}':\"$PATH\" exec \"$@\"\n",
+            tools.path().display()
+        ),
+    );
+    let config = format!(
+        "{PIXEL}\n[env]\nshell = '{}'\n",
+        tools.path().join("banner").display()
+    );
+    let repo = pixel_repo(&config, &[]);
+    compared_with(&repo.fz(&["run"]), &calls);
+}
+
+/// The project chooses which ffmpeg runs, so that ffmpeg sees what a check sees and never
+/// Fearlezz's own secrets.
+#[test]
+fn the_project_ffmpeg_never_sees_the_secrets_fearlezz_holds() {
+    let seen = tempfile::tempdir().unwrap();
+    let env_file = seen.path().join("env");
+    let (tools, calls) = wrapped(&format!("env >> '{}'", env_file.display()));
+    let repo = pixel_repo(&format!("{PIXEL}{}", shell_with(tools.path())), &[]);
+    let out = repo.fz_env(
+        &["run"],
+        &[
+            ("OP_SERVICE_ACCOUNT_TOKEN", "op-token-of-fearlezz"),
+            ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "oidc-token-of-fearlezz"),
+        ],
+    );
+    compared_with(&out, &calls);
+    let env = std::fs::read_to_string(&env_file).unwrap();
+    assert!(env.contains("PATH="), "{env}");
+    assert!(!env.contains("op-token-of-fearlezz"), "{env}");
+    assert!(!env.contains("oidc-token-of-fearlezz"), "{env}");
+}
+
+/// A PATH of only the programs the pixel check and git need, with no ffmpeg.
+fn bare_path() -> (tempfile::TempDir, String) {
     let bin = tempfile::tempdir().unwrap();
     for name in ["sh", "git", "cat", "env", "yes", "head"] {
         std::os::unix::fs::symlink(on_path(name), bin.path().join(name)).unwrap();
     }
     let path = bin.path().to_str().unwrap().to_string();
+    (bin, path)
+}
+
+/// A shell that fails when Fearlezz asks it for ffmpeg says why in the error, not only that
+/// ffmpeg is missing.
+#[test]
+fn a_shell_that_fails_to_answer_says_why() {
+    let (bin, path) = bare_path();
+    // Starts the checks, which get FEARLEZZ_OUT, and fails for Fearlezz's own question.
+    tool(
+        bin.path(),
+        "picky",
+        "#!/bin/sh\n[ -n \"$FEARLEZZ_OUT\" ] || { echo 'picky: no environment to open' >&2; exit 3; }\nexec \"$@\"\n",
+    );
+    let env = [("PATH", path.as_str())];
+    let repo = pixel_repo(&format!("{PIXEL}\n[env]\nshell = \"picky\"\n"), &env);
+    let out = repo.fz_env(&["run"], &env);
+    let all = format!("{}\n{}", out.stdout, out.stderr);
+    assert!(all.contains("picky: no environment to open"), "{all}");
+    assert!(all.contains("nor on PATH"), "{all}");
+}
+
+/// With no ffmpeg in the project's shell or on PATH, the look says what to do.
+#[test]
+fn a_look_without_ffmpeg_says_to_add_it_to_the_shell() {
+    let (_bin, path) = bare_path();
     let env = [("PATH", path.as_str())];
     let repo = pixel_repo(&format!("{PIXEL}\n[env]\nshell = \"env\"\n"), &env);
     let out = repo.fz_env(&["run"], &env);

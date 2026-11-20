@@ -77,7 +77,7 @@ impl Workflow {
             _ => None,
         };
         Workflow {
-            actions: var("GITHUB_ACTIONS").as_deref() == Some("true"),
+            actions: on_actions(),
             repository,
             api_url: var("GITHUB_API_URL"),
             run_url,
@@ -437,9 +437,14 @@ const FFMPEG_SUMS: [(&str, &str); 4] = [
     ),
 ];
 
+/// Whether Fearlezz runs in a GitHub Actions job.
+pub(crate) fn on_actions() -> bool {
+    std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+}
+
 /// Installs the pinned ffmpeg into the runner's tool cache and returns its folder, or None on
-/// a platform it has no build for. [`crate::ffmpeg`] asks for it when neither the project's
-/// shell nor PATH has ffmpeg.
+/// a platform it has no build for. [`crate::ffmpeg`] asks for it on Actions when neither the
+/// project's shell nor PATH has ffmpeg.
 pub(crate) fn pinned_ffmpeg() -> Result<Option<PathBuf>> {
     let arch = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x64",

@@ -35,11 +35,12 @@ pub(crate) fn unavailable() -> Option<Unavailable> {
                 .into(),
         });
     }
-    crate::ffmpeg::missing().map(|why| Unavailable {
-        why: format!("a Linux display needs ffmpeg to encode what it shows: {why}"),
-        fix: "add ffmpeg to the project's [env] shell, or install it, such as `apt install \
-              ffmpeg`"
-            .into(),
+    crate::ffmpeg::missing().map(|m| Unavailable {
+        why: format!(
+            "a Linux display needs ffmpeg to encode what it shows: {}",
+            m.why
+        ),
+        fix: format!("{}, such as `apt install ffmpeg`", m.fix),
     })
 }
 
