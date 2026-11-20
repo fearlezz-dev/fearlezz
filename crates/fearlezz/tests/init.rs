@@ -689,6 +689,12 @@ fn setup_guide_prints_the_whole_guide_and_ends_with_next() {
     let repo = project(&[("README.md", "# app\n")]);
     let out = repo.fz(&["setup", "guide"]);
     assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let guide = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../skills/fearlezz/GUIDE.md"
+    ))
+    .unwrap();
+    assert!(out.stdout.starts_with(&guide), "{}", out.stdout);
     for step in [
         "fearlezz setup init --ci host",
         "fearlezz setup init --ci plain",

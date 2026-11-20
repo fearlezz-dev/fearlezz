@@ -10,7 +10,7 @@ Look at how the project already gets its tools, and add Fearlezz the same way:
 | --- | --- |
 | Nix flake | the input `github:fearlezz-dev/fearlezz`, and its `packages.<system>.default` in the dev shell |
 | devenv | `fearlezz.url = "github:fearlezz-dev/fearlezz"` under `inputs` in `devenv.yaml`, and `inputs.fearlezz.packages.${pkgs.stdenv.system}.default` in `packages` |
-| Homebrew (a Brewfile, or the developer's own machine) | `brew install fearlezz-dev/tap/fearlezz` |
+| A Brewfile | `brew "fearlezz-dev/tap/fearlezz"` in the Brewfile (`brew install fearlezz-dev/tap/fearlezz` to install it now) |
 | Cargo | `cargo install --git https://github.com/fearlezz-dev/fearlezz fearlezz` |
 | None of these, or a container image | the release binary: `curl -fsSL https://raw.githubusercontent.com/fearlezz-dev/fearlezz/main/install.sh \| sh`, or a binary from the [releases](https://github.com/fearlezz-dev/fearlezz/releases) page |
 

@@ -36,7 +36,9 @@ Ask which of these the developer wants, and recommend one:
 
 - **With the proof host**: CI proves each pull request and sends the proof to a page where people review the pictures and leave notes. `fearlezz setup init --ci host`.
 - **CI only**: CI proves each pull request, nothing is sent anywhere. `fearlezz setup init --ci plain`.
-- **Local only**: agents prove their work on the developer's machine, CI stays as it is. `fearlezz setup init` without `--ci`.
+- **Local only**: agents prove their work on the developer's machine, CI stays as it is. `fearlezz setup init` without `--ci`; when its `next:` line asks about CI, step 3 has already answered it.
+
+The proof host takes proof from GitHub Actions only (through the Fearlezz GitHub App and GitHub's OIDC token), so offer it only for a repository on GitHub whose CI runs there.
 
 `--ci` writes a GitHub Actions workflow. On another CI system, run `fearlezz setup init` and add one job to the existing pipeline that runs `fearlezz run --ci` on each pull request and push to the default branch, with the full git history fetched (the proof compares with the base branch).
 
@@ -64,8 +66,8 @@ Run `fearlezz setup sync`. It writes the agent hooks, this project's copy of the
 
 The developer does these; give them the links and wait:
 
-- Install the Fearlezz GitHub App on the repository (the link `fearlezz setup init --ci host` printed).
-- Run `fearlezz setup login`; it signs the CLI in and says whether the app is installed.
+- Run `fearlezz setup login`; it signs the CLI in through GitHub and says whether the Fearlezz GitHub App is installed on the repository, naming where to install it when it is not.
+- Install the app there when it is not yet.
 - The proof job needs the permission `id-token: write`. The workflow `--ci host` writes has it; add it when the job is your own.
 
 ## 8. First proof (do)
