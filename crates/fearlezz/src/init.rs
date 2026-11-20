@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
+use clap::ValueEnum;
 
 use crate::config::FILE;
 
@@ -346,4 +347,100 @@ fn starter(found: &[Found]) -> Result<String, std::fmt::Error> {
     )?;
     writeln!(text, "{NO_PROOF}")?;
     Ok(text)
+}
+
+/// The workflow `setup init --ci` writes.
+pub(crate) const WORKFLOW: &str = ".github/workflows/proof.yml";
+
+/// What CI does with its proof: `host` also sends it to the proof host, for its page and
+/// review; `plain` only proves, writing nothing anywhere but the job's own summary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum Ci {
+    Host,
+    Plain,
+}
+
+/// The workflow under `.github/workflows` in `root` that already proves with Fearlezz (its
+/// action or `fearlezz run --ci`), if any.
+pub(crate) fn proving_workflow(root: &Path) -> Option<String> {
+    let dir = root.join(".github/workflows");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| n.ends_with(".yml") || n.ends_with(".yaml"))
+        .collect();
+    names.sort();
+    names.into_iter().find_map(|name| {
+        let text = std::fs::read_to_string(dir.join(&name)).ok()?;
+        (text.contains("fearlezz-dev/fearlezz@") || text.contains("fearlezz run --ci"))
+            .then(|| format!(".github/workflows/{name}"))
+    })
+}
+
+/// Refuses to write the proof workflow in `root` over one that is there, or beside a workflow
+/// that already proves with Fearlezz.
+pub(crate) fn may_write_workflow(root: &Path) -> Result<()> {
+    if root.join(WORKFLOW).exists() {
+        bail!("{WORKFLOW} is already there; change it by hand, or move it away and run this again");
+    }
+    if let Some(proving) = proving_workflow(root) {
+        bail!(
+            "{proving} already proves with Fearlezz; change it by hand, or move it away and run \
+             this again"
+        );
+    }
+    Ok(())
+}
+
+/// Writes the proof workflow in `root` for pull requests to and pushes on `base`, when
+/// [`may_write_workflow`] allows it.
+pub(crate) fn workflow(root: &Path, ci: Ci, base: &str) -> Result<()> {
+    may_write_workflow(root)?;
+    let path = root.join(WORKFLOW);
+    let host = if ci == Ci::Host {
+        "  # The proof page and review need this and the Fearlezz GitHub App installed; without\n  \
+         # either, CI still proves the commit but sends nothing and shows no page.\n  \
+         id-token: write\n"
+    } else {
+        ""
+    };
+    // The action installs Nix and devenv first when the checks run in a devenv shell.
+    let devenv = if root.join("devenv.nix").exists() {
+        "        with:\n          devenv: true\n"
+    } else {
+        ""
+    };
+    let text = format!(
+        "# Written by `fearlezz setup init`: proves every pull request and push with the checks\n\
+         # in fearlezz.toml. Make its `proof` job a required check of {base}.\n\
+         name: proof\n\
+         on:\n  \
+         pull_request:\n    \
+         # edited: a title that starts with fix: makes the change a fix, which needs red before green.\n    \
+         types: [opened, synchronize, reopened, edited]\n  \
+         push:\n    \
+         branches: [{base}]\n\
+         permissions:\n  \
+         contents: read\n\
+         {host}\
+         jobs:\n  \
+         proof:\n    \
+         runs-on: ubuntu-latest\n    \
+         # A newer push cancels the run of the one before it.\n    \
+         concurrency:\n      \
+         group: proof-${{{{ github.event.pull_request.number || github.ref }}}}\n      \
+         cancel-in-progress: true\n    \
+         steps:\n      \
+         - uses: actions/checkout@v5\n        \
+         with:\n          \
+         # The proof compares the change with its base branch.\n          \
+         fetch-depth: 0\n          \
+         persist-credentials: false\n      \
+         - uses: fearlezz-dev/fearlezz@v0\n\
+         {devenv}"
+    );
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
 }

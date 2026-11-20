@@ -423,3 +423,140 @@ fn a_flux_repository_gets_flux_instead_of_kustomize() {
     ]);
     assert_eq!(use_line, r#"use = ["flux", "safety"]"#);
 }
+
+/// `project`, on GitHub.
+fn on_github(files: &[(&str, &str)]) -> Repo {
+    let repo = project(files);
+    repo.git(&["remote", "add", "origin", "https://github.com/acme/app.git"]);
+    repo
+}
+
+const WORKFLOW: &str = ".github/workflows/proof.yml";
+
+#[test]
+fn init_on_github_asks_whether_ci_sends_its_proof_to_the_host() {
+    let repo = on_github(&[("README.md", "# app\n")]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let next = out.last_line();
+    assert!(
+        next.starts_with(
+            "next: ask the developer whether CI should send its proof to the proof host"
+        ) && next.contains("fearlezz setup init --ci host")
+            && next.contains("--ci plain"),
+        "{}",
+        out.stdout
+    );
+
+    // A repository whose workflows already prove with Fearlezz is not asked.
+    let proven = on_github(&[(
+        ".github/workflows/ci.yml",
+        "on: push\njobs:\n  proof:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: fearlezz-dev/fearlezz@v0\n",
+    )]);
+    let out = proven.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("--ci"), "{}", out.stdout);
+}
+
+#[test]
+fn init_ci_plain_writes_the_proof_workflow_beside_the_starter() {
+    let repo = on_github(&[("README.md", "# app\n")]);
+    let out = repo.fz(&["setup", "init", "--ci", "plain"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(repo.path("fearlezz.toml").exists());
+    let workflow = std::fs::read_to_string(repo.path(WORKFLOW)).unwrap();
+    for part in [
+        "contents: read",
+        "fetch-depth: 0",
+        "types: [opened, synchronize, reopened, edited]",
+        "branches: [main]",
+        "uses: fearlezz-dev/fearlezz@v0",
+    ] {
+        assert!(workflow.contains(part), "{part}: {workflow}");
+    }
+    assert!(!workflow.contains("id-token"), "{workflow}");
+    assert!(!workflow.contains("devenv"), "{workflow}");
+    assert!(!out.stdout.contains("GitHub App"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains(&format!("wrote {WORKFLOW}")),
+        "{}",
+        out.stdout
+    );
+    assert!(out.last_line().starts_with("next: "), "{}", out.stdout);
+}
+
+#[test]
+fn init_ci_host_adds_the_workflow_to_a_config_that_is_there() {
+    let repo = on_github(&[("devenv.nix", "{ pkgs, ... }: { }\n")]);
+    let config = "use = [\"devenv\"]\nbase = \"trunk\"\n";
+    repo.write("fearlezz.toml", config);
+    repo.commit("config");
+    let out = repo.fz(&["setup", "init", "--ci", "host"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert_eq!(
+        std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap(),
+        config
+    );
+    let workflow = std::fs::read_to_string(repo.path(WORKFLOW)).unwrap();
+    for part in [
+        "contents: read",
+        "id-token: write",
+        "devenv: true",
+        "branches: [trunk]",
+    ] {
+        assert!(workflow.contains(part), "{part}: {workflow}");
+    }
+    // Not signed in, it names where to install the app and how to learn whether it is.
+    assert!(
+        out.stdout
+            .contains("https://github.com/apps/fearlezz-dev/installations/new")
+            && out.stdout.contains("fearlezz setup login"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.last_line().starts_with("next: "), "{}", out.stdout);
+}
+
+#[test]
+fn init_ci_never_writes_over_a_workflow() {
+    let repo = on_github(&[(WORKFLOW, "name: mine\n")]);
+    let out = repo.fz(&["setup", "init", "--ci", "plain"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stderr.contains(WORKFLOW) && out.stderr.contains("already"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.path(WORKFLOW)).unwrap(),
+        "name: mine\n"
+    );
+    assert!(!repo.path("fearlezz.toml").exists());
+}
+
+#[test]
+fn init_ci_host_signed_in_says_whether_the_app_is_installed() {
+    let host = common::host::FakeHost::start();
+    let repo = on_github(&[]);
+    repo.write(
+        "fearlezz.toml",
+        &format!("[host]\nurl = \"{}\"\n", host.url),
+    );
+    repo.commit("config");
+    let config = tempfile::tempdir().unwrap();
+    let folder = config.path().join("fearlezz");
+    std::fs::create_dir_all(&folder).unwrap();
+    let logins = serde_json::json!({ host.url.clone(): {"login": "writer", "token": common::host::HOST_TOKEN} });
+    std::fs::write(folder.join("logins.json"), logins.to_string()).unwrap();
+    let out = repo.fz_env(
+        &["setup", "init", "--ci", "host"],
+        &[("XDG_CONFIG_HOME", config.path().to_str().unwrap())],
+    );
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("the Fearlezz GitHub App is installed on acme/app"),
+        "{}",
+        out.stdout
+    );
+}

@@ -25,6 +25,10 @@ use crate::proof::Check;
 /// The host a project sends to unless its config names another.
 pub(crate) const DEFAULT: &str = "https://fearlezz.seamlezz.com";
 
+/// Where a repository installs the GitHub App of the default host; a signed in CLI asks its
+/// host instead, which names its own.
+pub(crate) const INSTALL: &str = "https://github.com/apps/fearlezz-dev/installations/new";
+
 /// Why a job on GitHub Actions sends nothing to the host when it may not request an OIDC
 /// token.
 pub(crate) const NO_ID_TOKEN: &str = "this job has no id-token: write, so it cannot sign in to \

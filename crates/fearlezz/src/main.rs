@@ -183,7 +183,13 @@ enum Say {
 #[derive(Subcommand)]
 enum Setup {
     /// Write a starter fearlezz.toml from the languages this repository shows.
-    Init,
+    Init {
+        /// Also write .github/workflows/proof.yml, which proves each pull request and push:
+        /// `host` sends the proof to the proof host for its page and review, `plain` only
+        /// proves. A fearlezz.toml that is there is kept.
+        #[arg(long, value_enum)]
+        ci: Option<init::Ci>,
+    },
     /// Write the shared settings into each tool's own file (lint levels and more).
     Sync,
     /// Move pieces from a repository to their newest tag of the same major version (or only
@@ -733,16 +739,69 @@ fn say(ctx: &Ctx, what: Say) -> Result<bool> {
     Ok(true)
 }
 
-/// Writes the starter config and says what it found.
-fn setup_init() -> Result<()> {
+/// Writes the starter config and says what it found; with `ci`, the proof workflow too,
+/// beside a config that is there.
+fn setup_init(ci: Option<init::Ci>) -> Result<()> {
     let git = Git::discover(&std::env::current_dir()?)?;
-    let found = init::init(&git.root)?;
-    if found.iter().all(|p| p.file.is_none()) {
-        println!("wrote fearlezz.toml: no language found, so fill in its checks");
+    let had = ci.is_some() && git.root.join(config::FILE).exists();
+    if ci.is_some() {
+        // Refused before the starter is written, so nothing is half done.
+        init::may_write_workflow(&git.root)?;
     }
-    let names: Vec<String> = found.iter().map(ToString::to_string).collect();
-    println!("wrote fearlezz.toml: uses {}", names.join(", "));
-    println!("next: fearlezz setup sync");
+    if !had {
+        let found = init::init(&git.root)?;
+        if found.iter().all(|p| p.file.is_none()) {
+            println!("wrote fearlezz.toml: no language found, so fill in its checks");
+        }
+        let names: Vec<String> = found.iter().map(ToString::to_string).collect();
+        println!("wrote fearlezz.toml: uses {}", names.join(", "));
+    }
+    let config = Config::load(&git.root, &git.common)?;
+    let Some(ci) = ci else {
+        if git.github_repository().is_some() && init::proving_workflow(&git.root).is_none() {
+            println!(
+                "next: ask the developer whether CI should send its proof to the proof host (a \
+                 page per run where people review the pictures) or only prove, then run \
+                 fearlezz setup init --ci host or fearlezz setup init --ci plain"
+            );
+        } else {
+            println!("next: fearlezz setup sync");
+        }
+        return Ok(());
+    };
+    init::workflow(&git.root, ci, &config.base)?;
+    println!(
+        "wrote {}: proves each pull request to and push on {}",
+        init::WORKFLOW,
+        config.base
+    );
+    if ci == init::Ci::Host {
+        let url = host_url(Some(&config));
+        let repository = git
+            .github_repository()
+            .unwrap_or_else(|| "the repository".into());
+        match feedback::login_of(&url) {
+            Some(login) => {
+                if let Some(line) = feedback::app_installed(&url, &login.token) {
+                    println!("{line}");
+                }
+            }
+            None if url == host_url(None) => println!(
+                "the proof page needs the Fearlezz GitHub App on {repository}: {}; fearlezz \
+                 setup login then says whether it is installed",
+                host::INSTALL
+            ),
+            None => println!(
+                "the proof page needs {url}'s GitHub App on {repository}; fearlezz setup login \
+                 names where to install it and says whether it is"
+            ),
+        }
+    }
+    if had {
+        println!("next: commit {} with the change", init::WORKFLOW);
+    } else {
+        println!("next: fearlezz setup sync");
+    }
     Ok(())
 }
 
@@ -771,7 +830,7 @@ fn notes() -> Result<bool> {
 
 fn setup(what: Setup) -> Result<bool> {
     match what {
-        Setup::Init => setup_init()?,
+        Setup::Init { ci } => setup_init(ci)?,
         Setup::Login => feedback::login(&here_host_url())?,
         Setup::Logout => feedback::logout(&here_host_url())?,
         Setup::Update { piece } => setup_update(piece.as_deref())?,

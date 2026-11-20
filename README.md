@@ -64,7 +64,7 @@ Agents: `fearlezz setup sync` writes [the skill](skills/fearlezz/SKILL.md) into 
 
 ## CI in your project
 
-One workflow proves every pull request and push:
+One workflow proves every pull request and push; `fearlezz setup init --ci host` writes it (`--ci plain` without `id-token: write`, for a repository that does not send its proof to the proof host):
 
 ```yaml
 # .github/workflows/proof.yml

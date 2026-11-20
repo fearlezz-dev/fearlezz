@@ -136,7 +136,7 @@ no_proof = ["*.md", "docs/**"]
 
 ## Starting out
 
-In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter: the built in pieces of the languages at its root, `no_proof` for prose, and `fearlezz = "<version>"`, the lowest Fearlezz the config needs. Commit it on the base branch first, then run `fearlezz setup sync`. An older Fearlezz refuses the config and says which it needs; raise the pin when the config starts using something a newer Fearlezz added.
+In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter: the built in pieces of the languages at its root, `no_proof` for prose, and `fearlezz = "<version>"`, the lowest Fearlezz the config needs. Commit it on the base branch first, then run `fearlezz setup sync`. On GitHub, when no workflow proves with Fearlezz yet, ask the developer whether CI should send its proof to the proof host, then `fearlezz setup init --ci host` (or `--ci plain`) writes `.github/workflows/proof.yml`, also beside a `fearlezz.toml` that is there. An older Fearlezz refuses the config and says which it needs; raise the pin when the config starts using something a newer Fearlezz added.
 
 ## Pieces
 
