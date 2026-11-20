@@ -96,3 +96,79 @@ jobs:
           major="${TAG%%.*}"
           git tag -f "$major"
           git push -f origin "refs/tags/$major"
+      # The tap's formula is written whole from the files just uploaded, so `brew upgrade`
+      # finds the release. Rebuilding an older tag leaves it alone, so it never goes back.
+      - name: Update the Homebrew tap
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          latest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          if [ "$TAG" != "$latest" ]; then
+            echo "$TAG is not the latest release ($latest); the tap stays as it is"
+            exit 0
+          fi
+          version="${TAG#v}"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          sum() {
+            s=$(cut -d' ' -f1 "$GITHUB_WORKSPACE/fearlezz-$1.tar.gz.sha256")
+            [[ $s =~ ^[0-9a-f]{64}$ ]] || { echo "no sha256 for $1" >&2; exit 1; }
+            echo "$s"
+          }
+          for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do sum "$t" > /dev/null; done
+
+          key="$RUNNER_TEMP/tap_key"
+          hosts="$RUNNER_TEMP/known_hosts"
+          install -m 600 /dev/null "$key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$hosts"
+          git clone --depth 1 git@github.com:fearlezz-dev/homebrew-tap.git "$RUNNER_TEMP/tap"
+          cd "$RUNNER_TEMP/tap"
+
+          cat > Formula/fearlezz.rb <<EOF
+          class Fearlezz < Formula
+            desc "Proof for work done by AI agents"
+            homepage "https://github.com/$GITHUB_REPOSITORY"
+            version "$version"
+            license any_of: ["MIT", "Apache-2.0"]
+
+            on_macos do
+              on_arm do
+                url "$base/fearlezz-aarch64-apple-darwin.tar.gz"
+                sha256 "$(sum aarch64-apple-darwin)"
+              end
+              on_intel do
+                url "$base/fearlezz-x86_64-apple-darwin.tar.gz"
+                sha256 "$(sum x86_64-apple-darwin)"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "$base/fearlezz-aarch64-unknown-linux-musl.tar.gz"
+                sha256 "$(sum aarch64-unknown-linux-musl)"
+              end
+              on_intel do
+                url "$base/fearlezz-x86_64-unknown-linux-musl.tar.gz"
+                sha256 "$(sum x86_64-unknown-linux-musl)"
+              end
+            end
+
+            def install
+              bin.install "fearlezz"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/fearlezz --version")
+            end
+          end
+          EOF
+
+          if git diff --quiet; then
+            echo "the tap already has $TAG"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "fearlezz $version"
+          git push origin HEAD
