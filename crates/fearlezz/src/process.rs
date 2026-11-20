@@ -56,6 +56,12 @@ impl<'a> Project<'a> {
         self.shaped(folder.as_deref(), script, Some(vars), args)
     }
 
+    /// `script` at the root, as [`Project::clean`] runs it with no variables of its own: a
+    /// question Fearlezz asks the project's environment, such as where its ffmpeg is.
+    pub(crate) fn script(&self, script: &str) -> Command {
+        self.clean(None, script, &[], &[])
+    }
+
     /// `script` as [`Project::clean`] runs it, but with all of Fearlezz's own variables: only
     /// for asking SecretSpec, whose provider's token must reach it and never a check.
     fn inherited(&self, dir: &Path, script: &str) -> Command {

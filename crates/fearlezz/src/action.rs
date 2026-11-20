@@ -1,13 +1,13 @@
 //! GitHub Actions: what `fearlezz run --ci` reads of the workflow it runs in (the repository,
 //! the run's page and the pull request its event names), the job summary it writes on the
-//! run's page, and the pinned ffmpeg it installs when checks take pictures. It writes nothing
+//! run's page, and the pinned ffmpeg it installs when nothing else has one. It writes nothing
 //! to GitHub: a person reviews the pull request there as usual, and the proof host (`host.rs`)
 //! is the only place with a page.
 
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::Value;
@@ -437,28 +437,14 @@ const FFMPEG_SUMS: [(&str, &str); 4] = [
     ),
 ];
 
-/// Installs the pinned ffmpeg into the runner's tool cache, unless ffmpeg is on PATH already,
-/// and returns the folder to put in front of PATH.
-pub(crate) fn install_ffmpeg() -> Result<Option<PathBuf>> {
-    let found = Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if found {
-        println!("ffmpeg for the pictures: the one on PATH");
-        return Ok(None);
-    }
+/// Installs the pinned ffmpeg into the runner's tool cache and returns its folder, or None on
+/// a platform it has no build for. [`crate::ffmpeg`] asks for it when neither the project's
+/// shell nor PATH has ffmpeg.
+pub(crate) fn pinned_ffmpeg() -> Result<Option<PathBuf>> {
     let arch = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x64",
         ("linux", "aarch64") => "arm64",
-        (os, arch) => {
-            println!(
-                "::warning::no static ffmpeg for {os} on {arch}; install ffmpeg before Fearlezz"
-            );
-            return Ok(None);
-        }
+        _ => return Ok(None),
     };
     let cache = std::env::var_os("RUNNER_TOOL_CACHE")
         .or_else(|| std::env::var_os("RUNNER_TEMP"))
@@ -477,10 +463,6 @@ pub(crate) fn install_ffmpeg() -> Result<Option<PathBuf>> {
             fetch(&format!("{FFMPEG_RELEASE}/{name}.gz"), sum, &target)?;
         }
     }
-    println!(
-        "ffmpeg for the pictures: 7.0.2, installed into {}",
-        dir.display()
-    );
     Ok(Some(dir))
 }
 

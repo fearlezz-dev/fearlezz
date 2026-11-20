@@ -28,21 +28,19 @@ const START: Duration = Duration::from_secs(10);
 
 /// None when this machine can start a Linux display and encode what it shows.
 pub(crate) fn unavailable() -> Option<Unavailable> {
-    for (tool, fix) in [
-        (
-            "Xvfb",
-            "install Xvfb, such as `apt install xvfb` (GitHub's Ubuntu runners have it)",
-        ),
-        ("ffmpeg", "install ffmpeg, such as `apt install ffmpeg`"),
-    ] {
-        if !on_path(tool) {
-            return Some(Unavailable {
-                why: format!("a Linux display needs {tool}, which is not on PATH"),
-                fix: fix.into(),
-            });
-        }
+    if !on_path("Xvfb") {
+        return Some(Unavailable {
+            why: "a Linux display needs Xvfb, which is not on PATH".into(),
+            fix: "install Xvfb, such as `apt install xvfb` (GitHub's Ubuntu runners have it)"
+                .into(),
+        });
     }
-    None
+    crate::ffmpeg::missing().map(|why| Unavailable {
+        why: format!("a Linux display needs ffmpeg to encode what it shows: {why}"),
+        fix: "add ffmpeg to the project's [env] shell, or install it, such as `apt install \
+              ffmpeg`"
+            .into(),
+    })
 }
 
 fn on_path(tool: &str) -> bool {
@@ -411,7 +409,7 @@ fn grab(
 
 /// ffmpeg reading raw frames of `size` from its input into `path`.
 fn encoder((width, height): (u32, u32), fps: u32, path: &Path, output: &[&str]) -> Result<Child> {
-    Command::new("ffmpeg")
+    crate::ffmpeg::ffmpeg()?
         .args(["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr0"])
         .args(["-s", &format!("{width}x{height}")])
         .args(["-framerate", &fps.to_string(), "-i", "-"])

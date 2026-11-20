@@ -735,3 +735,96 @@ fn the_base_commit_runs_in_its_own_shell_for_the_look() {
         out.stdout
     );
 }
+
+// Which ffmpeg compares
+
+/// A check that writes one still without ffmpeg: 64 by 48 pixels of the colour
+/// `src/color.txt` names, as a plain PPM.
+const PIXEL: &str = r#"
+[check.screens]
+run = "{ printf 'P3\\n64 48\\n255\\n'; yes \"$(cat src/color.txt)\" | head -n 3072; } > \"$FEARLEZZ_OUT/home.ppm\" && echo '{\"kind\":\"still\",\"file\":\"home.ppm\"}' >> \"$FEARLEZZ_OUT/proof.jsonl\""
+stage = "look"
+"#;
+
+/// A repository whose change turns the still from red to blue, ready to run the look.
+fn pixel_repo(config: &str, env: &[(&str, &str)]) -> Repo {
+    let repo = Repo::new(config, &[("src/color.txt", "255 0 0")]);
+    repo.branch("feat/blue");
+    repo.write("src/color.txt", "0 0 255");
+    repo.fz_env(&["run", "--stage", "look", "--no-run"], env);
+    repo
+}
+
+/// Where `tool` is on the test's own PATH.
+fn on_path(tool: &str) -> PathBuf {
+    let path = std::env::var_os("PATH").unwrap();
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(tool))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| panic!("{tool} is needed for this test"))
+}
+
+/// A folder with `script` as an executable called `name`.
+fn tool(dir: &std::path::Path, name: &str, script: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = dir.join(name);
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// A devenv project keeps ffmpeg in its shell, not on the PATH Fearlezz runs with; Fearlezz
+/// asks the shell once and compares with that ffmpeg.
+#[test]
+fn pictures_are_compared_with_the_ffmpeg_of_the_project_shell() {
+    let shell_tools = tempfile::tempdir().unwrap();
+    let calls = shell_tools.path().join("calls");
+    for name in ["ffmpeg", "ffprobe"] {
+        let real = on_path(name);
+        tool(
+            shell_tools.path(),
+            name,
+            &format!(
+                "#!/bin/sh\necho \"{name} $*\" >> '{}'\nexec '{}' \"$@\"\n",
+                calls.display(),
+                real.display()
+            ),
+        );
+    }
+    let config = format!(
+        "{PIXEL}\n[env]\nshell = 'env \"PATH={}:$PATH\"'\n",
+        shell_tools.path().display()
+    );
+    let repo = pixel_repo(&config, &[]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("look screens: 1 changed"),
+        "{}",
+        out.stdout
+    );
+    let calls = std::fs::read_to_string(&calls).unwrap_or_default();
+    assert!(calls.contains("ffprobe -v error"), "{calls}");
+    assert!(calls.contains("ffmpeg -v error -i"), "{calls}");
+}
+
+/// With no ffmpeg in the project's shell or on PATH, the look says what to do.
+#[test]
+fn a_look_without_ffmpeg_says_to_add_it_to_the_shell() {
+    let bin = tempfile::tempdir().unwrap();
+    for name in ["sh", "git", "cat", "env", "yes", "head"] {
+        std::os::unix::fs::symlink(on_path(name), bin.path().join(name)).unwrap();
+    }
+    let path = bin.path().to_str().unwrap().to_string();
+    let env = [("PATH", path.as_str())];
+    let repo = pixel_repo(&format!("{PIXEL}\n[env]\nshell = \"env\"\n"), &env);
+    let out = repo.fz_env(&["run"], &env);
+    let all = format!("{}\n{}", out.stdout, out.stderr);
+    assert!(
+        all.contains("found them neither in the project's shell (`env`) nor on PATH"),
+        "{all}"
+    );
+    assert!(
+        all.contains("add ffmpeg to the project's shell, or install it"),
+        "{all}"
+    );
+}

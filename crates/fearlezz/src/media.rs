@@ -25,7 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use anyhow::{Context as _, Result, bail};
 
@@ -243,7 +243,7 @@ impl Frames {
         pick: Option<Vec<usize>>,
     ) -> Result<Frames> {
         let (w, h) = seen;
-        let mut cmd = Command::new("ffmpeg");
+        let mut cmd = crate::ffmpeg::ffmpeg()?;
         cmd.args(["-v", "error", "-i"]).arg(path);
         let mut filters = Vec::new();
         if let Some(pick) = &pick {
@@ -452,7 +452,7 @@ struct Probe {
 
 fn probe(path: &Path) -> Result<Probe> {
     let out = crate::process::read(
-        Command::new("ffprobe")
+        crate::ffmpeg::ffprobe()?
             .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
             // Packets carry the frames' times without decoding them; sorted by time they are
             // the frames in the order ffmpeg sends them.
@@ -1163,7 +1163,7 @@ pub(crate) fn noted(
     };
     let run = |seek: &[String]| -> Result<bool> {
         crate::process::read(
-            Command::new("ffmpeg")
+            crate::ffmpeg::ffmpeg()?
                 .args(["-v", "error", "-nostdin", "-y"])
                 .args(seek)
                 .arg("-i")
