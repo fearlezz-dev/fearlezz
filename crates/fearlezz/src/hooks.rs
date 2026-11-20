@@ -297,7 +297,7 @@ fn check_run_by_hand(config: &Config, line: &str) -> Option<String> {
 /// and hooks run the first `fearlezz` on PATH, which need not be this one. Each answers
 /// `--version` within a short budget; one that cannot is passed over.
 pub(crate) fn older_on_path() -> Vec<(PathBuf, String)> {
-    let mine = crate::version::numbers(crate::version::OURS);
+    let mine = crate::version::Version::parse(crate::version::OURS);
     let this = std::env::current_exe().and_then(std::fs::canonicalize).ok();
     let mut seen = Vec::new();
     let mut older = Vec::new();
@@ -322,7 +322,7 @@ pub(crate) fn older_on_path() -> Vec<(PathBuf, String)> {
         }) else {
             continue;
         };
-        if crate::version::numbers(&theirs) < mine {
+        if crate::version::Version::parse(&theirs) < mine {
             older.push((candidate, theirs));
         }
     }

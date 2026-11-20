@@ -14,20 +14,45 @@ pub(crate) fn this() -> String {
     format!("Fearlezz {OURS} at {path}")
 }
 
-/// A version's numbers, for comparing, three of them: a part that is no number counts as 0,
-/// and a missing one too, so `0.6` is `0.6.0`.
-pub(crate) fn numbers(text: &str) -> [u64; 3] {
-    let mut out = [0; 3];
-    for (slot, part) in out.iter_mut().zip(text.split(['.', '-', '+'])) {
-        *slot = part.parse().unwrap_or(0);
+/// A version as it compares: three numbers, a missing one counting as 0 (`0.6` is `0.6.0`),
+/// and a prerelease (`0.6.0-rc.1`) before its release. Build metadata (`+…`) counts for
+/// nothing, and a part that is no number counts as 0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Version {
+    numbers: [u64; 3],
+    released: bool,
+}
+
+impl Version {
+    pub(crate) fn parse(text: &str) -> Version {
+        let text = text.trim().trim_start_matches('v');
+        let text = text.split('+').next().unwrap_or_default();
+        let (release, pre) = match text.split_once('-') {
+            Some((release, _)) => (release, true),
+            None => (text, false),
+        };
+        let mut numbers = [0; 3];
+        for (slot, part) in numbers.iter_mut().zip(release.split('.')) {
+            *slot = part.parse().unwrap_or(0);
+        }
+        Version {
+            numbers,
+            released: !pre,
+        }
     }
-    out
+}
+
+/// This binary's release, its version without a prerelease or build part: the pin `setup
+/// init` writes, which [`meets`] accepts.
+pub(crate) fn release() -> &'static str {
+    OURS.split(['-', '+']).next().unwrap_or(OURS)
 }
 
 /// Refuses a config whose `fearlezz` key names a newer version than this binary, before
 /// anything else in it is read: a newer config may use fields and pieces this one does not
-/// know, and the version is the cause to name.
-pub(crate) fn meets(needs: &toml::Value) -> Result<()> {
+/// know, and the version is the cause to name. `who` names what holds the key, such as
+/// `this config` or `the piece "flux"`. A prerelease of the pinned version is older than it.
+pub(crate) fn meets(needs: &toml::Value, who: &str) -> Result<()> {
     let Some(text) = needs.as_str().filter(|t| {
         let parts: Vec<&str> = t.split('.').collect();
         parts.len() <= 3
@@ -36,12 +61,14 @@ pub(crate) fn meets(needs: &toml::Value) -> Result<()> {
                 .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
     }) else {
         bail!(
-            "fearlezz = {needs} is no version; name the lowest Fearlezz this config needs, like fearlezz = \"{OURS}\""
+            "{who}: fearlezz = {needs} is no version; name the lowest Fearlezz it needs, like \
+             fearlezz = \"{}\"",
+            release()
         );
     };
-    if numbers(text) > numbers(OURS) {
+    if Version::parse(text) > Version::parse(OURS) {
         bail!(
-            "this config needs Fearlezz {text} or newer (fearlezz = \"{text}\"), and this is {}; \
+            "{who} needs Fearlezz {text} or newer (fearlezz = \"{text}\"), and this is {}; \
              install a newer one (curl -fsSL \
              https://raw.githubusercontent.com/fearlezz-dev/fearlezz/main/install.sh | sh, or the \
              way it was installed: brew upgrade, nix, devenv update), or when one is installed, \
@@ -50,4 +77,25 @@ pub(crate) fn meets(needs: &toml::Value) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fewer_parts_are_zeros() {
+        assert_eq!(Version::parse("1.0"), Version::parse("1.0.0"));
+        assert_eq!(Version::parse("1"), Version::parse("1.0.0"));
+        assert!(Version::parse("1.0") < Version::parse("1.0.1"));
+        assert!(Version::parse("0.10.0") > Version::parse("0.9.9"));
+    }
+
+    #[test]
+    fn a_prerelease_comes_before_its_release() {
+        assert!(Version::parse("0.6.0-rc.1") < Version::parse("0.6.0"));
+        assert!(Version::parse("0.6.0-rc.1") > Version::parse("0.5.9"));
+        assert_eq!(Version::parse("0.6.0+build"), Version::parse("0.6.0"));
+        assert_eq!(Version::parse("v0.6.0"), Version::parse("0.6.0"));
+    }
 }

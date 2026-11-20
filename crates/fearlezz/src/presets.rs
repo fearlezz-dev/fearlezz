@@ -423,9 +423,12 @@ impl Loader {
     fn expand(&mut self, mut table: Table, origin: &Origin) -> Result<Table> {
         // First, so a config for a newer Fearlezz names the version, not a field or piece this
         // one does not know. It says which binary reads the config, no behaviour, so it leaves
-        // the merged table and the floor never sees it.
-        if let Some(needs) = table.remove("fearlezz") {
-            crate::version::meets(&needs)?;
+        // the merged table and the floor never sees it. A piece's is met where it is used, which
+        // names it.
+        if let Some(needs) = table.remove("fearlezz")
+            && self.stack.is_empty()
+        {
+            crate::version::meets(&needs, "this config")?;
         }
         let uses = match table.remove("use") {
             None => Vec::new(),
@@ -453,6 +456,9 @@ impl Loader {
                 .with_context(|| format!("use \"{spec}\""))?;
             let piece: Table =
                 toml::from_str(&text).with_context(|| format!("use \"{spec}\": not valid TOML"))?;
+            if let Some(needs) = piece.get("fearlezz") {
+                crate::version::meets(needs, &format!("the piece \"{spec}\""))?;
+            }
             self.stack.push(id);
             let piece = self
                 .expand(piece, &source.origin())
