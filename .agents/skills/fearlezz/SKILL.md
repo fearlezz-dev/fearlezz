@@ -136,7 +136,7 @@ no_proof = ["*.md", "docs/**"]
 
 ## Starting out
 
-In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter: the built in pieces of the languages at its root, `no_proof` for prose, and `fearlezz = "<version>"`, the lowest Fearlezz the config needs. Commit it on the base branch first, then run `fearlezz setup sync`. On GitHub, when no workflow proves with Fearlezz yet, ask the developer whether CI should send its proof to the proof host, then `fearlezz setup init --ci host` (or `--ci plain`) writes `.github/workflows/proof.yml`, also beside a `fearlezz.toml` that is there. An older Fearlezz refuses the config and says which it needs; raise the pin when the config starts using something a newer Fearlezz added.
+In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter: the built in pieces of the languages at its root, `no_proof` for prose, and `fearlezz = "<version>"`, the lowest Fearlezz the config needs. Commit it on the base branch first, then run `fearlezz setup sync`. On GitHub, when no workflow proves with Fearlezz yet, ask the developer whether CI should send its proof to the proof host, then `fearlezz setup init --ci host` (or `--ci plain`, which also turns the host off with `[host] off = true`) writes `.github/workflows/proof.yml`, also beside a `fearlezz.toml` that is there; run `fearlezz setup sync` after. An older Fearlezz refuses the config and says which it needs; raise the pin when the config starts using something a newer Fearlezz added.
 
 ## Grow the proof
 
@@ -144,9 +144,9 @@ Proof that people can see should grow with the project. When setting up, or when
 
 - A UI no check takes pictures of: `use = ["playwright"]` for a web app, `record` for a desktop window, `flutter-look` and `flutter-film` for a Flutter app, films for flows.
 - Rendered output (kustomize, helm, terraform) no check keeps: write it into `$FEARLEZZ_OUT` and name it with `texts`.
-- Checks that take stills and films while README.md shows none: offer to show the proof's stills and films in the README.
+- Checks that take stills and films while README.md shows none: a public repository can show each from its stable address, `https://fearlezz.seamlezz.net/readme/<owner>/<repo>/<check>/<picture>` (Fearlezz's README, "Pictures in your README").
 
-`fearlezz setup init` lists what the project could prove, one `could prove:` line each. While working, the `settings` check gives one as a hint when the change touches files of that kind; it never blocks. `[lints.fearlezz]` turns one off for the repository: `pictures`, `texts` or `readme-media` = `"off"`.
+`fearlezz setup init` lists what the project could prove, one `could prove:` line each. While working, the `settings` check gives one as a hint when the change touches files of that kind; it never blocks, whatever level `[lints.fearlezz]` gives it. `[lints.fearlezz]` turns one off for the repository: `pictures`, `texts` or `readme-media` = `"off"`.
 
 ## Pieces
 

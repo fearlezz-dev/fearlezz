@@ -79,7 +79,7 @@ pub(crate) enum Tool {
     /// Fearlezz's own reading of a coverage report: the rule `uncovered`.
     Coverage,
     /// What a project could prove but does not yet (`grow`): `pictures`, `texts`,
-    /// `readme-media`, hints of the settings check.
+    /// `readme-media`, hints of the settings check, only ever off or a hint.
     Fearlezz,
 }
 

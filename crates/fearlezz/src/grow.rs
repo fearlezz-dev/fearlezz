@@ -4,7 +4,8 @@
 //!
 //! Each is one line: `setup init` lists them for the agent to offer the developer, and while
 //! working the built in `settings` check gives one as a hint when the change touches files of
-//! its kind. `[lints.fearlezz] <rule> = "off"` turns one off for a repository.
+//! its kind. A hint only offers, so it never blocks: `[lints.fearlezz] <rule> = "off"` turns
+//! one off for a repository, and any other level leaves it a hint.
 
 use std::path::Path;
 
@@ -42,6 +43,33 @@ pub(crate) struct Opportunity {
     pub offer: String,
     /// Whether a change to a file makes the offer timely while working.
     touches: fn(&str) -> bool,
+    /// The folders such a file must be in to count; none means anywhere.
+    within: Vec<String>,
+}
+
+impl Opportunity {
+    fn new(kind: Kind, offer: String, touches: fn(&str) -> bool) -> Opportunity {
+        Opportunity {
+            kind,
+            offer,
+            touches,
+            within: Vec::new(),
+        }
+    }
+
+    /// Whether a change to `path` makes the offer timely.
+    fn touched_by(&self, path: &str) -> bool {
+        (self.touches)(path)
+            && (self.within.is_empty() || self.within.iter().any(|d| inside(path, d)))
+    }
+}
+
+/// Whether `path` is inside the folder `dir`, the root being `""`.
+fn inside(path: &str, dir: &str) -> bool {
+    dir.is_empty()
+        || path
+            .strip_prefix(dir)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// What the config proves already, read once from its checks.
@@ -52,7 +80,14 @@ pub(crate) struct Have {
     /// A check keeps texts.
     pub texts: bool,
     /// The checks that render output a person could review, such as `kustomize`.
-    pub rendered: Vec<String>,
+    pub rendered: Vec<Rendering>,
+}
+
+/// A check that renders output, and the folder it renders from (`""` for the root).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Rendering {
+    pub id: String,
+    pub dir: String,
 }
 
 /// The checks of the pieces whose tools render output: manifests, charts, a plan.
@@ -75,9 +110,77 @@ impl Have {
                     let piece = c.id.split('/').next().unwrap_or_default();
                     RENDERING.contains(&piece)
                 })
-                .map(|c| c.id.clone())
+                .map(|c| Rendering {
+                    id: c.id.clone(),
+                    dir: c.command.dir.clone().unwrap_or_default(),
+                })
                 .collect(),
         }
+    }
+
+    /// The kinds [`find`] could offer with what the config proves already.
+    pub(crate) fn could(&self) -> Vec<Kind> {
+        let mut kinds = Vec::new();
+        if !self.pictures {
+            kinds.push(Kind::Pictures);
+        }
+        if !self.texts && !self.rendered.is_empty() {
+            kinds.push(Kind::Texts);
+        }
+        if self.pictures {
+            kinds.push(Kind::ReadmeMedia);
+        }
+        kinds
+    }
+
+    /// The folders the rendering checks render from, each once.
+    fn rendered_dirs(&self) -> Vec<String> {
+        let mut dirs: Vec<String> = self.rendered.iter().map(|r| r.dir.clone()).collect();
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
+
+    /// Every file whose change can make an offer of `kinds` timely or change what is offered,
+    /// as globs: the settings check reads them, so it runs again when one changes.
+    pub(crate) fn globs(&self, kinds: &[Kind]) -> Vec<String> {
+        let mut globs = Vec::new();
+        for kind in kinds {
+            match kind {
+                Kind::Pictures => globs.extend(
+                    [
+                        "**/*.tsx",
+                        "**/*.jsx",
+                        "**/*.vue",
+                        "**/*.svelte",
+                        "**/*.astro",
+                        "**/*.css",
+                        "**/*.scss",
+                        "**/*.html",
+                        "lib/**/*.dart",
+                        "**/*.swift",
+                        "**/project.pbxproj",
+                        "package.json",
+                        "pubspec.yaml",
+                    ]
+                    .map(String::from),
+                ),
+                Kind::Texts => {
+                    for dir in self.rendered_dirs() {
+                        let at = if dir.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{dir}/")
+                        };
+                        for ext in RENDERED {
+                            globs.push(format!("{at}**/*.{ext}"));
+                        }
+                    }
+                }
+                Kind::ReadmeMedia => globs.push("README.md".into()),
+            }
+        }
+        globs
     }
 }
 
@@ -98,8 +201,12 @@ fn swift_file(path: &str) -> bool {
     has_extension(path, &["swift"])
 }
 
+/// The extensions of what rendering checks render from.
+const RENDERED: [&str; 4] = ["yaml", "yml", "tf", "tpl"];
+
+/// A file a rendering check renders from; GitHub's own files never are.
 fn rendered_file(path: &str) -> bool {
-    has_extension(path, &["yaml", "yml", "tf", "tpl"])
+    has_extension(path, &RENDERED) && !path.starts_with(".github/")
 }
 
 fn readme(path: &str) -> bool {
@@ -126,42 +233,47 @@ pub(crate) fn find(root: &Path, files: &[String], have: &Have, host: &str) -> Ve
         found.extend(uis(root, files));
     }
     if !have.texts && !have.rendered.is_empty() {
+        let ids: Vec<&str> = have.rendered.iter().map(|r| r.id.as_str()).collect();
         found.push(Opportunity {
-            kind: Kind::Texts,
-            offer: format!(
-                "{} renders output, and no check keeps it as texts: write it into \
-                 $FEARLEZZ_OUT and add texts = \"rendered/**\" to the check, so a person reviews \
-                 the rendered diff",
-                have.rendered.join(", ")
-            ),
-            touches: rendered_file,
+            within: have.rendered_dirs(),
+            ..Opportunity::new(
+                Kind::Texts,
+                format!(
+                    "{} renders output, and no check keeps it as texts: write it into \
+                     $FEARLEZZ_OUT and add texts = \"rendered/**\" to the check, so a person \
+                     reviews the rendered diff",
+                    ids.join(", ")
+                ),
+                rendered_file,
+            )
         });
     }
-    // The proof host will give each picture a stable URL for READMEs; until then, any link to
-    // the host counts as showing the proof. Once it exists, name its pattern here and in the
-    // offer.
+    // A README shows the proof's pictures through their stable addresses on the files origin,
+    // or through any link to the host.
     if have.pictures
         && let Ok(text) = std::fs::read_to_string(root.join("README.md"))
         && !text.contains(host)
+        && !text.contains(&format!("{}/readme/", crate::host::FILES))
     {
-        found.push(Opportunity {
-            kind: Kind::ReadmeMedia,
-            offer: "checks take stills and films, and README.md shows none: offer to show the \
-                    proof's stills and films in README.md"
-                .into(),
-            touches: readme,
-        });
+        found.push(Opportunity::new(
+            Kind::ReadmeMedia,
+            format!(
+                "checks take stills and films, and README.md shows none: a public repository \
+                 can show each with ![name]({}/readme/<owner>/<repo>/<check>/<picture>), the \
+                 picture from the newest passing proof of the default branch (Fearlezz's README, \
+                 Pictures in your README)",
+                crate::host::FILES
+            ),
+            readme,
+        ));
     }
     found
 }
 
 /// The UIs the project has, each with the picture proof that fits it.
 fn uis(root: &Path, files: &[String]) -> Vec<Opportunity> {
-    let pictures = |offer: String, touches: fn(&str) -> bool| Opportunity {
-        kind: Kind::Pictures,
-        offer,
-        touches,
-    };
+    let pictures =
+        |offer: String, touches: fn(&str) -> bool| Opportunity::new(Kind::Pictures, offer, touches);
     let mut found = Vec::new();
     let depends = crate::init::depends(root);
     if root.join("src-tauri").is_dir() {
@@ -210,13 +322,13 @@ fn uis(root: &Path, files: &[String]) -> Vec<Opportunity> {
     found
 }
 
-/// A hint for each opportunity the change makes timely, touching `changed` files of its kind,
-/// at the level `[lints.fearlezz]` gives its rule; one that is off is left out.
+/// A hint for each opportunity the change makes timely, touching `changed` files of its kind;
+/// one `[lints.fearlezz]` turns off is left out, and any other level stays a hint.
 pub(crate) fn hints(found: &[Opportunity], changed: &[&str], lints: &Lints) -> Vec<Finding> {
     let hints = found
         .iter()
         .filter_map(|o| {
-            let file = changed.iter().find(|f| (o.touches)(f))?;
+            let file = changed.iter().find(|f| o.touched_by(f))?;
             Some(Finding {
                 file: (*file).to_string(),
                 line: 1,
@@ -225,8 +337,8 @@ pub(crate) fn hints(found: &[Opportunity], changed: &[&str], lints: &Lints) -> V
                 rule: o.kind.rule().into(),
                 message: format!("this change could prove more: {}", o.offer),
                 fix: Some(format!(
-                    "ask the developer whether to add it (fearlezz say ask); [lints.fearlezz] {} \
-                     = \"off\" stops this hint",
+                    "the developer decides whether to add it; [lints.fearlezz] {} = \"off\" \
+                     stops this hint",
                     o.kind.rule()
                 )),
                 why: Some("proof that people can see grows with the project".into()),
@@ -234,27 +346,9 @@ pub(crate) fn hints(found: &[Opportunity], changed: &[&str], lints: &Lints) -> V
             })
         })
         .collect();
-    lints.apply(&[Tool::Fearlezz], hints)
+    let mut hints = lints.apply(&[Tool::Fearlezz], hints);
+    for hint in &mut hints {
+        hint.level = Level::Hint;
+    }
+    hints
 }
-
-/// Every file whose change can make an opportunity timely, as globs: the settings check reads
-/// them, so it runs again when one changes.
-pub(crate) const GLOBS: &[&str] = &[
-    "**/*.tsx",
-    "**/*.jsx",
-    "**/*.vue",
-    "**/*.svelte",
-    "**/*.astro",
-    "**/*.css",
-    "**/*.scss",
-    "**/*.html",
-    "lib/**/*.dart",
-    "**/*.swift",
-    "**/*.yaml",
-    "**/*.yml",
-    "**/*.tf",
-    "**/*.tpl",
-    "README.md",
-    "package.json",
-    "pubspec.yaml",
-];

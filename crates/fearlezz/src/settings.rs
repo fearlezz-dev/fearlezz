@@ -328,7 +328,7 @@ impl Settings {
             globs.push("**/Cargo.toml".into());
         }
         // The files that can make an opportunity timely, so a change to one runs it again.
-        globs.extend(crate::grow::GLOBS.iter().map(|g| (*g).to_string()));
+        globs.extend(self.grow.globs(&self.growing()));
         globs
     }
 
@@ -568,12 +568,23 @@ impl Settings {
         root: &Path,
         files: &[String],
     ) -> Vec<crate::grow::Opportunity> {
-        let levels = self.lints.of(lints::Tool::Fearlezz);
+        let kinds = self.growing();
         crate::grow::find(root, files, &self.grow, &self.host)
             .into_iter()
-            .filter(|o| {
+            .filter(|o| kinds.contains(&o.kind))
+            .collect()
+    }
+
+    /// The kinds of proof the project could add that the config does not prove yet and
+    /// `[lints.fearlezz]` leaves on.
+    fn growing(&self) -> Vec<crate::grow::Kind> {
+        let levels = self.lints.of(lints::Tool::Fearlezz);
+        self.grow
+            .could()
+            .into_iter()
+            .filter(|k| {
                 levels
-                    .and_then(|l| l.get(o.kind.rule()))
+                    .and_then(|l| l.get(k.rule()))
                     .is_none_or(|l| l.is_on())
             })
             .collect()

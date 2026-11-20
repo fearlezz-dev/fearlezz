@@ -974,17 +974,89 @@ fn a_readme_without_the_proofs_pictures_hints_at_them() {
     );
     assert!(
         out.stdout
-            .contains("hint README.md:1  readme-media  this change could prove more"),
+            .contains("hint README.md:1  readme-media  this change could prove more")
+            && out
+                .stdout
+                .contains("https://fearlezz.seamlezz.net/readme/<owner>/<repo>/<check>/<picture>")
+            && out.stdout.contains("Pictures in your README"),
         "{}",
         out.stdout
     );
 
     // A README that shows pictures from the proof host has them.
-    let shown = "# app\n\n![home](https://fearlezz.seamlezz.com/a/b.png)\n";
+    let shown = "# app\n\n![home](https://fearlezz.seamlezz.net/readme/acme/app/look/home.png)\n";
     let out = grown(
         config,
         &[("README.md", shown)],
         &[("README.md", &format!("{shown}More.\n"))],
     );
     assert!(!out.stdout.contains("readme-media"), "{}", out.stdout);
+}
+
+#[test]
+fn a_hint_is_never_reused_on_a_branch_that_does_not_touch_its_files() {
+    let repo = Repo::with_skill("", &[REACT, ("src/App.tsx", "export {};\n")]);
+    let sync = repo.fz(&["setup", "sync"]);
+    assert!(sync.ok, "{}\n{}", sync.stdout, sync.stderr);
+    repo.commit("synced");
+    repo.branch("feat/a");
+    repo.write("src/App.tsx", "export const a = 1;\n");
+    let out = repo.fz(&["run", "settings"]);
+    assert!(
+        out.stdout.contains("hint src/App.tsx:1  pictures"),
+        "{}",
+        out.stdout
+    );
+
+    // feat/a lands, and feat/b touches no UI: the same files, another change.
+    repo.commit("a");
+    repo.git(&["switch", "-q", "main"]);
+    repo.git(&["merge", "-q", "--ff-only", "feat/a"]);
+    repo.branch("feat/b");
+    repo.write("src/a.ts", "export {};\n");
+    let out = repo.fz(&["run", "settings"]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains("pictures"), "{}", out.stdout);
+
+    // And back on a change that touches it, the hint is due again.
+    repo.write("src/App.tsx", "export const b = 1;\n");
+    let out = repo.fz(&["run", "settings"]);
+    assert!(
+        out.stdout.contains("hint src/App.tsx:1  pictures"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_hint_never_blocks_and_reads_well_anywhere() {
+    // A level above hint is clamped: the hints only offer.
+    let gate = "[lints.fearlezz]\npictures = \"gate\"\n";
+    let out = grown(gate, &[REACT], &[("src/App.tsx", "export {};\n")]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("hint src/App.tsx:1  pictures"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("say ask"), "{}", out.stdout);
+}
+
+#[test]
+fn workflows_and_other_yaml_outside_the_rendered_folders_hint_nothing() {
+    let config =
+        "[check.kustomize]\nrun = \"true\"\nstage = \"working\"\neach = \"kustomization.yaml\"\n";
+    for path in [
+        ".github/workflows/ci.yml",
+        ".github/dependabot.yml",
+        "docs/notes.yaml",
+    ] {
+        let out = grown(
+            config,
+            &[("deploy/kustomization.yaml", "resources: []\n")],
+            &[(path, "on: push\n")],
+        );
+        assert!(out.ok, "{path}: {}", out.stdout);
+        assert!(!out.stdout.contains("texts"), "{path}: {}", out.stdout);
+    }
 }

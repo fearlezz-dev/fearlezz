@@ -59,8 +59,11 @@ impl Worktree {
             .findings
             .as_ref()
             .is_some_and(|f| f.on == crate::findings::Scope::Changed);
-        let scope =
-            (judged || check.coverage.is_some()).then(|| self.lines.digest(|p| check.reads(p)));
+        // The settings check hints at what a change touching its files could prove, so which
+        // of them the change touches is part of its result too.
+        let hints = matches!(check.builtin, Some(crate::config::Builtin::Settings(_)));
+        let scope = (judged || hints || check.coverage.is_some())
+            .then(|| self.lines.digest(|p| check.reads(p)));
         self.hasher.inputs(
             &self.git.root,
             check,
