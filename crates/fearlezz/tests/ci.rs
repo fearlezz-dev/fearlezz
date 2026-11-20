@@ -840,6 +840,19 @@ fn adding_a_setting_to_a_tool_the_base_has_is_red_and_named() {
     );
 }
 
+/// A base that runs Biome through a check of its own, reading Biome's findings, with no Biome
+/// settings: settings the change gives Biome still count.
+#[test]
+fn a_setting_for_a_tool_the_base_reads_the_findings_of_is_red_and_named() {
+    let own = "[check.tsc]\noff = true\n\n[check.lint]\nrun = \"true\"\nstage = \"working\"\nfindings = { read = \"sarif\", lints = [\"biome\"] }\n";
+    let off = format!("{own}\n[settings.biome.linter]\nenabled = false\n");
+    let out = ci_from_to((TYPESCRIPT.0, own), (TYPESCRIPT.0, &off));
+    assert_weakens(
+        &out,
+        "weakens settings.biome.linter.enabled: it is added (false)",
+    );
+}
+
 #[test]
 fn agent_settings_may_change() {
     let out = ci_after_tuning(|c| c.replace("Bash(ls)", "Bash(eza)"));

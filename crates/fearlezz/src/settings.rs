@@ -330,9 +330,9 @@ impl Settings {
     /// How `head` tunes the tools that judge code differently: any setting added, removed or
     /// changed, since Fearlezz cannot tell which way a tool's option loosens it. Each as
     /// `settings.<tool>.<key>` and how. Only a tool the base already has settings for or a
-    /// check reading the findings of counts: a tool the change adds only strengthens the
-    /// proof, whatever settings it comes with. Agent settings, the skill and hooks are left
-    /// out.
+    /// check reading the findings of counts: a tool the base neither has settings for nor
+    /// reads the findings of is new to the floor, whose files it never held, so its settings
+    /// are not held either. Agent settings, the skill and hooks are left out.
     pub(crate) fn weakenings(&self, head: &Settings) -> Vec<(String, Change)> {
         let empty = Table::new();
         let mut found = Vec::new();
