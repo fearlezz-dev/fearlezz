@@ -200,6 +200,8 @@ pub(crate) struct Settings {
     tools: BTreeMap<Tool, Table>,
     shipped: BTreeMap<Shipped, Table>,
     lints: Lints,
+    /// The tools a check reads the findings of, whether or not they have settings.
+    read: BTreeSet<Tool>,
     /// The folders of the repository's Cargo projects (`.` for the root), which the Rust lint
     /// tables are written into.
     pub cargo: Vec<String>,
@@ -261,10 +263,16 @@ impl Settings {
                 tools.entry(row.tool).or_default();
             }
         }
+        let read = TOOLS
+            .iter()
+            .filter(|row| row.lints.iter().any(|lint| read.contains(lint)))
+            .map(|row| row.tool)
+            .collect();
         Ok(Settings {
             tools,
             shipped,
             lints,
+            read,
             // Config::load finds them in the repository.
             cargo: Vec::new(),
         })
@@ -321,14 +329,17 @@ impl Settings {
 
     /// How `head` tunes the tools that judge code differently: any setting added, removed or
     /// changed, since Fearlezz cannot tell which way a tool's option loosens it. Each as
-    /// `settings.<tool>.<key>` and how. Agent settings, the skill and hooks are left out.
+    /// `settings.<tool>.<key>` and how. Only a tool the base already has settings for or a
+    /// check reading the findings of counts: a tool the change adds only strengthens the
+    /// proof, whatever settings it comes with. Agent settings, the skill and hooks are left
+    /// out.
     pub(crate) fn weakenings(&self, head: &Settings) -> Vec<(String, Change)> {
         let empty = Table::new();
         let mut found = Vec::new();
         let tools: BTreeSet<Tool> = self
             .tools
             .keys()
-            .chain(head.tools.keys())
+            .chain(&self.read)
             .copied()
             .filter(|t| *t != Tool::Claude)
             .collect();

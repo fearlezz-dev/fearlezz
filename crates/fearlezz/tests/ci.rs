@@ -799,6 +799,47 @@ fn removing_a_tool_setting_is_red_and_named() {
     );
 }
 
+/// A synced repository whose config uses `base`, and a synced branch that turns it into
+/// `head`, and what CI says about it. Each is the `use` line and then tables; the pieces'
+/// checks are off, so only the floor can fail.
+fn ci_from_to(base: (&str, &str), head: (&str, &str)) -> common::Output {
+    let config = |(pieces, tables): (&str, &str)| format!("{pieces}{NO_PROOF}{CHECKS}{tables}");
+    let repo = repo_with(&config(base));
+    repo.fz(&["setup", "sync"]);
+    repo.commit("sync");
+    repo.branch("feat/x");
+    repo.write("src/lib.rs", "fn b() {}\n");
+    repo.commit("change");
+    repo.write("fearlezz.toml", &full(&config(head)));
+    repo.fz(&["setup", "sync"]);
+    repo.commit("tune");
+    ci(&repo)
+}
+
+const TYPESCRIPT: (&str, &str) = ("use = [\"typescript\"]\n", "[check.tsc]\noff = true\n");
+
+const BIOME: (&str, &str) = (
+    "use = [\"typescript\", \"biome\"]\n",
+    "[check.tsc]\noff = true\n\n[check.biome-lint]\noff = true\n\n[check.biome-format]\noff = true\n",
+);
+
+#[test]
+fn adding_a_tool_with_its_settings_is_fine() {
+    let out = ci_from_to(TYPESCRIPT, BIOME);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("weakens"), "{}", out.stdout);
+}
+
+#[test]
+fn adding_a_setting_to_a_tool_the_base_has_is_red_and_named() {
+    let wider = format!("{}\n[settings.biome.formatter]\nlineWidth = 120\n", BIOME.1);
+    let out = ci_from_to(BIOME, (BIOME.0, &wider));
+    assert_weakens(
+        &out,
+        "weakens settings.biome.formatter.lineWidth: it is added (120)",
+    );
+}
+
 #[test]
 fn agent_settings_may_change() {
     let out = ci_after_tuning(|c| c.replace("Bash(ls)", "Bash(eza)"));
