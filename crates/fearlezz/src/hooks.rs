@@ -14,8 +14,9 @@ use crate::names::Named;
 /// What a session start hook that failed tells the agent. No single quote, since the hook
 /// prints it from a single quoted shell word.
 const HOOK_FAILED: &str = "fearlezz setup hook failed, so Fearlezz could not say where the work \
-                           stands. An older Fearlezz may be first on PATH: check which -a \
-                           fearlezz and fearlezz --version, and tell the developer.";
+                           stands. An older Fearlezz may be first on PATH, or none is \
+                           installed: check which -a fearlezz and fearlezz --version, and tell \
+                           the developer.";
 
 /// An agent whose hooks Fearlezz writes and answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -301,7 +302,8 @@ pub(crate) fn older_on_path() -> Vec<(PathBuf, String)> {
     let mut seen = Vec::new();
     let mut older = Vec::new();
     let path = std::env::var_os("PATH").unwrap_or_default();
-    for dir in std::env::split_paths(&path) {
+    // A relative entry (empty or `.`) would run a `fearlezz` of the current folder.
+    for dir in std::env::split_paths(&path).filter(|dir| dir.is_absolute()) {
         let candidate = dir.join("fearlezz");
         let Ok(real) = std::fs::canonicalize(&candidate) else {
             continue;

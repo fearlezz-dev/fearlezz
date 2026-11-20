@@ -301,6 +301,46 @@ fn on_github_actions_without_the_id_token_permission_it_says_why_there_is_no_pag
 }
 
 #[test]
+fn a_repository_with_the_host_off_sends_nothing_and_says_nothing() {
+    let host = FakeHost::start();
+    let repo = repo(&host);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    let url = format!("url = \"{}\"\n", host.url);
+    repo.write("fearlezz.toml", &config.replace(&url, &format!("{url}off = true\n")));
+    repo.commit("no host");
+    let (out, text) = ci(&repo, &[("GITHUB_ACTIONS".into(), "true".into())]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(!out.stdout.contains("proof page"), "{}", out.stdout);
+    assert!(!text.contains("id-token"), "{text}");
+    // Even a job that may sign in sends nothing.
+    let (out, _) = ci(&repo, &host.token_env());
+    assert!(out.ok, "{}", out.stdout);
+    assert!(host.api().is_empty(), "nothing is asked: {:?}", host.api());
+}
+
+#[test]
+fn a_pull_request_from_a_fork_is_not_told_to_add_the_permission() {
+    let host = FakeHost::start();
+    let repo = repo(&host);
+    let event = repo.path(".runs/event.json");
+    std::fs::write(
+        &event,
+        r#"{"pull_request":{"number":7,"title":"fix: x","head":{"sha":"abc","ref":"x","repo":{"fork":true}}}}"#,
+    )
+    .unwrap();
+    let (out, text) = ci(
+        &repo,
+        &[
+            ("GITHUB_ACTIONS".into(), "true".into()),
+            ("GITHUB_EVENT_NAME".into(), "pull_request".into()),
+            ("GITHUB_EVENT_PATH".into(), event.to_str().unwrap().into()),
+        ],
+    );
+    assert!(!out.stdout.contains("id-token"), "{}", out.stdout);
+    assert!(!text.contains("id-token"), "{text}");
+}
+
+#[test]
 fn a_host_that_fails_never_fails_the_proof() {
     for broken in [
         "/api/v2/runs",

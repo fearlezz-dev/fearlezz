@@ -97,6 +97,12 @@ impl Workflow {
         self.text("/pull_request/title")
     }
 
+    /// Whether the event is a pull request from a fork, whose jobs GitHub never gives an OIDC
+    /// token, whatever the workflow asks.
+    pub(crate) fn fork(&self) -> bool {
+        self.event.pointer("/pull_request/head/repo/fork") == Some(&Value::Bool(true))
+    }
+
     /// The pull request's head commit, when the event is one.
     pub(crate) fn head(&self) -> Option<&str> {
         self.text("/pull_request/head/sha")

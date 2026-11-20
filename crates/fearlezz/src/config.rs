@@ -36,6 +36,9 @@ pub(crate) struct Config {
     pub no_proof: Globs,
     /// The proof host CI sends its bundle to, when it is not the default one.
     pub host: Option<String>,
+    /// The repository sends nothing to the proof host (`[host] off = true`): neither CI nor a
+    /// signed in CLI, and CI never says that its page was not sent.
+    pub host_off: bool,
     /// The places a release goes to, `fearlezz run --release`.
     pub releases: Vec<crate::release::Place>,
     /// The machines CI proves the checks on, by name; empty for a project proven in one job.
@@ -599,7 +602,9 @@ struct RawConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawHost {
-    url: String,
+    url: Option<String>,
+    #[serde(default)]
+    off: bool,
 }
 
 #[derive(Deserialize)]
@@ -782,7 +787,8 @@ impl Config {
             scheduled: false,
             base,
             env,
-            host: raw.host.map(|h| h.url),
+            host_off: raw.host.as_ref().is_some_and(|h| h.off),
+            host: raw.host.and_then(|h| h.url),
             releases: crate::release::parse(raw.release.as_ref())?,
             platforms,
             table,

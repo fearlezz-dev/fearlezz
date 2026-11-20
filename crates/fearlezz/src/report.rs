@@ -137,9 +137,13 @@ impl Report {
             }),
         };
         // A host that fails never fails the proof: CI proves the commit anyway.
-        let host = host::Host::from_actions(ctx.config.host.as_deref());
-        // A job on GitHub Actions that may not request an OIDC token could have had the page.
-        let unsent = (host.is_none() && workflow.actions).then_some(host::NO_ID_TOKEN);
+        let host = host::Host::from_actions(ctx.config.host.as_deref())
+            .filter(|_| !ctx.config.host_off);
+        // A job on GitHub Actions that may not request an OIDC token could have had the page,
+        // unless the repository sends nothing to the host or the job is a fork's, which never
+        // gets a token.
+        let unsent = (host.is_none() && workflow.actions && !ctx.config.host_off && !workflow.fork())
+            .then_some(host::NO_ID_TOKEN);
         if let Some(why) = unsent {
             println!("proof page not sent: {why}");
         }
@@ -169,7 +173,8 @@ impl Report {
         let head = ctx.git.head()?;
         let mut proof = Proof::new(ctx.git.head_short()?, head.clone(), ctx.config.base.clone());
         let url = crate::host_url(Some(&ctx.config));
-        let login = feedback::login_of(&url).filter(|_| !targets.is_empty());
+        let login = feedback::login_of(&url)
+            .filter(|_| !targets.is_empty() && !ctx.config.host_off);
         let stream = login.and_then(|login| {
             let (Some(repository), Ok(branch)) = (ctx.git.github_repository(), ctx.git.branch())
             else {
@@ -426,17 +431,43 @@ pub(crate) fn print_failure(f: &RunResult, steps: &[String]) {
 }
 
 /// The steps of a check whose steps join commands with `&&`, as a TOML list with each
-/// command a step of its own; None when no step does.
+/// command a step of its own; None when no step does, or when splitting would change what
+/// runs: a step with quotes or `||`, or a command that changes the shell for the next one
+/// (`cd`, `export`, `source`, `.`, `pushd` or a variable set on its own), since each step is
+/// a shell of its own.
 fn split_steps(steps: &[String]) -> Option<String> {
     if !steps.iter().any(|step| step.contains("&&")) {
         return None;
     }
-    let split: Vec<String> = steps
+    if steps
+        .iter()
+        .any(|step| step.contains(['"', '\'']) || step.contains("||"))
+    {
+        return None;
+    }
+    let commands: Vec<&str> = steps
         .iter()
         .flat_map(|step| step.split("&&"))
-        .map(|command| toml::Value::String(command.trim().to_owned()).to_string())
+        .map(str::trim)
+        .collect();
+    if commands.iter().any(|command| changes_shell(command)) {
+        return None;
+    }
+    let split: Vec<String> = commands
+        .iter()
+        .map(|command| toml::Value::String((*command).to_owned()).to_string())
         .collect();
     Some(format!("[{}]", split.join(", ")))
+}
+
+/// Whether a command changes the shell it runs in for the commands after it.
+fn changes_shell(command: &str) -> bool {
+    let first = command.split_whitespace().next().unwrap_or_default();
+    let assigns = first.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    });
+    matches!(first, "cd" | "export" | "source" | "." | "pushd" | "popd" | "set" | "unset")
+        || (assigns && command.split_whitespace().count() == 1)
 }
 
 /// The items of one list the terminal shows at most: failed tests, findings.

@@ -237,6 +237,10 @@ stage = "working"
 [check.steps]
 run = ["true", "test ! -e src/broken"]
 stage = "working"
+
+[check.moved]
+run = "cd src && test ! -e broken"
+stage = "working"
 "#;
     let repo = Repo::new(config, &[("src/lib.rs", "")]);
     repo.branch("feat/x");
@@ -247,7 +251,9 @@ stage = "working"
     let hint = "  fix: list the commands of check joined as steps, run = [\"true\", \"test ! -e \
                 src/broken\"]";
     assert!(out.stdout.contains(hint), "{}", out.stdout);
-    // A check already in steps is told nothing of the kind.
+    // A check already in steps is told nothing of the kind, nor one whose first command
+    // changes the shell for the next, which a step of its own would lose.
+    assert!(out.stdout.contains("fail moved"), "{}", out.stdout);
     assert_eq!(out.stdout.matches("as steps").count(), 1, "{}", out.stdout);
 }
 
