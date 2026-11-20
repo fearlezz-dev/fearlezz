@@ -85,12 +85,22 @@ pub async fn installation(config: &Config, repo: &str) -> Result<Option<u64>> {
 /// Whether anyone may read a repository. Only the app can tell for someone without a session;
 /// a repository it is not installed on counts as private.
 pub async fn public(config: &Config, repo: &str) -> Result<bool> {
+    Ok(public_branch(config, repo).await?.is_some())
+}
+
+/// The default branch of a repository anyone may read, as the app sees it (empty if GitHub names
+/// none); None for one that is private, or that the app is not installed on.
+pub(crate) async fn public_branch(config: &Config, repo: &str) -> Result<Option<String>> {
     let Some(token) = installation_token(config, repo).await? else {
-        return Ok(false);
+        return Ok(None);
     };
     let url = format!("{}/repos/{repo}", config.github_api);
     let reply = call(Method::Get, &url, Some(&token), None).await?;
-    Ok(reply.status == 200 && reply.body["private"] == false)
+    if reply.status != 200 || reply.body["private"] != false {
+        return Ok(None);
+    }
+    let branch = reply.body["default_branch"].as_str().unwrap_or_default();
+    Ok(Some(branch.to_owned()))
 }
 
 /// A token of the app's installation on a repository, to ask GitHub as the app; None when the

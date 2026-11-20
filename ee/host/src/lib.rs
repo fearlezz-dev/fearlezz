@@ -10,7 +10,8 @@
 //! `ee/app`, served from static assets: a work's page, a repository's list of works, and a
 //! work's page through a share link, which only views) and their live connections, each held by
 //! a Durable Object of the work or the repository; the files origin serves the runs' files,
-//! which CI wrote, so nothing of them ever runs where the session cookie lives.
+//! which CI wrote, so nothing of them ever runs where the session cookie lives, and at stable
+//! addresses the newest proven pictures of a public repository's default branch, for its README.
 
 mod access;
 mod api;
@@ -23,6 +24,7 @@ mod jobs;
 mod notes;
 mod oidc;
 mod pages;
+mod readme;
 mod repository;
 mod review;
 mod room;

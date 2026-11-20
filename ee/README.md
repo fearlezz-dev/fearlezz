@@ -338,7 +338,7 @@ answers on two origins and tells them apart by the request's host:
 - the **app origin** (`APP_ORIGIN`, `https://fearlezz.seamlezz.com` by default): sign in, the
   API, the pages and their live connections;
 - the **files origin** (`FILES_ORIGIN`, `https://fearlezz.seamlezz.net` by default): the runs'
-  files, and nothing else. It reads no cookies and sets none.
+  files under a grant, and README pictures (below), and nothing else. It reads no cookies and sets none.
 
 Files origin: `/<grant>/<path>` is the run's picture, film or text at that path, with `Range`
 support (films need it). Only png, jpeg, webp, gif, avif, mp4, webm and txt are served, each with
@@ -351,6 +351,34 @@ URL is what opens it. The grant is
 out, and the mac is HMAC-SHA256 with `SIGNING_KEY`. A missing, expired or altered grant, or one
 for another run, gets `404`. Files answer with `Content-Security-Policy: frame-ancestors
 <APP_ORIGIN>`.
+
+### README pictures
+
+`<FILES_ORIGIN>/readme/<owner>/<repo>/<check>/<picture>` is a stable address for a README to
+embed: the picture `<picture>` (its name in the check's look, its after) of the newest CI run of
+a push to the repository's default branch that ran the check and whose proof did not fail. It
+holds no grant, and a grant always holds a dot, so `readme` never names one.
+
+- **Which run.** Only a run whose OIDC token's ref was `refs/heads/<default branch>`: never a
+  pull request, another branch or a local run. Its proof must not have failed as review judges
+  it (`fearlezz_proof::review::failed`: nothing to fix, no failed check, and what it weakens
+  covered by the host's own accept of its head), so a newer push that failed leaves the older
+  picture, and a picture the newest proven run of the check no longer takes is `404`. The bar is
+  the run's proof, not the check alone: a README shows what the default branch proved. Of a
+  split proof, each leg's own run counts, since the gate does not stream to the host. The 20
+  newest done pushes that ran the check are looked through.
+- **Check and picture.** Both may hold slashes; the path names the longest check of the run its
+  leading segments spell, and the rest is the picture.
+- **Only public repositories.** A README's picture loads for anyone, through GitHub's image
+  proxy, without a sign in. The app asks GitHub for the repository (`GET /repos/{owner}/{repo}`)
+  and its default branch, kept 5 minutes like every answer of GitHub; a private repository, one
+  without the app, and anything not there is `404`.
+- **Caching.** `Cache-Control: public, max-age=300` and an `ETag` of the file's SHA-256, so a
+  cache that asks again with `If-None-Match` gets `304`; a push shows within five minutes. The
+  rest is what every file of this origin answers: the type its name pins, `nosniff`, `Range`.
+
+A light and a dark variant are two pictures, chosen in the README with
+`<picture><source media="(prefers-color-scheme: dark)" srcset="...">` (the root README shows it).
 
 ### Who sees a page
 
@@ -372,7 +400,8 @@ read it, and their role on it.
   only the row's random 128 bit id. Logging out deletes the row, so an old cookie signs in
   no one.
 - **GitHub's answers are cached** in D1 (`cache`): who may read a repository and their role
-  there, per login and repository, and whether a repository is public, each for 5 minutes; GitHub's OIDC keys for
+  there, per login and repository, and whether a repository is public and the default branch a
+  public one's README pictures come from, each for 5 minutes; GitHub's OIDC keys for
   an hour, fetched again once when a token names a key id the cached set lacks. So a change
   of access on GitHub shows here within 5 minutes.
 - **A live page follows the same rule while it stays open.** Its room asks again for each page

@@ -5,11 +5,14 @@
 //! request: only the picture and film types a page shows are served, each with the type its
 //! name pins and `nosniff`, so nothing here ever runs as a page, and served from here they
 //! could reach nothing of the signed in app anyway.
+//!
+//! It also serves README pictures at `/readme/<owner>/<repo>/<check>/<picture>`, with no grant:
+//! the newest proven picture of a push to a public repository's default branch (`readme.rs`).
 
 use serde::{Deserialize, Serialize};
 use worker::{Env, Headers, Range, Request, Response, ResponseBody};
 
-use crate::{Answer, Config, Refusal, crypto, not_found, now};
+use crate::{Answer, Config, Refusal, crypto, not_found, now, readme};
 
 const GRANT: &str = "grant";
 
@@ -56,13 +59,29 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
         .trim_start_matches('/')
         .split_once('/')
         .ok_or_else(not_found)?;
+    // A grant always holds a dot, so `readme` is never one.
+    if sealed == "readme" {
+        return readme::serve(req, env, config, rest).await;
+    }
     let grant: Grant = crypto::unseal(&config.signing_key, GRANT, sealed)
         .await?
         .filter(|grant: &Grant| grant.exp > now())
         .ok_or_else(not_found)?;
-    let stored = stored(env, &grant.repo, &grant.run, rest).await?;
-    let size = stored.size;
+    let stored = stored(env, &grant.repo, &grant.run, &decoded(rest)?).await?;
+    // A file at a path of a run can be replaced while the run goes; the grant lasts an hour.
+    send(req, env, config, &stored, "private, no-cache").await
+}
 
+/// The file `stored` as the files origin answers it, whole or the range a `Range` header asks
+/// for, kept by caches as `cache` says.
+pub(crate) async fn send(
+    req: &Request,
+    env: &Env,
+    config: &Config,
+    stored: &Stored,
+    cache: &str,
+) -> Answer {
+    let size = stored.size;
     let headers = Headers::new();
     headers.set("Content-Type", stored.kind)?;
     headers.set("Accept-Ranges", "bytes")?;
@@ -78,8 +97,7 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
     headers.set("X-Frame-Options", "SAMEORIGIN")?;
     // The page reads a text of a look to diff it; the grant in the URL is what opens it.
     headers.set("Access-Control-Allow-Origin", &config.app_origin)?;
-    // A file at a path of a run can be replaced while the run goes; the grant lasts an hour.
-    headers.set("Cache-Control", "private, no-cache")?;
+    headers.set("Cache-Control", cache)?;
     let range = req
         .headers()
         .get("Range")?
@@ -105,33 +123,38 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
         .with_headers(headers))
 }
 
+/// A path as a URL holds it, decoded: `404` for one that does not decode.
+pub(crate) fn decoded(path: &str) -> Result<String, Refusal> {
+    Ok(percent_encoding::percent_decode_str(path)
+        .decode_utf8()
+        .map_err(|_| not_found())?
+        .into_owned())
+}
+
 /// Where R2 keeps the bytes `sha256` of the repository `repo` (lowercased): each repository
 /// keeps its own, so a blob is only ever served for runs of its repository.
 pub(crate) fn blob_key(repo: &str, sha256: &str) -> String {
     format!("blobs/{repo}/{sha256}")
 }
 
-/// A run's file, as both origins serve it: the type its name pins, where its bytes are kept,
-/// and their size.
+/// A run's file, as both origins serve it: the type its name pins, its SHA-256, where its bytes
+/// are kept, and their size.
 pub(crate) struct Stored {
     pub kind: &'static str,
+    pub sha256: String,
     pub key: String,
     pub size: u64,
 }
 
-/// The file at `path` (escaped, as a URL holds it) of the run `run` of `repo` (lowercased):
-/// `404` for a path that does not decode, a type never served, or a file the run lacks.
+/// The file at `path` of the run `run` of `repo` (lowercased): `404` for a type never served, or
+/// a file the run lacks.
 pub(crate) async fn stored(
     env: &Env,
     repo: &str,
     run: &str,
     path: &str,
 ) -> Result<Stored, Refusal> {
-    let path = percent_encoding::percent_decode_str(path)
-        .decode_utf8()
-        .map_err(|_| not_found())?
-        .into_owned();
-    let kind = content_type(&path).ok_or_else(not_found)?;
+    let kind = content_type(path).ok_or_else(not_found)?;
     #[derive(Deserialize)]
     struct Row {
         sha256: String,
@@ -142,13 +165,14 @@ pub(crate) async fn stored(
         .prepare(
             "SELECT f.sha256, f.size FROM files f JOIN runs r ON r.id = f.run JOIN works w ON w.id = r.work WHERE r.id = ?1 AND w.repo = ?2 AND f.path = ?3",
         )
-        .bind(&[run.into(), repo.into(), path.as_str().into()])?
+        .bind(&[run.into(), repo.into(), path.into()])?
         .first(None)
         .await?;
     let row = row.ok_or_else(not_found)?;
     Ok(Stored {
         kind,
         key: blob_key(repo, &row.sha256),
+        sha256: row.sha256,
         size: row.size as u64,
     })
 }

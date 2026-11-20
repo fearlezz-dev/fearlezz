@@ -18,6 +18,8 @@ mod local;
 mod media;
 #[path = "host/notes.rs"]
 mod notes;
+#[path = "host/readme.rs"]
+mod readme;
 #[path = "host/repository.rs"]
 mod repository;
 #[path = "host/share.rs"]
@@ -532,6 +534,26 @@ fn main() {
         (
             "the_repository_page_updates_live",
             repository::the_repository_page_updates_live,
+        ),
+        (
+            "a_readme_picture_is_the_newest_proven_push_to_the_default_branch",
+            readme::a_readme_picture_is_the_newest_proven_push_to_the_default_branch,
+        ),
+        (
+            "a_readme_picture_never_comes_from_another_branch_or_a_pull_request",
+            readme::a_readme_picture_never_comes_from_another_branch_or_a_pull_request,
+        ),
+        (
+            "a_readme_picture_of_a_check_in_a_folder_names_the_check_then_the_picture",
+            readme::a_readme_picture_of_a_check_in_a_folder_names_the_check_then_the_picture,
+        ),
+        (
+            "a_readme_picture_of_a_private_repository_is_not_found",
+            readme::a_readme_picture_of_a_private_repository_is_not_found,
+        ),
+        (
+            "an_unknown_readme_picture_is_not_found",
+            readme::an_unknown_readme_picture_is_not_found,
         ),
         (
             "the_policy_decides_who_reads_a_private_repository",

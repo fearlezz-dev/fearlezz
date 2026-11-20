@@ -258,11 +258,27 @@ pub(crate) async fn speaker(
         .ok_or_else(|| Refusal::new(401, format!("sign in to {what}")))
 }
 
+/// The branch whose pictures a README shows: the default branch of `repo` (lowercased) when
+/// anyone may read it, None for a private repository or one without the app, since a README's
+/// picture loads for anyone, without a sign in. GitHub's word, kept like every other.
+pub(crate) async fn readme_branch(
+    env: &Env,
+    config: &Config,
+    repo: &str,
+) -> Result<Option<String>, Refusal> {
+    match word(env, config, Question::ReadmeBranch, repo, Asking::GitHub).await? {
+        Word::Is(branch) if !branch.is_empty() => Ok(Some(branch)),
+        Word::Is(_) | Word::BadToken | Word::Unknown => Ok(None),
+    }
+}
+
 /// What the host asks GitHub about a repository.
 #[derive(Clone, Copy)]
 enum Question<'a> {
     /// Whether anyone may read it, as the app sees it.
     Public,
+    /// Its default branch when anyone may read it, as the app sees it; empty otherwise.
+    ReadmeBranch,
     /// Whether the person may read it, as their token sees it.
     Reads(&'a Person),
     /// The person's role on it.
@@ -290,6 +306,7 @@ async fn word(
 ) -> Result<Word, Refusal> {
     let key = match question {
         Question::Public => format!("public:{}", repo.to_lowercase()),
+        Question::ReadmeBranch => format!("readme:{}", repo.to_lowercase()),
         Question::Reads(person) => key("reads", person, repo),
         Question::Role(person) => key("role", person, repo),
     };
@@ -299,9 +316,14 @@ async fn word(
     if asking == Asking::Cache {
         return Ok(Word::Unknown);
     }
-    let yes = |b: bool| if b { "yes" } else { "no" };
+    let yes = |b: bool| if b { "yes" } else { "no" }.to_owned();
     let word = match question {
         Question::Public => Some(yes(github::public(config, repo).await?)),
+        Question::ReadmeBranch => Some(
+            github::public_branch(config, repo)
+                .await?
+                .unwrap_or_default(),
+        ),
         Question::Reads(person) => match github::sight(config, repo, &person.token).await? {
             github::Sight::Reads => Some(yes(true)),
             github::Sight::Nothing => Some(yes(false)),
@@ -309,13 +331,13 @@ async fn word(
         },
         Question::Role(person) => github::permission(config, repo, &person.login, &person.token)
             .await?
-            .map(Role::word),
+            .map(|role| role.word().to_owned()),
     };
     let Some(word) = word else {
         return Ok(Word::BadToken);
     };
-    cache::put(env, &key, word, GITHUB_SECONDS).await?;
-    Ok(Word::Is(word.to_owned()))
+    cache::put(env, &key, &word, GITHUB_SECONDS).await?;
+    Ok(Word::Is(word))
 }
 
 fn key(question: &str, person: &Person, repo: &str) -> String {

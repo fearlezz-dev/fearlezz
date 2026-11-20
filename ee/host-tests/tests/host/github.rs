@@ -197,6 +197,9 @@ impl FakeGitHub {
                 ),
                 // Its check runs fail or hang when a test says so.
                 ("owner/stalled".to_owned(), reviewed(false, 11)),
+                // README pictures: public, and private so they are never served.
+                ("owner/readme".to_owned(), repo(false, Some(13), &[])),
+                ("owner/unseen".to_owned(), repo(true, Some(14), &[])),
                 // The local run tests: each CLI test signs in as a login of its own.
                 (
                     "owner/local".to_owned(),
@@ -529,6 +532,7 @@ fn answer(
                 json!({
                     "full_name": full,
                     "private": repo.private,
+                    "default_branch": "main",
                     "permissions": {"admin": false, "push": false, "pull": reads},
                 }),
             )

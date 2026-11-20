@@ -161,6 +161,25 @@ A change that weakens the proof the base branch requires (a check turned off, an
 
 The proof host is where hosted review happens. Its page of a work is live: it fills in as CI runs, with every changed picture compared with the base. People with write access say per picture that it looks right, or leave a note on its before, its after or both; an admin accepts what a change weakens there, which runs the proof job again. The host writes where review stands to the pull request as the `Fearlezz review` check run and one comment. An agent signs in with `fearlezz setup login` and reads the open notes, with their pictures, through `fearlezz --notes`. Once signed in, a local `fearlezz run` shows on the page too, marked unproven: it is the agent's word, so it never moves the review. How it works is in [`ee/README.md`](ee/README.md).
 
+### Pictures in your README
+
+A public repository with the app can embed the stills and films its proof takes. Each picture has a stable address on the host's files origin:
+
+```text
+https://fearlezz.seamlezz.net/readme/<owner>/<repo>/<check>/<picture>
+```
+
+It always shows that picture from the newest push to the default branch whose proof passed, so the README follows every push with no pictures branch to keep. `<picture>` is its name in the check's look (as `fearlezz run` lists it, for example `card/light.png`). Pull requests, other branches and local runs never change it, and a private repository's pictures are never served. A light and a dark picture are two pictures:
+
+```html
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://fearlezz.seamlezz.net/readme/owner/app/screens/home/dark.webp">
+  <img alt="The home screen" src="https://fearlezz.seamlezz.net/readme/owner/app/screens/home/light.webp">
+</picture>
+```
+
+Browsers and GitHub keep a picture up to five minutes, so a push shows within that.
+
 ### Several platforms, several jobs
 
 A check that must pass on more than one machine names its platforms, and Fearlezz splits the proof over jobs: one leg per platform, and per `job` a check names on it.

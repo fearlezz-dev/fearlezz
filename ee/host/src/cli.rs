@@ -319,7 +319,7 @@ pub async fn file(req: &Request, env: &Env, config: &Config, run: &str, path: &[
     bearer(req)?.ok_or_else(|| Refusal::new(401, SIGN_IN))?;
     let row = row.ok_or_else(not_found)?;
     reads(req, env, config, &row.repo).await?;
-    let stored = files::stored(env, &row.repo, run, &path.join("/")).await?;
+    let stored = files::stored(env, &row.repo, run, &files::decoded(&path.join("/"))?).await?;
     let body = files::body(env, &stored.key, None).await?;
     let headers = Headers::new();
     headers.set("Content-Type", stored.kind)?;
