@@ -217,17 +217,71 @@ pub(crate) fn unshown(red: &Red) -> Option<Unshown> {
     (red.verdict == Verdict::NotRed).then_some(Unshown::PassesOnBase)
 }
 
-/// Whether the change says it fixes a bug. The pull request title decides when it is known
-/// (in CI), since with a squash merge it is the commit: a `feat:` title with an interim
-/// `fix:` commit is no fix. Without a title (locally), any commit since `base`, the base
-/// commit, whose subject is a conventional `fix:` commit makes it one, so a later format or
-/// merge commit does not hide an earlier fix; uncommitted work with no commits of its own is
-/// not a fix yet.
-pub(crate) fn is_fix_change(git: &Git, base: &str) -> Result<bool> {
-    if let Some(title) = crate::action::Workflow::read().title() {
-        return Ok(is_fix(title));
+/// Whether the change says it fixes a bug, and what says so.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Fix {
+    pub is: bool,
+    /// What decided it: the pull request title, the first `fix:` commit, or none of them.
+    pub by: By,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum By {
+    /// The pull request title, in CI or from `gh` locally.
+    Title(String),
+    /// A commit since the base whose subject is a `fix:` commit: its short id and subject.
+    Commit(String, String),
+    /// No title, and no commit since the base is a `fix:` commit.
+    NoFixCommit,
+}
+
+impl Fix {
+    /// The line saying whether red before green is needed, and what says so.
+    pub(crate) fn line(&self) -> String {
+        let lead = if self.is {
+            "red before green"
+        } else {
+            "red before green not needed"
+        };
+        match &self.by {
+            By::Title(title) => format!("{lead}: the pull request title is {title}"),
+            By::Commit(id, subject) => {
+                format!("{lead}: commit {id} is {subject} (no pull request title yet)")
+            }
+            By::NoFixCommit => {
+                format!("{lead}: no commit since the base is fix: (no pull request title yet)")
+            }
+        }
     }
-    Ok(git.subjects_since(base)?.iter().any(|s| is_fix(s)))
+}
+
+/// Whether the change says it fixes a bug. The change's title decides when there is one (the
+/// pull request's, in CI or from `gh`; see [`crate::title`]), since with a squash merge it is
+/// the commit: a `feat:` title with an interim `fix:` commit is no fix. Without a title, any
+/// commit since `base`, the base commit, whose subject is a conventional `fix:` commit makes
+/// it one, so a later format or merge commit does not hide an earlier fix; uncommitted work
+/// with no commits of its own is not a fix yet.
+pub(crate) fn is_fix_change(git: &Git, base: &str) -> Result<Fix> {
+    if let Some(crate::title::Title(title)) = crate::title::of(git) {
+        return Ok(Fix {
+            is: is_fix(&title),
+            by: By::Title(title),
+        });
+    }
+    let fix = git
+        .commits_since(base)?
+        .into_iter()
+        .find(|(_, subject)| is_fix(subject));
+    Ok(match fix {
+        Some((id, subject)) => Fix {
+            is: true,
+            by: By::Commit(id, subject),
+        },
+        None => Fix {
+            is: false,
+            by: By::NoFixCommit,
+        },
+    })
 }
 
 /// Whether a commit subject or title is a conventional `fix:` commit.

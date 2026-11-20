@@ -1,6 +1,7 @@
 //! `[commits]`: the built in `commits` check, which holds a change to Conventional Commits
-//! (`type(scope)!: words`). In CI the pull request title is judged, since with a squash merge
-//! it is the commit; locally (no title) every commit since the base commit is. Merge commits,
+//! (`type(scope)!: words`). The change's title is judged when it has one (the pull request's,
+//! in CI or from `gh` locally; see [`crate::title`]), since with a squash merge it is the
+//! commit; without one every commit since the base commit is. Merge commits,
 //! the `Revert "..."` commits git writes and the `fixup!` and `squash!` commits an autosquash
 //! folds away are left alone.
 
@@ -71,13 +72,13 @@ impl Commits {
     }
 
     fn messages(&self, root: &Path) -> Result<Vec<Message>> {
-        if let Some(title) = crate::action::Workflow::read().title() {
+        let git = crate::git::Git::discover(root)?;
+        if let Some(crate::title::Title(title)) = crate::title::of(&git) {
             return Ok(vec![Message {
                 commit: None,
-                subject: title.to_string(),
+                subject: title,
             }]);
         }
-        let git = crate::git::Git::discover(root)?;
         let base = git.base_commit(&self.base)?;
         Ok(git
             .commits_since(&base)?

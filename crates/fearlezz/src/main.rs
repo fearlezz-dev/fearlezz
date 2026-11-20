@@ -41,6 +41,7 @@ mod sops;
 mod state;
 mod store;
 mod text;
+mod title;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};

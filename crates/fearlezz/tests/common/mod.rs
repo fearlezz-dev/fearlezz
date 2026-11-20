@@ -92,6 +92,24 @@ impl Repo {
         git_in(&self.root, args)
     }
 
+    /// Points `origin` at GitHub and puts a fake `gh` running `script` first on a PATH, which
+    /// it returns, so a run asks it for the branch's pull request. The fake lives in the git
+    /// folder, outside the work.
+    pub(crate) fn fake_gh(&self, script: &str) -> String {
+        self.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ]);
+        let bin = self.path(".git/fake-bin");
+        fs::create_dir_all(&bin).unwrap();
+        let gh = bin.join("gh");
+        fs::write(&gh, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&gh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        format!("{}:{}", bin.display(), std::env::var("PATH").unwrap())
+    }
+
     pub(crate) fn commit(&self, message: &str) {
         self.git(&["add", "-A"]);
         self.git(&["commit", "-q", "-m", message]);

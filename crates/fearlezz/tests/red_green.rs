@@ -874,3 +874,94 @@ fn a_scheduled_check_runs_red_before_green_like_any_other() {
         out.stdout
     );
 }
+
+/// A fake `gh` whose branch has an open pull request titled `title`.
+fn open_pull(title: &str) -> String {
+    format!("printf '{{\"title\":\"{title}\",\"state\":\"OPEN\"}}'")
+}
+
+#[test]
+fn locally_the_open_pull_request_title_decides_as_in_ci() {
+    let repo = repo();
+    let path = repo.fake_gh(&open_pull("chore: tidy the value"));
+    change(&repo, PASSES_ANYWAY, "fix: review comments");
+    let out = repo.fz_env(FINAL, &[("PATH", &path)]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains(
+            "red before green not needed: the pull request title is chore: tidy the value"
+        ),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn locally_a_fix_title_holds_a_change_without_fix_commits() {
+    let repo = repo();
+    let path = repo.fake_gh(&open_pull("fix: the value is two"));
+    change(&repo, PASSES_ANYWAY, "a plain sentence");
+    let out = repo.fz_env(FINAL, &[("PATH", &path)]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("red before green: the pull request title is fix: the value is two"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn without_gh_the_commits_decide() {
+    let repo = repo();
+    repo.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/acme/widget.git",
+    ]);
+    change(&repo, PASSES_ANYWAY, "fix: the value is two");
+    let id = repo.git(&["rev-parse", "--short", "HEAD"]);
+    let out = repo.fz_env(FINAL, &[("PATH", "/usr/bin:/bin")]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains(&format!(
+            "red before green: commit {} is fix: the value is two (no pull request title yet)",
+            id.trim()
+        )),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_gh_that_fails_means_no_title() {
+    // Not signed in, offline, or no pull request for the branch: gh exits with an error.
+    let repo = repo();
+    let path = repo.fake_gh("echo 'no pull requests found' >&2; exit 1");
+    change(&repo, PASSES_ANYWAY, "chore: tidy");
+    let out = repo.fz_env(FINAL, &[("PATH", &path)]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains(
+            "red before green not needed: no commit since the base is fix: (no pull request \
+             title yet)"
+        ),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn a_closed_pull_request_gives_no_title() {
+    let repo = repo();
+    let path = repo.fake_gh("printf '{\"title\":\"chore: old\",\"state\":\"MERGED\"}'");
+    change(&repo, PASSES_ANYWAY, "fix: the value is two");
+    let out = repo.fz_env(FINAL, &[("PATH", &path)]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("(no pull request title yet)"),
+        "{}",
+        out.stdout
+    );
+}
