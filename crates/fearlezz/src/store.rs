@@ -217,6 +217,7 @@ impl Hasher {
             parts.insert("(secrets)".into(), sha256_hex(names.join("\n").as_bytes()));
         }
         if let Some(builtin) = &check.builtin {
+            parts.insert("(shipped)".into(), crate::config::SHIPPED.into());
             parts.insert(
                 "(builtin)".into(),
                 sha256_hex(builtin.fingerprint().as_bytes()),

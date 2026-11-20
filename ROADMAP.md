@@ -26,7 +26,7 @@ Fearlezz is one excellent tool that helps AI coding agents audit, verify and pro
 | Capability | Notes |
 | --- | --- |
 | Checks, stages | Proof is about behaviour, never files: any change needs every check not on a schedule, and a pass counts only for the inputs it ran on (every file outside `no_proof`, or the check's own `inputs`, a speed hint), so an edit to prose reruns nothing; the final stage runs everything fresh. Glob lists take `!` globs back out, the last match deciding. A check runs at the root, in the folder its `dir` names, or with `each` once in every project folder (`<check>/<folder>`; a Cargo project is a manifest no workspace above names a member); a folder that goes takes its checks with it |
-| Results by input hash | Shared across worktrees, pruned after 30 days |
+| Results by input hash | Shared across worktrees, pruned after 30 days. A built in check (settings, rules, commits) is keyed on what the binary ships, a digest of its source, presets and skill made at build time, not its version, so two development builds of one version never share or contradict its results |
 | Journals | One per piece of work, append only; `fearlezz --all` prints every journal as text |
 | Command line | See, run, say, setup. A tool a check cannot find is named with how to install it; tools in `node_modules/.bin` and `.venv/bin` are found |
 | Starting out | Without `fearlezz.toml`, every command leads to `fearlezz setup init`, which writes a starter from the languages at the root (Rust also from Cargo projects in folders) and `no_proof` for prose |
