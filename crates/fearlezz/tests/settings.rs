@@ -828,24 +828,35 @@ fn settings_results_are_keyed_on_what_the_binary_ships() {
         stored[0]["parts"]
     );
 
-    // The digest follows the files: another skill is another key.
+    // The digest follows every source: a change to any one is another key, while a hidden
+    // file is none.
     let other = tempfile::tempdir().unwrap();
-    for (path, text) in [
-        ("crates/fearlezz/Cargo.toml", "[package]\n"),
-        ("crates/fearlezz/src/main.rs", "fn main() {}\n"),
-        ("crates/fearlezz/presets/rust.toml", "[check.x]\n"),
-        ("skills/fearlezz/SKILL.md", "one skill\n"),
-    ] {
+    let sources = [
+        "crates/fearlezz/Cargo.toml",
+        "crates/fearlezz/src/main.rs",
+        "crates/fearlezz/presets/rust.toml",
+        "skills/fearlezz/SKILL.md",
+        "Cargo.lock",
+        "crates/fearlezz-proof/Cargo.toml",
+        "crates/fearlezz-proof/src/lib.rs",
+    ];
+    for path in sources {
         let path = other.path().join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
+        std::fs::write(path, "one\n").unwrap();
     }
     let dir = other.path().join("crates/fearlezz");
-    let before = shipped::digest(&dir).unwrap();
-    std::fs::write(
-        other.path().join("skills/fearlezz/SKILL.md"),
-        "another skill\n",
-    )
-    .unwrap();
-    assert_ne!(before, shipped::digest(&dir).unwrap());
+    let mut seen = vec![shipped::digest(&dir).unwrap()];
+    std::fs::write(other.path().join("crates/fearlezz/src/.#main.rs"), "lock\n").unwrap();
+    assert_eq!(
+        seen[0],
+        shipped::digest(&dir).unwrap(),
+        "a hidden file ships nothing"
+    );
+    for path in sources {
+        std::fs::write(other.path().join(path), "two\n").unwrap();
+        let now = shipped::digest(&dir).unwrap();
+        assert!(!seen.contains(&now), "{path} is not in the digest");
+        seen.push(now);
+    }
 }
