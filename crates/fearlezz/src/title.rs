@@ -106,7 +106,7 @@ struct Kept {
 /// `gh`. Without a GitHub `origin` or a branch it has none, before `gh` is ever asked.
 fn local(git: &Git) -> Found {
     git.github_repository().ok_or(NoTitle::NotOnGitHub)?;
-    let branch = git.branch().map_err(|_| NoTitle::NoBranch)?;
+    let branch = git.branch().ok().ok_or(NoTitle::NoBranch)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
