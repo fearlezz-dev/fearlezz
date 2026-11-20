@@ -321,7 +321,11 @@ pub(crate) fn a_picture_the_newest_proven_push_no_longer_takes_is_not_found() {
         Err(404),
         "the README shows what main proves now"
     );
-    assert_eq!(shows("gone", "new.png").as_deref(), Ok(&b"readme new"[..]));
+    assert_eq!(
+        shows("gone", "new.png").as_deref(),
+        Ok(&b"readme new"[..]),
+        "what it takes now is served"
+    );
 }
 
 pub(crate) fn a_readme_picture_names_the_longest_check_of_its_run() {
@@ -357,24 +361,29 @@ pub(crate) fn a_readme_film_answers_a_range() {
 
     let answer = get_url(&address, &[("Range", "bytes=0-5")]);
     assert_eq!(answer.status, 206, "{}", answer.text());
-    assert_eq!(answer.body, &film[..6]);
+    assert_eq!(answer.body.get(..), film.get(..6), "the first six bytes");
     assert_eq!(
         answer.header("content-range"),
-        Some(format!("bytes 0-5/{}", film.len()).as_str())
+        Some(format!("bytes 0-5/{}", film.len()).as_str()),
+        "the range it sends"
     );
-    assert_eq!(answer.header("content-type"), Some("video/mp4"));
+    assert_eq!(
+        answer.header("content-type"),
+        Some("video/mp4"),
+        "its name pins its type"
+    );
     let tag = answer.header("etag").unwrap_or_default().to_owned();
 
     // A range of the version a cache holds comes as a range only while that version is served.
     let answer = get_url(&address, &[("Range", "bytes=6-"), ("If-Range", &tag)]);
     assert_eq!(answer.status, 206, "{}", answer.text());
-    assert_eq!(answer.body, &film[6..]);
+    assert_eq!(answer.body.get(..), film.get(6..), "the rest of the film");
     let answer = get_url(
         &address,
         &[("Range", "bytes=6-"), ("If-Range", "\"older\"")],
     );
     assert_eq!(answer.status, 200, "another version gets the whole film");
-    assert_eq!(answer.body, film);
+    assert_eq!(answer.body, film, "the whole film");
 }
 
 pub(crate) fn a_readme_picture_waits_for_a_newer_push_to_finish() {
