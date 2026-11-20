@@ -137,13 +137,14 @@ impl Report {
             }),
         };
         // A host that fails never fails the proof: CI proves the commit anyway.
-        let host = host::Host::from_actions(ctx.config.host.as_deref())
-            .filter(|_| !ctx.config.host_off);
+        let host =
+            host::Host::from_actions(ctx.config.host.as_deref()).filter(|_| !ctx.config.host_off);
         // A job on GitHub Actions that may not request an OIDC token could have had the page,
         // unless the repository sends nothing to the host or the job is a fork's, which never
         // gets a token.
-        let unsent = (host.is_none() && workflow.actions && !ctx.config.host_off && !workflow.fork())
-            .then_some(host::NO_ID_TOKEN);
+        let unsent =
+            (host.is_none() && workflow.actions && !ctx.config.host_off && !workflow.fork())
+                .then_some(host::NO_ID_TOKEN);
         if let Some(why) = unsent {
             println!("proof page not sent: {why}");
         }
@@ -173,8 +174,8 @@ impl Report {
         let head = ctx.git.head()?;
         let mut proof = Proof::new(ctx.git.head_short()?, head.clone(), ctx.config.base.clone());
         let url = crate::host_url(Some(&ctx.config));
-        let login = feedback::login_of(&url)
-            .filter(|_| !targets.is_empty() && !ctx.config.host_off);
+        let login =
+            feedback::login_of(&url).filter(|_| !targets.is_empty() && !ctx.config.host_off);
         let stream = login.and_then(|login| {
             let (Some(repository), Ok(branch)) = (ctx.git.github_repository(), ctx.git.branch())
             else {
@@ -466,8 +467,10 @@ fn changes_shell(command: &str) -> bool {
     let assigns = first.split_once('=').is_some_and(|(name, _)| {
         !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     });
-    matches!(first, "cd" | "export" | "source" | "." | "pushd" | "popd" | "set" | "unset")
-        || (assigns && command.split_whitespace().count() == 1)
+    matches!(
+        first,
+        "cd" | "export" | "source" | "." | "pushd" | "popd" | "set" | "unset"
+    ) || (assigns && command.split_whitespace().count() == 1)
 }
 
 /// The items of one list the terminal shows at most: failed tests, findings.

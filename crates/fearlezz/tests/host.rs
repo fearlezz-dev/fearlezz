@@ -306,7 +306,10 @@ fn a_repository_with_the_host_off_sends_nothing_and_says_nothing() {
     let repo = repo(&host);
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
     let url = format!("url = \"{}\"\n", host.url);
-    repo.write("fearlezz.toml", &config.replace(&url, &format!("{url}off = true\n")));
+    repo.write(
+        "fearlezz.toml",
+        &config.replace(&url, &format!("{url}off = true\n")),
+    );
     repo.commit("no host");
     let (out, text) = ci(&repo, &[("GITHUB_ACTIONS".into(), "true".into())]);
     assert!(out.ok, "{}", out.stdout);

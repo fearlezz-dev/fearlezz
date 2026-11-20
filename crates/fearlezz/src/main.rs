@@ -568,8 +568,8 @@ fn gate_accept(
     let run = found
         .iter()
         .find_map(|l| std::fs::read_to_string(l.dir.join(legs::HOST_RUN)).ok());
-    let host = host::Host::from_actions(ctx.config.host.as_deref())
-        .filter(|_| !ctx.config.host_off);
+    let host =
+        host::Host::from_actions(ctx.config.host.as_deref()).filter(|_| !ctx.config.host_off);
     let (Some(run), Some(host)) = (run, host) else {
         return floor::Gate::Job;
     };
