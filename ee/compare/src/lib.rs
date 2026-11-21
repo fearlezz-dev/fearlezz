@@ -6,7 +6,8 @@
 //! `rgb24` drops it) and a film as WebCodecs' I420 planes, which equal ffmpeg's `yuv420p`. A
 //! film is read once: the frames that start a state are kept as they arrive, and the
 //! comparison's second read ([`fearlezz_compare::Reread`]) gives them back, so the page never
-//! decodes a film twice. That costs the states' first frames in memory, a few dozen per film.
+//! decodes a film twice. That costs the states' first frames in memory, kept at the size they
+//! are compared at; a film busy enough to need more than [`KEPT_MAX`] is refused.
 //!
 //! The exports are plain functions over numbers, so the page needs no generated glue: it asks
 //! [`input`] for room, writes a frame's bytes there, and reads answers from [`output`].
@@ -14,6 +15,11 @@
 use std::cell::RefCell;
 
 use fearlezz_compare::{Comparison, Cut, Format, Picture, Reread, Unfit};
+
+/// The most bytes a feed keeps for the second read: a film whose states' first frames need more
+/// (a long scroll or animation, where every frame starts a state) is refused rather than let run
+/// the page's memory out.
+pub const KEPT_MAX: usize = 384 << 20;
 
 /// How the page gives a frame's bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,8 +53,13 @@ struct Frames {
     given: Given,
     w: usize,
     h: usize,
-    /// Each frame that starts a state, by its index in the film, in the comparison's format.
+    /// The size its frames are compared at, which kept frames are scaled to.
+    seen: (usize, usize),
+    /// Each frame that starts a state, by its index in the film, in the comparison's format at
+    /// `seen`.
     kept: Vec<(usize, Vec<u8>)>,
+    /// How many bytes `kept` holds.
+    held: usize,
     /// How many frames it was fed.
     fed: usize,
 }
@@ -57,13 +68,17 @@ impl Feed {
     /// Starts a still or film of `w` by `h` with `frames` frames, given as `given`.
     #[must_use]
     pub fn new(w: usize, h: usize, frames: usize, given: Given) -> Feed {
+        let cut = Cut::new(w, h, frames);
+        let seen = cut.seen();
         Feed {
-            cut: Cut::new(w, h, frames),
+            cut,
             frames: Frames {
                 given,
                 w,
                 h,
+                seen,
                 kept: Vec::new(),
+                held: 0,
                 fed: 0,
             },
         }
@@ -73,8 +88,9 @@ impl Feed {
     ///
     /// # Errors
     ///
-    /// When its bytes do not fill the size the feed was started with.
-    pub fn push(&mut self, bytes: &[u8], start: f64, dur: f64) -> Result<(), Unfit> {
+    /// When its bytes do not fill the size the feed was started with, or the film needs more
+    /// than [`KEPT_MAX`] kept for the second read.
+    pub fn push(&mut self, bytes: &[u8], start: f64, dur: f64) -> Result<(), String> {
         let Feed { cut, frames: f } = self;
         let format = f.given.format();
         let owned;
@@ -87,7 +103,8 @@ impl Feed {
                         w: f.w,
                         h: f.h,
                         len: bytes.len() / 4 * 3,
-                    });
+                    }
+                    .to_string());
                 }
                 owned = bytes
                     .as_chunks::<4>()
@@ -98,11 +115,24 @@ impl Feed {
                 &owned
             }
         };
-        let picture = Picture::new(format, f.w, f.h, data)?;
+        let picture = Picture::new(format, f.w, f.h, data).map_err(|e| e.to_string())?;
         let had = cut.states();
-        cut.push(&picture, start, dur)?;
+        cut.push(&picture, start, dur).map_err(|e| e.to_string())?;
         if cut.states() > had {
-            f.kept.push((f.fed, data.to_vec()));
+            let kept = if f.seen == (f.w, f.h) {
+                data.to_vec()
+            } else {
+                picture.area(f.seen.0, f.seen.1)
+            };
+            f.held += kept.len();
+            if f.held > KEPT_MAX {
+                return Err(format!(
+                    "the film changes too often to compare here ({} states by frame {})",
+                    cut.states(),
+                    f.fed + 1
+                ));
+            }
+            f.kept.push((f.fed, kept));
         }
         f.fed += 1;
         Ok(())
@@ -130,7 +160,7 @@ impl Reread for Kept<'_> {
             return Ok(None);
         };
         self.next += 1;
-        let picture = Picture::new(f.given.format(), f.w, f.h, bytes)?;
+        let picture = Picture::new(f.given.format(), f.seen.0, f.seen.1, bytes)?;
         Ok(Some((*index, picture)))
     }
 }
@@ -225,10 +255,7 @@ pub extern "C" fn frame(id: u32, start: f64, dur: f64) -> u32 {
     PAGE.with_borrow_mut(|page| {
         let Page { input, feeds, .. } = &mut *page;
         let said = match feeds.get_mut(id as usize).and_then(Option::as_mut) {
-            Some(feed) => feed
-                .push(input, start, dur)
-                .map(|()| Vec::new())
-                .map_err(|e| e.to_string()),
+            Some(feed) => feed.push(input, start, dur).map(|()| Vec::new()),
             None => Err(format!("no film {id}")),
         };
         answer(page, said)

@@ -28,7 +28,13 @@ function vint(b: Uint8Array, at: number, marked: boolean): { v: number; len: num
   return { v, len };
 }
 
+/** The longest side a film may have; a larger one says so rather than ask for the memory. */
+const SIDE_MAX = 8192;
+
 function uint(b: Uint8Array, at: number, n: number): number {
+  // An unsigned element is 8 bytes at most; the size comes from the file, so a larger one is a
+  // broken or hostile film, not a reason to loop over it.
+  if (n > 8) throw new Error("the film is not WebM the page can read");
   let v = 0;
   for (let i = 0; i < n; i++) v = v * 256 + (b[at + i] ?? 0);
   return v;
@@ -119,6 +125,8 @@ export function demux(buf: ArrayBuffer): Demuxed {
   }
   const video = tracks.find((t) => t.type === 1);
   if (!video) throw new Error("the film has no video the page can read");
+  if (video.w < 1 || video.h < 1 || video.w > SIDE_MAX || video.h > SIDE_MAX)
+    throw new Error(`the film is ${video.w}x${video.h}, larger than the page compares`);
   const own = raw.filter((r) => r.track === video.number);
   const timed = own.map((r) => ({
     r,

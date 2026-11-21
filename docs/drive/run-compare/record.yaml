@@ -1,0 +1,43 @@
+goal: "see the difference of what it detected between the last one and the new one", between runs (local runs too), not only base against this run, and make it very obvious what is going on
+
+pieces:
+  - id: compare-in-browser
+    status: built
+    tries:
+      - id: wasm-spike
+        what: copy media.rs math into a wasm crate, decode films in Chromium, compare with `setup compare --json`
+        taught: same verdict, states, moments and boxes (0 px) on every pair; WebCodecs VP9 decode equals ffmpeg byte for byte; only the YUV to RGB step (ffmpeg varies by width and build) and canvas scaling differ; browser 1.5 to 2x the CLI, single threaded
+        state: working
+        evidence: [spike/wasm-compare 1575d2d, spike/wasm-compare/README.md, spike/wasm-compare/results/]
+  - id: run-strip
+    status: built
+    open: none
+    tries: []
+
+decided:
+  - id: strip
+    what: "B. Strip of runs" above the picture, base, your look, local runs, now; click a dot to compare with it
+  - id: diff-in-page
+    what: "We should do it immediately locally in the web page, and we should use WASM to make it really fast", "then you still have one algorithm that does the diffing"
+  - id: ci-keeps-base
+    what: CI keeps comparing against the base (the review status and free CI need it); the page compares any other pair
+  - id: films-first
+    what: "Yes, prototype films first"
+  - id: exact-parity
+    what: "Yes, exact everywhere": the CLI reads raw yuv420p planes from ffmpeg, one shared Rust function converts to colour and scales, for the CLI, CI and the browser
+  - id: look-again-default
+    what: a Look again picture opens compared with "Your look"; other pictures open compared with the base
+  - id: own-pr
+    what: separate branch and PR after #59 merges (new scope)
+
+open: []
+
+slices:
+  - id: shared-crate
+    tests: [cargo test -p fearlezz-compare (18), cargo test -p fearlezz --test media, compare-wasm check]
+    status: done # f8d9a8e on feat/compare-in-page, fearlezz run --stage merge ready to merge
+  - id: page-strip
+    tests: [Playwright: strip shows runs, picking a run compares with it, look again opens on your look, wasm outlines match the CLI on a fixture pair]
+    status: built
+
+next: rebase onto main after #59 merges, then the pull request; follow ups: a browser parity test for films over 720p, semi transparent PNG stills

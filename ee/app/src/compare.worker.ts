@@ -161,16 +161,31 @@ async function compare(ask: Ask): Promise<string> {
   return json;
 }
 
-// One comparison at a time: the wasm side has one frame of room and one answer.
+// One comparison at a time: the wasm side has one frame of room and one answer. The page shows
+// one picture, so a newer ask takes the place of one that has not started yet.
 const scope = self as unknown as { onmessage: ((e: MessageEvent<Ask>) => void) | null; postMessage: (answer: Answer) => void };
-let queue = Promise.resolve();
+let running = false;
+let next: Ask | undefined;
 scope.onmessage = (e) => {
-  const ask = e.data;
-  queue = queue.then(async () => {
+  if (next) scope.postMessage({ id: next.id, error: "a newer comparison took its place" });
+  next = e.data;
+  void drain();
+};
+
+async function drain() {
+  if (running) return;
+  running = true;
+  while (next) {
+    const ask = next;
+    next = undefined;
     try {
       scope.postMessage({ id: ask.id, json: await compare(ask) });
     } catch (error) {
+      // A trap (a panic or memory that ran out) leaves the wasm side's state half changed, so the
+      // next comparison starts a new instance.
+      if (error instanceof WebAssembly.RuntimeError) loading = undefined;
       scope.postMessage({ id: ask.id, error: error instanceof Error ? error.message : String(error) });
     }
-  });
-};
+  }
+  running = false;
+}

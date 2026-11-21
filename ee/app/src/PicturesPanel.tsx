@@ -491,6 +491,7 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
             notes={notes()}
             canNote={canNote()}
             sideBySide={mode() === "side"}
+            onlyNow={!!against()}
             draft={composing() ? draft() : undefined}
             time={isFilm(p().picture) ? time() : undefined}
             position={order().findIndex((o) => o.key === p().key) + 1}
@@ -709,6 +710,8 @@ function ReviewBar(props: {
   notes: Noted[];
   canNote: boolean;
   sideBySide: boolean;
+  /** An earlier run is on the left, so notes go on now's side only. */
+  onlyNow: boolean;
   draft: Draft | undefined;
   time: number | undefined;
   position: number;
@@ -751,7 +754,9 @@ function ReviewBar(props: {
   const since = createMemo(() => changedSince(props.state, props.run, props.shown));
   // The numbers of the notes made before it changed, as the list numbers them.
   const sinceNotes = () => props.notes.filter((n) => since()?.notes.includes(n.note.id)).map((n) => n.n);
-  const both = () => props.shown.picture.before != null && props.shown.picture.after != null;
+  // With an earlier run on the left, a note goes on now's side only: the before it would also
+  // mark is not shown.
+  const both = () => !props.onlyNow && props.shown.picture.before != null && props.shown.picture.after != null;
   // Who says it: the page shows what they say at once, and the host settles it behind.
   const by = () => signedIn(props.viewer)?.login ?? "";
   // What a looks right at `scope` says looks right: this picture, and the others it reaches

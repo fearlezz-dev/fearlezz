@@ -57,11 +57,8 @@ export function stripOf(state: Snapshot, run: Run, p: Shown): Dot[] {
   return [...base, ...runs, now];
 }
 
-/** The newest looks right on picture `p`, when it was on other content than `run` shows. */
-function yourLook(state: Snapshot, run: Run, p: Shown) {
-  const newest = (state.verdicts ?? []).filter((v) => v.check === p.check && v.picture === p.picture.name).sort((a, b) => b.at - a.at)[0];
-  return newest && newest.key !== keyOf(run, p) ? newest : undefined;
-}
+/** The looks right on picture `p` that it changed since, by the one rule Look again uses. */
+const yourLook = (state: Snapshot, run: Run, p: Shown) => changedSince(state, run, p)?.verdict;
 
 /** The dot a picture opens compared with: your look when it is to look at again, else the
  * base, else none (`now`, the picture alone). */

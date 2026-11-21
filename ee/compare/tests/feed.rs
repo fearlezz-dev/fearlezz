@@ -68,3 +68,84 @@ fn a_frame_that_does_not_fill_the_size_is_refused() {
     let err = feed.push(&[0u8; 12], 0.0, 0.04).unwrap_err();
     assert!(err.to_string().contains("64x48"), "{err}");
 }
+
+/// Every frame of a film, at its own size, as the CLI's second read can give them.
+struct All<'a> {
+    frames: &'a [Vec<u8>],
+    w: usize,
+    h: usize,
+    next: usize,
+}
+
+impl fearlezz_compare::Reread for All<'_> {
+    type Error = fearlezz_compare::Unfit;
+
+    fn next(
+        &mut self,
+    ) -> Result<Option<(usize, fearlezz_compare::Picture<'_>)>, fearlezz_compare::Unfit> {
+        let Some(bytes) = self.frames.get(self.next) else {
+            return Ok(None);
+        };
+        self.next += 1;
+        let picture = fearlezz_compare::Picture::new(
+            fearlezz_compare::Format::Yuv420,
+            self.w,
+            self.h,
+            bytes,
+        )?;
+        Ok(Some((self.next - 1, picture)))
+    }
+}
+
+/// A film larger than the size films are compared at keeps its frames scaled, and compares
+/// exactly as the CLI does from frames at their own size.
+#[test]
+fn a_large_film_keeps_its_frames_scaled_and_compares_as_the_cli_does() {
+    let (w, h) = (1400, 800);
+    let film = |moved: usize| -> Vec<Vec<u8>> {
+        (0..6)
+            .map(|i| {
+                let mut px: Vec<u8> = (0..w * h)
+                    .map(|p| u8::try_from(p % w * 200 / w + 20).unwrap_or(u8::MAX))
+                    .collect();
+                let x = if i < 3 { 100 } else { moved };
+                for y in 300..400 {
+                    px[y * w + x..][..120].fill(16);
+                }
+                px.extend(vec![128u8; 2 * w.div_ceil(2) * h.div_ceil(2)]);
+                px
+            })
+            .collect()
+    };
+    let (before, after) = (film(400), film(900));
+    let feed = |frames: &[Vec<u8>]| {
+        let mut feed = Feed::new(w, h, frames.len(), Given::Yuv420);
+        for (i, f) in frames.iter().enumerate() {
+            feed.push(f, i as f64 / 10.0, 0.1).unwrap();
+        }
+        feed
+    };
+    let page = compare(feed(&before), feed(&after)).unwrap();
+    let cut = |frames: &[Vec<u8>]| {
+        let mut cut = fearlezz_compare::Cut::new(w, h, frames.len());
+        for (i, f) in frames.iter().enumerate() {
+            let picture =
+                fearlezz_compare::Picture::new(fearlezz_compare::Format::Yuv420, w, h, f).unwrap();
+            cut.push(&picture, i as f64 / 10.0, 0.1).unwrap();
+        }
+        cut.finish()
+    };
+    let all = |frames| All {
+        frames,
+        w,
+        h,
+        next: 0,
+    };
+    let cli =
+        fearlezz_compare::compare(&cut(&before), all(&before), &cut(&after), all(&after)).unwrap();
+    assert_eq!(
+        serde_json::to_string(&page).unwrap(),
+        serde_json::to_string(&cli).unwrap()
+    );
+    assert!(!page.moments.is_empty(), "{page:?}");
+}
