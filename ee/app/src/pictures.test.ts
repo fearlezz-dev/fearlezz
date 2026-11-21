@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { apply } from "./live";
-import { counts, grouped, groupings, lanes, marksAt, parts, picturesOf, stillMarks } from "./pictures";
+import { counts, grouped, groupings, lanes, marksAt, parts, picturesOf, screensOf, stillMarks } from "./pictures";
 import type { Check, Comparison, Look, Pair, Picture, PictureChange, Run, Snapshot } from "./proof";
 
 const picture = (name: string, change: PictureChange, extra: Partial<Picture> = {}): Picture => ({
@@ -183,5 +183,61 @@ describe("films", () => {
     const still = { moments: [moment], size_before: [64, 48], size_after: [64, 48] } as unknown as Comparison;
     expect(stillMarks(still)).toEqual([[1, 2, 3, 4]]);
     expect(stillMarks({ ...still, size_after: [80, 48] })).toEqual([]);
+  });
+});
+
+describe("screensOf", () => {
+  const variants = run([
+    look("screens", [
+      picture("card/mobile/dark.png", "changed"),
+      picture("menu/desktop/light.png", "changed"),
+      picture("card/desktop/dark.png", "changed"),
+      picture("card/desktop/light.png", "changed"),
+      picture("card/mobile/light.png", "changed"),
+      picture("about.png", "changed"),
+    ]),
+  ]);
+
+  test("one screen per name without its viewport and theme, in the order they first come", () => {
+    const screens = screensOf(picturesOf(variants));
+    expect(screens.map((s) => s.label)).toEqual(["card", "menu", "about"]);
+  });
+
+  test("a screen's films are among its variants, before its stills", () => {
+    const both = run([
+      look("screens", [
+        picture("card/desktop/dark.webm", "new", { kind: "film" }),
+        picture("card/desktop/dark.png", "changed"),
+        picture("card/desktop/light.webm", "new", { kind: "film" }),
+        picture("card/desktop/light.png", "changed"),
+      ]),
+    ]);
+    const [card, ...others] = screensOf(picturesOf(both));
+    expect(others).toEqual([]);
+    expect(card!.variants.map((p) => p.picture.name)).toEqual([
+      "card/desktop/light.webm",
+      "card/desktop/dark.webm",
+      "card/desktop/light.png",
+      "card/desktop/dark.png",
+    ]);
+  });
+
+  test("a screen's variants by viewport as first seen, light before dark", () => {
+    const [card] = screensOf(picturesOf(variants));
+    expect(card!.variants.map((p) => p.picture.name)).toEqual([
+      "card/mobile/light.png",
+      "card/mobile/dark.png",
+      "card/desktop/light.png",
+      "card/desktop/dark.png",
+    ]);
+    expect(card!.viewports.map((v) => [v.viewport, v.variants.map((p) => p.parts.theme)])).toEqual([
+      ["mobile", ["light", "dark"]],
+      ["desktop", ["light", "dark"]],
+    ]);
+  });
+
+  test("the same screen in two checks is two screens", () => {
+    const two = run([look("a", [picture("home/light.png", "changed")]), look("b", [picture("home/light.png", "changed")])]);
+    expect(screensOf(picturesOf(two)).map((s) => s.key)).toEqual(["a/home", "b/home"]);
   });
 });

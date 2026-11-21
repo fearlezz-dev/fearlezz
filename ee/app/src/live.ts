@@ -53,12 +53,23 @@ export function applyWork(state: Snapshot, seq: number, change: WorkChange): Sna
     case "verdict": {
       const v = change.verdict;
       const same = (o: typeof v) => o.check === v.check && o.picture === v.picture && o.key === v.key;
-      return { ...next, verdicts: [...(state.verdicts ?? []).filter((o) => !same(o)), v] };
+      // Looks right resolved the picture's open notes with it.
+      const resolved = new Set((change.resolved ?? []).map((n) => n.id));
+      const notes = resolved.size ? { notes: (state.notes ?? []).filter((n) => !resolved.has(n.id)) } : {};
+      return { ...next, ...notes, verdicts: [...(state.verdicts ?? []).filter((o) => !same(o)), v] };
+    }
+    case "withdrawn": {
+      const gone = (o: { check: string; picture: string; key: string }) => o.check === change.check && o.picture === change.picture && o.key === change.key;
+      return { ...next, verdicts: (state.verdicts ?? []).filter((o) => !gone(o)) };
     }
     case "note": {
       const n = change.note;
       const others = (state.notes ?? []).filter((o) => o.id !== n.id);
       return { ...next, notes: n.state === "open" ? [...others, n] : others };
+    }
+    case "edited": {
+      const now = new Map(change.notes.map((n) => [n.id, n]));
+      return { ...next, notes: (state.notes ?? []).map((n) => now.get(n.id) ?? n) };
     }
     case "review":
       return { ...next, review: change.review ?? null };

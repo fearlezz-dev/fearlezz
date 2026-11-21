@@ -83,8 +83,12 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         ("POST", ["api", "v2", "runs", run, "verdicts"]) => {
             say::verdict(req, env, config, run).await
         }
+        ("DELETE", ["api", "v2", "runs", run, "verdicts"]) => {
+            say::withdraw(req, env, config, run).await
+        }
         ("POST", ["api", "v2", "runs", run, "accept"]) => say::accept(req, env, config, run).await,
         ("POST", ["api", "v2", "runs", run, "notes"]) => notes::make(req, env, config, run).await,
+        ("PATCH", ["api", "v2", "notes", note]) => notes::edit(req, env, config, note).await,
         ("POST", ["api", "v2", "notes", note, "resolve"]) => {
             notes::resolve(req, env, config, note).await
         }

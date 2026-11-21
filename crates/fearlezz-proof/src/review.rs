@@ -180,6 +180,24 @@ pub struct Picture {
     /// The looks right verdict on it, when someone gave one on this content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
+    /// What a person said about what it showed before it changed, so it shows for a look
+    /// again; none when nothing was said about other content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_since: Option<ChangedSince>,
+}
+
+/// What a person said about what a picture showed before: it changed since. The verdict and
+/// the notes stay as they were; a person says looks right again, or resolves the notes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ChangedSince {
+    /// The newest looks right verdict on what it showed before, when none is on what it shows
+    /// now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
+    /// The ids of its open notes made on what it showed before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// Where review of one head stands, and what waits.
@@ -277,9 +295,49 @@ pub fn key(item: &Item, sha: impl Fn(&str) -> Option<String>) -> Option<String> 
     ))
 }
 
+/// The content key `check` gave picture `name` in run `id`, when that run is among `runs`.
+fn key_in<'a>(runs: &'a [ProvenRun], id: &str, check: &str, name: &str) -> Option<&'a String> {
+    let (run, _) = runs.iter().find(|(run, _)| run.id == id)?;
+    run.checks.iter().find(|c| c.id == check)?.keys.get(name)
+}
+
+/// What was said about other content of picture `name` of `check`, whose content is now `key`:
+/// the newest looks right verdict on other content (unless one is on this content), and the
+/// open notes made on a run that showed other content. A note whose run is not known says
+/// nothing.
+fn changed_since(
+    runs: &[ProvenRun],
+    (check, name, key): (&str, &str, &str),
+    verdicts: &[Verdict],
+    verdict: Option<&Verdict>,
+    open: &[&Note],
+) -> Option<ChangedSince> {
+    let verdict = match verdict {
+        Some(_) => None,
+        None => verdicts
+            .iter()
+            .filter(|v| v.check == check && v.picture == name && v.key != key)
+            .max_by(|a, b| a.at.total_cmp(&b.at))
+            .cloned(),
+    };
+    let notes: Vec<String> = open
+        .iter()
+        .filter(|n| n.check == check && n.picture == name)
+        .filter(|n| key_in(runs, &n.run, check, name).is_some_and(|then| then != key))
+        .map(|n| n.id.clone())
+        .collect();
+    (verdict.is_some() || !notes.is_empty()).then_some(ChangedSince { verdict, notes })
+}
+
 /// Each picture or text of the live runs a person looks at, once per content, with its
-/// verdict and where it stands.
-fn looked_at(live: &[&ProvenRun], verdicts: &[Verdict], open: &[&Note]) -> Vec<Picture> {
+/// verdict, where it stands and what was said about it before it changed (`runs` are every run
+/// known, to find what an open note was made on).
+fn looked_at(
+    live: &[&ProvenRun],
+    runs: &[ProvenRun],
+    verdicts: &[Verdict],
+    open: &[&Note],
+) -> Vec<Picture> {
     let mut pictures: Vec<Picture> = Vec::new();
     for (run, _) in live {
         for check in &run.checks {
@@ -306,12 +364,20 @@ fn looked_at(live: &[&ProvenRun], verdicts: &[Verdict], open: &[&Note]) -> Vec<P
                     (false, Some(_)) => Standing::LooksRight,
                     (false, None) => Standing::Waits,
                 };
+                let changed_since = changed_since(
+                    runs,
+                    (&check.id, &item.name, key),
+                    verdicts,
+                    verdict.as_ref(),
+                    open,
+                );
                 pictures.push(Picture {
                     check: check.id.clone(),
                     name: item.name.clone(),
                     key: key.clone(),
                     standing,
                     verdict,
+                    changed_since,
                 });
             }
         }
@@ -360,7 +426,7 @@ pub fn review(
     let live: Vec<&ProvenRun> = seen.iter().filter_map(|(_, chosen)| *chosen).collect();
 
     let open: Vec<&Note> = notes.iter().filter(|n| n.is_open()).collect();
-    let pictures = looked_at(&live, verdicts, &open);
+    let pictures = looked_at(&live, runs, verdicts, &open);
     let mut weakened: Vec<Weakening> = Vec::new();
     for proof in live.iter().filter_map(|(_, proof)| proof.as_ref()) {
         for w in &proof.weakened {
@@ -567,6 +633,23 @@ impl Review {
                     .iter()
                     .map(|p| format!("- `{}` {}", p.check, p.name)),
             );
+        }
+        let changed: Vec<String> = self
+            .pictures
+            .iter()
+            .filter_map(|p| {
+                let since = p.changed_since.as_ref()?;
+                let what = match (&since.verdict, since.notes.len()) {
+                    (Some(v), 0) => format!("{} said it looks right", v.by),
+                    (_, 1) => "its note".to_owned(),
+                    (_, _) => "its notes".to_owned(),
+                };
+                Some(format!("- `{}` {}, changed since {what}", p.check, p.name))
+            })
+            .collect();
+        if !changed.is_empty() {
+            lines.push("\nPictures that changed since a person looked, to look at again:".into());
+            lines.extend(changed);
         }
         if !self.notes.is_empty() {
             lines.push("\nPictures that need change, by their open notes:".into());

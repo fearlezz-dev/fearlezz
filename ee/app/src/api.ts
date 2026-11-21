@@ -4,10 +4,13 @@
 export type Said<T> = { ok: true; answer: T } | { ok: false; error: string };
 
 /** Sends `body` to `path` as JSON with the page's session. */
-export async function post<T = unknown>(path: string, body: object): Promise<Said<T>> {
+export const post = <T = unknown>(path: string, body: object) => send<T>("POST", path, body);
+
+/** Sends `body` to `path` with `method` as JSON with the page's session. */
+export async function send<T = unknown>(method: "POST" | "PATCH" | "DELETE", path: string, body: object): Promise<Said<T>> {
   try {
     const answer = await fetch(path, {
-      method: "POST",
+      method,
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

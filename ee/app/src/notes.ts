@@ -4,7 +4,9 @@
 // marked as old, until a person resolves them.
 
 import type { Note, NoteSide, Region, Run, Snapshot } from "./proof";
-import { post, refusal } from "./api";
+import { type Shown as Picture, title } from "./pictures";
+import { post, send } from "./api";
+import { hoping, pendingId, resolvedBy } from "./hopes";
 import { short } from "./short";
 
 /** One side of a pair of pictures. */
@@ -52,14 +54,68 @@ export const meant = (r: Region) => r.w > 0.01 && r.h > 0.01;
 /** The side a note of `draft` is on: both when the person ticked it, else the side drawn on. */
 export const sidesOf = (draft: Draft, both: boolean): NoteSide => (both ? "both" : draft.side);
 
-/** Sends a note on picture `picture` of check `check` of run `run`. The error the host gave, if
- * it refused. */
-export async function makeNote(
-  run: string,
-  ask: { check: string; picture: string; side: NoteSide; region: Region; time?: number; words: string },
-): Promise<string | undefined> {
-  return refusal(await post(`/api/v2/runs/${encodeURIComponent(run)}/notes`, ask));
+/** What a note says when it is made: where, when, the words, and the note it was made from. */
+export type Ask = { check: string; picture: string; side: NoteSide; region: Region; time?: number; words: string; link?: string };
+
+/** Makes a note on run `run` as `by`, shown at once under an id of the page's own until the host
+ * names it. The error the host gave, if it refused. */
+export function makeNote(run: Run, ask: Ask, by: string): Promise<string | undefined> {
+  const note: Note = { ...ask, id: pendingId(), run: run.id, head: run.head, by, at: Date.now() / 1000, state: "open" };
+  return hoping(
+    { kind: "note", note },
+    () => post<{ note?: Note }>(`/api/v2/runs/${encodeURIComponent(run.id)}/notes`, ask),
+    (answer) => (answer.note ? { kind: "note", note: answer.note } : undefined),
+  );
 }
 
-/** Resolves note `id`. The error the host gave, if it refused. */
-export const resolveNote = async (id: string) => refusal(await post(`/api/v2/notes/${encodeURIComponent(id)}/resolve`, {}));
+/** Whether a note is still on its way to the host, so it cannot be edited or resolved yet. */
+export const pending = (note: Note) => note.id.startsWith("pending-");
+
+/** Gives note `note` new words, with `linked` on every open note linked with it too, shown at
+ * once. The error the host gave, if it refused. */
+export function editNote(state: Snapshot, note: Note, words: string, linked: boolean): Promise<string | undefined> {
+  const notes = [note, ...(linked ? linkedWith(state, note) : [])].map((n) => ({ ...n, words }));
+  return hoping({ kind: "edited", notes }, () => send("PATCH", `/api/v2/notes/${encodeURIComponent(note.id)}`, { words, linked }));
+}
+
+/** The other open notes linked with `note`: made from it, from the note it was made from, or
+ * from the same first note. An edit asks whether they take the new words too. */
+export function linkedWith(state: Snapshot, note: Note): Note[] {
+  const group = note.link ?? note.id;
+  return (state.notes ?? []).filter((n) => n.id !== note.id && n.state === "open" && (n.id === group || n.link === group));
+}
+
+/** Resolves note `note` as `by`, shown at once. The error the host gave, if it refused. */
+export const resolveNote = (note: Note, by: string) =>
+  hoping({ kind: "note", note: resolvedBy(note, by) }, () => post(`/api/v2/notes/${encodeURIComponent(note.id)}/resolve`, {}));
+
+/** An open note on another variant of a screen, as a person may make it here too: where it is,
+ * whether its region means the same place here (`place`: the pictures are the same size), and
+ * the side it would be on, which this picture must have. */
+export type Elsewhere = { note: Note; where: string; place: boolean; side: NoteSide };
+
+const sizeOf = (p: Picture) => p.picture.comparison?.size_after ?? p.picture.comparison?.size_before;
+
+/** The open notes on the other variants of `here`'s screen, `variants`, but those already on
+ * `here` in the same words. */
+export function elsewhere(state: Snapshot, here: Picture, variants: Picture[]): Elsewhere[] {
+  const open = (p: Picture) =>
+    (state.notes ?? []).filter((n) => n.state === "open" && n.check === p.check && n.picture === p.picture.name).sort((a, b) => a.at - b.at);
+  const said = new Set(open(here).map((n) => n.words));
+  const size = sizeOf(here);
+  const both = here.picture.before != null && here.picture.after != null;
+  return variants
+    .filter((p) => p.key !== here.key)
+    .flatMap((p) => {
+      const other = sizeOf(p);
+      const place = size && other ? size[0] === other[0] && size[1] === other[1] : p.parts.viewport === here.parts.viewport;
+      return open(p)
+        .filter((n) => !said.has(n.words))
+        .map((note) => ({
+          note,
+          where: title({ screen: "", viewport: p.parts.viewport, theme: p.parts.theme }) || p.picture.name,
+          place,
+          side: both ? note.side : here.picture.after != null ? "after" : "before",
+        }));
+    });
+}

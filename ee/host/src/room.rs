@@ -267,8 +267,15 @@ pub async fn close(env: &Env, room: &str, tag: &str, why: &str) -> Result<()> {
     Ok(())
 }
 
+/// Where a room is made: beside the D1 database, as `placement` in wrangler.toml puts the
+/// Worker, since a write queries it many times one after another. A room stays where it was
+/// first made.
+const REGION: &str = "weur";
+
 async fn fetch(env: &Env, room: &str, url: &str, init: &RequestInit) -> Result<Response> {
-    let stub = env.durable_object("WORK")?.id_from_name(room)?.get_stub()?;
+    let stub = env
+        .durable_object("WORK")?
+        .get_by_name_with_location_hint(room, REGION)?;
     stub.fetch_with_request(Request::new_with_init(url, init)?)
         .await
 }

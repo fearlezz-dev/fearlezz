@@ -217,6 +217,12 @@ pub fn an_open_note_follows_the_work_until_a_writer_resolves_it() {
     assert_eq!(review["state"], "needs_change", "{review:#}");
     assert!(review["pictures"][0]["verdict"].is_null(), "{review:#}");
     assert_eq!(review["notes"][0]["id"], id.as_str(), "{review:#}");
+    // It changed since the note, so the review says to look at it again.
+    assert_eq!(
+        review.pointer("/pictures/0/changed_since/notes/0"),
+        Some(&json!(id)),
+        "{review:#}"
+    );
     let snapshot = live("/owner/review/pull/122", &[]).json();
     assert_eq!(snapshot["notes"][0]["run"], run.as_str(), "{snapshot:#}");
 
@@ -632,4 +638,153 @@ pub fn pictures(shoot: &dyn Fn(&mut browser::Browser, &str)) {
     shoot(&mut writer, "notes-phone-light");
     writer.view(390, 844, true, true);
     shoot(&mut writer, "notes-phone-dark");
+}
+
+pub(crate) fn looks_right_resolves_the_pictures_open_notes() {
+    let job = Job::pull("owner/review", 143, "notes/looks-right").at(&commit("a143"), 1143);
+    let (look, files) = one_still(b"settle before", b"settle after");
+    let run = proven(&job, &look, &files, &json!({}));
+    let id = noted(&run, "Too tight");
+    assert_eq!(
+        review_of(143).pointer("/state"),
+        Some(&json!("needs_change")),
+        "the note holds it"
+    );
+
+    // Saying it looks right settles what the note asked: the note is resolved, by them.
+    let writer = sign_in("writer-code", "/");
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("card/light.png"),
+    );
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let review = review_of(143);
+    assert_eq!(
+        review.pointer("/state"),
+        Some(&json!("approved")),
+        "{review:#}"
+    );
+    let snapshot = live("/owner/review/pull/143", &[]).json();
+    let open = snapshot
+        .pointer("/notes")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    assert_eq!(open, 0, "no open note left: {snapshot:#}");
+    let resolved = answer.json();
+    assert_eq!(
+        resolved.pointer("/resolved/0/id"),
+        Some(&json!(id)),
+        "the answer names the note it resolved: {resolved:#}"
+    );
+    assert_eq!(
+        resolved.pointer("/resolved/0/resolved_by"),
+        Some(&json!("writer")),
+        "{resolved:#}"
+    );
+}
+
+/// Edits note `id` as the page does: `PATCH` with the session `cookie`.
+fn edit(id: &str, cookie: Option<&str>, body: &Value) -> Answer {
+    let origin = world().worker.url.clone();
+    let mut all: Vec<(&str, &str)> =
+        vec![("Origin", &origin), ("Content-Type", "application/json")];
+    if let Some(cookie) = cookie {
+        all.push(("Cookie", cookie));
+    }
+    let path = format!("/api/v2/notes/{id}");
+    request("PATCH", &path, &all, Some(body.to_string().into_bytes()))
+}
+
+/// The words of the work's open notes on pull `pull`, by id.
+fn words_of(pull: u64) -> std::collections::BTreeMap<String, String> {
+    let snapshot = live(&format!("/owner/review/pull/{pull}"), &[]).json();
+    snapshot
+        .pointer("/notes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            Some((
+                n.pointer("/id")?.as_str()?.to_owned(),
+                n.pointer("/words")?.as_str()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+pub(crate) fn a_note_is_edited_alone_or_with_the_notes_made_from_it() {
+    let job = Job::pull("owner/review", 144, "notes/edit").at(&commit("a144"), 1144);
+    let (look, files) = one_still(b"edit before", b"edit after");
+    let run = proven(&job, &look, &files, &json!({}));
+    let first = noted(&run, "Too tight");
+    let writer = sign_in("writer-code", "/");
+
+    // A note made from another keeps the link, so an edit can reach both.
+    let mut body = ask("card/light.png", "both", [0.1, 0.6, 0.3, 0.2], "Too tight");
+    body["link"] = json!(first);
+    let answer = say(&run, "notes", Some(&writer), &[], &body);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let made = answer.json();
+    let second = made
+        .pointer("/note/id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_default();
+    assert_eq!(made.pointer("/note/link"), Some(&json!(first)), "{made:#}");
+
+    let answer = edit(&second, None, &json!({"words": "x"}));
+    assert_eq!(answer.status, 401, "without a session: {}", answer.text());
+    let reader = sign_in("reader-code", "/");
+    let answer = edit(&second, Some(&reader), &json!({"words": "x"}));
+    assert_eq!(answer.status, 403, "a reader: {}", answer.text());
+
+    let answer = edit(
+        &second,
+        Some(&writer),
+        &json!({"words": "Too tight, and too dark"}),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let words = words_of(144);
+    assert_eq!(
+        words.get(&first).map(String::as_str),
+        Some("Too tight"),
+        "only that note: {words:?}"
+    );
+    assert_eq!(
+        words.get(&second).map(String::as_str),
+        Some("Too tight, and too dark"),
+        "{words:?}"
+    );
+
+    let answer = edit(
+        &first,
+        Some(&writer),
+        &json!({"words": "More room", "linked": true}),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let edited = answer
+        .json()
+        .pointer("/notes")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    assert_eq!(
+        edited,
+        2,
+        "the note and the one made from it: {}",
+        answer.text()
+    );
+    let words = words_of(144);
+    for id in [&first, &second] {
+        assert_eq!(
+            words.get(id).map(String::as_str),
+            Some("More room"),
+            "{words:?}"
+        );
+    }
+
+    let answer = edit(&first, Some(&writer), &json!({"words": "  "}));
+    assert_eq!(answer.status, 400, "no words: {}", answer.text());
 }
