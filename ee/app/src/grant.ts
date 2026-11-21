@@ -25,9 +25,10 @@ export function grantPath(run: string, share: string | undefined): string {
 }
 
 /** The folder of the files of run `run()` on the files origin, once granted; empty until then
- * and when the host refuses (the page then shows the pictures as not loaded). */
+ * and when the host refuses (the page then shows the pictures as not loaded). A grant is only
+ * ever given out for the run it was asked for, also while the run changes. */
 export function grantOf(run: Accessor<string>): Accessor<string> {
-  const [files, setFiles] = createSignal("");
+  const [held, setHeld] = createSignal({ run: "", files: "" });
   createEffect(() => {
     const id = run();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -38,7 +39,7 @@ export function grantOf(run: Accessor<string>): Accessor<string> {
         if (!answer.ok) throw new Error(`the host answered ${answer.status}`);
         const granted = (await answer.json()) as Granted;
         if (stopped) return;
-        setFiles(granted.files);
+        setHeld({ run: id, files: granted.files });
         const left = granted.expires - Date.now() / 1000 - EARLY_SECONDS;
         timer = setTimeout(() => ask(1000), Math.max(left, 30) * 1000);
       } catch {
@@ -46,12 +47,11 @@ export function grantOf(run: Accessor<string>): Accessor<string> {
         if (!stopped) timer = setTimeout(() => ask(Math.min(wait * 2, 60_000)), wait);
       }
     };
-    setFiles("");
     void ask(1000);
     onCleanup(() => {
       stopped = true;
       clearTimeout(timer);
     });
   });
-  return files;
+  return () => (held().run === run() ? held().files : "");
 }

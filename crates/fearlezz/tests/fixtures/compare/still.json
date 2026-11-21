@@ -1,0 +1,56 @@
+{
+  "verdict": "changed",
+  "still": true,
+  "size_before": [
+    1280,
+    800
+  ],
+  "size_after": [
+    1280,
+    800
+  ],
+  "total_before": 0.04,
+  "total_after": 0.04,
+  "max_shift": 0.0,
+  "max_shift_at": null,
+  "states_before": 1,
+  "states_after": 1,
+  "moments": [
+    {
+      "before": [
+        0.0,
+        0.04
+      ],
+      "after": [
+        0.0,
+        0.04
+      ],
+      "box": [
+        312,
+        118,
+        968,
+        245
+      ],
+      "px": 17133
+    }
+  ],
+  "pairs": [
+    {
+      "before": 0,
+      "after": 0,
+      "before_frame": 0,
+      "after_frame": 0,
+      "before_at": 0.0,
+      "after_at": 0.0,
+      "px": 17133,
+      "boxes": [
+        [
+          312,
+          118,
+          968,
+          245
+        ]
+      ]
+    }
+  ]
+}

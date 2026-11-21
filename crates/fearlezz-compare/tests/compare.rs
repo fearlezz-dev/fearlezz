@@ -103,6 +103,28 @@ fn a_film_is_cut_into_its_stable_states() {
     assert!((film.total - 2.0).abs() < 1e-9);
 }
 
+/// A caller that keeps frames for the second read, as the page does, keeps those that start a
+/// state: the frames after which the cut counts one more.
+#[test]
+fn the_cut_counts_its_states_as_frames_arrive() {
+    let frames = Frames::boxed(64, 48, 20, 10, 10);
+    let mut cut = Cut::new(64, 48, 20);
+    let mut starts = Vec::new();
+    for (i, f) in frames.each.iter().enumerate() {
+        let had = cut.states();
+        cut.push(
+            &Picture::new(Format::Rgb, 64, 48, f).unwrap(),
+            i as f64 / 10.0,
+            0.1,
+        )
+        .unwrap();
+        if cut.states() > had {
+            starts.push(i);
+        }
+    }
+    assert_eq!(starts, [0, 10]);
+}
+
 #[test]
 fn the_same_film_twice_is_the_same() {
     let film = Frames::boxed(64, 48, 20, 10, 10);

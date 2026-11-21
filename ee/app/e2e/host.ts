@@ -8,13 +8,18 @@ import type { Listing, Live, Viewer } from "../src/proof";
 /** The moment every page is shown at, in seconds since the epoch. */
 export const NOW = 1_795_000_000;
 
+/** A run's files by their path in its proof bundle. */
+export type Files = Record<string, { type: string; body: string | Buffer }>;
+
 /** What a page is shown: the first message of its live connection (none keeps it connecting),
- * or a close that says the page is gone; who looks; and the files a run's pictures load from. */
+ * or a close that says the page is gone; who looks; and the files a run's pictures load from:
+ * `files` for every run, or a run's own under `runFiles`, granted in a folder of its own. */
 export type World = {
   live?: Live | Listing;
   gone?: string;
   viewer?: Viewer;
-  files?: Record<string, { type: string; body: string | Buffer }>;
+  files?: Files;
+  runFiles?: Record<string, Files>;
 };
 
 /** The page's live connection, to send it more as the host would. */
@@ -45,7 +50,10 @@ export async function serve(page: Page, world: World): Promise<Socket> {
   await page.route("**/api/v2/**", (route) => {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith("/api/v2/viewer/")) return route.fulfill({ json: world.viewer ?? { login: null } });
-    if (url.pathname.endsWith("/grant")) return route.fulfill({ json: { files: "/files/", expires: NOW + 3600 } });
+    if (url.pathname.endsWith("/grant")) {
+      const run = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+      return route.fulfill({ json: { files: world.runFiles?.[run] ? `/files/${run}/` : "/files/", expires: NOW + 3600 } });
+    }
     if (url.pathname === "/api/v2/shares") return route.fulfill({ json: [] });
     // A verdict is taken; the page then waits for the live event that carries it.
     if (url.pathname.endsWith("/verdicts") || url.pathname.endsWith("/notes")) return route.fulfill({ json: {} });
@@ -53,7 +61,8 @@ export async function serve(page: Page, world: World): Promise<Socket> {
   });
   await page.route("**/files/**", (route) => {
     const path = decodeURIComponent(new URL(route.request().url()).pathname.slice("/files/".length));
-    const file = world.files?.[path];
+    const [run, ...rest] = path.split("/");
+    const file = world.runFiles?.[run!]?.[rest.join("/")] ?? world.files?.[path];
     return file ? route.fulfill({ contentType: file.type, body: file.body }) : route.fulfill({ status: 404 });
   });
   return {

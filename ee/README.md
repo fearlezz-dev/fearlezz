@@ -94,8 +94,9 @@ request:
 The page is a Solid app (`ee/app`) the worker serves from its static assets: the same
 `index.html` for every page, which draws itself from its live connection. An unknown work, or a
 repository the host holds no work of, is `404`. It answers `no-store`, may not be framed, its `connect-src` is `'self'` and
-the files origin (the page reads a text there to diff it), and its `img-src` and `media-src`
-name the files origin, the only place pictures load from.
+the files origin (the page reads a text there to diff it, and two pictures to compare them),
+its `script-src` is `'self'` with `'wasm-unsafe-eval'` (the comparison), and its `img-src` and
+`media-src` name the files origin, the only place pictures load from.
 
 Every state of the pages worth seeing is a fixture in `ee/app/e2e/states.ts`, in the proof
 model's own types. The `ee-page-look` check shows each one with Playwright against a stand in
@@ -104,8 +105,10 @@ clock, on desktop and mobile, light and dark, and Fearlezz compares the stills w
 commit's. A new state of a page gets a fixture there, so its pull request shows it. The pages
 in motion are films beside them (`ee/app/e2e/films.look.ts`: a run arriving live, comparing,
 reviewing with the keys, a note made again on another theme and edited, full screen and zoom,
-a picture to look at again, a failed run, a weaker proof, a new film and sharing), compared the
-same way. Run it alone with
+a picture to look at again, a failed run, a weaker proof, a new film, sharing and comparing
+with earlier runs on the strip), compared the same way. `ee/app/e2e/compare.look.ts` checks the
+strip, and that the page's comparison answers what the CLI answers for the same files
+(`crates/fearlezz/tests/fixtures/compare`, whose answers the CLI's own tests check). Run it alone with
 `fearlezz run ee-page-look`, or with `bunx playwright test --update-snapshots=all` in
 `ee/app`; the stills land in `e2e/stills` and the films in `e2e/films`.
 
@@ -153,8 +156,27 @@ timing, and the same ones folded. The picture on the stage compares its before a
 five ways (side by side, slider, onion skin, difference, blink) with outlines of where they
 differ; films play on one clock with a lane per film and a jump to each change. A text shows as
 its diff, line by line with the words that differ marked, read from the files origin. Flaky
-pictures show, marked. `j` and `k` step between pictures, `1` to `5` pick the way to compare. The page
-gets a run's files with `GET /api/v2/runs/<run>/grant`, which answers
+pictures show, marked. `j` and `k` step between pictures, `1` to `5` pick the way to compare.
+
+**Comparing with any run.** Above a picture with earlier runs, a strip of runs: the base, each
+earlier run that showed the picture (CI and local runs; runs whose content key is the same are
+one dot, and those that showed what now shows fold into now), and now. A dot compares what
+that run showed (left) with now (right), in every way to compare, with notes on now's side
+only. The run of the newest looks right on other content is "your look": its dot, its line to
+now, the left side's name and the outlines are in the Look again colour, a picture to look at
+again opens on it, and the Look again line offers "compare with that look". Other pictures open
+on the base, which shows CI's comparison as it is. An earlier run's picture comes under that
+run's own grant, and the page compares it with now itself: a worker (`ee/app/src/compare.worker.ts`)
+runs `ee/compare`, the CLI's comparison (`crates/fearlezz-compare`) built to wasm with plain
+exports, on a still decoded by `createImageBitmap` to a canvas's RGBA (alpha dropped, as
+ffmpeg's `rgb24` does) and on a WebM film demuxed by `ee/app/src/demux.ts` (frame times as
+the CLI reads them from ffprobe) and decoded by WebCodecs to I420 planes, which equal ffmpeg's
+`yuv420p`. A film is decoded once: the wasm side keeps the frames that start its states for the
+comparison's second read. Answers are kept per pair of files by their SHA-256. The page's
+build builds the wasm first (`ee/app/vite.config.ts`, with cargo and the
+`wasm32-unknown-unknown` target), and its `script-src` allows `'wasm-unsafe-eval'`.
+
+The page gets a run's files with `GET /api/v2/runs/<run>/grant`, which answers
 `{"files": "<files origin>/<grant>/", "expires"}` to someone who may see the work (the page's
 rule: `401` without a session for a private repository, `404` otherwise), or with
 `?share=<token>` to a share link of the run's work (`404` for any other run, or a link that does

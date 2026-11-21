@@ -1,0 +1,78 @@
+{
+  "verdict": "changed",
+  "still": false,
+  "size_before": [
+    640,
+    400
+  ],
+  "size_after": [
+    640,
+    400
+  ],
+  "total_before": 2.0,
+  "total_after": 2.0,
+  "max_shift": 0.0,
+  "max_shift_at": 0.0,
+  "states_before": 1,
+  "states_after": 2,
+  "moments": [
+    {
+      "before": [
+        0.0,
+        2.0
+      ],
+      "after": [
+        0.8,
+        2.0
+      ],
+      "box": [
+        8,
+        1,
+        488,
+        310
+      ],
+      "px": 8123
+    }
+  ],
+  "pairs": [
+    {
+      "before": 0,
+      "after": 0,
+      "before_frame": 0,
+      "after_frame": 0,
+      "before_at": 0.0,
+      "after_at": 0.0,
+      "px": 0,
+      "boxes": []
+    },
+    {
+      "before": 0,
+      "after": 1,
+      "before_frame": 0,
+      "after_frame": 8,
+      "before_at": 0.0,
+      "after_at": 0.8,
+      "px": 8123,
+      "boxes": [
+        [
+          8,
+          1,
+          41,
+          35
+        ],
+        [
+          149,
+          49,
+          488,
+          131
+        ],
+        [
+          167,
+          211,
+          259,
+          310
+        ]
+      ]
+    }
+  ]
+}

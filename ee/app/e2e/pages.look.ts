@@ -4,7 +4,7 @@
 
 import { type Page, expect, test } from "@playwright/test";
 import { settled, show } from "./host";
-import { REPOSITORY_PATH, REPOSITORY_STATES, WORK, WORK_PATH } from "./states";
+import { REPOSITORY_PATH, REPOSITORY_STATES, STRIP, WORK, WORK_PATH } from "./states";
 
 const THEMES = ["light", "dark"] as const;
 
@@ -134,4 +134,21 @@ test("work page: full screen, zoomed in", async ({ page, isMobile }) => {
   // Settled where the zoom eases to.
   await page.waitForTimeout(300);
   await stills(page, "work/zoomed", false);
+});
+
+// The strip of runs above a picture to look again: it opens compared with your look, which the
+// page compares itself, so the still waits for that comparison.
+test("work page: the strip of runs", async ({ page }) => {
+  await show(page, WORK_PATH, STRIP.world);
+  await expect(page.locator("[data-pair-says]")).toHaveAttribute("data-pair-says", "changed");
+  await settled(page, true);
+  await stills(page, "work/strip-of-runs");
+});
+
+test("work page: the strip of runs in full screen", async ({ page }) => {
+  await show(page, WORK_PATH, STRIP.world);
+  await page.keyboard.press("f");
+  await expect(page.locator("[data-pair-says]")).toHaveAttribute("data-pair-says", "changed");
+  await settled(page, true);
+  await stills(page, "work/strip-of-runs-full-screen", false);
 });

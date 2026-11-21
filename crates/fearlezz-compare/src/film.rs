@@ -143,6 +143,13 @@ impl Cut {
         Ok(())
     }
 
+    /// How many states it has cut so far: a frame after which it counts one more starts a
+    /// state, which a caller that keeps frames for the second read keeps.
+    #[must_use]
+    pub fn states(&self) -> usize {
+        self.film.states.len()
+    }
+
     /// The film, after its last frame.
     #[must_use]
     pub fn finish(self) -> Film {

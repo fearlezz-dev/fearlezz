@@ -1,0 +1,21 @@
+[package]
+name = "fearlezz-page-compare"
+version = "0.1.0"
+description = "The picture comparison of fearlezz-compare for the proof host's page, as plain wasm exports."
+edition.workspace = true
+publish.workspace = true
+
+# Built to wasm32-unknown-unknown by the page's build (ee/app/vite.config.ts) and loaded by its
+# comparing worker; natively it builds only for clippy and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+# Its behaviour is tested through its public API, in tests/.
+test = false
+bench = false
+
+[dependencies]
+fearlezz-compare = { path = "../../crates/fearlezz-compare" }
+serde_json = "1"
+
+[lints]
+workspace = true

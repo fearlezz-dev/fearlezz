@@ -1,0 +1,176 @@
+// The page's comparing worker: it decodes two stills or films the way the CLI reads them and
+// compares them with the CLI's own comparison (fearlezz-compare, built to wasm from
+// ee/compare), off the page's thread. A still decodes through createImageBitmap to the RGBA of a
+// canvas, without colour conversion; a film through WebCodecs, as the I420 planes ffmpeg's
+// yuv420p equals, each frame copied straight into the wasm memory. A film is decoded once: the
+// wasm side keeps the frames that start its states for the comparison's second read.
+//
+// Answers are kept per pair of files by their SHA-256, so the same pair is compared once
+// however its URLs change (a grant's folder lasts an hour).
+
+import wasmUrl from "fearlezz-page-compare.wasm?url";
+import { codecOf, demux } from "./demux";
+
+/** What the page asks: compare the file at `before` with the one at `after`. */
+export type Ask = { id: number; before: string; after: string; film: boolean };
+/** What the worker answers: the comparison as the CLI's JSON, or why there is none. */
+export type Answer = { id: number; json: string } | { id: number; error: string };
+
+/** The exports of ee/compare (see its lib.rs). */
+type Compare = {
+  memory: WebAssembly.Memory;
+  input(len: number): number;
+  film(w: number, h: number, frames: number, yuv: number): number;
+  frame(id: number, start: number, dur: number): number;
+  compared(before: number, after: number): number;
+  forget(id: number): void;
+  output(): number;
+  output_len(): number;
+};
+
+/** How long ffprobe says a still lasts (image2 at 25 frames a second), so totals match. */
+const STILL_SECONDS = 0.04;
+
+let loading: Promise<Compare> | undefined;
+const load = () =>
+  (loading ??= (async () => {
+    const answer = await fetch(wasmUrl);
+    if (!answer.ok) throw new Error(`the comparison could not load (${answer.status})`);
+    const { instance } = await WebAssembly.instantiate(await answer.arrayBuffer(), {});
+    return instance.exports as unknown as Compare;
+  })());
+
+/** The last answer of the wasm side, as text. */
+const said = (w: Compare) => new TextDecoder().decode(new Uint8Array(w.memory.buffer, w.output(), w.output_len()));
+
+/** Fails with the wasm side's words when a call says it failed. */
+function check(w: Compare, status: number) {
+  if (status !== 0) throw new Error(said(w));
+}
+
+/** Room for `len` bytes in the wasm memory, as a view to write the next frame into. */
+function room(w: Compare, len: number): Uint8Array {
+  // Asked first: making room may grow the memory, which replaces its buffer.
+  const at = w.input(len);
+  return new Uint8Array(w.memory.buffer, at, len);
+}
+
+async function feedStill(w: Compare, bytes: ArrayBuffer): Promise<number> {
+  const bitmap = await createImageBitmap(new Blob([bytes]), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("the page could not draw the still");
+  context.drawImage(bitmap, 0, 0);
+  const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+  const id = w.film(bitmap.width, bitmap.height, 1, 0);
+  room(w, pixels.length).set(pixels);
+  check(w, w.frame(id, 0, STILL_SECONDS));
+  return id;
+}
+
+async function feedFilm(w: Compare, bytes: ArrayBuffer): Promise<number> {
+  const { codec, w: width, h: height, blocks } = demux(bytes);
+  const id = w.film(width, height, blocks.length, 1);
+  const cw = Math.ceil(width / 2);
+  const ch = Math.ceil(height / 2);
+  const len = width * height + 2 * cw * ch;
+  const layout = [
+    { offset: 0, stride: width },
+    { offset: width * height, stride: cw },
+    { offset: width * height + cw * ch, stride: cw },
+  ];
+  // Frames come out in the order they are shown, which is the order of `blocks`; each is
+  // copied and fed before the next, since the wasm side has one frame of room.
+  let shown = 0;
+  let chain = Promise.resolve();
+  let failed: unknown;
+  const decoder = new VideoDecoder({
+    output: (frame) => {
+      const block = blocks[shown++];
+      chain = chain
+        .then(async () => {
+          if (failed) return;
+          if (!block) throw new Error("the film gave more frames than it holds");
+          if (frame.format !== "I420") throw new Error(`the page compares yuv420p films, not ${frame.format ?? "this format"}`);
+          await frame.copyTo(room(w, len), { rect: { x: 0, y: 0, width, height }, layout });
+          check(w, w.frame(id, block.start, block.dur));
+        })
+        .catch((e: unknown) => {
+          failed ??= e;
+        })
+        .finally(() => frame.close());
+    },
+    error: (e) => {
+      failed ??= e;
+    },
+  });
+  try {
+    decoder.configure({ codec: codecOf(codec), codedWidth: width, codedHeight: height, hardwareAcceleration: "prefer-software" });
+    for (const block of blocks) {
+      if (failed) break;
+      decoder.decode(new EncodedVideoChunk({ type: block.key ? "key" : "delta", timestamp: Math.round(block.start * 1e6), duration: Math.round(block.dur * 1e6), data: block.data }));
+      // A short queue, so frames are copied and closed as they come.
+      while (decoder.decodeQueueSize > 8) await new Promise((r) => decoder.addEventListener("dequeue", r, { once: true }));
+    }
+    if (!failed) await decoder.flush();
+    await chain;
+  } catch (e) {
+    failed ??= e;
+  } finally {
+    if (decoder.state !== "closed") decoder.close();
+  }
+  if (!failed && shown !== blocks.length) failed = new Error(`the film decoded to ${shown} of its ${blocks.length} frames`);
+  if (failed) {
+    w.forget(id);
+    throw failed;
+  }
+  return id;
+}
+
+async function sha256(bytes: ArrayBuffer): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function fetched(url: string): Promise<ArrayBuffer> {
+  // As the page fetches films ahead (preload.ts), so a film fetched then is in the cache.
+  const answer = await fetch(url, { mode: "cors", credentials: "omit" });
+  if (!answer.ok) throw new Error(`the files origin answered ${answer.status}`);
+  return answer.arrayBuffer();
+}
+
+const known = new Map<string, string>();
+
+async function compare(ask: Ask): Promise<string> {
+  const [w, before, after] = await Promise.all([load(), fetched(ask.before), fetched(ask.after)]);
+  const key = `${await sha256(before)}:${await sha256(after)}`;
+  const kept = known.get(key);
+  if (kept) return kept;
+  const feed = (bytes: ArrayBuffer) => (ask.film ? feedFilm(w, bytes) : feedStill(w, bytes));
+  const b = await feed(before);
+  let a: number;
+  try {
+    a = await feed(after);
+  } catch (e) {
+    w.forget(b);
+    throw e;
+  }
+  check(w, w.compared(b, a));
+  const json = said(w);
+  known.set(key, json);
+  return json;
+}
+
+// One comparison at a time: the wasm side has one frame of room and one answer.
+const scope = self as unknown as { onmessage: ((e: MessageEvent<Ask>) => void) | null; postMessage: (answer: Answer) => void };
+let queue = Promise.resolve();
+scope.onmessage = (e) => {
+  const ask = e.data;
+  queue = queue.then(async () => {
+    try {
+      scope.postMessage({ id: ask.id, json: await compare(ask) });
+    } catch (error) {
+      scope.postMessage({ id: ask.id, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+};

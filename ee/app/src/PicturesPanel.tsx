@@ -2,7 +2,7 @@
 // the order that directs attention, the one on the stage, the notes on it and the verdict. j
 // and k step between pictures, 1 to 5 pick the way to compare.
 
-import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { fileUrl, grantOf } from "./grant";
 import {
   GROUP_WORDS,
@@ -23,7 +23,10 @@ import {
 import { type Draft, type Elsewhere, type Shown as Noted, editNote, elsewhere, fromWhere, linkedWith, makeNote, notesOn, pending, resolveNote, sidesOf } from "./notes";
 import type { Note, PictureChange, Run, Snapshot } from "./proof";
 import { type Looker, SCOPES, type Scope, canSay, carried, changedSince, covered, localBy, maySignIn, onlyViews, signIn, signedIn, standingOf, toLookAt, verdict as say, verdictOf, withdraw } from "./review";
-import { MODES, type Mode, type Noting, Stage, stepSpeed } from "./Stage";
+import { type Against, MODES, type Mode, type Noting, Stage, stepSpeed } from "./Stage";
+import { opensOn, stripOf, worthShowing } from "./runs";
+import { Strip, dotName } from "./Strip";
+import { compared } from "./compare";
 import { FIT, type View } from "./zoom";
 import { ago } from "./ago";
 import { prefetch, preload } from "./preload";
@@ -87,6 +90,54 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
     if (shown && untrack(picked) !== shown.key) setPicked(shown.key);
   });
   const currentKey = createMemo(() => current()?.key);
+  // The strip of runs above the picture, and the run its left side shows: the one picked for
+  // this picture, else what it opens on (your look for a picture to look again, else the base).
+  const dots = createMemo(() => {
+    const p = current();
+    return p && !isText(p.picture) && p.picture.after ? stripOf(props.state, props.run, p) : [];
+  });
+  const [pickedDots, setPickedDots] = createSignal<Record<string, string>>({});
+  const dotKey = createMemo(() => {
+    const p = current();
+    if (!p) return "now";
+    const picked = pickedDots()[p.key];
+    return dots().some((d) => d.key === picked) ? picked! : opensOn(props.state, props.run, p, dots());
+  });
+  const dot = () => dots().find((d) => d.key === dotKey());
+  const pickDot = (key: string) => {
+    const p = current();
+    if (p) setPickedDots((was) => ({ ...was, [p.key]: key }));
+  };
+  // An earlier run's files come under that run's own grant.
+  const leftFiles = grantOf(() => {
+    const d = dot();
+    return d?.kind === "run" ? d.runs[0]!.id : props.run.id;
+  });
+  const pairUrls = createMemo(() => {
+    const d = dot();
+    const p = current();
+    const left = leftFiles();
+    const right = files();
+    if (d?.kind !== "run" || !d.path || !p?.picture.after || !left || !right) return undefined;
+    return { before: fileUrl(left, d.path), after: fileUrl(right, p.picture.after), film: isFilm(p.picture) };
+    // The same files are the same pair, so a live event that redraws the run compares nothing again.
+  }, undefined, { equals: (a, b) => a?.before === b?.before && a?.after === b?.after && a?.film === b?.film });
+  // Its comparison with now, made in the page.
+  const [pair] = createResource(pairUrls, (u) => compared(u.before, u.after, u.film));
+  const against = createMemo<Against | undefined>(() => {
+    const d = dot();
+    if (d?.kind !== "run") return undefined;
+    const urls = pairUrls();
+    const error = pair.state === "errored" ? (pair.error instanceof Error ? pair.error.message : String(pair.error)) : undefined;
+    return {
+      url: urls?.before ?? "",
+      word: dotName(d),
+      label: `${dotName(d)}, ${short(d.head)}`,
+      look: d.look,
+      comparison: urls && pair.state === "ready" ? pair() : undefined,
+      error,
+    };
+  });
   // The note being drawn, and where a film's clock is, for the picture on the stage.
   const [draft, setDraft] = createSignal<Draft>();
   const [composing, setComposing] = createSignal(false);
@@ -135,6 +186,10 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
     },
     get can() {
       return canNote() && mode() === "side";
+    },
+    // Notes are on the base's before and now's after; an earlier run's picture takes none.
+    get only() {
+      return against() ? "after" : undefined;
     },
     onDraft: (next, done) => {
       setDraft(next && draft()?.both ? { ...next, both: true } : next);
@@ -415,6 +470,12 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
               panning={panning()}
               full={full()}
               onFull={toggleFull}
+              against={against()}
+              strip={
+                <Show when={worthShowing(dots())}>
+                  <Strip dots={dots()} picked={dotKey()} onPick={pickDot} />
+                </Show>
+              }
             />
           )}
         </Show>
@@ -438,6 +499,10 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
             onSaid={onward}
             onKeys={() => setKeysShown((v) => !v)}
             elsewhere={fromVariants()}
+            onLook={(() => {
+              const look = dots().find((d) => d.look);
+              return look && look.key !== dotKey() ? () => pickDot(look.key) : undefined;
+            })()}
             variants={screenOf()?.variants ?? []}
             menu={menu()}
             onMenu={setMenu}
@@ -657,6 +722,9 @@ function ReviewBar(props: {
   onDraft: (draft: Draft | undefined) => void;
   /** Every variant of the screen, for a looks right that reaches more than this picture. */
   variants: Shown[];
+  /** Compares now with the run of the last looks right, when the strip has it and it is not
+   * shown already. */
+  onLook: (() => void) | undefined;
   /** Where the choice of how far a looks right reaches is open: beside its arrow, or floating
    * on the screen for a held Y. */
   menu: Menu;
@@ -920,6 +988,16 @@ function ReviewBar(props: {
                 fallback={
                   <span>
                     Changed since <b>{s().verdict?.by}</b> said it looks right at {short(s().verdict?.head ?? "")}: look again
+                    <Show when={props.onLook}>
+                      {(go) => (
+                        <>
+                          {", "}
+                          <button type="button" class="plain" data-compare-look title="Compare now with what it showed when it looked right" onClick={() => go()()}>
+                            compare with that look
+                          </button>
+                        </>
+                      )}
+                    </Show>
                   </span>
                 }
               >
