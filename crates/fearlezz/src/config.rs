@@ -455,6 +455,11 @@ impl Needs {
     }
 }
 
+/// What this binary ships (`src/shipped.rs`): its code and the files a built in check compares
+/// against decide the check's verdict, and every development build says the same version, so
+/// results shared across worktrees are keyed on this rather than the version.
+pub(crate) const SHIPPED: &str = env!("FEARLEZZ_SHIPPED");
+
 /// A check Fearlezz runs in process.
 #[derive(Clone, Debug)]
 pub(crate) enum Builtin {
@@ -467,14 +472,12 @@ pub(crate) enum Builtin {
 }
 
 impl Builtin {
-    /// A stable text of what it checks, part of its inputs. It holds the Fearlezz version,
-    /// since the check's code is part of what decides its result.
+    /// A stable text of what it checks, part of its inputs beside [`SHIPPED`].
     pub(crate) fn fingerprint(&self) -> String {
-        let version = env!("CARGO_PKG_VERSION");
         match self {
-            Builtin::Settings(s) => format!("{version} settings {}", s.fingerprint()),
-            Builtin::Rules(r) => format!("{version} rules {}", r.fingerprint()),
-            Builtin::Commits(c) => format!("{version} commits {}", c.fingerprint()),
+            Builtin::Settings(s) => format!("settings {}", s.fingerprint()),
+            Builtin::Rules(r) => format!("rules {}", r.fingerprint()),
+            Builtin::Commits(c) => format!("commits {}", c.fingerprint()),
         }
     }
 

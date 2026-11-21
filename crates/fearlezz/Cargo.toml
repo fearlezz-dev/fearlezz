@@ -43,6 +43,11 @@ objc2-core-media = { version = "0.3.2", default-features = false, features = ["s
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSURL", "NSError", "NSArray", "NSData", "NSDictionary", "NSObject", "NSEnumerator", "NSValue", "NSPropertyList"] }
 objc2-screen-capture-kit = "0.3.2"
 
+# What the binary ships, hashed into the built in checks' reuse key (build.rs).
+[build-dependencies]
+hex = "0.4.3"
+sha2 = "0.11.1"
+
 [dev-dependencies]
 assert_cmd = "2.2.2"
 

@@ -5,6 +5,8 @@
 #![cfg(test)]
 
 mod common;
+#[path = "../src/shipped.rs"]
+mod shipped;
 
 use common::{Repo, reading};
 
@@ -796,4 +798,65 @@ fn the_flutter_look_piece_writes_its_test_helpers_and_catches_their_drift() {
         "{}",
         out.stdout
     );
+}
+
+/// Every development build says the same version, so the settings check's results are keyed on
+/// what the binary ships: a result stored by a build of other files is never reused.
+#[test]
+fn settings_results_are_keyed_on_what_the_binary_ships() {
+    let repo = workspace(PROJECT);
+    repo.fz(&["setup", "sync"]);
+    repo.commit("synced");
+    assert!(repo.fz(&["run", "settings"]).ok);
+
+    let results = repo.path(".git/fearlezz/results");
+    let stored: Vec<serde_json::Value> = std::fs::read_dir(results)
+        .unwrap()
+        .flatten()
+        .filter(|key| key.path().is_dir())
+        .flat_map(|key| std::fs::read_dir(key.path()).unwrap().flatten())
+        .filter(|f| f.path().extension().is_some_and(|x| x == "json"))
+        .map(|f| serde_json::from_str(&std::fs::read_to_string(f.path()).unwrap()).unwrap())
+        .filter(|r: &serde_json::Value| r["check"] == "settings")
+        .collect();
+    assert_eq!(stored.len(), 1, "{stored:?}");
+    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert_eq!(
+        stored[0]["parts"]["(shipped)"],
+        shipped::digest(crate_dir).unwrap().as_str(),
+        "{:?}",
+        stored[0]["parts"]
+    );
+
+    // The digest follows every source: a change to any one is another key, while a hidden
+    // file is none.
+    let other = tempfile::tempdir().unwrap();
+    let sources = [
+        "crates/fearlezz/Cargo.toml",
+        "crates/fearlezz/src/main.rs",
+        "crates/fearlezz/presets/rust.toml",
+        "skills/fearlezz/SKILL.md",
+        "Cargo.lock",
+        "crates/fearlezz-proof/Cargo.toml",
+        "crates/fearlezz-proof/src/lib.rs",
+    ];
+    for path in sources {
+        let path = other.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "one\n").unwrap();
+    }
+    let dir = other.path().join("crates/fearlezz");
+    let mut seen = vec![shipped::digest(&dir).unwrap()];
+    std::fs::write(other.path().join("crates/fearlezz/src/.#main.rs"), "lock\n").unwrap();
+    assert_eq!(
+        seen[0],
+        shipped::digest(&dir).unwrap(),
+        "a hidden file ships nothing"
+    );
+    for path in sources {
+        std::fs::write(other.path().join(path), "two\n").unwrap();
+        let now = shipped::digest(&dir).unwrap();
+        assert!(!seen.contains(&now), "{path} is not in the digest");
+        seen.push(now);
+    }
 }
