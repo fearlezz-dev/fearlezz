@@ -931,6 +931,18 @@ html, * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--quiet
 .strip li[data-look] button { color: var(--again); }
 .strip li[data-look] button[aria-pressed="true"] .pip { background: var(--again); box-shadow: 0 0 0 3px var(--raised), 0 0 0 5px var(--again); }
 .strip button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+/* Runs folded between two dots: a chip on the line, at the dots' height, that opens them. */
+.strip li.fold button { display: block; align-self: flex-start; margin-top: 3px; height: 22px; padding: 0 9px; border-radius: 999px; box-shadow: inset 0 0 0 1.5px var(--line-strong); color: var(--quiet); font-size: 0.78rem; font-weight: 700; }
+.strip li.fold button:hover { box-shadow: inset 0 0 0 1.5px var(--ink); color: var(--ink); background: var(--raised); }
+.strip li.fold button:focus-visible { border-radius: 999px; }
+/* A phone keeps the strip on one line: shorter lines, and each dot's commit and fold count only
+   in its title. */
+@media (max-width: 700px) {
+  .strip li + li { padding-left: 14px; }
+  .strip li + li::before { right: calc(100% - 14px); }
+  .strip button { padding: 0 2px; column-gap: 5px; grid-template-rows: 28px; }
+  .strip :is(.dot-head, .folded) { display: none; }
+}
 
 /* What comparing the picked run with now came to. */
 .pair-says { margin: -4px 0 10px; font-size: 0.87rem; color: var(--quiet); }
@@ -944,4 +956,5 @@ html, * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--quiet
 @media (prefers-reduced-motion: no-preference) {
   .strip li + li::before { transition: background-color 0.25s var(--ease); }
   .strip .pip { transition: background-color 0.2s var(--ease), box-shadow 0.2s var(--ease); }
+  .strip li.fold button { transition: box-shadow 0.2s var(--ease), color 0.2s var(--ease), background-color 0.2s var(--ease); }
 }

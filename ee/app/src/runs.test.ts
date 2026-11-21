@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { picturesOf } from "./pictures";
 import type { Picture, PictureVerdict, Run, Snapshot } from "./proof";
-import { opensOn, stripOf } from "./runs";
+import { opensOn, stopsOf, stripOf } from "./runs";
 
 const card = (after: string | null = "looks/s/after/card.png", before: string | null = "looks/s/before/card.png"): Picture => ({
   name: "card.png",
@@ -63,6 +63,42 @@ describe("stripOf", () => {
     // A looks right on what now shows is no earlier look.
     const right = state([now, run("r2", "k2"), run("r1", "k1")], [verdict("k2", 20, "r2"), verdict("k3", 30, "r3")]);
     expect(dots(right, now)).toEqual(["base:", "run:r1", "run:r2", "now:r3"]);
+  });
+});
+
+describe("stopsOf", () => {
+  /** Nine runs that each showed the card differently, your look on r4. */
+  const many = () => {
+    const now = run("r9", "k9");
+    const earlier = [8, 7, 6, 5, 4, 3, 2, 1].map((n) => run(`r${n}`, `k${n}`));
+    return { now, s: state([now, ...earlier], [verdict("k4", 40, "r4")]) };
+  };
+  /** The stops as dot keys, a fold as `+` and the keys it holds. */
+  const stops = (picked: string, open: string[] = [], narrow = false) => {
+    const { now, s } = many();
+    return stopsOf(stripOf(s, now, shown(now)), picked, new Set(open), narrow).map((t) => ("fold" in t ? `+${t.dots.map((d) => d.key).join(",")}` : t.dot.key));
+  };
+
+  test("keeps the base, your look, the run before now and now; the runs between fold", () => {
+    expect(stops("r4")).toEqual(["base", "+r1,r2,r3", "r4", "+r5,r6,r7", "r8", "now"]);
+  });
+
+  test("on a phone the run before now folds too", () => {
+    expect(stops("r4", [], true)).toEqual(["base", "+r1,r2,r3", "r4", "+r5,r6,r7,r8", "now"]);
+  });
+
+  test("keeps the dot picked out of its fold", () => {
+    expect(stops("r6")).toEqual(["base", "+r1,r2,r3", "r4", "r5", "r6", "r7", "r8", "now"]);
+  });
+
+  test("an opened fold shows its runs", () => {
+    expect(stops("r4", ["r1"])).toEqual(["base", "r1", "r2", "r3", "r4", "+r5,r6,r7", "r8", "now"]);
+  });
+
+  test("a single run between two kept ones is no fold", () => {
+    const now = run("r3", "k3");
+    const s = state([now, run("r2", "k2"), run("r1", "k1")]);
+    expect(stopsOf(stripOf(s, now, shown(now)), "base", new Set()).map((t) => ("dot" in t ? t.dot.key : "fold"))).toEqual(["base", "r1", "r2", "now"]);
   });
 });
 
