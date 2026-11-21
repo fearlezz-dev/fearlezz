@@ -27,6 +27,13 @@ async function keep(page: Page, info: TestInfo, name: string) {
   await page.video()?.saveAs(`${out}/films/${info.project.name}/work/${name}/${theme}.webm`);
 }
 
+/** Scrolls the picture under review to the top of the screen, as a person would before looking
+ * at it, so the film shows what it is about rather than the page above it. */
+async function toStage(page: Page) {
+  await page.locator("[data-stage]").evaluate((el) => scrollTo({ top: el.getBoundingClientRect().top + scrollY - 16, behavior: "smooth" }));
+  await pause(page, 900);
+}
+
 /** Answers verdicts and notes as the host does: taken, then streamed to the page. */
 async function answers(page: Page, socket: Socket, seq: { n: number }) {
   await page.route("**/api/v2/runs/*/verdicts", async (route) => {
@@ -91,6 +98,7 @@ async function waiting(page: Page) {
   await page.goto(WORK_PATH);
   await settled(page, true);
   await pause(page, 600);
+  await toStage(page);
 }
 
 // Each film stays short, so its script and the recording fit one test's time.
@@ -116,7 +124,6 @@ test("film: a note, made again on the other theme", async ({ page }, info) => {
   await waiting(page);
   // Drag a region on the after, where the banner pushes the card down.
   const after = page.locator('[data-stage] [data-side="after"]').first();
-  await after.scrollIntoViewIfNeeded();
   const box = (await after.boundingBox())!;
   await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.12);
   await page.mouse.down();
@@ -181,15 +188,16 @@ test("film: full screen, zoomed in on the change", async ({ page, isMobile }, in
       await page.keyboard.press("+");
       await pause(page, 500);
     }
-    // Then moved around the zoomed picture with Space held.
+    // Then moved with Space held up to the banner, and along it to read it.
     const after = (await page.locator('[data-stage] [data-side="after"]').boundingBox())!;
     const [x, y] = [after.x + after.width * 0.5, after.y + after.height * 0.5];
     await page.mouse.move(x, y, { steps: 10 });
     await page.keyboard.down(" ");
     await page.mouse.down();
     await page.mouse.move(x + after.width * 0.25, y + after.height * 0.2, { steps: 25 });
-    await pause(page, 300);
-    await page.mouse.move(x - after.width * 0.2, y, { steps: 25 });
+    await pause(page, 400);
+    await page.mouse.move(x + after.width * 0.05, y + after.height * 0.2, { steps: 25 });
+    await pause(page, 600);
     await page.mouse.up();
     await page.keyboard.up(" ");
   } else {
@@ -223,7 +231,8 @@ test("film: a picture that changed since its look, looked at again", async ({ pa
   await answers(page, socket, { n: snapshotOf("look-again").seq + 100 });
   await page.goto(WORK_PATH);
   await settled(page, true);
-  await pause(page, 1200);
+  await pause(page, 600);
+  await toStage(page);
   await page.keyboard.press("t");
   await pause(page, 1200);
   await page.keyboard.press("y");
@@ -279,6 +288,7 @@ test("film: what the change weakens, opened", async ({ page }, info) => {
 
 test("film: comparing by slider and onion skin", async ({ page }, info) => {
   await open(page, WORK["waits-for-you"]!.world);
+  await toStage(page);
   await page.keyboard.press("2");
   await pause(page, 500);
   const frame = (await page.locator("[data-stage] .slide").boundingBox())!;
@@ -300,9 +310,10 @@ test("film: comparing by slider and onion skin", async ({ page }, info) => {
 
 test("film: a new film plays at a click, and a drag notes its frame", async ({ page }, info) => {
   await open(page, WORK["no-before"]!.world);
-  await page.locator('[data-picture="ee-page-look/checkout/desktop.webm"]').click();
+  await press(page, page.locator('[data-picture="ee-page-look/checkout/desktop.webm"]'));
   const layer = page.locator('[data-stage] [data-draw="after"]');
   await pause(page, 600);
+  await toStage(page);
   await layer.click();
   await pause(page, 1200);
   // Dragged while it plays: it pauses on that frame, and the note marks it.
