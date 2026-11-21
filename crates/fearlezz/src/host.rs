@@ -25,6 +25,12 @@ use crate::proof::Check;
 /// The host a project sends to unless its config names another.
 pub(crate) const DEFAULT: &str = "https://fearlezz.seamlezz.com";
 
+/// Why a job on GitHub Actions sends nothing to the host when it may not request an OIDC
+/// token.
+pub(crate) const NO_ID_TOKEN: &str = "this job has no id-token: write, so it cannot sign in to \
+                                      the proof host; add it to the workflow's permissions to \
+                                      get the page";
+
 /// How long a local run waits on the host before it gives it up for the rest of the run: the
 /// checks run between the calls, and the developer waits on them.
 const LOCAL: Limit = Limit {
@@ -113,12 +119,13 @@ impl Host {
             .to_string())
     }
 
-    /// Opens the run, when the host says the repository installed the app.
-    pub(crate) fn open(self, open: &Open) -> Result<Opening> {
+    /// Whether the repository `owner/name` installed the app: None when it did, otherwise
+    /// where to install it.
+    pub(crate) fn installed(&self, repository: &str) -> Result<Option<String>> {
         // An OIDC token names its repository; the CLI's token speaks for a person, who names it.
         let installed = match &self.auth {
             Auth::Actions { .. } => "/api/v2/installed".to_owned(),
-            Auth::Login(_) => format!("/api/v2/installed?repository={}", encode(&open.repository)),
+            Auth::Login(_) => format!("/api/v2/installed?repository={}", encode(repository)),
         };
         let (status, answer) = self.call("GET", &installed, Body::None)?;
         if status != 200 {
@@ -127,12 +134,21 @@ impl Host {
                 said(&answer)
             );
         }
-        if answer.get("installed") != Some(&Value::Bool(true)) {
-            let install = answer
+        if answer.get("installed") == Some(&Value::Bool(true)) {
+            return Ok(None);
+        }
+        Ok(Some(
+            answer
                 .get("install")
                 .and_then(Value::as_str)
                 .unwrap_or(DEFAULT)
-                .to_string();
+                .to_string(),
+        ))
+    }
+
+    /// Opens the run, when the host says the repository installed the app.
+    pub(crate) fn open(self, open: &Open) -> Result<Opening> {
+        if let Some(install) = self.installed(&open.repository)? {
             return Ok(Opening::NotInstalled(install));
         }
         let (status, answer) = self.call("POST", "/api/v2/runs", json(open)?)?;

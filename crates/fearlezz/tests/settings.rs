@@ -721,8 +721,44 @@ fn a_project_whose_typescript_piece_still_lints_with_biome_is_led_to_the_biome_p
         out.stdout
     );
 
-    // With the biome piece, without a biome.json, or with one the project wrote itself (to
-    // format with Biome, say), nothing is said.
+    // `setup sync` says so too.
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(
+        out.stdout.contains(
+            "hint: biome.json is here, but no piece gives Biome its rules and no check runs \
+             Biome; add \"biome\" to use in fearlezz.toml"
+        ),
+        "{}",
+        out.stdout
+    );
+    assert!(out.last_line().starts_with("next:"), "{}", out.stdout);
+
+    // A biome.json the project wrote itself, without the typescript piece, is said too, as a
+    // hint that holds nothing.
+    let repo = Repo::new(
+        "[check.tests]\nrun = \"true\"\nstage = \"working\"\n\n[settings.claude.permissions]\nallow = []\n",
+        &[("biome.json", "{ \"formatter\": {} }\n")],
+    );
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(
+        out.stdout
+            .contains("hint: biome.json is here, but no piece gives Biome its rules"),
+        "{}",
+        out.stdout
+    );
+    repo.commit("settings");
+    repo.branch("feat/x");
+    repo.fz(&["run", "--stage", "working", "--no-run"]);
+    let out = repo.fz(&["run", "settings"]);
+    assert!(out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("no piece gives Biome its rules"),
+        "{}",
+        out.stdout
+    );
+
+    // With the biome piece, without a biome.json, or with a check of the project's own that
+    // runs Biome, nothing is said.
     for (config, files) in [
         (
             "use = [\"typescript\", \"biome\"]\n",
@@ -730,12 +766,18 @@ fn a_project_whose_typescript_piece_still_lints_with_biome_is_led_to_the_biome_p
         ),
         ("use = [\"typescript\"]\n", &[][..]),
         (
-            "use = [\"typescript\"]\n",
+            "use = [\"typescript\"]\n[check.format]\nrun = \"bunx biome format .\"\nstage = \"working\"\n",
             &[("biome.json", "{ \"formatter\": {} }\n")][..],
         ),
     ] {
         let repo = Repo::new(config, files);
-        assert!(repo.fz(&["setup", "sync"]).ok);
+        let out = repo.fz(&["setup", "sync"]);
+        assert!(out.ok, "{}", out.stderr);
+        assert!(
+            !out.stdout.contains("no piece gives Biome"),
+            "{config}: {}",
+            out.stdout
+        );
         repo.branch("feat/x");
         repo.fz(&["run", "--stage", "working", "--no-run"]);
         let out = repo.fz(&["run", "settings"]);

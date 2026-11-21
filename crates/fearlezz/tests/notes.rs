@@ -193,6 +193,56 @@ fn login_keeps_a_token_only_the_user_can_read_and_logout_removes_it() {
 }
 
 #[test]
+fn login_says_whether_the_app_is_installed_on_the_repository() {
+    let host = FakeHost::start();
+    let repo = repo(&host.url);
+    let config = tempfile::tempdir().unwrap();
+    let out = fz(&repo, config.path(), &["setup", "login"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("the Fearlezz GitHub App is installed on owner/repo"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        host.calls()
+            .contains(&"GET /api/v2/installed?repository=owner%2Frepo".to_string()),
+        "{:?}",
+        host.calls()
+    );
+    assert!(out.last_line().starts_with("next:"), "{}", out.stdout);
+
+    host.state.lock().unwrap().installed = false;
+    let out = fz(&repo, config.path(), &["setup", "login"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains(
+            "the Fearlezz GitHub App is not installed on owner/repo, so its runs show no page; \
+             install it: https://github.com/apps/fearlezz"
+        ),
+        "{}",
+        out.stdout
+    );
+
+    // A host that cannot say is a line, never a failure.
+    host.state
+        .lock()
+        .unwrap()
+        .broken
+        .insert("/api/v2/installed".into());
+    let out = fz(&repo, config.path(), &["setup", "login"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("could not ask whether the Fearlezz GitHub App is installed on owner/repo"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.last_line().starts_with("next:"), "{}", out.stdout);
+}
+
+#[test]
 fn status_shows_what_waits_on_the_host_and_leads_to_the_notes() {
     let host = FakeHost::start();
     host.state.lock().unwrap().feedback = Some(feedback(&host));

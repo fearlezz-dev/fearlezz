@@ -46,6 +46,16 @@ Or pick what fits the project:
 
 In a project, `fearlezz setup init` writes a starter `fearlezz.toml` from the languages it finds; `fearlezz setup sync` then writes the agent skill, hooks and lint settings.
 
+A check that needs two commands lists them as steps, never joined with `&&`:
+
+```toml
+[check.validate]
+run = ["terraform init -backend=false", "terraform validate -json"]
+stage = "working"
+```
+
+Each step is its own `sh -c`, run in order; the first that fails ends the check, and a reader of stdout (findings, test counts) reads only the last step's output. A failed check whose `run` joins commands with `&&` says how to split it.
+
 Prebuilt binaries for Linux and macOS are on the [releases](https://github.com/fearlezz-dev/fearlezz/releases) page. Stills and films need `ffmpeg`, and code rules need `ast-grep`.
 
 To work on Fearlezz itself, enter the toolchain with `devenv shell`, then run `check`.
@@ -66,7 +76,8 @@ on:
     branches: [main]
 permissions:
   contents: read
-  # Only to send the proof to the proof host, with its GitHub App installed.
+  # The proof page and review need this and the Fearlezz GitHub App installed; without
+  # either, CI still proves the commit but sends nothing and shows no page.
   id-token: write
 jobs:
   proof:
@@ -84,6 +95,25 @@ jobs:
 ```
 
 The checkout needs `fetch-depth: 0`: the proof compares the change with its base branch. `edited` runs the proof again when the pull request is edited, since a title starting with `fix:` makes the change a fix that needs red before green, and another base is another comparison. Do not skip description edits with a job `if`: a required job that is skipped counts as passed. The action installs the release of its own tag (`version: v0.2.0` pins one), runs `fearlezz run --ci --proof <dir>`, and keeps the proof bundle (every check's output and every picture, before and after) and the check logs as artifacts of the run. Set `devenv: true` when the checks run in a devenv shell. A workflow can also run `fearlezz run --ci` without the action: when a check records stills or films and the runner has no ffmpeg, it installs a pinned static ffmpeg into the runner's tool cache.
+
+On [Namespace](https://namespace.so) runners the same job runs with their labels in `runs-on`. Cache Nix with `namespacelabs/nscloud-cache-action` only on Linux runners: with `cache: nix` it fails on macOS runners, whose system root is read only.
+
+```yaml
+jobs:
+  proof:
+    runs-on: # your Namespace Linux runner label
+    steps:
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: nix
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: fearlezz-dev/fearlezz@v0
+        with:
+          devenv: true
+```
 
 Free CI only proves. Unless asked to open an issue (below), it writes nothing to GitHub: the job summary shows whether the commit is proven, each blocker with why and what to do, every check with its tests and time, the end of each failing output, and the changed pictures. Changed pictures never fail the proof and never wait; a person reviews them on the pull request, through GitHub's own review. Require the proof check on the base branch to hold merging to it.
 
@@ -120,7 +150,7 @@ Putting an existing check on a schedule weakens the proof, so a person with admi
 
 A change that weakens the proof the base branch requires (a check turned off, another command, a lint lowered; see the floor below) fails the proof everywhere: locally, on any CI, and on every pull request, from the repository or a fork. When it must change, a person with admin rights reads why and merges past the required check.
 
-`fearlezz run --ci --proof <dir>` writes everything a run showed as a folder: `proof.json`, every check's output and every picture with its comparison. Only the proof host draws a page from it. A repository that installs the Fearlezz GitHub App and grants its proof job `id-token: write` has CI send the bundle to the proof host (`[host] url` in `fearlezz.toml`, default `https://fearlezz.seamlezz.com`; its protocol is in `ee/README.md`), and the log and job summary link to the page. Without the app or the permission, CI sends nothing.
+`fearlezz run --ci --proof <dir>` writes everything a run showed as a folder: `proof.json`, every check's output and every picture with its comparison. Only the proof host draws a page from it. A repository that installs the Fearlezz GitHub App and grants its proof job `id-token: write` has CI send the bundle to the proof host (`[host] url` in `fearlezz.toml`, default `https://fearlezz.seamlezz.com`; its protocol is in `ee/README.md`), and the log and job summary link to the page. Both are needed: without the app or the permission, CI still proves the commit but sends nothing and shows no page. A job on GitHub Actions without `id-token: write` says so in its log and job summary (not on a pull request from a fork, which never gets the token), and `fearlezz setup login` says whether the app is installed on the repository. A repository that does not use the proof host says so with `[host] off = true`: CI and a signed in CLI then send nothing and never mention the page.
 
 The proof host is where hosted review happens. Its page of a work is live: it fills in as CI runs, with every changed picture compared with the base. People with write access say per picture that it looks right, or leave a note on its before, its after or both; an admin accepts what a change weakens there, which runs the proof job again. The host writes where review stands to the pull request as the `Fearlezz review` check run and one comment. An agent signs in with `fearlezz setup login` and reads the open notes, with their pictures, through `fearlezz --notes`. Once signed in, a local `fearlezz run` shows on the page too, marked unproven: it is the agent's word, so it never moves the review. How it works is in [`ee/README.md`](ee/README.md).
 

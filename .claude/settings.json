@@ -53,7 +53,7 @@
       {
         "hooks": [
           {
-            "command": "fearlezz setup hook claude session-start || true",
+            "command": "fearlezz setup hook claude session-start || printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"fearlezz setup hook failed, so Fearlezz could not say where the work stands. An older Fearlezz may be first on PATH, or none is installed: check which -a fearlezz and fearlezz --version, and tell the developer.\"}}'",
             "type": "command"
           }
         ]

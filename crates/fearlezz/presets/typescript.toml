@@ -1,6 +1,8 @@
 # TypeScript and JavaScript: the type checker and its strictness. Linting and formatting come
 # with the piece of their tool (biome, eslint, oxlint, prettier), the tests with the piece of
-# their runner (vitest, bun, node-test).
+# their runner (vitest, bun, node-test). Biome's checks and rules come with the biome piece
+# since 0.5; `fearlezz setup sync` and the settings check point a biome.json left without it
+# there.
 
 [check.tsc]
 run = "tsc --noEmit"

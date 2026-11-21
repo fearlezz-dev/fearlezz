@@ -97,6 +97,12 @@ impl Workflow {
         self.text("/pull_request/title")
     }
 
+    /// Whether the event is a pull request from a fork, whose jobs GitHub never gives an OIDC
+    /// token, whatever the workflow asks.
+    pub(crate) fn fork(&self) -> bool {
+        self.event.pointer("/pull_request/head/repo/fork") == Some(&Value::Bool(true))
+    }
+
     /// The pull request's head commit, when the event is one.
     pub(crate) fn head(&self) -> Option<&str> {
         self.text("/pull_request/head/sha")
@@ -122,11 +128,12 @@ impl Workflow {
 /// The job summary of a proof: whether the commit is proven, what keeps it from being proven
 /// and what to do, what a reader should know, the changed pictures and texts for a person to review on
 /// the pull request, every check, and the end of each failing output. `page` is the proof
-/// host's page of the work, when the host opened the run, and `gate` where what the change
-/// weakens got past, or can.
+/// host's page of the work, when the host opened the run, `unsent` why a job that could have
+/// had that page sent nothing, and `gate` where what the change weakens got past, or can.
 pub(crate) fn summary(
     proof: &Proof,
     page: Option<&str>,
+    unsent: Option<&str>,
     gate: &crate::floor::Gate,
 ) -> Result<String, std::fmt::Error> {
     let mut text = String::new();
@@ -154,6 +161,13 @@ pub(crate) fn summary(
             text,
             "[The proof page]({url}) shows this run live on the proof host: each check as it \
              runs, and how it came out.\n"
+        )?;
+    }
+    if let Some(why) = unsent {
+        writeln!(
+            text,
+            "The proof page was not sent: {}.\n",
+            why.replace("id-token: write", "`id-token: write`")
         )?;
     }
     if !blockers.is_empty() {

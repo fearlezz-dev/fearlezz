@@ -156,10 +156,32 @@ pub(crate) fn login(url: &str) -> Result<()> {
          leave notes before a pull request; the token never gives a verdict",
         signed.login
     );
+    if let Some(line) = app_installed(url, &signed.token) {
+        println!("{line}");
+    }
     println!(
         "next: fearlezz run shows the run on the host; fearlezz setup logout stops sending runs"
     );
     Ok(())
+}
+
+/// Whether the Fearlezz GitHub App is installed on the GitHub repository of the current
+/// folder, as the host at `url` says to a sign in with `token`, in one line. None outside a
+/// repository on GitHub; a host that cannot say is a line too.
+fn app_installed(url: &str, token: &str) -> Option<String> {
+    let git = Git::discover(&std::env::current_dir().ok()?).ok()?;
+    let repository = git.github_repository()?;
+    let app = "the Fearlezz GitHub App";
+    Some(
+        match host::Host::from_login(url, token).installed(&repository) {
+            Ok(None) => format!("{app} is installed on {repository}"),
+            Ok(Some(install)) => format!(
+                "{app} is not installed on {repository}, so its runs show no page; install it: \
+             {install}"
+            ),
+            Err(e) => format!("could not ask whether {app} is installed on {repository}: {e:#}"),
+        },
+    )
 }
 
 /// `fearlezz setup logout`: ends the sign in to `url` on the host and forgets its token.

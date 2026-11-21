@@ -7,6 +7,9 @@ description: Prove a change with the checks in fearlezz.toml, with the result in
 # The job summary lists each check and the changed pictures, which a person reviews on the pull
 # request; the proof bundle (every check's output and every picture, before and after) is kept
 # as an artifact.
+# The proof page and hosted review need both the Fearlezz GitHub App installed on the repository
+# and `permissions: id-token: write` on the proof job; without either, the proof still runs but
+# sends nothing and there is no page. `fearlezz setup login` says whether the app is installed.
 inputs:
   version:
     description: >-

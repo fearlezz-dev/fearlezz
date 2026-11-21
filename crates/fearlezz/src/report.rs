@@ -49,6 +49,8 @@ pub(crate) struct Report {
     stream: Option<host::Stream>,
     /// The host's page of the work, once the host opened the run.
     page: Option<String>,
+    /// Why a job that could have had the host's page sent nothing, for the job summary.
+    unsent: Option<&'static str>,
     /// A folder for the proof bundle, when asked.
     bundle: Option<PathBuf>,
     /// Proving a commit for CI, not a local run.
@@ -135,16 +137,27 @@ impl Report {
             }),
         };
         // A host that fails never fails the proof: CI proves the commit anyway.
-        let stream =
-            host::Host::from_actions(ctx.config.host.as_deref()).and_then(|host| match open {
-                Ok(open) => open_on(host, &open),
-                Err(why) => {
-                    println!("proof page not sent: {why}");
-                    None
-                }
-            });
+        let host =
+            host::Host::from_actions(ctx.config.host.as_deref()).filter(|_| !ctx.config.host_off);
+        // A job on GitHub Actions that may not request an OIDC token could have had the page,
+        // unless the repository sends nothing to the host or the job is a fork's, which never
+        // gets a token.
+        let unsent =
+            (host.is_none() && workflow.actions && !ctx.config.host_off && !workflow.fork())
+                .then_some(host::NO_ID_TOKEN);
+        if let Some(why) = unsent {
+            println!("proof page not sent: {why}");
+        }
+        let stream = host.and_then(|host| match open {
+            Ok(open) => open_on(host, &open),
+            Err(why) => {
+                println!("proof page not sent: {why}");
+                None
+            }
+        });
         Ok(Report {
             page: stream.as_ref().map(|s| s.url.clone()),
+            unsent,
             stream,
             proof,
             bundle: out.proof,
@@ -161,7 +174,8 @@ impl Report {
         let head = ctx.git.head()?;
         let mut proof = Proof::new(ctx.git.head_short()?, head.clone(), ctx.config.base.clone());
         let url = crate::host_url(Some(&ctx.config));
-        let login = feedback::login_of(&url).filter(|_| !targets.is_empty());
+        let login =
+            feedback::login_of(&url).filter(|_| !targets.is_empty() && !ctx.config.host_off);
         let stream = login.and_then(|login| {
             let (Some(repository), Ok(branch)) = (ctx.git.github_repository(), ctx.git.branch())
             else {
@@ -181,6 +195,7 @@ impl Report {
         });
         Ok(Report {
             page: stream.as_ref().map(|s| s.url.clone()),
+            unsent: None,
             stream,
             proof,
             bundle: None,
@@ -252,7 +267,7 @@ impl Report {
             None => Gate::Job,
         };
         if self.ci {
-            summary(&self.proof, self.page.as_deref(), &gate)?;
+            summary(&self.proof, self.page.as_deref(), self.unsent, &gate)?;
         }
         if self.proof.leg.is_some() {
             if !floor.holds() {
@@ -349,10 +364,15 @@ pub(crate) fn ask_accept(stream: &host::Stream, proof: &mut Proof, floor: &Floor
 }
 
 /// Appends the job summary to the file GitHub Actions names, when it names one.
-pub(crate) fn summary(proof: &Proof, page: Option<&str>, gate: &Gate) -> Result<()> {
+pub(crate) fn summary(
+    proof: &Proof,
+    page: Option<&str>,
+    unsent: Option<&str>,
+    gate: &Gate,
+) -> Result<()> {
     use std::io::Write as _;
     if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-        let summary = action::summary(proof, page, gate)?;
+        let summary = action::summary(proof, page, unsent, gate)?;
         std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -363,7 +383,8 @@ pub(crate) fn summary(proof: &Proof, page: Option<&str>, gate: &Gate) -> Result<
 }
 
 /// Why a failed run failed, with the end of its log, its failed tests and its findings.
-pub(crate) fn print_failure(f: &RunResult) {
+/// `steps` are its check's commands, for the hint to split a step that joins several.
+pub(crate) fn print_failure(f: &RunResult, steps: &[String]) {
     let why = f.failure();
     println!("fail {}{}", f.check, why.line());
     if let Why::NoTests(said) = &why {
@@ -386,6 +407,14 @@ pub(crate) fn print_failure(f: &RunResult) {
     if let Some(fix) = why.fix_here(&f.check, run::install) {
         println!("  fix: {fix}");
     }
+    if let Some(split) = split_steps(steps) {
+        println!(
+            "  fix: list the commands of check {} as steps, run = {split}: each step is its own \
+             command, the first that fails ends the check, and a reader of stdout reads only the \
+             last one's",
+            f.check
+        );
+    }
     // The diff and the findings say what blocks; otherwise the end of the log does.
     if !matches!(why, Why::Gate(_) | Why::Generated(_)) {
         // A failed test's own output says more than the runner's last lines.
@@ -400,6 +429,48 @@ pub(crate) fn print_failure(f: &RunResult) {
         print_cases(f);
     }
     print_findings(f);
+}
+
+/// The steps of a check whose steps join commands with `&&`, as a TOML list with each
+/// command a step of its own; None when no step does, or when splitting would change what
+/// runs: a step with quotes or `||`, or a command that changes the shell for the next one
+/// (`cd`, `export`, `source`, `.`, `pushd` or a variable set on its own), since each step is
+/// a shell of its own.
+fn split_steps(steps: &[String]) -> Option<String> {
+    if !steps.iter().any(|step| step.contains("&&")) {
+        return None;
+    }
+    if steps
+        .iter()
+        .any(|step| step.contains(['"', '\'']) || step.contains("||"))
+    {
+        return None;
+    }
+    let commands: Vec<&str> = steps
+        .iter()
+        .flat_map(|step| step.split("&&"))
+        .map(str::trim)
+        .collect();
+    if commands.iter().any(|command| changes_shell(command)) {
+        return None;
+    }
+    let split: Vec<String> = commands
+        .iter()
+        .map(|command| toml::Value::String((*command).to_owned()).to_string())
+        .collect();
+    Some(format!("[{}]", split.join(", ")))
+}
+
+/// Whether a command changes the shell it runs in for the commands after it.
+fn changes_shell(command: &str) -> bool {
+    let first = command.split_whitespace().next().unwrap_or_default();
+    let assigns = first.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    });
+    matches!(
+        first,
+        "cd" | "export" | "source" | "." | "pushd" | "popd" | "set" | "unset"
+    ) || (assigns && command.split_whitespace().count() == 1)
 }
 
 /// The items of one list the terminal shows at most: failed tests, findings.

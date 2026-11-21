@@ -14,8 +14,11 @@ host draws the work's page itself, live, for the people who may read the reposit
 review it there, and for anyone a writer gave a share link.
 
 A repository opts in by installing the Fearlezz GitHub App and letting its workflow request
-GitHub's OIDC token (`permissions: id-token: write`). CI asks whether the repository is
-installed before it sends anything. The app needs these repository permissions:
+GitHub's OIDC token (`permissions: id-token: write`) on its proof job. Both are needed:
+without either, CI still proves the commit but sends nothing, and there is no page or review.
+CI asks whether the repository is installed before it sends anything; a job without the
+permission says so in its log and job summary, and `fearlezz setup login` says whether the app
+is installed on the repository it runs in. The app needs these repository permissions:
 
 | Permission | For |
 | --- | --- |

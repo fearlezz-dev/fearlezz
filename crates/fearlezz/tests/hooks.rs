@@ -117,6 +117,132 @@ fn sync_writes_hooks_for_the_agents_the_project_uses() {
     );
 }
 
+/// A folder holding a `fearlezz` that is a shell script running `body`.
+fn fake_fearlezz(body: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fearlezz");
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    dir
+}
+
+#[test]
+fn a_session_start_hook_that_fails_tells_the_agent_in_its_own_format() {
+    let repo = repo(CONFIG);
+    std::fs::create_dir_all(repo.path(".codex")).unwrap();
+    std::fs::create_dir_all(repo.path(".cursor")).unwrap();
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    let read = |path: &str| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(repo.path(path)).unwrap()).unwrap()
+    };
+    let claude = read(".claude/settings.json");
+    let codex = read(".codex/hooks.json");
+    let cursor = read(".cursor/hooks.json");
+    // An older Fearlezz first on PATH has no `setup hook` and fails as clap does.
+    let old = fake_fearlezz("echo \"error: unrecognized subcommand 'hook'\" >&2; exit 2");
+    let path = format!("{}:/usr/bin:/bin", old.path().display());
+    for (agent, settings, at, context) in [
+        (
+            "claude",
+            &claude,
+            "/hooks/SessionStart/0/hooks/0/command",
+            "/hookSpecificOutput/additionalContext",
+        ),
+        (
+            "codex",
+            &codex,
+            "/hooks/SessionStart/0/hooks/0/command",
+            "/hookSpecificOutput/additionalContext",
+        ),
+        (
+            "cursor",
+            &cursor,
+            "/hooks/sessionStart/0/command",
+            "/additional_context",
+        ),
+    ] {
+        let command = settings.pointer(at).and_then(|c| c.as_str()).unwrap();
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", command])
+            .env("PATH", &path)
+            .current_dir(&repo.root)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{agent}: {command}");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        let answer: serde_json::Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{agent}: {e}: {stdout}"));
+        let said = answer
+            .pointer(context)
+            .and_then(|c| c.as_str())
+            .unwrap_or_default();
+        assert!(
+            said.contains("fearlezz setup hook failed"),
+            "{agent}: {answer}"
+        );
+        assert!(said.contains("which -a fearlezz"), "{agent}: {answer}");
+        assert!(said.contains("fearlezz --version"), "{agent}: {answer}");
+    }
+    // Other events stay quiet when the hook fails.
+    let stop = claude
+        .pointer("/hooks/Stop/0/hooks/0/command")
+        .and_then(|c| c.as_str())
+        .unwrap();
+    assert!(stop.ends_with("|| true"), "{stop}");
+}
+
+#[test]
+fn sync_names_an_older_fearlezz_on_path() {
+    let repo = repo(CONFIG);
+    let old = fake_fearlezz("echo 'fearlezz 0.1.0'");
+    let newer = fake_fearlezz("echo 'fearlezz 999.0.0'");
+    let broken = fake_fearlezz("exit 1");
+    // git, which Fearlezz runs, from a folder of its own, so no other fearlezz is on PATH.
+    let git = tempfile::tempdir().unwrap();
+    let real = String::from_utf8(
+        std::process::Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(real.trim(), git.path().join("git")).unwrap();
+    let path = |dirs: &[&std::path::Path]| {
+        let mut all: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+        all.extend(["/usr/bin".into(), "/bin".into()]);
+        all.join(":")
+    };
+    let both = path(&[old.path(), newer.path(), broken.path(), git.path()]);
+    let out = repo.fz_env(&["setup", "sync"], &[("PATH", &both)]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let line = format!(
+        "older fearlezz on PATH: {} is 0.1.0 while this one is {}; agents and hooks that run fearlezz \
+         from PATH run the first one there",
+        old.path().join("fearlezz").display(),
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(out.stdout.contains(&line), "{}", out.stdout);
+    assert!(!out.stdout.contains("999.0.0"), "{}", out.stdout);
+    assert_eq!(
+        out.stdout.matches("older fearlezz").count(),
+        1,
+        "{}",
+        out.stdout
+    );
+    assert!(out.last_line().starts_with("next:"), "{}", out.stdout);
+
+    // None, nothing said.
+    let out = repo.fz_env(&["setup", "sync"], &[("PATH", &path(&[git.path()]))]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("older fearlezz"), "{}", out.stdout);
+}
+
 #[test]
 fn the_project_names_which_agents_get_hooks() {
     let repo = repo(&format!(
