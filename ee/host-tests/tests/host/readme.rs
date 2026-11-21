@@ -1,6 +1,7 @@
-//! README pictures: the files origin serves the newest proven picture of a push to a public
-//! repository's default branch at a stable address, `/readme/<owner>/<repo>/<check>/<picture>`,
-//! with no grant, so a README can embed what the proof took.
+//! README pictures: the files origin serves the newest proven picture of a push to the default
+//! branch of a repository with the app, private or public, at a stable address,
+//! `/readme/<owner>/<repo>/<check>/<picture>`, with no grant, so a README can embed what the
+//! proof took.
 
 use super::*;
 
@@ -161,12 +162,14 @@ pub(crate) fn a_readme_picture_of_a_check_in_a_folder_names_the_check_then_the_p
     );
 }
 
-pub(crate) fn a_readme_picture_of_a_private_repository_is_not_found() {
+pub(crate) fn a_readme_picture_of_a_private_repository_with_the_app_is_served() {
     let main = Job::push("owner/unseen", DEFAULT).at(&commit("p1"), 9401);
     took(&main, "hero", "home.png", b"readme private", "passed");
 
+    // GitHub's image proxy loads a README's pictures without a sign in, private or not.
     let answer = get_url(&readme("owner/unseen", "hero", "home.png"), &[]);
-    assert_eq!(answer.status, 404, "{}", answer.text());
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.body, b"readme private", "the picture itself");
 }
 
 pub(crate) fn an_unknown_readme_picture_is_not_found() {
@@ -180,6 +183,8 @@ pub(crate) fn an_unknown_readme_picture_is_not_found() {
         ("owner/open", "known", "home.png"),
         // Public, without the app.
         ("owner/bare", "known", "home.png"),
+        // Private, without the app.
+        ("owner/hidden", "known", "home.png"),
         ("owner/nowhere", "known", "home.png"),
     ] {
         let answer = get_url(&readme(repository, check, picture), &[]);

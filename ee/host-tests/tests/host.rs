@@ -548,8 +548,8 @@ fn main() {
             readme::a_readme_picture_of_a_check_in_a_folder_names_the_check_then_the_picture,
         ),
         (
-            "a_readme_picture_of_a_private_repository_is_not_found",
-            readme::a_readme_picture_of_a_private_repository_is_not_found,
+            "a_readme_picture_of_a_private_repository_with_the_app_is_served",
+            readme::a_readme_picture_of_a_private_repository_with_the_app_is_served,
         ),
         (
             "an_unknown_readme_picture_is_not_found",

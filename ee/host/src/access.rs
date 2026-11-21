@@ -259,9 +259,9 @@ pub(crate) async fn speaker(
 }
 
 /// The branch whose pictures a README shows: the default branch of `repo` (`owner/name` as
-/// the host keys it, in lower case) when anyone may read it, None for a private repository or
-/// one without the app, since a README's picture loads for anyone, without a sign in. GitHub's
-/// word, kept like every other.
+/// the host keys it, in lower case) when the app is installed there, private or public; None
+/// for one without the app. A README's picture loads for anyone, without a sign in, private
+/// repositories included. GitHub's word, kept like every other.
 pub(crate) async fn readme_branch(
     env: &Env,
     config: &Config,
@@ -278,7 +278,7 @@ pub(crate) async fn readme_branch(
 enum Question<'a> {
     /// Whether anyone may read it, as the app sees it.
     Public,
-    /// Its default branch when anyone may read it, as the app sees it; empty otherwise.
+    /// Its default branch when the app is installed there, as the app sees it; empty otherwise.
     ReadmeBranch,
     /// Whether the person may read it, as their token sees it.
     Reads(&'a Person),
@@ -321,7 +321,7 @@ async fn word(
     let word = match question {
         Question::Public => Some(yes(github::public(config, repo).await?)),
         Question::ReadmeBranch => Some(
-            github::public_branch(config, repo)
+            github::default_branch(config, repo)
                 .await?
                 .unwrap_or_default(),
         ),

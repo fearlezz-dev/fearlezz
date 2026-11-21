@@ -383,17 +383,19 @@ holds no grant, and a grant always holds a dot, so `readme` never names one.
   leading segments spell, and the rest is the picture.
 - **Only stills and films.** png, jpeg, webp, gif, avif, mp4 and webm; a text of a look is
   `404`.
-- **Only public repositories.** A README's picture loads for anyone, through GitHub's image
-  proxy, without a sign in. The app asks GitHub for the repository (`GET /repos/{owner}/{repo}`)
-  and its default branch, kept 5 minutes like every answer of GitHub; a private repository, one
-  without the app, and anything not there is `404`. An owner or name holding anything but
+- **Any repository with the app, private ones included.** GitHub's image proxy (camo) loads a
+  README's pictures without signing in, even for a private repository, so the address holds no
+  grant: anyone who knows it can load the picture, whatever the repository's visibility. The
+  app asks GitHub for the repository (`GET /repos/{owner}/{repo}`) and its default branch, kept
+  5 minutes like every answer of GitHub; a repository without the app, and anything not there,
+  is `404`. An owner or name holding anything but
   letters, digits, `.`, `_` and `-`, or that is `.` or `..`, is `404` without asking GitHub.
 - **Caching.** The host keeps which file an address names in the worker's cache
   (`caches.default`, keyed by the address without its query) for five minutes, so a view looks
   up neither GitHub nor the runs. The answer says `Cache-Control: public, max-age=300` and
   carries the `ETag`, `If-Range` and `Range` handling of every file of this origin, the type its
-  name pins and `nosniff`. A push shows within five minutes, and a repository turned private can
-  stay visible through these caches for those few minutes.
+  name pins and `nosniff`. A push shows within five minutes, and a repository that removes the app
+  can stay visible through these caches for those few minutes.
 
 A light and a dark variant are two pictures, chosen in the README with
 `<picture><source media="(prefers-color-scheme: dark)" srcset="...">` (the root README shows it).
@@ -418,8 +420,8 @@ read it, and their role on it.
   only the row's random 128 bit id. Logging out deletes the row, so an old cookie signs in
   no one.
 - **GitHub's answers are cached** in D1 (`cache`): who may read a repository and their role
-  there, per login and repository, and whether a repository is public and the default branch a
-  public one's README pictures come from, each for 5 minutes; GitHub's OIDC keys for
+  there, per login and repository, and whether a repository is public and the default branch its
+  README pictures come from, each for 5 minutes; GitHub's OIDC keys for
   an hour, fetched again once when a token names a key id the cached set lacks. So a change
   of access on GitHub shows here within 5 minutes.
 - **A live page follows the same rule while it stays open.** Its room asks again for each page

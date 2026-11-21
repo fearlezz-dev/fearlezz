@@ -7,7 +7,8 @@
 //! could reach nothing of the signed in app anyway.
 //!
 //! It also serves README pictures at `/readme/<owner>/<repo>/<check>/<picture>`, with no grant:
-//! the newest proven picture of a push to a public repository's default branch (`readme.rs`).
+//! the newest proven picture of a push to the default branch of a repository with the app,
+//! private ones included (`readme.rs`).
 
 use serde::{Deserialize, Serialize};
 use worker::{Env, Headers, Range, Request, Response, ResponseBody};

@@ -163,13 +163,13 @@ The proof host is where hosted review happens. Its page of a work is live: it fi
 
 ### Pictures in your README
 
-A public repository with the app can embed the stills and films its proof takes. Each picture has a stable address on the host's files origin:
+Any repository with the app, private ones included, can embed the stills and films its proof takes. Each picture has a stable address on the host's files origin:
 
 ```text
 https://fearlezz.seamlezz.net/readme/<owner>/<repo>/<check>/<picture>
 ```
 
-It always shows that picture from the newest push to the default branch whose proof did not fail (a weakening an admin accepted does not fail it), so the README follows every push with no pictures branch to keep. Only a CI run that a push started counts: pull requests (`pull_request_target` too), other branches, other events on the default branch, re-runs of older pushes and local runs never change it. Of a proof split over several jobs, each leg's run counts on its own. `<picture>` is its name in the check's look (as `fearlezz run` lists it, for example `card/light.png`); only stills and films are served, and a private repository's pictures never are. A light and a dark picture are two pictures:
+It always shows that picture from the newest push to the default branch whose proof did not fail (a weakening an admin accepted does not fail it), so the README follows every push with no pictures branch to keep. Only a CI run that a push started counts: pull requests (`pull_request_target` too), other branches, other events on the default branch, re-runs of older pushes and local runs never change it. Of a proof split over several jobs, each leg's run counts on its own. `<picture>` is its name in the check's look (as `fearlezz run` lists it, for example `card/light.png`); only stills and films are served. The address holds no grant: anyone who knows it can load the picture, also of a private repository. A README needs this, since GitHub's image proxy loads its pictures without signing in. A light and a dark picture are two pictures:
 
 ```html
 <picture>
@@ -178,7 +178,7 @@ It always shows that picture from the newest push to the default branch whose pr
 </picture>
 ```
 
-Browsers, GitHub and the host keep a picture up to five minutes, so a push shows within that, and a repository turned private can stay visible for those few minutes.
+Browsers, GitHub and the host keep a picture up to five minutes, so a push shows within that, and a repository that removes the app can stay visible for those few minutes.
 
 ### Several platforms, several jobs
 

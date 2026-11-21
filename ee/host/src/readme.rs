@@ -3,16 +3,18 @@
 //! the repository's default branch, so a README can embed what the proof shows and follows each
 //! push without anyone copying files.
 //!
-//! A README's picture loads for anyone, through GitHub's image proxy, without a sign in, so only
-//! a public repository's pictures are served and the address holds no grant: anything else is
-//! `404`, as on the rest of this origin. Only a CI run that a push started counts: its OIDC
-//! token's event is `push`, its ref `refs/heads/<default branch>`, and the commit it proves the
-//! one the token says was pushed. The ref alone would let in `pull_request_target` and
-//! `workflow_run` runs, which carry the default branch's ref while they often check out a
-//! fork's code. A pull request, another branch or a local run never counts, and only a run whose
-//! proof did not fail, as the host's review judges it (`fearlezz_proof::review::failed`): a
-//! README shows what the default branch proved, so a newer push that failed leaves the older
-//! picture.
+//! A README's picture loads through GitHub's image proxy, which signs in to nothing, even for a
+//! private repository. So the pictures of any repository with the app are served, private ones
+//! included, and the address holds no grant: anyone who knows it can load the picture. A
+//! repository without the app is `404`, as anything else on this origin.
+//!
+//! Only a CI run that a push started counts: its OIDC token's event is `push`, its ref
+//! `refs/heads/<default branch>`, and the commit it proves the one the token says was pushed.
+//! The ref alone would let in `pull_request_target` and `workflow_run` runs, which carry the
+//! default branch's ref while they often check out a fork's code. A pull request, another branch
+//! or a local run never counts, and only a run whose proof did not fail, as the host's review
+//! judges it (`fearlezz_proof::review::failed`): a README shows what the default branch proved,
+//! so a newer push that failed leaves the older picture.
 //!
 //! Newest means the newest push, not the newest run: pushes are ordered as the host first saw
 //! each commit (its first run's place in `runs`, as `opened` holds whole seconds only), so a run
@@ -93,7 +95,7 @@ struct Found {
 }
 
 /// The file a README shows for `segments` (the check, then the picture) of `repo`
-/// (lowercased): None for a repository that is not public, or no such proven picture.
+/// (lowercased): None for a repository without the app, or no such proven picture.
 async fn find(
     env: &Env,
     config: &Config,
