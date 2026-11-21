@@ -122,3 +122,24 @@ fn a_repository_not_on_github_has_no_showcase_address() {
     assert!(!out.stdout.contains("<img"), "{}", out.stdout);
     assert!(out.last_line().starts_with("next: "), "{}", out.stdout);
 }
+
+/// A repository that turned the proof host off sends no pictures, so it has no showcase.
+#[test]
+fn a_repository_with_the_proof_host_off_has_no_showcase() {
+    let repo = ran();
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write("fearlezz.toml", &format!("{config}\n[host]\noff = true\n"));
+    let out = repo.fz(&["setup", "showcase"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("the proof host is off"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("<img"), "{}", out.stdout);
+    assert!(
+        out.last_line().starts_with("next: ") && out.last_line().contains("[host]"),
+        "{}",
+        out.stdout
+    );
+}

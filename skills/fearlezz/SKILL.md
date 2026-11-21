@@ -145,7 +145,7 @@ Proof that people can see should grow with the project. When setting up, or when
 
 - A UI no check takes pictures of: `use = ["playwright"]` for a web app, `record` for a desktop window, `flutter-look` and `flutter-film` for a Flutter app, films for flows.
 - Rendered output (kustomize, helm, terraform) no check keeps: write it into `$FEARLEZZ_OUT` and name it with `texts`.
-- Checks that take stills and films while README.md shows none: a public repository can show each from its stable address, `https://fearlezz.seamlezz.net/readme/<owner>/<repo>/<check>/<picture>` (Fearlezz's README, "Pictures in your README").
+- Checks that take stills and films while README.md shows none: `fearlezz setup showcase` prints the markup that shows each from its stable address, `https://fearlezz.seamlezz.net/showcase/<owner>/<repo>/<check>/<picture>` (Fearlezz's README, "Showcase media").
 
 `fearlezz setup init` lists what the project could prove, one `could prove:` line each. While working, the `settings` check gives one as a hint when the change touches files of that kind; it never blocks, whatever level `[lints.fearlezz]` gives it. `[lints.fearlezz]` turns one off for the repository: `pictures`, `texts` or `readme-media` = `"off"`.
 

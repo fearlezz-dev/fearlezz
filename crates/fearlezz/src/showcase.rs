@@ -1,7 +1,8 @@
 //! `fearlezz setup showcase`: the markup that embeds each still and film of the work's last
 //! run from its showcase address on the proof host's files origin,
 //! `<files origin>/showcase/<owner>/<repo>/<check>/<picture>`, ready to paste into a README, a
-//! docs site or a website.
+//! docs site or a website. A repository whose proof host is off (`[host] off`) sends no
+//! pictures, so it has none.
 //!
 //! A light and a dark picture, named apart only by one path segment `light` or `dark` (any
 //! case, before the extension, as the proof page reads themes), become one `<picture>` whose
@@ -28,6 +29,17 @@ struct Taken {
 /// Prints the markup of every picture the work's last run took, or why there is none, and the
 /// `next:` line.
 pub(crate) fn print(git: &Git, config: &Config, store: &Store, journal: &Journal, host: &str) {
+    if config.host_off {
+        println!(
+            "the proof host is off for this repository ([host] off = true), so it holds no \
+             pictures to show"
+        );
+        println!(
+            "next: remove off = true from [host] in fearlezz.toml to send the proof to the host, \
+             then fearlezz setup showcase"
+        );
+        return;
+    }
     let Some(repository) = git.github_repository() else {
         println!(
             "no GitHub repository: origin names none, and a showcase address names the \
