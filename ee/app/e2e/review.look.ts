@@ -440,3 +440,13 @@ test("a note is edited here, or on every note linked with it", async ({ page }) 
   await expect.poll(() => edits.length).toBe(2);
   expect(edits[1]).toEqual({ url: expect.stringContaining("/api/v2/notes/n1"), body: { words: "Only here", linked: false } });
 });
+
+test("next and previous step on from a film", async ({ page }) => {
+  await show(page, WORK_PATH, WORK["no-before"]!.world);
+  await page.locator('[data-picture="ee-page-look/checkout/desktop.webm"]').click();
+  await expect(page.locator(current)).toHaveAttribute("data-picture", "ee-page-look/checkout/desktop.webm");
+  await page.getByRole("button", { name: "Next picture" }).click();
+  await expect(page.locator(current)).not.toHaveAttribute("data-picture", "ee-page-look/checkout/desktop.webm");
+  await page.getByRole("button", { name: "Previous picture" }).click();
+  await expect(page.locator(current)).toHaveAttribute("data-picture", "ee-page-look/checkout/desktop.webm");
+});

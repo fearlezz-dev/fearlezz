@@ -73,6 +73,12 @@ pub(crate) fn execute(
     let (mut proofs, mut errors) = read_proofs(&dir.join("proof.jsonl"));
     proofs.extend(check.pictures.proofs(&dir));
     let mut passed = exit_ok;
+    if let Some(name) = crate::look::shared_name(&proofs) {
+        errors.push(format!(
+            "two pictures are both named {name}: give each its own file name"
+        ));
+        passed = false;
+    }
     let mut generated_failed = None;
     if let (true, Some(snapshot)) = (exit_ok, &generated) {
         let diff;
