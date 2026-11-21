@@ -93,6 +93,7 @@ test("film: a run arrives live", async ({ page }, info) => {
 
 /** Opens the work whose pictures wait, answering verdicts and notes as the host does. */
 async function waiting(page: Page) {
+  await pointer(page);
   const socket = await serve(page, WORK["waits-for-you"]!.world);
   await answers(page, socket, { n: snapshotOf("waits-for-you").seq + 100 });
   await page.goto(WORK_PATH);
@@ -135,7 +136,7 @@ test("film: a note, made again on the other theme", async ({ page }, info) => {
   await pause(page, 900);
   await page.keyboard.press("t");
   await pause(page, 900);
-  await page.locator("[data-copy-note]").click();
+  await press(page, page.locator("[data-copy-note]"));
   await pause(page, 1400);
   await keep(page, info, "note");
 });

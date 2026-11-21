@@ -834,11 +834,14 @@ function ReviewBar(props: {
               data-say="looks_right"
               aria-pressed={!!verdict()}
               title={
-                props.notes.length
-                  ? "Looks right resolves its notes, and holds as long as it stays the same"
-                  : "Looks right holds as long as it stays the same"
+                verdict()
+                  ? "Take back looks right"
+                  : props.notes.length
+                    ? "Looks right resolves its notes, and holds as long as it stays the same"
+                    : "Looks right holds as long as it stays the same"
               }
-              onClick={() => void send()}
+              // Pressed again, it takes the verdict back, as Undo does.
+              onClick={() => void (verdict() ? undo() : send())}
             >
               <Icon name="check" size={16} />
               Looks right

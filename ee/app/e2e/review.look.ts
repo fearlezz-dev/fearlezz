@@ -207,6 +207,16 @@ test("a verdict given shows Undo, which takes it back", async ({ page }) => {
   await expect.poll(() => withdrawn).toBe(true);
 });
 
+test("looks right pressed again takes it back", async ({ page }) => {
+  await show(page, WORK_PATH, WORK["needs-change"]!.world);
+  await page.locator('[data-picture="ee-page-look/profile/desktop/dark.png"]').click();
+  const said = page.locator('[data-say="looks_right"]');
+  await expect(said).toHaveAttribute("aria-pressed", "true");
+  const withdrawn = page.waitForRequest((r) => r.method() === "DELETE" && r.url().endsWith("/verdicts"));
+  await said.click();
+  await withdrawn;
+});
+
 test("? shows the keys", async ({ page }) => {
   await show(page, WORK_PATH, WORK["waits-for-you"]!.world);
   await page.keyboard.press("?");

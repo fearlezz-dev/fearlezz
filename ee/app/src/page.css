@@ -709,6 +709,9 @@ kbd {
 }
 /* On a phone the sheet is two pictures wide. */
 @media (max-width: 640px) {
+  /* A note offered from another variant: its words the whole width, its actions below. */
+  .elsewhere li { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .elsewhere .act { justify-content: flex-end; }
   .sheet, .navigator[data-by="change"] { display: grid; grid-template-columns: 1fr 1fr; }
   .navigator[data-by="change"] > details.group { grid-column: 1 / -1; }
   .thumb, .tile { width: 100%; }
@@ -864,6 +867,8 @@ kbd {
    keys a held Y offers. */
 .say-more { position: relative; display: inline-flex; margin-left: -6px; }
 .btn.ok.more .icon { display: block; }
+/* Said, the whole split button is the verdict's colour, its arrow too. */
+.btn.ok[aria-pressed="true"] + .say-more .btn.ok.more { background: var(--ok); border-color: var(--ok); }
 .btn.ok.more { padding-left: 8px; padding-right: 8px; border-top-left-radius: 0; border-bottom-left-radius: 0; box-shadow: inset 1px 0 0 color-mix(in srgb, var(--on-accent) 30%, transparent); }
 [data-say="looks_right"]:has(+ .say-more) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .say-menu {
