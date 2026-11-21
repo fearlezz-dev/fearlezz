@@ -758,6 +758,13 @@ impl Config {
                     .any(|word| word == "biome" || word.ends_with("/biome"))
             })
         });
+        settings.grow = crate::grow::Have::of(&checks);
+        raw.host
+            .as_ref()
+            .and_then(|h| h.url.as_deref())
+            .unwrap_or(crate::host::DEFAULT)
+            .trim_end_matches('/')
+            .clone_into(&mut settings.host);
         let rules = Rules::parse(raw.rule.unwrap_or_default())?;
         let base = raw.base.unwrap_or_else(|| "main".into());
         let built_in = built_in(&settings, rules, raw.commits, &base, &stages, &platforms)?;

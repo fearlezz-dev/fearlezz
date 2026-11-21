@@ -719,13 +719,20 @@ fn run_builtin(
 ) -> Result<Vec<crate::findings::Finding>> {
     Ok(match builtin {
         crate::config::Builtin::Settings(settings) => {
-            let found = settings.drift(at.root)?;
+            let mut found = settings.drift(at.root)?;
             for f in &found {
                 writeln!(out, "{} drifted from the shared settings", f.file)?;
             }
             if found.is_empty() {
                 writeln!(out, "every managed file matches the shared settings")?;
             }
+            let files = listed.get().map_err(anyhow::Error::msg)?;
+            let changed: Vec<&str> = at.changed.paths().collect();
+            let grow = settings.grow(at.root, files, &changed);
+            for f in &grow {
+                writeln!(out, "{}", f.message)?;
+            }
+            found.extend(grow);
             found
         }
         crate::config::Builtin::Commits(commits) => {

@@ -168,7 +168,7 @@ pub(crate) fn login(url: &str) -> Result<()> {
 /// Whether the Fearlezz GitHub App is installed on the GitHub repository of the current
 /// folder, as the host at `url` says to a sign in with `token`, in one line. None outside a
 /// repository on GitHub; a host that cannot say is a line too.
-fn app_installed(url: &str, token: &str) -> Option<String> {
+pub(crate) fn app_installed(url: &str, token: &str) -> Option<String> {
     let git = Git::discover(&std::env::current_dir().ok()?).ok()?;
     let repository = git.github_repository()?;
     let app = "the Fearlezz GitHub App";

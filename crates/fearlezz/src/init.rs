@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
+use clap::ValueEnum;
 
 use crate::config::FILE;
 
@@ -118,15 +119,19 @@ fn refine(root: &Path, piece: &'static str) -> &'static str {
     match piece {
         // The piece runs `svelte-kit sync` first; a Svelte app without SvelteKit keeps tsc.
         "typescript" if depends(root)("@sveltejs/kit") => "svelte",
-        "flutter" => {
-            let pubspec = std::fs::read_to_string(root.join("pubspec.yaml")).unwrap_or_default();
-            let flutter = pubspec
-                .lines()
-                .any(|line| line.trim().replace(' ', "") == "sdk:flutter");
-            if flutter { "flutter" } else { "dart" }
-        }
+        "flutter" if flutter_app(root) => "flutter",
+        "flutter" => "dart",
         _ => piece,
     }
+}
+
+/// Whether pubspec.yaml in `root` is a Flutter app's: it depends on the Flutter SDK.
+pub(crate) fn flutter_app(root: &Path) -> bool {
+    std::fs::read_to_string(root.join("pubspec.yaml")).is_ok_and(|pubspec| {
+        pubspec
+            .lines()
+            .any(|line| line.trim().replace(' ', "") == "sdk:flutter")
+    })
 }
 
 /// Whether go.mod in `root` requires `module`.
@@ -161,7 +166,7 @@ fn package_json(root: &Path) -> Option<serde_json::Value> {
 
 /// Whether `package.json` in `root` depends on a package (its dependencies or
 /// devDependencies). A file that cannot be read as JSON depends on none.
-fn depends(root: &Path) -> impl Fn(&str) -> bool {
+pub(crate) fn depends(root: &Path) -> impl Fn(&str) -> bool {
     let json = package_json(root);
     move |package| {
         json.as_ref().is_some_and(|json| {
@@ -331,6 +336,13 @@ fn starter(found: &[Found]) -> Result<String, std::fmt::Error> {
     let names: Vec<String> = found.iter().map(|p| format!("\"{}\"", p.piece)).collect();
     writeln!(
         text,
+        "# The lowest Fearlezz this config needs; an older one refuses it. Raise it when the\n\
+         # config uses something a newer Fearlezz added.\n\
+         fearlezz = \"{}\"\n",
+        crate::version::release()
+    )?;
+    writeln!(
+        text,
         "# Built in pieces; override any field below, or drop a check with `off = true`.\n\
          # `safety` scans for leaked secrets with gitleaks; pick `trufflehog` or `betterleaks`\n\
          # instead, or add `osv-scanner` for vulnerable dependencies.\n\
@@ -339,4 +351,139 @@ fn starter(found: &[Found]) -> Result<String, std::fmt::Error> {
     )?;
     writeln!(text, "{NO_PROOF}")?;
     Ok(text)
+}
+
+/// The workflow `setup init --ci` writes.
+pub(crate) const WORKFLOW: &str = ".github/workflows/proof.yml";
+
+/// What CI does with its proof: `host` also sends it to the proof host, for its page and
+/// review; `plain` only proves, writing nothing anywhere but the job's own summary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum Ci {
+    Host,
+    Plain,
+}
+
+/// The workflow under `.github/workflows` in `root` that already proves with Fearlezz (its
+/// action or `fearlezz run --ci`), if any.
+pub(crate) fn proving_workflow(root: &Path) -> Option<String> {
+    let dir = root.join(".github/workflows");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| crate::files::has_extension(n, &["yml", "yaml"]))
+        .collect();
+    names.sort();
+    names.into_iter().find_map(|name| {
+        let text = std::fs::read_to_string(dir.join(&name)).ok()?;
+        (text.contains("fearlezz-dev/fearlezz@") || text.contains("fearlezz run --ci"))
+            .then(|| format!(".github/workflows/{name}"))
+    })
+}
+
+/// Refuses to write the proof workflow in `root` over one that is there, or beside a workflow
+/// that already proves with Fearlezz.
+pub(crate) fn may_write_workflow(root: &Path) -> Result<()> {
+    if root.join(WORKFLOW).exists() {
+        bail!("{WORKFLOW} is already there; change it by hand, or move it away and run this again");
+    }
+    if let Some(proving) = proving_workflow(root) {
+        bail!(
+            "{proving} already proves with Fearlezz; change it by hand, or move it away and run \
+             this again"
+        );
+    }
+    Ok(())
+}
+
+/// Writes the proof workflow in `root` for pull requests to and pushes on `base`, when
+/// [`may_write_workflow`] allows it.
+pub(crate) fn workflow(root: &Path, ci: Ci, base: &str) -> Result<()> {
+    may_write_workflow(root)?;
+    let path = root.join(WORKFLOW);
+    let host = if ci == Ci::Host {
+        "  # The proof page and review need this and the Fearlezz GitHub App installed; without\n  \
+         # either, CI still proves the commit but sends nothing and shows no page.\n  \
+         id-token: write\n"
+    } else {
+        ""
+    };
+    // The action installs Nix and devenv first when the checks run in a devenv shell.
+    let devenv = if root.join("devenv.nix").exists() {
+        "        with:\n          devenv: true\n"
+    } else {
+        ""
+    };
+    let text = format!(
+        "# Written by `fearlezz setup init`: proves every pull request and push with the checks\n\
+         # in fearlezz.toml. Make its `proof` job a required check of {base}.\n\
+         name: proof\n\
+         on:\n  \
+         pull_request:\n    \
+         # edited: a title that starts with fix: makes the change a fix, which needs red before green.\n    \
+         types: [opened, synchronize, reopened, edited]\n  \
+         push:\n    \
+         branches: [{base}]\n\
+         permissions:\n  \
+         contents: read\n\
+         {host}\
+         jobs:\n  \
+         proof:\n    \
+         runs-on: ubuntu-latest\n    \
+         # A newer push to a pull request cancels the run of the one before it; each push to\n    \
+         # {base} is proven to its end.\n    \
+         concurrency:\n      \
+         group: proof-${{{{ github.event.pull_request.number || github.ref }}}}\n      \
+         cancel-in-progress: ${{{{ github.event_name == 'pull_request' }}}}\n    \
+         steps:\n      \
+         - uses: actions/checkout@v5\n        \
+         with:\n          \
+         # The proof compares the change with its base branch.\n          \
+         fetch-depth: 0\n          \
+         persist-credentials: false\n      \
+         - uses: fearlezz-dev/fearlezz@v0\n\
+         {devenv}"
+    );
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Turns the proof host off in `fearlezz.toml` in `root` (`[host] off = true`), for a
+/// repository whose CI only proves, keeping everything else as written. Whether it changed
+/// the file: one that turns the host off already is left alone.
+pub(crate) fn host_off(root: &Path) -> Result<bool> {
+    let path = root.join(FILE);
+    let text = std::fs::read_to_string(&path).with_context(|| format!("reading {FILE}"))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .with_context(|| format!("{FILE} is not valid TOML"))?;
+    let new = match doc
+        .get_mut("host")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        Some(host) if host.get("off").and_then(toml_edit::Item::as_bool) == Some(true) => {
+            return Ok(false);
+        }
+        Some(host) => {
+            host.insert("off", toml_edit::value(true));
+            doc.to_string()
+        }
+        None => {
+            let gap = if text.is_empty() || text.ends_with("\n\n") {
+                ""
+            } else if text.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
+            format!(
+                "{text}{gap}# CI only proves (setup init --ci plain): nothing is sent to the proof \
+                 host.\n[host]\noff = true\n"
+            )
+        }
+    };
+    std::fs::write(&path, new).with_context(|| format!("writing {FILE}"))?;
+    Ok(true)
 }

@@ -67,7 +67,17 @@ fn init_uses_the_pieces_of_the_languages_it_finds() {
         config.contains(r#"no_proof = ["*.md", "docs/**"]"#),
         "{config}"
     );
-    assert_eq!(out.last_line(), "next: fearlezz setup sync");
+    // A Flutter app no check takes pictures of is an offer for the developer.
+    assert!(
+        out.stdout.contains("could prove: a Flutter app"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.last_line().ends_with("then fearlezz setup sync"),
+        "{}",
+        out.stdout
+    );
 
     // What it wrote is a config every command reads.
     let plan = repo.fz(&["--plan"]);
@@ -422,4 +432,252 @@ fn a_flux_repository_gets_flux_instead_of_kustomize() {
         ("clusters/home/kustomization.yaml", "resources: []\n"),
     ]);
     assert_eq!(use_line, r#"use = ["flux", "safety"]"#);
+}
+
+/// `project`, on GitHub.
+fn on_github(files: &[(&str, &str)]) -> Repo {
+    let repo = project(files);
+    repo.git(&["remote", "add", "origin", "https://github.com/acme/app.git"]);
+    repo
+}
+
+const WORKFLOW: &str = ".github/workflows/proof.yml";
+
+#[test]
+fn init_on_github_asks_whether_ci_sends_its_proof_to_the_host() {
+    let repo = on_github(&[("README.md", "# app\n")]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let next = out.last_line();
+    assert!(
+        next.starts_with(
+            "next: ask the developer whether CI should send its proof to the proof host"
+        ) && next.contains("fearlezz setup init --ci host")
+            && next.contains("--ci plain")
+            && next.ends_with("then fearlezz setup sync"),
+        "{}",
+        out.stdout
+    );
+
+    // A repository whose workflows already prove with Fearlezz is not asked.
+    let proven = on_github(&[(
+        ".github/workflows/ci.yml",
+        "on: push\njobs:\n  proof:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: fearlezz-dev/fearlezz@v0\n",
+    )]);
+    let out = proven.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("--ci"), "{}", out.stdout);
+}
+
+#[test]
+fn init_ci_plain_writes_the_proof_workflow_beside_the_starter() {
+    let repo = on_github(&[("README.md", "# app\n")]);
+    let out = repo.fz(&["setup", "init", "--ci", "plain"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(repo.path("fearlezz.toml").exists());
+    let workflow = std::fs::read_to_string(repo.path(WORKFLOW)).unwrap();
+    for part in [
+        "contents: read",
+        "fetch-depth: 0",
+        "types: [opened, synchronize, reopened, edited]",
+        "branches: [main]",
+        "uses: fearlezz-dev/fearlezz@v0",
+    ] {
+        assert!(workflow.contains(part), "{part}: {workflow}");
+    }
+    assert!(!workflow.contains("id-token"), "{workflow}");
+    assert!(!workflow.contains("devenv"), "{workflow}");
+    // A push to the base branch is never cancelled; a newer push to a pull request is.
+    assert!(
+        workflow.contains("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
+        "{workflow}"
+    );
+    assert!(!out.stdout.contains("GitHub App"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains(&format!("wrote {WORKFLOW}")),
+        "{}",
+        out.stdout
+    );
+    assert!(out.last_line().starts_with("next: "), "{}", out.stdout);
+    // The repository chose no proof host, so runs never send to it or mention it.
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(config.contains("[host]\noff = true\n"), "{config}");
+    let plan = repo.fz(&["--plan"]);
+    assert!(plan.ok, "{}{}", plan.stdout, plan.stderr);
+}
+
+#[test]
+fn init_ci_plain_turns_the_host_off_in_a_config_that_is_there() {
+    let repo = on_github(&[]);
+    let config =
+        "# mine\nbase = \"trunk\"\n\n[check.tests]\nrun = \"true\" # kept\nstage = \"working\"\n";
+    repo.write("fearlezz.toml", config);
+    repo.commit("config");
+    let out = repo.fz(&["setup", "init", "--ci", "plain"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let now = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(now.starts_with(config), "{now}");
+    assert!(now.ends_with("[host]\noff = true\n"), "{now}");
+    assert!(out.stdout.contains("fearlezz.toml"), "{}", out.stdout);
+    let next = out.last_line();
+    assert!(
+        next.contains("fearlezz setup sync") && next.contains(WORKFLOW),
+        "{}",
+        out.stdout
+    );
+
+    // With the host, a new config says nothing about it.
+    let host = on_github(&[("README.md", "# app\n")]);
+    let out = host.fz(&["setup", "init", "--ci", "host"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let written = std::fs::read_to_string(host.path("fearlezz.toml")).unwrap();
+    assert!(!written.contains("[host]"), "{written}");
+
+    // A [host] table that is there gets off = true, its other keys kept.
+    let repo = on_github(&[]);
+    let config = "[host]\nurl = \"https://proof.example.com\"\n\n[check.tests]\nrun = \"true\"\nstage = \"working\"\n";
+    repo.write("fearlezz.toml", config);
+    repo.commit("config");
+    let out = repo.fz(&["setup", "init", "--ci", "plain"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let now = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(
+        now.contains("[host]\nurl = \"https://proof.example.com\"\noff = true\n")
+            && now.contains("[check.tests]\nrun = \"true\""),
+        "{now}"
+    );
+}
+
+#[test]
+fn init_ci_host_adds_the_workflow_to_a_config_that_is_there() {
+    let repo = on_github(&[("devenv.nix", "{ pkgs, ... }: { }\n")]);
+    let config = "use = [\"devenv\"]\nbase = \"trunk\"\n";
+    repo.write("fearlezz.toml", config);
+    repo.commit("config");
+    let out = repo.fz(&["setup", "init", "--ci", "host"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    // With the host, the config stays as it was.
+    assert_eq!(
+        std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap(),
+        config
+    );
+    let workflow = std::fs::read_to_string(repo.path(WORKFLOW)).unwrap();
+    for part in [
+        "contents: read",
+        "id-token: write",
+        "devenv: true",
+        "branches: [trunk]",
+    ] {
+        assert!(workflow.contains(part), "{part}: {workflow}");
+    }
+    // Not signed in, it names where to install the app and how to learn whether it is.
+    assert!(
+        out.stdout
+            .contains("https://github.com/apps/fearlezz-dev/installations/new")
+            && out.stdout.contains("fearlezz setup login"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.last_line().contains("fearlezz setup sync"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn init_ci_never_writes_over_a_workflow() {
+    let repo = on_github(&[(WORKFLOW, "name: mine\n")]);
+    let out = repo.fz(&["setup", "init", "--ci", "plain"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stderr.contains(WORKFLOW) && out.stderr.contains("already"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.path(WORKFLOW)).unwrap(),
+        "name: mine\n"
+    );
+    assert!(!repo.path("fearlezz.toml").exists());
+}
+
+#[test]
+fn init_ci_host_signed_in_says_whether_the_app_is_installed() {
+    let host = common::host::FakeHost::start();
+    let repo = on_github(&[]);
+    repo.write(
+        "fearlezz.toml",
+        &format!("[host]\nurl = \"{}\"\n", host.url),
+    );
+    repo.commit("config");
+    let config = tempfile::tempdir().unwrap();
+    let folder = config.path().join("fearlezz");
+    std::fs::create_dir_all(&folder).unwrap();
+    let logins = serde_json::json!({ host.url.clone(): {"login": "writer", "token": common::host::HOST_TOKEN} });
+    std::fs::write(folder.join("logins.json"), logins.to_string()).unwrap();
+    let out = repo.fz_env(
+        &["setup", "init", "--ci", "host"],
+        &[("XDG_CONFIG_HOME", config.path().to_str().unwrap())],
+    );
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("the Fearlezz GitHub App is installed on acme/app"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn init_names_what_the_project_could_prove_too() {
+    let repo = project(&[
+        (
+            "package.json",
+            r#"{ "dependencies": { "react": "19.0.0" } }"#,
+        ),
+        ("deploy/kustomization.yaml", "resources: []\n"),
+    ]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let offers: Vec<&str> = out
+        .lines()
+        .into_iter()
+        .filter(|l| l.starts_with("could prove: "))
+        .collect();
+    assert_eq!(offers.len(), 2, "{}", out.stdout);
+    assert!(
+        offers[0].contains("a web UI (react in package.json)"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        offers[1].contains("kustomize/deploy renders output"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(
+        out.last_line(),
+        "next: ask the developer which of these to add and add them to fearlezz.toml, then \
+         fearlezz setup sync"
+    );
+
+    // Asked together with where CI sends its proof, on GitHub.
+    let repo = on_github(&[(
+        "pubspec.yaml",
+        "name: app\ndependencies:\n  flutter:\n    sdk: flutter\n",
+    )]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(
+        out.stdout.contains("could prove: a Flutter app"),
+        "{}",
+        out.stdout
+    );
+    let next = out.last_line();
+    assert!(
+        next.starts_with("next: ask the developer which of these to add and whether CI should send its proof to the proof host")
+            && next.contains("--ci plain"),
+        "{}",
+        out.stdout
+    );
 }

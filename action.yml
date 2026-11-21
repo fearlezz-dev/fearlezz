@@ -15,7 +15,8 @@ inputs:
     description: >-
       Fearlezz to install: a release tag (for example v0.2.0), `latest` (the release of the
       action's own tag when it is taken at one, otherwise the newest), or `installed` (the one
-      already on PATH).
+      already on PATH). A release older than the `fearlezz = "x.y.z"` that fearlezz.toml names
+      gives way to that one; an installed one older than it fails the step.
     default: latest
   devenv:
     description: Install Nix and devenv first, for projects whose checks run in a devenv shell.
@@ -74,19 +75,50 @@ runs:
         ACTION_REF: ${{ github.action_ref }}
         FEARLEZZ_INSTALL_DIR: ${{ runner.temp }}/fearlezz-bin
       run: |
-        # The action taken at a release tag installs that release, so the two always fit.
+        # The action taken at a release tag installs that release, unless fearlezz.toml needs a
+        # newer one.
         if [ "$VERSION" = latest ] && [[ "$ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then VERSION=$ACTION_REF; fi
+        # Pads a version to three parts: 0.6 is 0.6.0.
+        three() { local v=$1; while [ "$(tr -cd . <<< "$v" | wc -c)" -lt 2 ]; do v=$v.0; done; echo "$v"; }
+        # Whether version $1 is older than release $2; a prerelease (0.6.0-rc.1) comes before
+        # its release, as Fearlezz compares them.
+        older() {
+          local a=${1#v} pre=
+          a=${a%%+*}
+          case $a in *-*) pre=1; a=${a%%-*} ;; esac
+          a=$(three "$a")
+          if [ "$a" = "$2" ]; then [ -n "$pre" ]; return; fi
+          [ "$(printf '%s\n%s\n' "$a" "$2" | sort -V | head -n 1)" = "$a" ]
+        }
+        # A fearlezz.toml that names the lowest Fearlezz it needs (`fearlezz = "0.5.1"` before
+        # its first table, in either quotes) gets at least that release; an older binary would
+        # refuse it.
+        raw=$(awk '/^[[:space:]]*\[/ { exit } /^[[:space:]]*fearlezz[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]*(#.*)?$/, ""); print; exit }' fearlezz.toml 2>/dev/null || true)
+        if [ -n "$raw" ]; then
+          pin=$raw
+          if [[ "$pin" =~ ^\"(.*)\"$ || "$pin" =~ ^\'(.*)\'$ ]]; then pin=${BASH_REMATCH[1]}; fi
+          if ! [[ "$pin" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+            echo "::error::fearlezz.toml: fearlezz = $raw is no version; name the lowest Fearlezz it needs, like fearlezz = \"0.5.1\""
+            exit 1
+          fi
+          pin=$(three "$pin")
+          if [ "$VERSION" = installed ]; then
+            # The one on PATH must read the config; say so here rather than fail later on a
+            # field it does not know.
+            have=$(fearlezz --version 2>/dev/null | awk '{ print $2 }' || true)
+            if [ -z "$have" ] || older "$have" "$pin"; then
+              echo "::error::fearlezz.toml needs Fearlezz $pin or newer, and the installed one is ${have:-missing}; install a newer one before this step, or leave version unset so the action installs it"
+              exit 1
+            fi
+          elif [ "$VERSION" != latest ] && older "$VERSION" "$pin"; then
+            echo "::notice::fearlezz.toml needs Fearlezz $pin or newer, so the action installs v$pin instead of $VERSION."
+            VERSION=v$pin
+          fi
+        fi
         if [ "$VERSION" != installed ]; then
           if [ "$VERSION" != latest ]; then export FEARLEZZ_VERSION=$VERSION; fi
           sh "$GITHUB_ACTION_PATH/install.sh"
           echo "$FEARLEZZ_INSTALL_DIR" >> "$GITHUB_PATH"
-          PATH="$FEARLEZZ_INSTALL_DIR:$PATH"
-        fi
-        # Captured, not piped: grep -q would close the pipe early and kill fearlezz with SIGPIPE.
-        help=$(fearlezz run --help)
-        if [[ "$help" != *"GitHub Actions"* ]]; then
-          echo "::error::$(fearlezz --version) is too old for this action. Set version: to a newer release, or take the action at the tag of the release you install (fearlezz-dev/fearlezz@vX.Y.Z)."
-          exit 1
         fi
     # A pull request reuses passes from the proof its base commit's push kept: the gate's
     # bundle of the newest successful run of this workflow on that commit. None is fine.
