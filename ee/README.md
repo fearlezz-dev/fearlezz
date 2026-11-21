@@ -368,6 +368,11 @@ holds no grant, and a grant always holds a dot, so `showcase` never names one.
   request, another branch, another event, a run proving another commit and a local run never
   count. Each run keeps its token's `event_name` and `sha` (`runs.event`, `runs.sha`); runs
   opened before they were kept never count.
+- **What it sends.** On a push to the default branch, `fearlezz run --ci` compares nothing:
+  the pull request already showed and approved what changed, so each check's look holds every
+  picture as taken, with no before and no run on the base. A push whose run takes no picture of
+  a check (its pass reused from the base commit's proof, say) leaves the older push's picture,
+  which is the same.
 - **Did not fail.** Its proof must not have failed as review judges it
   (`fearlezz_proof::review::failed`: nothing to fix, no failed check, and what it weakens
   covered by the host's own accept of its head, so an accepted weakening counts and one not
@@ -378,7 +383,9 @@ holds no grant, and a grant always holds a dot, so `showcase` never names one.
 - **Newest push.** Pushes are ordered as the host first saw their commit (its first run's
   place in `runs`, since `opened` holds whole seconds), not by when a run opened: a run of an older push started again (after a flake, or by an admin's accept)
   never brings its picture back over a newer push's. Of one push, its newest run that did not
-  fail counts. The 20 newest done runs of pushes that ran the check are looked through.
+  fail counts. There is no cap on how far back: the runs of pushes that ran the check are read
+  newest push first, 20 at a time, until one whose proof did not fail, so a picture outlasts
+  any number of newer pushes that failed or reused the check's earlier result.
 - **Check and picture.** Both may hold slashes; the path names the longest check of the run its
   leading segments spell, and the rest is the picture.
 - **Only stills and films.** png, jpeg, webp, gif, avif, mp4 and webm; a text of a look is

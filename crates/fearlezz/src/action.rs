@@ -38,6 +38,8 @@ pub(crate) struct Workflow {
     pub ci_job: Option<CiJob>,
     /// The ref the run is for, such as `refs/heads/main` or `refs/pull/24/merge`.
     git_ref: Option<String>,
+    /// The event that started the workflow, such as `push` or `pull_request`.
+    event_name: Option<String>,
     /// The event, Null without one or when its file cannot be read.
     event: Value,
 }
@@ -84,6 +86,7 @@ impl Workflow {
             job: var("GITHUB_JOB"),
             ci_job: CiJob::read(&var),
             git_ref: var("GITHUB_REF"),
+            event_name: var("GITHUB_EVENT_NAME"),
             event,
         }
     }
@@ -113,6 +116,19 @@ impl Workflow {
     pub(crate) fn branch(&self) -> Option<&str> {
         self.text("/pull_request/head/ref")
             .or_else(|| self.git_ref.as_deref()?.strip_prefix("refs/heads/"))
+    }
+
+    /// The default branch, when a push to it started the run. Its pull request already showed
+    /// and approved what changed, so the default branch is trusted as it is. Other events that
+    /// carry its ref (`pull_request_target`, `workflow_run`) often check out a fork's code, so
+    /// only a push counts.
+    pub(crate) fn pushed_default(&self) -> Option<&str> {
+        if self.event_name.as_deref() != Some("push") {
+            return None;
+        }
+        let default = self.text("/repository/default_branch")?;
+        let pushed = self.git_ref.as_deref()?.strip_prefix("refs/heads/")?;
+        (pushed == default).then_some(default)
     }
 
     /// The pull request a proof is for, as the proof names it, when the event is one.

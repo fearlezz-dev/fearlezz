@@ -40,9 +40,10 @@ use crate::{Answer, Config, Refusal, access, files, github, not_found, repo_key,
 /// minutes, and neither GitHub's image proxy nor the host looks up the run on every view.
 const SECONDS: u32 = 300;
 
-/// How many of the newest done runs of pushes that ran the check are looked through for one
-/// whose proof did not fail.
-const NEWEST: usize = 20;
+/// How many runs of pushes one query reads. The lookup reads page after page, newest push first,
+/// until a run whose proof did not fail, so a picture outlasts any number of newer pushes that
+/// failed or did not run its check.
+const PAGE: usize = 20;
 
 pub(crate) async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Answer {
     let segments = path
@@ -155,8 +156,10 @@ async fn newest(
     };
     let db = env.d1("DB")?;
 
-    // The newest runs of pushes that ran one of the checks, by the `runs_by_work` index, each with
-    // its own place in `runs` and its commit's first (`runs_by_head`): a push counts from then.
+    // The runs of pushes that ran one of the checks, by the `runs_by_work` index, each with its
+    // own place in `runs` and its commit's first (`runs_by_head`): a push counts from then. The
+    // newest push first and, of one push, its newest run; a page goes on after the last
+    // candidate of the page before.
     #[derive(Deserialize)]
     struct Candidate {
         run: String,
@@ -167,74 +170,76 @@ async fn newest(
         pushed: f64,
     }
     let sql = format!(
-        "SELECT r.id AS run, r.work, r.head, r.proof, r.rowid AS place, \
+        "SELECT * FROM (SELECT r.id AS run, r.work, r.head, r.proof, r.rowid AS place, \
          (SELECT MIN(p.rowid) FROM runs p WHERE p.work = r.work AND p.head = r.head AND p.event = 'push') AS pushed \
          FROM runs r \
          WHERE r.work = (SELECT id FROM works WHERE repo = ?1 AND branch = ?2) \
          AND r.git_ref = ?3 AND r.event = 'push' AND r.sha = r.head \
          AND r.state = 'done' AND r.proof IS NOT NULL \
-         AND EXISTS (SELECT 1 FROM checks c WHERE c.run = r.id AND c.look IS NOT NULL AND c.id IN ({})) \
-         ORDER BY r.opened DESC, r.rowid DESC LIMIT {NEWEST}",
-        places(4)
+         AND EXISTS (SELECT 1 FROM checks c WHERE c.run = r.id AND c.look IS NOT NULL AND c.id IN ({}))) \
+         WHERE pushed < ?4 OR (pushed = ?4 AND place < ?5) \
+         ORDER BY pushed DESC, place DESC LIMIT {PAGE}",
+        places(6)
     );
-    let mut binds: Vec<JsValue> = vec![
-        repo.into(),
-        branch.into(),
-        format!("refs/heads/{branch}").into(),
-    ];
-    binds.extend(checks.iter().map(|c| JsValue::from(c.as_str())));
-    let mut candidates = db
-        .prepare(sql)
-        .bind(&binds)?
-        .all()
-        .await?
-        .results::<Candidate>()?;
-    // The newest push first; of one push, its newest run.
-    candidates.sort_by(|a, b| {
-        b.pushed
-            .total_cmp(&a.pushed)
-            .then(b.place.total_cmp(&a.place))
-    });
-
-    for candidate in candidates {
-        let proof: Proof = read(&candidate.proof)?;
-        let accept = review::accept(&db, &candidate.work, &candidate.head).await?;
-        if fearlezz_proof::review::failed(&proof, &candidate.head, accept.as_ref()) {
-            continue;
-        }
-        #[derive(Deserialize)]
-        struct Taken {
-            id: String,
-            look: String,
-        }
-        let sql = format!(
-            "SELECT id, look FROM checks WHERE run = ?1 AND look IS NOT NULL AND id IN ({})",
-            places(2)
-        );
-        let mut binds: Vec<JsValue> = vec![candidate.run.as_str().into()];
+    let mut past = (f64::MAX, f64::MAX);
+    loop {
+        let mut binds: Vec<JsValue> = vec![
+            repo.into(),
+            branch.into(),
+            format!("refs/heads/{branch}").into(),
+            past.0.into(),
+            past.1.into(),
+        ];
         binds.extend(checks.iter().map(|c| JsValue::from(c.as_str())));
-        let taken = db
-            .prepare(sql)
+        let candidates = db
+            .prepare(&sql)
             .bind(&binds)?
             .all()
             .await?
-            .results::<Taken>()?;
-        // The longest check the segments spell names it; the rest is the picture.
-        let Some((at, taken)) = taken
-            .into_iter()
-            .filter_map(|t| Some((checks.iter().position(|c| *c == t.id)?, t)))
-            .max_by_key(|(at, _)| *at)
-        else {
-            continue;
+            .results::<Candidate>()?;
+        let Some(last) = candidates.last() else {
+            return Ok(None);
         };
-        let look: Look = read(&taken.look)?;
-        let picture = segments.get(at + 1..).unwrap_or_default().join("/");
-        let after = look
-            .items
-            .into_iter()
-            .find(|item| item.name == picture)
-            .and_then(|item| item.after);
-        return Ok(after.map(|after| (candidate.run, after)));
+        past = (last.pushed, last.place);
+        for candidate in candidates {
+            let proof: Proof = read(&candidate.proof)?;
+            let accept = review::accept(&db, &candidate.work, &candidate.head).await?;
+            if fearlezz_proof::review::failed(&proof, &candidate.head, accept.as_ref()) {
+                continue;
+            }
+            #[derive(Deserialize)]
+            struct Taken {
+                id: String,
+                look: String,
+            }
+            let sql = format!(
+                "SELECT id, look FROM checks WHERE run = ?1 AND look IS NOT NULL AND id IN ({})",
+                places(2)
+            );
+            let mut binds: Vec<JsValue> = vec![candidate.run.as_str().into()];
+            binds.extend(checks.iter().map(|c| JsValue::from(c.as_str())));
+            let taken = db
+                .prepare(sql)
+                .bind(&binds)?
+                .all()
+                .await?
+                .results::<Taken>()?;
+            // The longest check the segments spell names it; the rest is the picture.
+            let Some((at, taken)) = taken
+                .into_iter()
+                .filter_map(|t| Some((checks.iter().position(|c| *c == t.id)?, t)))
+                .max_by_key(|(at, _)| *at)
+            else {
+                continue;
+            };
+            let look: Look = read(&taken.look)?;
+            let picture = segments.get(at + 1..).unwrap_or_default().join("/");
+            let after = look
+                .items
+                .into_iter()
+                .find(|item| item.name == picture)
+                .and_then(|item| item.after);
+            return Ok(after.map(|after| (candidate.run, after)));
+        }
     }
-    Ok(None)
 }

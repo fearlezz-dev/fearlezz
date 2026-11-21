@@ -485,3 +485,38 @@ pub(crate) fn a_showcase_serves_no_text_and_no_name_github_could_not_have() {
         );
     }
 }
+
+pub(crate) fn a_showcase_picture_outlasts_many_newer_pushes_that_did_not_prove_it() {
+    let main = Job::push("owner/showcase", DEFAULT);
+    took(
+        &main.at(&commit("ol0"), 10401),
+        "lasting",
+        "home.png",
+        b"showcase lasting",
+        "passed",
+    );
+    // Many pushes reuse the check's earlier result, so they take no picture of it, and many
+    // others fail: neither replaces the picture, however many there are.
+    for n in 1..=24u64 {
+        took(
+            &main.at(&commit(&format!("ol{n:02}")), 10401 + n),
+            "elsewhere",
+            "home.png",
+            format!("showcase elsewhere {n}").as_bytes(),
+            "passed",
+        );
+        took(
+            &main.at(&commit(&format!("olf{n:02}")), 10501 + n),
+            "lasting",
+            "home.png",
+            format!("showcase broken {n}").as_bytes(),
+            "failed",
+        );
+    }
+
+    assert_eq!(
+        shows("lasting", "home.png").as_deref(),
+        Ok(&b"showcase lasting"[..]),
+        "the newest proven push that took it, however old"
+    );
+}

@@ -588,6 +588,10 @@ fn main() {
             showcase::a_showcase_serves_no_text_and_no_name_github_could_not_have,
         ),
         (
+            "a_showcase_picture_outlasts_many_newer_pushes_that_did_not_prove_it",
+            showcase::a_showcase_picture_outlasts_many_newer_pushes_that_did_not_prove_it,
+        ),
+        (
             "the_policy_decides_who_reads_a_private_repository",
             access::the_policy_decides_who_reads_a_private_repository,
         ),
