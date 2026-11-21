@@ -638,7 +638,15 @@ flaky?: boolean,
  * to a count past a few on each side of a change. None for a still or film, and in a
  * bundle from a CLI that did not write it.
  */
-diff?: Array<DiffLine> | null, };
+diff?: Array<DiffLine> | null, 
+/**
+ * The animated WebP copy of a film's after inside the look folder, relative to it: the one
+ * form of a film a page that allows only images (a README on GitHub) plays. The CLI makes it
+ * only on a CI run that a push to the default branch started, the only runs the host serves
+ * pictures of at a stable address; None
+ * otherwise, and for a still or text.
+ */
+webp?: string | null, };
 
 export type PictureChange = "changed" | "timing" | "new" | "gone" | "unreadable" | "same";
 

@@ -711,3 +711,206 @@ fn a_leg_names_itself_and_its_plan_and_leaves_what_it_weakens_to_the_gate() {
         out.stdout
     );
 }
+
+/// A check that takes one film, `home.webm`, 96 by 64 at 10 frames a second: the test pattern
+/// for as long as `src/seconds.txt` says, with a box in the colour `src/color.txt` names, after
+/// as many seconds of black as `src/lead.txt` says.
+const FILM: &str = r#"set -e
+pattern="testsrc=s=96x64:r=10:d=$(cat src/seconds.txt),drawbox=w=20:h=20:color=$(cat src/color.txt):t=fill"
+lead=$(cat src/lead.txt)
+if [ "$lead" = 0 ]; then graph="$pattern"; else
+  graph="color=c=black:s=96x64:r=10:d=$lead[a];$pattern[b];[a][b]concat=n=2"
+fi
+ffmpeg -v error -nostdin -f lavfi -i "$graph" -c:v libvpx -b:v 200k "$FEARLEZZ_OUT/home.webm"
+echo '{"kind":"film","file":"home.webm"}' >> "$FEARLEZZ_OUT/proof.jsonl"
+"#;
+
+/// A repository whose check `screens` films `seconds` of content after `lead` seconds of
+/// black, with a commit that changes its box, checked out on a branch apart from `main` so
+/// the look has a base to compare with.
+fn filmed(host: &FakeHost, lead: u32, seconds: u32) -> Repo {
+    let config = format!(
+        "[check.screens]\nrun = \"sh record.sh\"\nstage = \"working\"\ninputs = [\"src/**\", \"record.sh\"]\n\n[host]\nurl = \"{}\"\n",
+        host.url
+    );
+    let repo = Repo::new(
+        &config,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", FILM),
+            ("src/seconds.txt", &seconds.to_string()),
+            ("src/lead.txt", &lead.to_string()),
+            ("src/color.txt", "red"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/film");
+    repo.write("src/color.txt", "blue");
+    repo.commit("a blue box");
+    repo
+}
+
+/// `fearlezz run --ci` on `repo` as GitHub starts it for `event` on `git_ref`, with an event
+/// file naming `main` as the default branch (and, for a pull request, the pull request).
+fn ci_on(repo: &Repo, host: &FakeHost, event: &str, git_ref: &str) -> common::Output {
+    let file = repo.path(".runs/event.json");
+    let mut body = json!({"repository": {"default_branch": "main"}});
+    if event == "pull_request" {
+        body["pull_request"] = json!({
+            "number": 7,
+            "title": "feat: a blue box",
+            "head": {"ref": "feat/film", "sha": repo.git(&["rev-parse", "HEAD"]).trim()},
+        });
+    }
+    std::fs::write(&file, body.to_string()).unwrap();
+    let mut env = host.token_env();
+    for (k, v) in [
+        ("GITHUB_EVENT_NAME", event),
+        ("GITHUB_EVENT_PATH", file.to_str().unwrap()),
+        ("GITHUB_REF", git_ref),
+    ] {
+        env.push((k.into(), v.into()));
+    }
+    let mut all: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    all.push(("GITHUB_REPOSITORY", "owner/repo"));
+    all.push(("GITHUB_JOB", "proof"));
+    all.push(("GITHUB_RUN_ID", "4242"));
+    all.push(("GITHUB_RUN_ATTEMPT", "1"));
+    all.push(("RUNNER_NAME", "GitHub Actions 7"));
+    repo.fz_env(&["run", "--ci"], &all)
+}
+
+/// The film `home.webm` of the `screens` look as the host got it when the check ended, with
+/// the files that went with it.
+fn film_sent(host: &FakeHost) -> (Value, Value) {
+    let finished = host
+        .api()
+        .into_iter()
+        .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap_or_default())
+        .find(|b| b["finished"]["check"]["id"] == "screens")
+        .expect("a finished screens check");
+    let film = finished["finished"]["look"]["items"]
+        .as_array()
+        .and_then(|items| items.iter().find(|i| i["name"] == "home.webm"))
+        .unwrap_or_else(|| panic!("no film in {finished:#}"))
+        .clone();
+    (film, finished["finished"]["files"].clone())
+}
+
+/// The bytes of the animated WebP copy the host got for `film`, sent with `files`.
+fn copy_of(host: &FakeHost, film: &Value, files: &Value) -> (String, Vec<u8>) {
+    let copy = film["webp"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no WebP copy: {film:#}"))
+        .to_string();
+    let sha = files[&copy]["sha256"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{files:#}"));
+    let held = host.state.lock().unwrap().blobs.clone();
+    let bytes = held.get(sha).expect("the copy was sent").clone();
+    (copy, bytes)
+}
+
+/// How long an animated WebP plays once, in milliseconds: the sum of its frames' durations,
+/// each a 24 bit number 12 bytes into its `ANMF` chunk.
+fn plays_ms(webp: &[u8]) -> u32 {
+    let mut at = 12;
+    let mut total = 0;
+    while let Some(head) = webp.get(at..at + 8) {
+        let size = u32::from_le_bytes(head[4..8].try_into().unwrap()) as usize;
+        if &head[..4] == b"ANMF" {
+            let d = &webp[at + 8 + 12..at + 8 + 15];
+            total += u32::from(d[0]) | u32::from(d[1]) << 8 | u32::from(d[2]) << 16;
+        }
+        at += 8 + size + size % 2;
+    }
+    total
+}
+
+#[test]
+fn a_push_to_the_default_branch_sends_an_animated_webp_copy_of_each_film() {
+    // GitHub plays no film in a README, only an animated image, so the run whose pictures the
+    // host serves at a stable address sends its films as an animated WebP too.
+    let host = FakeHost::start();
+    let repo = filmed(&host, 0, 2);
+    let out = ci_on(&repo, &host, "push", "refs/heads/main");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+
+    let (film, files) = film_sent(&host);
+    let (copy, bytes) = copy_of(&host, &film, &files);
+    assert!(
+        copy.starts_with("looks/") && copy.ends_with(".webp"),
+        "{copy}"
+    );
+    assert_ne!(
+        Some(copy.as_str()),
+        film["after"].as_str(),
+        "beside the film"
+    );
+    // An animated WebP: a RIFF WEBP file with an animation chunk.
+    assert_eq!(bytes.get(..4), Some(&b"RIFF"[..]));
+    assert_eq!(bytes.get(8..12), Some(&b"WEBP"[..]));
+    assert!(bytes.windows(4).any(|w| w == b"ANIM"), "it moves");
+    // Two seconds of film, then its last frame held 1.5 s.
+    let ms = plays_ms(&bytes);
+    assert!((3300..=3700).contains(&ms), "plays {ms} ms");
+    // And done names it too, in the proof and among the files.
+    let done = host.sent("POST", "/api/v2/runs/r1/done");
+    assert!(done["files"].get(&copy).is_some(), "{done:#}");
+    let items = done["proof"]["looks"][0]["items"].to_string();
+    assert!(items.contains(&copy), "{done:#}");
+}
+
+#[test]
+fn a_webp_copy_starts_at_the_first_frame_with_content() {
+    // A recorder that starts as the page opens leaves blank frames first, which would flash
+    // on every loop of the copy; the film itself keeps them.
+    let host = FakeHost::start();
+    let repo = filmed(&host, 1, 2);
+    let out = ci_on(&repo, &host, "push", "refs/heads/main");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let (film, files) = film_sent(&host);
+    let (_, bytes) = copy_of(&host, &film, &files);
+    let ms = plays_ms(&bytes);
+    assert!(
+        (3300..=3700).contains(&ms),
+        "plays {ms} ms, not the black second"
+    );
+}
+
+#[test]
+fn a_pull_request_sends_no_webp_copy() {
+    // The host serves only pushes to the default branch at a stable address, so nothing else
+    // pays for a copy.
+    let host = FakeHost::start();
+    let repo = filmed(&host, 0, 2);
+    let out = ci_on(&repo, &host, "pull_request", "refs/pull/7/merge");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let (film, files) = film_sent(&host);
+    assert!(film.get("webp").is_none(), "{film:#}");
+    assert!(
+        !files
+            .as_object()
+            .unwrap()
+            .keys()
+            .any(|k| k.ends_with(".webp")),
+        "{files:#}"
+    );
+}
+
+#[test]
+fn a_film_longer_than_thirty_seconds_gets_no_webp_copy() {
+    let host = FakeHost::start();
+    let repo = filmed(&host, 0, 31);
+    let out = ci_on(&repo, &host, "push", "refs/heads/main");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let (film, _) = film_sent(&host);
+    assert!(film.get("webp").is_none(), "{film:#}");
+    assert!(
+        out.stdout.contains(
+            "look screens: home.webm gets no WebP copy: it runs 31 s, longer than the 30 s a WebP copy may"
+        ),
+        "{}",
+        out.stdout
+    );
+}

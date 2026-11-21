@@ -66,6 +66,13 @@ pub struct Item {
     /// bundle from a CLI that did not write it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff: Option<Vec<DiffLine>>,
+    /// The animated WebP copy of a film's after inside the look folder, relative to it: the one
+    /// form of a film a page that allows only images (a README on GitHub) plays. The CLI makes it
+    /// only on a CI run that a push to the default branch started, the only runs the host serves
+    /// pictures of at a stable address; None
+    /// otherwise, and for a still or text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webp: Option<String>,
 }
 
 /// One line of a text's diff.
