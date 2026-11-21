@@ -383,6 +383,22 @@ test("Space plays and pauses a film", async ({ page }) => {
   expect(await page.evaluate(() => window.scrollY), "the page did not scroll").toBe(scrolled);
 });
 
+test("in full screen, a film stepped to plays at once", async ({ page }) => {
+  await show(page, WORK_PATH, WORK["no-before"]!.world);
+  await page.locator('[data-picture="ee-page-look/checkout/desktop.webm"]').click();
+  const play = page.locator("[data-stage] [data-play]");
+  // On the page, a film stepped to waits for a click.
+  await page.keyboard.press("j");
+  await expect(page.locator(current)).toHaveAttribute("data-picture", "ee-page-look/checkout/mobile.webm");
+  await expect(play).toHaveText("Play");
+  await page.keyboard.press("k");
+  await page.keyboard.press("f");
+  await expect(play).toHaveText("Play");
+  await page.keyboard.press("j");
+  await expect(page.locator(current)).toHaveAttribute("data-picture", "ee-page-look/checkout/mobile.webm");
+  await expect(play).toHaveText("Pause");
+});
+
 test("a film plays slower or faster at the speed picked", async ({ page }) => {
   await show(page, WORK_PATH, WORK["no-before"]!.world);
   await page.locator('[data-picture="ee-page-look/checkout/desktop.webm"]').click();

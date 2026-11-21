@@ -143,7 +143,10 @@ type Clock = {
   toggle: () => void;
 };
 
-function createClock(length: number): Clock {
+/** A clock for films of `length` seconds, which starts playing once its first film is loaded
+ * when `autoplay`. */
+function createClock(length: number, autoplay = false): Clock {
+  let starts = autoplay;
   const [total, setTotal] = createSignal(length);
   const [t, setT] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
@@ -207,6 +210,10 @@ function createClock(length: number): Clock {
       video.addEventListener("loadedmetadata", () => {
         if (Number.isFinite(video.duration)) setTotal((was) => Math.max(was, video.duration));
         place(video, t());
+        if (starts) {
+          starts = false;
+          play();
+        }
       });
       onCleanup(() => videos.delete(video));
     },
@@ -817,7 +824,8 @@ export function Stage(props: {
                     }
                   >
                     {(alone) => {
-                      const clock = createClock(0.01);
+                      // In full screen, a film stepped to plays at once.
+                      const clock = createClock(0.01, untrack(() => props.full));
                       createEffect(() => props.onTime(clock.t()));
                       onCleanup(() => props.onTime(undefined));
                       return (
@@ -855,7 +863,7 @@ export function Stage(props: {
           }
         >
           {(c) => {
-            const clock = createClock(Math.max(c.total_before, c.total_after, 0.01));
+            const clock = createClock(Math.max(c.total_before, c.total_after, 0.01), untrack(() => props.full));
             const sameSize = c.size_before[0] === c.size_after[0] && c.size_before[1] === c.size_after[1];
             createEffect(() => props.onTime(clock.t()));
             onCleanup(() => props.onTime(undefined));
