@@ -376,6 +376,13 @@ films = "films/**/*.gif"
         "{}",
         out.stdout
     );
+    // A film keeps its extension in the look, so a still of the same screen never shares its
+    // name, nor its verdicts and notes.
+    assert!(
+        out.stdout.contains("home/video.gif: changed"),
+        "{}",
+        out.stdout
+    );
     let status = repo.fz(&["--check", "screens"]);
     assert!(
         status.stdout.contains("\"id\": \"home/video\"")
@@ -987,5 +994,29 @@ fn a_look_without_ffmpeg_says_to_add_it_to_the_shell() {
     assert!(
         all.contains("add ffmpeg to the project's shell, or install it"),
         "{all}"
+    );
+}
+
+#[test]
+fn two_pictures_of_one_name_fail_the_check() {
+    let repo = Repo::new(
+        r#"
+[check.screens]
+run = "sh shoot.sh"
+stage = "working"
+stills = "stills/*"
+"#,
+        &[(
+            "shoot.sh",
+            "mkdir -p \"$FEARLEZZ_OUT/stills\" && printf a > \"$FEARLEZZ_OUT/stills/home.png\" && printf b > \"$FEARLEZZ_OUT/stills/home.jpg\"\n",
+        )],
+    );
+    let out = repo.fz(&["run", "screens"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("two pictures are both named home: give each its own file name"),
+        "{}",
+        out.stdout
     );
 }
