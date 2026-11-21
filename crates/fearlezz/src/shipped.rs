@@ -1,4 +1,4 @@
-//! What a Fearlezz binary ships, as one digest: its own source and the proof model's, the
+//! What a Fearlezz binary ships, as one digest: its own source, the proof model's and the comparison's, the
 //! locked dependencies, its built in presets and the agent skill it embeds. The build script computes it into `FEARLEZZ_SHIPPED`; the built in
 //! checks key their results on it, since their code and the files they compare against decide
 //! their verdicts, and two builds may say the same version while shipping different files.
@@ -19,6 +19,8 @@ pub(crate) const SOURCES: &[&str] = &[
     "../../Cargo.lock",
     "../fearlezz-proof/Cargo.toml",
     "../fearlezz-proof/src",
+    "../fearlezz-compare/Cargo.toml",
+    "../fearlezz-compare/src",
 ];
 
 /// The SHA-256 hex of every file under `SOURCES` in `crate_dir`: each one's path from the

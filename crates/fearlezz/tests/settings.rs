@@ -881,6 +881,8 @@ fn settings_results_are_keyed_on_what_the_binary_ships() {
         "Cargo.lock",
         "crates/fearlezz-proof/Cargo.toml",
         "crates/fearlezz-proof/src/lib.rs",
+        "crates/fearlezz-compare/Cargo.toml",
+        "crates/fearlezz-compare/src/lib.rs",
     ];
     for path in sources {
         let path = other.path().join(path);

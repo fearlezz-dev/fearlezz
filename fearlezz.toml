@@ -33,6 +33,13 @@ inputs = ["ee/**", "crates/fearlezz-proof/**"]
 on = ["linux"]
 inputs = ["ee/**", "crates/fearlezz-proof/**"]
 
+# The picture comparison runs in the proof host's page too, so it must keep building for wasm:
+# no I/O, no dependency that needs an operating system.
+[check.compare-wasm]
+run = "cargo check --quiet --target wasm32-unknown-unknown -p fearlezz-compare"
+stage = "working"
+inputs = ["crates/fearlezz-compare/**", "crates/fearlezz-proof/**", "Cargo.toml", "Cargo.lock"]
+
 # The proof host's page: its types, and its tests of how a live connection becomes what the
 # page shows. That its types match the proof model is a test of tests/ee. devenv installs
 # the page's packages as it enters the shell.

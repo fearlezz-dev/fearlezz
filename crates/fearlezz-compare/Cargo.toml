@@ -1,0 +1,20 @@
+[package]
+name = "fearlezz-compare"
+version = "0.1.0"
+edition = "2024"
+description = "The picture comparison of Fearlezz: stills and films fed frame by frame, the same in the CLI, CI and the browser."
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Its behaviour is tested through its public API, in tests/.
+[lib]
+test = false
+bench = false
+
+# No I/O and nothing but the proof model, so it builds for wasm32-unknown-unknown, where the
+# proof host's page runs it.
+[dependencies]
+fearlezz-proof = { path = "../fearlezz-proof" }
+
+[lints]
+workspace = true
