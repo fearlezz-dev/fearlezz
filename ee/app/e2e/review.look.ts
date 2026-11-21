@@ -295,14 +295,29 @@ test("the zoom stays on the screen's other theme", async ({ page }) => {
   expect(await zoomOf(page)).toBe(zoomed);
 });
 
-test("a picture that changed since its look or its note says to look again", async ({ page }) => {
+test("the page opens on the first picture that waits for a look", async ({ page }) => {
+  // The profile's light theme has a note waiting on the agent and its dark theme looks right.
+  await show(page, WORK_PATH, WORK["needs-change"]!.world);
+  await expect(page.locator(current)).toHaveAttribute("data-picture", "ee-page-look/profile/mobile/light.png");
+  // Opened, it stays while what waits changes.
+  await page.keyboard.press("y");
+  await expect(page.locator(current)).toHaveAttribute("data-picture", "ee-page-look/profile/mobile/dark.png");
+});
+
+test("a picture or film that changed since its look or its note says to look again", async ({ page }) => {
   await show(page, WORK_PATH, WORK["look-again"]!.world);
   const profile = page.locator('[data-screen="ee-page-look/profile"]');
   await expect(profile.locator("[data-again-mark]")).toHaveText("Look again");
   await expect(profile.locator('[data-picture="ee-page-look/profile/desktop/dark.png"]')).toHaveAttribute("data-again", "");
   await expect(profile.locator('[data-picture="ee-page-look/profile/desktop/light.png"]')).toHaveAttribute("data-again", "");
+  await expect(profile.locator('[data-picture="ee-page-look/profile/desktop/light.webm"]')).toHaveAttribute("data-again", "");
   await expect(profile.locator('[data-picture="ee-page-look/profile/mobile/light.png"]')).not.toHaveAttribute("data-again");
+  // The page opens on the first picture to look at again: the film, as a screen's films come
+  // first, which looked right before it changed.
+  await expect(page.locator(current)).toHaveAttribute("data-picture", "ee-page-look/profile/desktop/light.webm");
+  await expect(page.locator(".verdict [data-again]")).toContainText("Changed since mara said it looks right at 2b7e91c");
   // The light theme's note was made before it changed: check it, then resolve or keep it.
+  await profile.locator('[data-picture="ee-page-look/profile/desktop/light.png"]').click();
   await expect(page.locator(".verdict [data-again]")).toContainText("Changed since note 1");
   await expect(page.locator('[data-notes] [data-note="n1"] [data-changed-since]')).toBeVisible();
   // The dark theme looked right before it changed.
@@ -411,6 +426,7 @@ test("a note is edited here, or on every note linked with it", async ({ page }) 
     await route.fulfill({ json: { notes: [] } });
   });
   // One Save, on the linked note too unless a person unchecks it.
+  await page.locator('[data-picture="ee-page-look/profile/desktop/light.png"]').click();
   await page.locator('[data-notes] [data-note="n1"] [data-edit]').click();
   await page.locator("textarea[data-edit-words]").fill("Keep the card where it was");
   await expect(page.locator(".edit-note .also")).toHaveText("Also on the linked note");

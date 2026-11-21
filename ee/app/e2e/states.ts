@@ -202,6 +202,43 @@ const NOTE: Note = {
 /** The note and a verdict given on the profile at the earlier push, before it changed. */
 const AGAIN_NOTE: Note = { ...NOTE, run: "r1", head: OLD_HEAD, at: NOW - 5000 };
 const AGAIN_VERDICT: PictureVerdict = { ...verdictOn("profile/desktop/dark.png"), key: OLD_KEYS["profile/desktop/dark.png"]!, run: "r1", head: OLD_HEAD, at: NOW - 5100 };
+// The profile's film changed too since mara said it looks right, and a screen's films come first,
+// so the page opens on it.
+const AGAIN_FILM = "profile/desktop/light.webm";
+const AGAIN_LOOK: Look = {
+  ...LOOK,
+  items: [
+    ...LOOK.items,
+    {
+      name: AGAIN_FILM,
+      kind: "film",
+      change: "changed",
+      summary: "Changed in 1 state.",
+      before: "looks/checkout/after.webm",
+      after: "looks/checkout/after.webm",
+      comparison: {
+        verdict: "changed",
+        still: false,
+        size_before: [640, 400],
+        size_after: [640, 400],
+        total_before: 2,
+        total_after: 2,
+        max_shift: 0,
+        max_shift_at: null,
+        states_before: 2,
+        states_after: 2,
+        moments: [{ before: [1, 2], after: [1, 2], box: [160, 120, 480, 220], px: 9_000 }],
+        pairs: [
+          { before: 0, after: 0, before_frame: 0, after_frame: 0, before_at: 0, after_at: 0, px: 0, boxes: [] },
+          { before: 1, after: 1, before_frame: 30, after_frame: 30, before_at: 1, after_at: 1, px: 9_000, boxes: [[160, 120, 480, 220]] },
+        ],
+      },
+    },
+  ],
+};
+const AGAIN_FILM_VERDICT: PictureVerdict = { ...AGAIN_VERDICT, picture: AGAIN_FILM, key: "old-film" };
+const lookedAgain = (keys: Record<string, string>) => (checks: RunCheck[]) =>
+  checks.map((c) => (c.id === "ee-page-look" ? { ...c, look: AGAIN_LOOK, keys } : c));
 
 const WEAKENED: Weakening[] = [
   {
@@ -370,9 +407,14 @@ export const WORK: Record<string, { path?: string; world: World }> = {
       viewer: WRITER,
       files: FILES,
       live: live(
-        snapshot([run("r2", HEAD, "done", looked(allPassed())), run("r1", OLD_HEAD, "done", looked(allPassed()).map((c) => (c.keys ? { ...c, keys: OLD_KEYS } : c)), ci("linux", 1188), NOW - 5400)], {
+        snapshot(
+          [
+            run("r2", HEAD, "done", lookedAgain({ ...KEYS, [AGAIN_FILM]: "key-film" })(allPassed())),
+            run("r1", OLD_HEAD, "done", lookedAgain({ ...OLD_KEYS, [AGAIN_FILM]: "old-film" })(allPassed()), ci("linux", 1188), NOW - 5400),
+          ],
+          {
           review: review("needs_change", "1 picture needs change at 8f3c2a1", {
-            pictures: waitingPictures().map((p) =>
+            pictures: [...waitingPictures(), { check: "ee-page-look", name: AGAIN_FILM, key: "key-film", standing: "waits" as const, changed_since: { verdict: AGAIN_FILM_VERDICT } }].map((p) =>
               p.name === NOTE.picture
                 ? { ...p, standing: "needs_change", changed_since: { notes: [AGAIN_NOTE.id] } }
                 : p.name === "profile/desktop/dark.png"
@@ -384,8 +426,9 @@ export const WORK: Record<string, { path?: string; world: World }> = {
             notes: [AGAIN_NOTE],
           }),
           notes: [AGAIN_NOTE],
-          verdicts: [AGAIN_VERDICT, verdictOn("team/desktop/light.png")],
-        }),
+          verdicts: [AGAIN_VERDICT, AGAIN_FILM_VERDICT, verdictOn("team/desktop/light.png")],
+        },
+        ),
       ),
     },
   },
