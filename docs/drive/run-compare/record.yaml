@@ -27,8 +27,8 @@ decided:
     what: "Yes, exact everywhere": the CLI reads raw yuv420p planes from ffmpeg, one shared Rust function converts to colour and scales, for the CLI, CI and the browser
   - id: look-again-default
     what: a Look again picture opens compared with "Your look"; other pictures open compared with the base
-  - id: own-pr
-    what: separate branch and PR after #59 merges (new scope)
+  - id: in-59
+    what: part of #59, the same work on the review page (was a separate PR)
 
 open: []
 
@@ -40,4 +40,4 @@ slices:
     tests: [Playwright: strip shows runs, picking a run compares with it, look again opens on your look, wasm outlines match the CLI on a fixture pair]
     status: built
 
-next: rebase onto main after #59 merges, then the pull request; follow ups: a browser parity test for films over 720p, semi transparent PNG stills
+next: lands with #59; follow ups: a browser parity test for films over 720p, semi transparent PNG stills
