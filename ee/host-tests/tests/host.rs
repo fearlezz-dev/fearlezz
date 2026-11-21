@@ -18,12 +18,12 @@ mod local;
 mod media;
 #[path = "host/notes.rs"]
 mod notes;
-#[path = "host/showcase.rs"]
-mod showcase;
 #[path = "host/repository.rs"]
 mod repository;
 #[path = "host/share.rs"]
 mod share;
+#[path = "host/showcase.rs"]
+mod showcase;
 #[path = "host/worker.rs"]
 mod worker;
 

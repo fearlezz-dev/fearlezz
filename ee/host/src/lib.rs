@@ -25,13 +25,13 @@ mod jobs;
 mod notes;
 mod oidc;
 mod pages;
-mod showcase;
 mod repository;
 mod review;
 mod room;
 mod say;
 mod session;
 mod share;
+mod showcase;
 #[cfg(feature = "test-hooks")]
 mod test_hooks;
 mod webhook;

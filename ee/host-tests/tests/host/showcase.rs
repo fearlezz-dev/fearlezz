@@ -140,7 +140,13 @@ pub(crate) fn a_showcase_picture_never_comes_from_another_branch_or_a_pull_reque
         "passed",
     );
     let pull = Job::pull("owner/showcase", 9203, "showcase/pull").at(&commit("b3"), 9203);
-    took(&pull, "branches", "home.png", b"showcase of a pull", "passed");
+    took(
+        &pull,
+        "branches",
+        "home.png",
+        b"showcase of a pull",
+        "passed",
+    );
 
     let answer = get_url(&showcase("owner/showcase", "branches", "home.png"), &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
@@ -460,7 +466,11 @@ pub(crate) fn a_showcase_serves_no_text_and_no_name_github_could_not_have() {
     let github = &world().github;
     // A slash inside a segment would name another path of GitHub's API.
     for (owner, name, asked) in [
-        ("own%2Fer", "showcase", "/repos/own/er/showcase/installation"),
+        (
+            "own%2Fer",
+            "showcase",
+            "/repos/own/er/showcase/installation",
+        ),
         ("owner", "read%2Fme", "/repos/owner/read/me/installation"),
     ] {
         let answer = get_url(
