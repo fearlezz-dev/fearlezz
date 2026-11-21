@@ -258,16 +258,16 @@ pub(crate) async fn speaker(
         .ok_or_else(|| Refusal::new(401, format!("sign in to {what}")))
 }
 
-/// The branch whose pictures a README shows: the default branch of `repo` (`owner/name` as
+/// The branch whose pictures a showcase shows: the default branch of `repo` (`owner/name` as
 /// the host keys it, in lower case) when the app is installed there, private or public; None
-/// for one without the app. A README's picture loads for anyone, without a sign in, private
+/// for one without the app. A showcase picture loads for anyone, without a sign in, private
 /// repositories included. GitHub's word, kept like every other.
-pub(crate) async fn readme_branch(
+pub(crate) async fn showcase_branch(
     env: &Env,
     config: &Config,
     repo: &str,
 ) -> Result<Option<String>, Refusal> {
-    match word(env, config, Question::ReadmeBranch, repo, Asking::GitHub).await? {
+    match word(env, config, Question::ShowcaseBranch, repo, Asking::GitHub).await? {
         Word::Is(branch) if !branch.is_empty() => Ok(Some(branch)),
         Word::Is(_) | Word::BadToken | Word::Unknown => Ok(None),
     }
@@ -279,7 +279,7 @@ enum Question<'a> {
     /// Whether anyone may read it, as the app sees it.
     Public,
     /// Its default branch when the app is installed there, as the app sees it; empty otherwise.
-    ReadmeBranch,
+    ShowcaseBranch,
     /// Whether the person may read it, as their token sees it.
     Reads(&'a Person),
     /// The person's role on it.
@@ -307,7 +307,7 @@ async fn word(
 ) -> Result<Word, Refusal> {
     let key = match question {
         Question::Public => format!("public:{}", repo.to_lowercase()),
-        Question::ReadmeBranch => format!("readme:{}", repo.to_lowercase()),
+        Question::ShowcaseBranch => format!("showcase:{}", repo.to_lowercase()),
         Question::Reads(person) => key("reads", person, repo),
         Question::Role(person) => key("role", person, repo),
     };
@@ -320,7 +320,7 @@ async fn word(
     let yes = |b: bool| if b { "yes" } else { "no" }.to_owned();
     let word = match question {
         Question::Public => Some(yes(github::public(config, repo).await?)),
-        Question::ReadmeBranch => Some(
+        Question::ShowcaseBranch => Some(
             github::default_branch(config, repo)
                 .await?
                 .unwrap_or_default(),

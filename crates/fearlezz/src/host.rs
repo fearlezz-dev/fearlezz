@@ -38,6 +38,9 @@ pub(crate) const NO_ID_TOKEN: &str = "this job has no id-token: write, so it can
                                       the proof host; add it to the workflow's permissions to \
                                       get the page";
 
+/// The files origin of the default host, which serves showcase media.
+pub(crate) const FILES: &str = "https://fearlezz.seamlezz.net";
+
 /// How long a local run waits on the host before it gives it up for the rest of the run: the
 /// checks run between the calls, and the developer waits on them.
 const LOCAL: Limit = Limit {

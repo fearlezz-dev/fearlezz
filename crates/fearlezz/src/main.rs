@@ -38,6 +38,7 @@ mod report;
 mod rules;
 mod run;
 mod settings;
+mod showcase;
 mod sops;
 mod state;
 mod store;
@@ -219,6 +220,9 @@ enum Setup {
         #[arg(long)]
         all: bool,
     },
+    /// Print the markup that embeds each still and film of the work's last run from the proof
+    /// host, for a README, a docs site or a website: a light and a dark one as one <picture>.
+    Showcase,
     /// Compare two stills or films: same, only timing, or changed (where and when).
     Compare {
         before: PathBuf,
@@ -878,6 +882,12 @@ fn setup(what: Setup) -> Result<bool> {
             println!("\nnext: follow the guide from step 1, learning the project");
         }
         Setup::Sync => setup_sync()?,
+        Setup::Showcase => {
+            let ctx = ctx()?;
+            let journal = ctx.journal()?;
+            let host = host_url(Some(&ctx.config));
+            showcase::print(&ctx.git, &ctx.config, &ctx.store, &journal, &host);
+        }
         Setup::Hook { agent, event } => setup_hook(agent, event)?,
         Setup::Down { all } => setup_down(all)?,
     }

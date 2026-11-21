@@ -338,7 +338,7 @@ answers on two origins and tells them apart by the request's host:
 - the **app origin** (`APP_ORIGIN`, `https://fearlezz.seamlezz.com` by default): sign in, the
   API, the pages and their live connections;
 - the **files origin** (`FILES_ORIGIN`, `https://fearlezz.seamlezz.net` by default): the runs'
-  files under a grant, and README pictures (below), and nothing else. It reads no cookies and sets none.
+  files under a grant, and showcase media (below), and nothing else. It reads no cookies and sets none.
 
 Files origin: `/<grant>/<path>` is the run's picture, film or text at that path, with `Range`
 support (films need it). Only png, jpeg, webp, gif, avif, mp4, webm and txt are served, each with
@@ -354,12 +354,12 @@ for another run, gets `404`. Files answer with `Content-Security-Policy: frame-a
 `Range` whose `If-Range` names another tag (or a date, since no file says when it changed) gets
 the whole file with `200`, so a cache never joins the bytes of two versions.
 
-### README pictures
+### Showcase media
 
-`<FILES_ORIGIN>/readme/<owner>/<repo>/<check>/<picture>` is a stable address for a README to
-embed: the picture `<picture>` (its name in the check's look, its after) of the newest push to
+`<FILES_ORIGIN>/showcase/<owner>/<repo>/<check>/<picture>` is a stable address for a README, a
+docs site or a website to embed: the picture `<picture>` (its name in the check's look, its after) of the newest push to
 the repository's default branch whose done CI run ran the check and whose proof did not fail. It
-holds no grant, and a grant always holds a dot, so `readme` never names one.
+holds no grant, and a grant always holds a dot, so `showcase` never names one.
 
 - **Which run.** Only a run a push started: its OIDC token's `event_name` was `push`, its ref
   `refs/heads/<default branch>`, and the commit it proves is the token's `sha`. The ref alone is
@@ -373,7 +373,7 @@ holds no grant, and a grant always holds a dot, so `readme` never names one.
   covered by the host's own accept of its head, so an accepted weakening counts and one not
   accepted does not). A newer push that failed, or whose run is not done, leaves the older
   picture, and a picture the newest proven push no longer takes is `404`. The bar is the run's
-  proof, not the check alone: a README shows what the default branch proved. Of a split proof,
+  proof, not the check alone: a showcase shows what the default branch proved. Of a split proof,
   each leg's run counts on its own, since the gate does not stream to the host.
 - **Newest push.** Pushes are ordered as the host first saw their commit (its first run's
   place in `runs`, since `opened` holds whole seconds), not by when a run opened: a run of an older push started again (after a flake, or by an admin's accept)
@@ -397,8 +397,14 @@ holds no grant, and a grant always holds a dot, so `readme` never names one.
   name pins and `nosniff`. A push shows within five minutes, and a repository that removes the app
   can stay visible through these caches for those few minutes.
 
+- **Any website.** Unlike a run's files, a showcase answer says `Access-Control-Allow-Origin: *`
+  and `Cross-Origin-Resource-Policy: cross-origin`, so any site may embed it, also under
+  cross-origin isolation, and read it from a script or a canvas. It holds only what the address
+  already gives anyone.
+
 A light and a dark variant are two pictures, chosen in the README with
 `<picture><source media="(prefers-color-scheme: dark)" srcset="...">` (the root README shows it).
+`fearlezz setup showcase` prints that markup for every picture of the work's last run.
 
 ### Who sees a page
 
@@ -421,7 +427,7 @@ read it, and their role on it.
   no one.
 - **GitHub's answers are cached** in D1 (`cache`): who may read a repository and their role
   there, per login and repository, and whether a repository is public and the default branch its
-  README pictures come from, each for 5 minutes; GitHub's OIDC keys for
+  showcase pictures come from, each for 5 minutes; GitHub's OIDC keys for
   an hour, fetched again once when a token names a key id the cached set lacks. So a change
   of access on GitHub shows here within 5 minutes.
 - **A live page follows the same rule while it stays open.** Its room asks again for each page

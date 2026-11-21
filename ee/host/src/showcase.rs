@@ -1,20 +1,23 @@
-//! README pictures: a stable address on the files origin for each picture a check takes,
-//! `/readme/<owner>/<repo>/<check>/<picture>`, answering with the newest proven one of a push to
-//! the repository's default branch, so a README can embed what the proof shows and follows each
-//! push without anyone copying files.
+//! Showcase media: a stable address on the files origin for each picture a check takes,
+//! `/showcase/<owner>/<repo>/<check>/<picture>`, answering with the newest proven one of a push
+//! to the repository's default branch, so a README, a docs site or a website can embed what the
+//! proof shows and follows each push without anyone copying files.
 //!
 //! A README's picture loads through GitHub's image proxy, which signs in to nothing, even for a
 //! private repository. So the pictures of any repository with the app are served, private ones
 //! included, and the address holds no grant: anyone who knows it can load the picture. A
-//! repository without the app is `404`, as anything else on this origin.
+//! repository without the app is `404`, as anything else on this origin. A website may embed
+//! them too, also from a script or a canvas, so these answers, unlike the rest of this origin,
+//! let any origin read them (`Access-Control-Allow-Origin: *`) and load them
+//! (`Cross-Origin-Resource-Policy: cross-origin`).
 //!
 //! Only a CI run that a push started counts: its OIDC token's event is `push`, its ref
 //! `refs/heads/<default branch>`, and the commit it proves the one the token says was pushed.
 //! The ref alone would let in `pull_request_target` and `workflow_run` runs, which carry the
 //! default branch's ref while they often check out a fork's code. A pull request, another branch
 //! or a local run never counts, and only a run whose proof did not fail, as the host's review
-//! judges it (`fearlezz_proof::review::failed`): a README shows what the default branch proved,
-//! so a newer push that failed leaves the older picture.
+//! judges it (`fearlezz_proof::review::failed`): a showcase shows what the default branch
+//! proved, so a newer push that failed leaves the older picture.
 //!
 //! Newest means the newest push, not the newest run: pushes are ordered as the host first saw
 //! each commit (its first run's place in `runs`, as `opened` holds whole seconds only), so a run
@@ -33,7 +36,7 @@ use worker::{Cache, Env, Headers, Request, Response, wasm_bindgen::JsValue};
 use crate::work::read;
 use crate::{Answer, Config, Refusal, access, files, github, not_found, repo_key, review};
 
-/// How long a cache keeps a README picture, and the host the file it names: a push shows within
+/// How long a cache keeps a showcase picture, and the host the file it names: a push shows within
 /// minutes, and neither GitHub's image proxy nor the host looks up the run on every view.
 const SECONDS: u32 = 300;
 
@@ -83,10 +86,15 @@ pub(crate) async fn serve(req: &Request, env: &Env, config: &Config, path: &str)
         sha256: found.sha256,
         size: found.size,
     };
-    files::send(req, env, config, &stored, &cache_control).await
+    let mut answer = files::send(req, env, config, &stored, &cache_control).await?;
+    // Any website may embed and read a showcase picture, unlike a run's files.
+    let headers = answer.headers_mut();
+    headers.set("Access-Control-Allow-Origin", "*")?;
+    headers.set("Cross-Origin-Resource-Policy", "cross-origin")?;
+    Ok(answer)
 }
 
-/// The file a README address names, as the cache keeps it.
+/// The file a showcase address names, as the cache keeps it.
 #[derive(Serialize, Deserialize)]
 struct Found {
     path: String,
@@ -94,7 +102,7 @@ struct Found {
     size: u64,
 }
 
-/// The file a README shows for `segments` (the check, then the picture) of `repo`
+/// The file a showcase shows for `segments` (the check, then the picture) of `repo`
 /// (lowercased): None for a repository without the app, or no such proven picture.
 async fn find(
     env: &Env,
@@ -102,7 +110,7 @@ async fn find(
     repo: &str,
     segments: &[String],
 ) -> Result<Option<Found>, Refusal> {
-    let Some(branch) = access::readme_branch(env, config, repo).await? else {
+    let Some(branch) = access::showcase_branch(env, config, repo).await? else {
         return Ok(None);
     };
     let Some((run, path)) = newest(env, repo, &branch, segments).await? else {
@@ -119,13 +127,13 @@ async fn find(
     }))
 }
 
-/// The type a README picture at `path` is served as: only a still or a film, never a text.
+/// The type a showcase picture at `path` is served as: only a still or a film, never a text.
 fn shown(path: &str) -> Option<&'static str> {
     files::content_type(path)
         .filter(|kind| kind.starts_with("image/") || kind.starts_with("video/"))
 }
 
-/// The run and the path of its file that a README shows for `segments` (the check, then the
+/// The run and the path of its file that a showcase shows for `segments` (the check, then the
 /// picture) of `repo` (lowercased): of the newest push to `branch` whose done CI run ran the
 /// check, took its pictures and did not fail its proof. None when there is none, or when that
 /// run took no such picture.

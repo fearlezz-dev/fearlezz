@@ -11,7 +11,8 @@
 //! work's page through a share link, which only views) and their live connections, each held by
 //! a Durable Object of the work or the repository; the files origin serves the runs' files,
 //! which CI wrote, so nothing of them ever runs where the session cookie lives, and at stable
-//! addresses the newest proven pictures of a public repository's default branch, for its README.
+//! addresses the newest proven pictures of a repository's default branch, for its README, docs or
+//! website.
 
 mod access;
 mod api;
@@ -24,7 +25,7 @@ mod jobs;
 mod notes;
 mod oidc;
 mod pages;
-mod readme;
+mod showcase;
 mod repository;
 mod review;
 mod room;

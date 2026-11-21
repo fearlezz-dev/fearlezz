@@ -142,13 +142,15 @@ impl MediaGlob {
     }
 }
 
-struct MediaProof {
-    name: String,
-    kind: String,
+/// A still, film or text a run lists, by the name its look gives it.
+pub(crate) struct MediaProof {
+    pub name: String,
+    pub kind: String,
     file: String,
 }
 
-fn media_proofs(result: &RunResult) -> Vec<MediaProof> {
+/// The stills, films and texts `result` lists, in its order.
+pub(crate) fn media_proofs(result: &RunResult) -> Vec<MediaProof> {
     result
         .proofs
         .iter()

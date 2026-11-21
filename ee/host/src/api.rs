@@ -182,7 +182,7 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
             planned.push(check);
         }
     }
-    // The event and commit CI's token names, which README pictures ask for; none for a local run.
+    // The event and commit CI's token names, which showcase pictures ask for; none for a local run.
     let (event, sha) = match &writer {
         Writer::Ci(token) => (token.event.as_str().into(), token.sha.as_str().into()),
         Writer::Local(_) => (Value::Null, Value::Null),

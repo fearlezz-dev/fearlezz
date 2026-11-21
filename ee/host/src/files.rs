@@ -6,14 +6,14 @@
 //! name pins and `nosniff`, so nothing here ever runs as a page, and served from here they
 //! could reach nothing of the signed in app anyway.
 //!
-//! It also serves README pictures at `/readme/<owner>/<repo>/<check>/<picture>`, with no grant:
+//! It also serves showcase media at `/showcase/<owner>/<repo>/<check>/<picture>`, with no grant:
 //! the newest proven picture of a push to the default branch of a repository with the app,
-//! private ones included (`readme.rs`).
+//! private ones included, for a README, a docs site or a website (`showcase.rs`).
 
 use serde::{Deserialize, Serialize};
 use worker::{Env, Headers, Range, Request, Response, ResponseBody};
 
-use crate::{Answer, Config, Refusal, crypto, not_found, now, readme};
+use crate::{Answer, Config, Refusal, crypto, not_found, now, showcase};
 
 const GRANT: &str = "grant";
 
@@ -60,9 +60,9 @@ pub async fn serve(req: &Request, env: &Env, config: &Config, path: &str) -> Ans
         .trim_start_matches('/')
         .split_once('/')
         .ok_or_else(not_found)?;
-    // A grant always holds a dot, so `readme` is never one.
-    if sealed == "readme" {
-        return readme::serve(req, env, config, rest).await;
+    // A grant always holds a dot, so `showcase` is never one.
+    if sealed == "showcase" {
+        return showcase::serve(req, env, config, rest).await;
     }
     let grant: Grant = crypto::unseal(&config.signing_key, GRANT, sealed)
         .await?

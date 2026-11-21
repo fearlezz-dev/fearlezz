@@ -18,8 +18,8 @@ mod local;
 mod media;
 #[path = "host/notes.rs"]
 mod notes;
-#[path = "host/readme.rs"]
-mod readme;
+#[path = "host/showcase.rs"]
+mod showcase;
 #[path = "host/repository.rs"]
 mod repository;
 #[path = "host/share.rs"]
@@ -536,56 +536,56 @@ fn main() {
             repository::the_repository_page_updates_live,
         ),
         (
-            "a_readme_picture_is_the_newest_proven_push_to_the_default_branch",
-            readme::a_readme_picture_is_the_newest_proven_push_to_the_default_branch,
+            "a_showcase_picture_is_the_newest_proven_push_to_the_default_branch",
+            showcase::a_showcase_picture_is_the_newest_proven_push_to_the_default_branch,
         ),
         (
-            "a_readme_picture_never_comes_from_another_branch_or_a_pull_request",
-            readme::a_readme_picture_never_comes_from_another_branch_or_a_pull_request,
+            "a_showcase_picture_never_comes_from_another_branch_or_a_pull_request",
+            showcase::a_showcase_picture_never_comes_from_another_branch_or_a_pull_request,
         ),
         (
-            "a_readme_picture_of_a_check_in_a_folder_names_the_check_then_the_picture",
-            readme::a_readme_picture_of_a_check_in_a_folder_names_the_check_then_the_picture,
+            "a_showcase_picture_of_a_check_in_a_folder_names_the_check_then_the_picture",
+            showcase::a_showcase_picture_of_a_check_in_a_folder_names_the_check_then_the_picture,
         ),
         (
-            "a_readme_picture_of_a_private_repository_with_the_app_is_served",
-            readme::a_readme_picture_of_a_private_repository_with_the_app_is_served,
+            "a_showcase_picture_of_a_private_repository_with_the_app_is_served",
+            showcase::a_showcase_picture_of_a_private_repository_with_the_app_is_served,
         ),
         (
-            "an_unknown_readme_picture_is_not_found",
-            readme::an_unknown_readme_picture_is_not_found,
+            "an_unknown_showcase_picture_is_not_found",
+            showcase::an_unknown_showcase_picture_is_not_found,
         ),
         (
-            "a_readme_picture_comes_only_from_a_run_a_push_started",
-            readme::a_readme_picture_comes_only_from_a_run_a_push_started,
+            "a_showcase_picture_comes_only_from_a_run_a_push_started",
+            showcase::a_showcase_picture_comes_only_from_a_run_a_push_started,
         ),
         (
-            "a_rerun_of_an_older_push_never_takes_the_readme_picture_back",
-            readme::a_rerun_of_an_older_push_never_takes_the_readme_picture_back,
+            "a_rerun_of_an_older_push_never_takes_the_showcase_picture_back",
+            showcase::a_rerun_of_an_older_push_never_takes_the_showcase_picture_back,
         ),
         (
-            "a_readme_picture_counts_a_weakening_only_once_an_admin_accepted_it",
-            readme::a_readme_picture_counts_a_weakening_only_once_an_admin_accepted_it,
+            "a_showcase_picture_counts_a_weakening_only_once_an_admin_accepted_it",
+            showcase::a_showcase_picture_counts_a_weakening_only_once_an_admin_accepted_it,
         ),
         (
             "a_picture_the_newest_proven_push_no_longer_takes_is_not_found",
-            readme::a_picture_the_newest_proven_push_no_longer_takes_is_not_found,
+            showcase::a_picture_the_newest_proven_push_no_longer_takes_is_not_found,
         ),
         (
-            "a_readme_picture_names_the_longest_check_of_its_run",
-            readme::a_readme_picture_names_the_longest_check_of_its_run,
+            "a_showcase_picture_names_the_longest_check_of_its_run",
+            showcase::a_showcase_picture_names_the_longest_check_of_its_run,
         ),
         (
-            "a_readme_film_answers_a_range",
-            readme::a_readme_film_answers_a_range,
+            "a_showcase_film_answers_a_range",
+            showcase::a_showcase_film_answers_a_range,
         ),
         (
-            "a_readme_picture_waits_for_a_newer_push_to_finish",
-            readme::a_readme_picture_waits_for_a_newer_push_to_finish,
+            "a_showcase_picture_waits_for_a_newer_push_to_finish",
+            showcase::a_showcase_picture_waits_for_a_newer_push_to_finish,
         ),
         (
-            "a_readme_serves_no_text_and_no_name_github_could_not_have",
-            readme::a_readme_serves_no_text_and_no_name_github_could_not_have,
+            "a_showcase_serves_no_text_and_no_name_github_could_not_have",
+            showcase::a_showcase_serves_no_text_and_no_name_github_could_not_have,
         ),
         (
             "the_policy_decides_who_reads_a_private_repository",
@@ -1395,6 +1395,11 @@ fn the_files_origin_serves_only_pictures_films_and_plain_text() {
         answer.header("access-control-allow-origin"),
         Some(world().worker.url.as_str()),
         "the app origin may read a text"
+    );
+    assert_eq!(
+        answer.header("cross-origin-resource-policy"),
+        None,
+        "only showcase pictures are for other sites"
     );
     for (path, _) in refused {
         let answer = get_url(&format!("{base}{path}"), &[]);

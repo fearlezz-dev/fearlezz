@@ -197,9 +197,9 @@ impl FakeGitHub {
                 ),
                 // Its check runs fail or hang when a test says so.
                 ("owner/stalled".to_owned(), reviewed(false, 11)),
-                // README pictures: public with an admin who accepts weakenings, private with the
+                // Showcase pictures: public with an admin who accepts weakenings, private with the
                 // app so they are served all the same, and private without it so they are not.
-                ("owner/readme".to_owned(), reviewed(false, 13)),
+                ("owner/showcase".to_owned(), reviewed(false, 13)),
                 ("owner/unseen".to_owned(), repo(true, Some(14), &[])),
                 ("owner/hidden".to_owned(), repo(true, None, &[])),
                 // The local run tests: each CLI test signs in as a login of its own.
