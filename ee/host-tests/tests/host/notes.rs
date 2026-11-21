@@ -438,6 +438,8 @@ pub fn draw_note(
     );
     let error = browser.eval("document.querySelector('.verdict .error')?.textContent ?? ''");
     assert_eq!(error, json!(""), "the note was refused");
+    // The page shows the note at once; it is the host's once it no longer waits for its answer.
+    browser.wait_for("!document.querySelector('[data-note^=\"pending-\"]')");
 }
 
 /// The open notes of the work at `path`, as its page gets them.
@@ -580,6 +582,8 @@ pub fn an_old_note_shows_dashed_with_its_run_on_a_later_run() {
         r#"document.querySelector('section.run')?.dataset.run === "{}""#,
         next.id
     ));
+    // The page opens on what waits for a look; the noted picture needs change.
+    browser.eval(r#"document.querySelector('[data-picture="screens/card/light.png"]').click()"#);
     browser.wait_for(
         r#"!!document.querySelector('[data-draw="after"] [data-region][data-old="true"]')"#,
     );
@@ -613,6 +617,7 @@ pub fn pictures(shoot: &dyn Fn(&mut browser::Browser, &str)) {
         r#"document.querySelector('section.run')?.dataset.run === "{}""#,
         next.id
     ));
+    writer.eval(r#"document.querySelector('[data-picture="screens/card/light.png"]').click()"#);
     writer.wait_for(&loaded("img", "after"));
     writer.wait_for(r#"!!document.querySelector('[data-draw="after"].can')"#);
     shoot(&mut writer, "notes-light-old");
