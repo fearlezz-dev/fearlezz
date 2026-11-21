@@ -599,7 +599,7 @@ const STRIP_LOOK: Look = {
   ],
 };
 /** What a run of the strip showed: `still` and `film` as the files it took. */
-const stripRun = (id: string, head: string, shows: "base" | "look" | "now", source: Source, opened: number): Run =>
+const stripRun = (id: string, head: string, shows: "base" | "look" | "now", source: Source, opened: number, key: string = shows): Run =>
   run(
     id,
     head,
@@ -609,7 +609,7 @@ const stripRun = (id: string, head: string, shows: "base" | "look" | "now", sour
         ? {
             ...c,
             look: { ...STRIP_LOOK, items: STRIP_LOOK.items.map((p) => ({ ...p, change: shows === "base" ? ("same" as const) : p.change })) },
-            keys: { [STRIP_STILL]: `still-${shows}`, [STRIP_FILM]: `film-${shows}` },
+            keys: { [STRIP_STILL]: `still-${key}`, [STRIP_FILM]: `film-${key}` },
           }
         : c,
     ),
@@ -661,4 +661,20 @@ export const STRIP: { world: World; still: string; film: string } = {
       ),
     ),
   },
+};
+
+// A long history: the same screen pushed often, each run showing it a little differently (each
+// its own content), around the look and the newest push of STRIP. Most of it folds.
+const stripLive = STRIP.world.live as Live & Snapshot;
+const [stripNow, ...stripEarlier] = stripLive.runs;
+const LONG_RUNS = [
+  ...["y3", "y2", "y1"].map((id, k) => stripRun(id, OLD_HEAD, "look", ci("linux", 1199 - k), NOW - 600 - k * 600, id)),
+  ...stripEarlier.slice(0, 2),
+  ...["x4", "x3", "x2", "x1"].map((id, k) => stripRun(id, FIRST_HEAD, "base", ci("linux", 1180 - k), NOW - 6000 - k * 600, id)),
+  ...stripEarlier.slice(2),
+];
+export const LONG_STRIP: World = {
+  ...STRIP.world,
+  runFiles: { ...STRIP.world.runFiles, ...Object.fromEntries(LONG_RUNS.filter((r) => /^[xy]/.test(r.id)).map((r) => [r.id, stripFiles(r.id.startsWith("x") ? "base" : "look")])) },
+  live: live({ ...stripLive, runs: [stripNow!, ...LONG_RUNS] }),
 };

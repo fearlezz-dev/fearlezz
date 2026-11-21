@@ -4,7 +4,7 @@
 
 import { type Page, expect, test } from "@playwright/test";
 import { settled, show } from "./host";
-import { REPOSITORY_PATH, REPOSITORY_STATES, STRIP, WORK, WORK_PATH } from "./states";
+import { LONG_STRIP, REPOSITORY_PATH, REPOSITORY_STATES, STRIP, WORK, WORK_PATH } from "./states";
 
 const THEMES = ["light", "dark"] as const;
 
@@ -143,6 +143,13 @@ test("work page: the strip of runs", async ({ page }) => {
   await expect(page.locator("[data-pair-says]")).toHaveAttribute("data-pair-says", "changed");
   await settled(page, true);
   await stills(page, "work/strip-of-runs");
+});
+
+test("work page: a long strip of runs, folded", async ({ page }) => {
+  await show(page, WORK_PATH, LONG_STRIP);
+  await expect(page.locator("[data-pair-says]")).toHaveAttribute("data-pair-says", "changed");
+  await settled(page, true);
+  await stills(page, "work/strip-of-runs-long");
 });
 
 test("work page: the strip of runs in full screen", async ({ page }) => {

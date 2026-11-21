@@ -70,3 +70,30 @@ export function opensOn(state: Snapshot, run: Run, p: Shown, dots: Dot[]): strin
 
 /** Whether the strip is worth showing: it has a run besides the base and now. */
 export const worthShowing = (dots: Dot[]) => dots.some((d) => d.kind === "run");
+
+/** A stop on the strip as shown: a dot, or the runs between two dots kept, folded into one. */
+export type Stop = { dot: Dot } | { fold: string; dots: Dot[] };
+
+/** The strip as shown: the base, your look, the run just before now (unless `narrow`, a phone,
+ * where it does not fit), now and the dot `picked` stay; each stretch of two or more runs
+ * between them folds into one stop, named by its first run's key, unless `open` holds that key.
+ * Most of a long history is noise, and these are the dots a person compares with. */
+export function stopsOf(dots: Dot[], picked: string, open: ReadonlySet<string>, narrow = false): Stop[] {
+  const kept = (d: Dot, k: number) => d.kind !== "run" || d.look || d.key === picked || (!narrow && k === dots.length - 2);
+  const stops: Stop[] = [];
+  let between: Dot[] = [];
+  const close = () => {
+    const first = between[0];
+    if (first && between.length > 1 && !open.has(first.key)) stops.push({ fold: first.key, dots: between });
+    else stops.push(...between.map((dot) => ({ dot })));
+    between = [];
+  };
+  dots.forEach((d, k) => {
+    if (kept(d, k)) {
+      close();
+      stops.push({ dot: d });
+    } else between.push(d);
+  });
+  close();
+  return stops;
+}

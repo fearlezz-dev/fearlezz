@@ -161,7 +161,9 @@ pictures show, marked. `j` and `k` step between pictures, `1` to `5` pick the wa
 
 **Comparing with any run.** Above a picture with earlier runs, a strip of runs: the base, each
 earlier run that showed the picture (CI and local runs; runs whose content key is the same are
-one dot, and those that showed what now shows fold into now), and now. A dot compares what
+one dot, and those that showed what now shows fold into now), and now. A long history folds:
+the base, your look, the run just before now (not on a phone), now and the dot picked stay, and
+each stretch of two or more runs between them is one chip ("+5") that opens them. A dot compares what
 that run showed (left) with now (right), in every way to compare, with notes on now's side
 only. The run of the newest looks right on other content is "your look": its dot, its line to
 now, the left side's name and the outlines are in the Look again colour, a picture to look at

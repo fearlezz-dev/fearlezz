@@ -4,7 +4,7 @@
 
 import { type Page, expect, test } from "@playwright/test";
 import { show } from "./host";
-import { STRIP, WORK, WORK_PATH, answerOf } from "./states";
+import { LONG_STRIP, STRIP, WORK, WORK_PATH, answerOf } from "./states";
 
 const dots = (page: Page) => page.locator("[data-strip] [data-dot]");
 const dot = (page: Page, key: string) => page.locator(`[data-strip] [data-dot="${key}"] button`);
@@ -65,6 +65,26 @@ test("a dot shows its run's picture beside now, and the Look again line goes bac
   await page.locator("[data-compare-look]").click();
   await expect(stage(page)).toHaveAttribute("data-against", "look");
   await expect(page.locator("[data-compare-look]")).toHaveCount(0);
+});
+
+// The strip as shown, a fold as + and the runs it holds.
+const stops = (page: Page) =>
+  page.locator("[data-strip] li").evaluateAll((all) => all.map((li) => li.getAttribute("data-dot") ?? `+${li.getAttribute("data-fold")}:${li.textContent}`));
+
+test("a long history keeps the base, your look, the run before now and now, and folds the rest", async ({ page }, info) => {
+  await show(page, WORK_PATH, LONG_STRIP);
+  await expect(dot(page, "l2")).toHaveAttribute("aria-pressed", "true");
+  // A phone has no room for the run before now, so it folds too.
+  const after = info.project.name === "mobile" ? ["+y1:+3"] : ["+y1:+2", "y3"];
+  expect(await stops(page)).toEqual(["base", "+r1:+5", "l2", ...after, "now"]);
+  const fold = page.locator('[data-strip] [data-fold="r1"] button');
+  await expect(fold).toHaveAccessibleName("Show 5 more runs");
+  await fold.click();
+  expect(await stops(page)).toEqual(["base", "r1", "x1", "x2", "x3", "x4", "l2", ...after, "now"]);
+  // A run picked from an opened fold stays, though the next picture starts folded again.
+  await dot(page, "x2").click();
+  await expect(caption(page, "before")).toHaveText("Run");
+  await expect(page.locator('[data-stage] img[data-side="before"]')).toHaveAttribute("src", /\/files\/x2\//);
 });
 
 test("a picture with only the base and now shows no strip", async ({ page }) => {
