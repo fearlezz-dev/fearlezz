@@ -1204,8 +1204,8 @@ pub(crate) enum WebpCopy {
     /// Not made: from its first frame with content, the film runs this many seconds, longer
     /// than [`WEBP_LONGEST`].
     TooLong(f64),
-    /// Not made: there is no ffmpeg to make it with.
-    NoFfmpeg,
+    /// Not made: Fearlezz found no ffmpeg to make it with, for this reason.
+    NoFfmpeg(crate::ffmpeg::Missing),
 }
 
 /// Writes `to`, the animated WebP copy of the film `film`, which it leaves as it is: it loops
@@ -1218,19 +1218,14 @@ pub(crate) enum WebpCopy {
 /// even at quality 80, and a 15 s test pattern that changes every pixel of every frame (the
 /// worst case) at 2 MB, in seconds where the default level 4 took ten times as long for 10%
 /// fewer bytes.
+///
+/// It runs the ffmpeg Fearlezz runs for every picture (`crate::ffmpeg`): the project's shell
+/// first, then PATH, then on GitHub Actions the pinned build.
 pub(crate) fn webp_copy(film: &Path, to: &Path) -> Result<WebpCopy> {
-    let missing = |failed: &crate::process::Failed| {
-        matches!(failed, crate::process::Failed::Start { error, .. }
-            if error.kind() == std::io::ErrorKind::NotFound)
-    };
-    let scan = match scan(film) {
-        Ok(scan) => scan,
-        Err(failed) if missing(&failed) => return Ok(WebpCopy::NoFfmpeg),
-        Err(failed) => {
-            return Err(anyhow::Error::from(failed))
-                .with_context(|| format!("ffmpeg could not read {}", film.display()));
-        }
-    };
+    if let Some(missing) = crate::ffmpeg::missing() {
+        return Ok(WebpCopy::NoFfmpeg(missing));
+    }
+    let scan = scan(film).with_context(|| format!("ffmpeg could not read {}", film.display()))?;
     let seconds = scan.end - scan.content;
     if seconds > WEBP_LONGEST {
         return Ok(WebpCopy::TooLong(seconds));
@@ -1248,8 +1243,8 @@ pub(crate) fn webp_copy(film: &Path, to: &Path) -> Result<WebpCopy> {
     } else {
         String::new()
     };
-    let made = crate::process::read(
-        Command::new("ffmpeg")
+    crate::process::read(
+        crate::ffmpeg::ffmpeg()?
             .args(["-v", "error", "-nostdin", "-y", "-i"])
             .arg(film)
             .arg("-vf")
@@ -1261,13 +1256,9 @@ pub(crate) fn webp_copy(film: &Path, to: &Path) -> Result<WebpCopy> {
             .args(["-compression_level", "2", "-loop", "0", "-f", "webp"])
             .arg(to),
         None,
-    );
-    match made {
-        Ok(_) => Ok(WebpCopy::Made),
-        Err(failed) if missing(&failed) => Ok(WebpCopy::NoFfmpeg),
-        Err(failed) => Err(anyhow::Error::from(failed))
-            .with_context(|| format!("ffmpeg could not make a WebP of {}", film.display())),
-    }
+    )
+    .with_context(|| format!("ffmpeg could not make a WebP of {}", film.display()))?;
+    Ok(WebpCopy::Made)
 }
 
 /// When a film's frames start and end, and when its first frame with content starts, in
@@ -1282,9 +1273,9 @@ struct Scan {
 /// channel (`signalstats`), and finds where it starts, where it ends (a recorded WebM often
 /// names no duration of its own) and its first frame that is not one flat colour (the start
 /// when every frame is).
-fn scan(path: &Path) -> Result<Scan, crate::process::Failed> {
+fn scan(path: &Path) -> Result<Scan> {
     let out = crate::process::read(
-        Command::new("ffmpeg")
+        crate::ffmpeg::ffmpeg()?
             .args(["-v", "error", "-nostdin", "-i"])
             .arg(path)
             .args([

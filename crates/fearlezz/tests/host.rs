@@ -918,3 +918,52 @@ fn a_film_longer_than_thirty_seconds_gets_no_webp_copy() {
         out.stdout
     );
 }
+
+#[test]
+fn a_webp_copy_is_made_with_the_ffmpeg_of_the_project_shell() {
+    // A devenv project keeps ffmpeg in its shell, not on the PATH Fearlezz runs with, so the
+    // copy is made with the ffmpeg Fearlezz finds there, as every picture it compares is.
+    let tools = tempfile::tempdir().unwrap();
+    let calls = tools.path().join("calls");
+    let path = std::env::var_os("PATH").unwrap();
+    for name in ["ffmpeg", "ffprobe"] {
+        use std::os::unix::fs::PermissionsExt as _;
+        let real = std::env::split_paths(&path)
+            .map(|dir| dir.join(name))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| panic!("{name} is needed for this test"));
+        let wrapper = tools.path().join(name);
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\necho \"{name} $*\" >> '{}'\nexec '{}' \"$@\"\n",
+                calls.display(),
+                real.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let host = FakeHost::start();
+    let repo = filmed(&host, 0, 2, None);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    repo.write(
+        "fearlezz.toml",
+        &format!(
+            "{config}\n[env]\nshell = 'env \"PATH={}:$PATH\"'\n",
+            tools.path().display()
+        ),
+    );
+    repo.commit("ffmpeg in the shell");
+    let out = ci_on(&repo, &host, "push", "refs/heads/main");
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let (film, files) = film_sent(&host);
+    copy_of(&host, &film, &files);
+    let calls = std::fs::read_to_string(&calls).unwrap_or_default();
+    assert!(
+        calls
+            .lines()
+            .any(|call| call.starts_with("ffmpeg ") && call.contains("libwebp_anim")),
+        "{calls}"
+    );
+}
