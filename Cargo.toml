@@ -960,3 +960,8 @@ useless_ptr_null_checks = "warn"
 uses_power_alignment = "warn"
 variant_size_differences = "allow"
 while_true = "warn"
+
+# The picture comparison loops over every pixel of every frame; unoptimized, a 1080p film
+# takes ten times as long, which the tests of the debug binary feel.
+[profile.dev.package.fearlezz-compare]
+opt-level = 3

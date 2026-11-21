@@ -1,0 +1,272 @@
+//! Matching two films' states and saying what changed between them.
+#![expect(
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "states and costs are indexed by the warp path, which only names states the films \
+              have, and a picture's sides fit in a box's u32"
+)]
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::diff::{diff, outside_range};
+use crate::film::Window;
+use crate::{Box4, Comparison, Film, Moment, Pair, Reread, State, Verdict};
+
+/// Seconds of timing difference that still count as the same timing.
+const TIMING_TOL: f64 = 0.10;
+/// A state held at least this long is a moment worth checking for timing.
+const STABLE_MIN: f64 = 0.15;
+
+/// Matches states of two films; returns the path of (before, after) pairs and the costs.
+fn warp(a: &[Vec<f32>], b: &[Vec<f32>]) -> (Vec<(usize, usize)>, Vec<Vec<f32>>) {
+    let (n, m) = (a.len(), b.len());
+    let cost: Vec<Vec<f32>> = a
+        .iter()
+        .map(|x| {
+            b.iter()
+                .map(|y| x.iter().zip(y).map(|(p, q)| (p - q).abs()).sum::<f32>() / x.len() as f32)
+                .collect()
+        })
+        .collect();
+    let mut d = vec![vec![f32::INFINITY; m + 1]; n + 1];
+    d[0][0] = 0.0;
+    for i in 1..=n {
+        for j in 1..=m {
+            d[i][j] = cost[i - 1][j - 1] + d[i - 1][j].min(d[i][j - 1]).min(d[i - 1][j - 1]);
+        }
+    }
+    let (mut i, mut j, mut path) = (n, m, Vec::new());
+    while i > 0 && j > 0 {
+        path.push((i - 1, j - 1));
+        let options = [d[i - 1][j - 1], d[i - 1][j], d[i][j - 1]];
+        let mut k = 0;
+        for (idx, v) in options.iter().enumerate() {
+            if *v < options[k] {
+                k = idx;
+            }
+        }
+        match k {
+            0 => {
+                i -= 1;
+                j -= 1;
+            }
+            1 => i -= 1,
+            _ => j -= 1,
+        }
+    }
+    path.reverse();
+    (path, cost)
+}
+
+/// Compares two films, reading each again through its [`Reread`] for the pixel diffs. Films
+/// of different sizes are changed whole, and neither is read again.
+///
+/// # Errors
+///
+/// When a second read fails or gives other frames than the first.
+pub fn compare<B, A>(
+    before: &Film,
+    before_again: B,
+    after: &Film,
+    after_again: A,
+) -> Result<Comparison, B::Error>
+where
+    B: Reread,
+    A: Reread<Error = B::Error>,
+{
+    let still = before.is_still() && after.is_still();
+    let mut out = Comparison {
+        verdict: Verdict::Same,
+        still,
+        size_before: (before.w, before.h),
+        size_after: (after.w, after.h),
+        total_before: round3(before.total),
+        total_after: round3(after.total),
+        max_shift: 0.0,
+        max_shift_at: None,
+        states_before: before.states.len(),
+        states_after: after.states.len(),
+        moments: Vec::new(),
+        pairs: Vec::new(),
+    };
+    if before.w != after.w || before.h != after.h {
+        out.verdict = Verdict::Changed;
+        out.moments.push(Moment {
+            before: (0.0, before.total),
+            after: (0.0, after.total),
+            area: [0, 0, after.w as u32, after.h as u32],
+            px: after.w * after.h,
+        });
+        return Ok(out);
+    }
+    let (ko, kn) = (&before.states, &after.states);
+    let thumbs = |s: &[State]| s.iter().map(|k| k.thumb.clone()).collect::<Vec<_>>();
+    let (path, cost) = warp(&thumbs(ko), &thumbs(kn));
+
+    let mut windows = (
+        Window::new(before, before_again),
+        Window::new(after, after_again),
+    );
+    out.pairs = pairs(&mut windows, &path)?;
+    let max_shift = max_shift(ko, kn, &path, &cost);
+    out.max_shift = round3(max_shift.0);
+    out.max_shift_at = max_shift.1.map(round3);
+    out.moments = moments(&out.pairs, ko, kn);
+
+    out.verdict = if !out.moments.is_empty() {
+        Verdict::Changed
+    } else if !still
+        && ((after.total - before.total).abs() > TIMING_TOL || max_shift.0.abs() > TIMING_TOL)
+    {
+        Verdict::Timing
+    } else {
+        Verdict::Same
+    };
+    Ok(out)
+}
+
+/// Each pair of states the path visits, with what differs between them. The path only moves
+/// forward, so each film needs the states one before to one after.
+fn pairs<B, A>(
+    (wo, wn): &mut (Window<'_, B>, Window<'_, A>),
+    path: &[(usize, usize)],
+) -> Result<Vec<Pair>, B::Error>
+where
+    B: Reread,
+    A: Reread<Error = B::Error>,
+{
+    let (ko, kn) = (&wo.film().states, &wn.film().states);
+    let after = wn.film();
+    let mut pairs = Vec::new();
+    let visited: BTreeSet<(usize, usize)> = path.iter().copied().collect();
+    let mut cache: BTreeMap<(usize, usize), (usize, Vec<Box4>)> = BTreeMap::new();
+    for &(i, j) in path {
+        wo.span(i.saturating_sub(1), i + 1)?;
+        wn.span(j.saturating_sub(1), j + 1)?;
+        cache.retain(|&(ci, cj), _| ci + 1 >= i && cj + 1 >= j);
+        let mut pd = |i: usize, j: usize| -> Result<(usize, Vec<Box4>), crate::Unfit> {
+            if let Some(d) = cache.get(&(i, j)) {
+                return Ok(d.clone());
+            }
+            let d = diff(wo.image(i)?, wn.image(j)?, true);
+            let d = (d.px, d.boxes);
+            cache.insert((i, j), d.clone());
+            Ok(d)
+        };
+        let (mut px, mut boxes) = pd(i, j)?;
+        if px > 0 {
+            // When the films caught a transition at different moments, each side of the pair
+            // has its true counterpart next to the other: a neighbour the path also visits
+            // that matches it fully, or the other film's neighbours, whose range it sits in.
+            // Both sides must have one; a state only one film shows is a change.
+            let mut before_found = false;
+            for jj in [j.wrapping_sub(1), j + 1] {
+                if jj < kn.len() && visited.contains(&(i, jj)) && pd(i, jj)?.0 == 0 {
+                    before_found = true;
+                }
+            }
+            let mut after_found = false;
+            for ii in [i.wrapping_sub(1), i + 1] {
+                if ii < ko.len() && visited.contains(&(ii, j)) && pd(ii, j)?.0 == 0 {
+                    after_found = true;
+                }
+            }
+            before_found = before_found || outside_range(wo.image(i)?, &wn.near(j)?) == 0;
+            after_found = after_found || outside_range(wn.image(j)?, &wo.near(i)?) == 0;
+            if before_found && after_found {
+                px = 0;
+                boxes.clear();
+            }
+        }
+        let boxes = boxes.into_iter().map(|b| after.own_pixels(b)).collect();
+        pairs.push(Pair {
+            before: i,
+            after: j,
+            before_frame: ko[i].frame,
+            after_frame: kn[j].frame,
+            before_at: round3(ko[i].start),
+            after_at: round3(kn[j].start),
+            px,
+            boxes,
+        });
+    }
+    Ok(pairs)
+}
+
+/// Timing: how much later each held state of the before film shows in the after film, the
+/// largest shift and the moment of the before film it is at.
+fn max_shift(
+    ko: &[State],
+    kn: &[State],
+    path: &[(usize, usize)],
+    cost: &[Vec<f32>],
+) -> (f64, Option<f64>) {
+    let mut best: BTreeMap<usize, usize> = BTreeMap::new();
+    for &(i, j) in path {
+        let e = best.entry(i).or_insert(j);
+        if cost[i][j] < cost[i][*e] {
+            *e = j;
+        }
+    }
+    let mut max_shift = (0.0f64, None);
+    for (i, k) in ko.iter().enumerate() {
+        if k.dur >= STABLE_MIN
+            && let Some(j) = best.get(&i)
+        {
+            let shift = kn[*j].start - k.start;
+            if max_shift.1.is_none() || shift.abs() > max_shift.0.abs() {
+                max_shift = (shift, Some(k.start));
+            }
+        }
+    }
+    max_shift
+}
+
+/// The moments that changed: each run of pairs that differ, with the area they differ in.
+fn moments(pairs: &[Pair], ko: &[State], kn: &[State]) -> Vec<Moment> {
+    let mut current: Option<(Moment, Vec<Box4>)> = None;
+    let mut groups = Vec::new();
+    for p in pairs {
+        let (o, n) = (&ko[p.before], &kn[p.after]);
+        if p.px == 0 {
+            groups.extend(current.take());
+            continue;
+        }
+        let (m, boxes) = current.get_or_insert_with(|| {
+            (
+                Moment {
+                    before: (o.start, 0.0),
+                    after: (n.start, 0.0),
+                    area: [0; 4],
+                    px: 0,
+                },
+                Vec::new(),
+            )
+        });
+        m.before.1 = o.start + o.dur;
+        m.after.1 = n.start + n.dur;
+        m.px = m.px.max(p.px);
+        boxes.extend(&p.boxes);
+    }
+    groups.extend(current.take());
+    groups
+        .into_iter()
+        .map(|(mut m, boxes)| {
+            m.area = boxes.iter().fold([u32::MAX, u32::MAX, 0, 0], |a, b| {
+                [
+                    a[0].min(b[0]),
+                    a[1].min(b[1]),
+                    a[2].max(b[2]),
+                    a[3].max(b[3]),
+                ]
+            });
+            m.before = (round3(m.before.0), round3(m.before.1));
+            m.after = (round3(m.after.0), round3(m.after.1));
+            m
+        })
+        .collect()
+}
+
+fn round3(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0
+}
