@@ -726,9 +726,9 @@ echo '{"kind":"film","file":"home.webm"}' >> "$FEARLEZZ_OUT/proof.jsonl"
 "#;
 
 /// A repository whose check `screens` films `seconds` of content after `lead` seconds of
-/// black, with a commit that changes its box, checked out on a branch apart from `main` so
-/// the look has a base to compare with.
-fn filmed(host: &FakeHost, lead: u32, seconds: u32) -> Repo {
+/// black, with a commit that changes its box: on `branch` when one is given, as a pull request
+/// has it, otherwise on `main` itself, as a push to the default branch lands it.
+fn filmed(host: &FakeHost, lead: u32, seconds: u32, branch: Option<&str>) -> Repo {
     let config = format!(
         "[check.screens]\nrun = \"sh record.sh\"\nstage = \"working\"\ninputs = [\"src/**\", \"record.sh\"]\n\n[host]\nurl = \"{}\"\n",
         host.url
@@ -744,7 +744,9 @@ fn filmed(host: &FakeHost, lead: u32, seconds: u32) -> Repo {
         ],
     );
     std::fs::create_dir_all(repo.path(".runs")).unwrap();
-    repo.branch("feat/film");
+    if let Some(branch) = branch {
+        repo.branch(branch);
+    }
     repo.write("src/color.txt", "blue");
     repo.commit("a blue box");
     repo
@@ -834,7 +836,7 @@ fn a_push_to_the_default_branch_sends_an_animated_webp_copy_of_each_film() {
     // GitHub plays no film in a README, only an animated image, so the run whose pictures the
     // host serves at a stable address sends its films as an animated WebP too.
     let host = FakeHost::start();
-    let repo = filmed(&host, 0, 2);
+    let repo = filmed(&host, 0, 2, None);
     let out = ci_on(&repo, &host, "push", "refs/heads/main");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
 
@@ -868,7 +870,7 @@ fn a_webp_copy_starts_at_the_first_frame_with_content() {
     // A recorder that starts as the page opens leaves blank frames first, which would flash
     // on every loop of the copy; the film itself keeps them.
     let host = FakeHost::start();
-    let repo = filmed(&host, 1, 2);
+    let repo = filmed(&host, 1, 2, None);
     let out = ci_on(&repo, &host, "push", "refs/heads/main");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let (film, files) = film_sent(&host);
@@ -885,7 +887,7 @@ fn a_pull_request_sends_no_webp_copy() {
     // The host serves only pushes to the default branch at a stable address, so nothing else
     // pays for a copy.
     let host = FakeHost::start();
-    let repo = filmed(&host, 0, 2);
+    let repo = filmed(&host, 0, 2, Some("feat/film"));
     let out = ci_on(&repo, &host, "pull_request", "refs/pull/7/merge");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let (film, files) = film_sent(&host);
@@ -903,7 +905,7 @@ fn a_pull_request_sends_no_webp_copy() {
 #[test]
 fn a_film_longer_than_thirty_seconds_gets_no_webp_copy() {
     let host = FakeHost::start();
-    let repo = filmed(&host, 0, 31);
+    let repo = filmed(&host, 0, 31, None);
     let out = ci_on(&repo, &host, "push", "refs/heads/main");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     let (film, _) = film_sent(&host);
