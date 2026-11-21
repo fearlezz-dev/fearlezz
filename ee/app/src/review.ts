@@ -3,9 +3,10 @@
 // The host derives where review stands and words it for each role; the page shows that.
 
 import type { PictureVerdict, Role, Run, Snapshot, Viewer } from "./proof";
-import type { Shown } from "./pictures";
-import { post, refusal } from "./api";
+import { type Shown, isFilm, picturesOf } from "./pictures";
+import { post, refusal, send } from "./api";
 import { notesOn } from "./notes";
+import { hoping, verdictChange } from "./hopes";
 import { short } from "./short";
 
 /** Who the page is shown to: a person as the host says (`Viewer`), or anyone through a share
@@ -34,6 +35,40 @@ export const localBy = (run: Run) => (run.source.kind === "local" ? run.source.l
 /** Whether a person looks at a picture: anything but the same, and never a flaky one. */
 export const toLookAt = (p: Shown) => p.picture.change !== "same" && !p.picture.flaky;
 
+/** How far one looks right reaches among a screen's variants: the picture alone, every
+ * variant of its viewport, every variant of its theme, or the whole screen. */
+export const SCOPES = ["this", "viewport", "theme", "screen"] as const;
+export type Scope = (typeof SCOPES)[number];
+
+/** The pictures a looks right on `p` at `scope` says looks right, from its screen's `variants`:
+ * those to look at that `scope` reaches, `p` first. A film shows what its still shows, so its
+ * looks right reaches the still of its viewport and theme too. */
+export function covered(p: Shown, variants: readonly Shown[], scope: Scope): Shown[] {
+  const reaches = (q: Shown) => {
+    switch (scope) {
+      case "this":
+        return isFilm(p.picture) && !isFilm(q.picture) && q.parts.viewport === p.parts.viewport && q.parts.theme === p.parts.theme;
+      case "viewport":
+        return q.parts.viewport === p.parts.viewport;
+      case "theme":
+        return q.parts.theme === p.parts.theme;
+      case "screen":
+        return true;
+    }
+  };
+  return [p, ...variants.filter((q) => q.key !== p.key && toLookAt(q) && reaches(q))];
+}
+
+/** The run a work page opens on: the newest, or, when it is one leg of a CI run proved in legs,
+ * the newest leg of that same run with pictures to look at, since only one leg has them. A
+ * rerun is a run of its own, so it shows as it opens. */
+export function opening(runs: Run[]): Run | undefined {
+  const newest = runs[0];
+  const legOf = (r: Run) =>
+    r.source.kind === "ci" && newest?.source.kind === "ci" && r.head === newest.head && r.source.run_id === newest.source.run_id && r.source.run_attempt === newest.source.run_attempt;
+  return runs.find((r) => legOf(r) && picturesOf(r).some(toLookAt)) ?? newest;
+}
+
 /** What a picture of a run shows, as a verdict follows it; none until the host knows. */
 export function keyOf(run: Run, p: Shown): string | undefined {
   return run.checks.find((c) => c.id === p.check)?.keys?.[p.picture.name];
@@ -55,6 +90,31 @@ export function standingOf(state: Snapshot, run: Run, p: Shown): "needs_change" 
   return verdictOf(state, run, p) ? "looks_right" : "none";
 }
 
+/** What a person said about what a picture showed before it changed: the newest looks right
+ * on other content (unless one is on this content), and the ids of its open notes made on a run
+ * that showed other content. The host's review says the same as `changed_since`; the page reads
+ * what it holds, so a new verdict clears it at once. A note whose run the page does not hold
+ * says nothing. */
+export type Since = { verdict: PictureVerdict | undefined; notes: string[] };
+export function changedSince(state: Snapshot, run: Run, p: Shown): Since | undefined {
+  const key = keyOf(run, p);
+  if (!key) return undefined;
+  const verdict = verdictOf(state, run, p)
+    ? undefined
+    : (state.verdicts ?? []).filter((v) => v.check === p.check && v.picture === p.picture.name && v.key !== key).sort((a, b) => b.at - a.at)[0];
+  const then = (id: string) => {
+    const made = state.runs.find((r) => r.id === id);
+    return made && keyOf(made, p);
+  };
+  const notes = notesOn(state, p.check, p.picture.name, run)
+    .filter((n) => {
+      const was = then(n.note.run);
+      return was !== undefined && was !== key;
+    })
+    .map((n) => n.note.id);
+  return verdict || notes.length ? { verdict, notes } : undefined;
+}
+
 /** Where a verdict came from, beside who gave it: an earlier push, or an earlier run. */
 export function carried(verdict: PictureVerdict, run: Run): string {
   if (verdict.head !== run.head) return `carried over from an earlier push (${short(verdict.head)})`;
@@ -67,7 +127,25 @@ export function carried(verdict: PictureVerdict, run: Run): string {
 const say = async (run: string, what: "verdicts" | "accept", body: object) =>
   refusal(await post(`/api/v2/runs/${encodeURIComponent(run)}/${what}`, body));
 
-export const verdict = (run: string, p: Shown) => say(run, "verdicts", { check: p.check, picture: p.picture.name });
+/** Says picture `p` of run `run` looks right, as `by`, shown at once with the picture's open
+ * notes resolved. The error the host gave, if it refused. */
+export function verdict(state: Snapshot, run: Run, p: Shown, by: string): Promise<string | undefined> {
+  const ask = () => post(`/api/v2/runs/${encodeURIComponent(run.id)}/verdicts`, { check: p.check, picture: p.picture.name });
+  const key = keyOf(run, p);
+  if (!key) return ask().then(refusal);
+  const open = notesOn(state, p.check, p.picture.name, run).map((n) => n.note);
+  const given = { check: p.check, picture: p.picture.name, key, by, at: Date.now() / 1000, run: run.id, head: run.head };
+  return hoping(verdictChange(given, open), ask);
+}
+
+/** Takes back the verdict on a picture's content, shown at once; the error the host gave, if it
+ * refused. */
+export function withdraw(run: Run, p: Shown): Promise<string | undefined> {
+  const ask = () => send("DELETE", `/api/v2/runs/${encodeURIComponent(run.id)}/verdicts`, { check: p.check, picture: p.picture.name });
+  const key = keyOf(run, p);
+  if (!key) return ask().then(refusal);
+  return hoping({ kind: "withdrawn", check: p.check, picture: p.picture.name, key }, ask);
+}
 
 export const accept = (run: string) => say(run, "accept", {});
 

@@ -251,6 +251,10 @@ fn main() {
             a_file_is_served_in_ranges_under_a_grant,
         ),
         (
+            "a_file_the_browser_holds_is_not_sent_again",
+            a_file_the_browser_holds_is_not_sent_again,
+        ),
+        (
             "the_files_origin_refuses_a_missing_tampered_or_expired_grant",
             the_files_origin_refuses_a_missing_tampered_or_expired_grant,
         ),
@@ -322,6 +326,10 @@ fn main() {
         (
             "a_verdict_needs_a_session_write_access_the_app_origin_and_json",
             a_verdict_needs_a_session_write_access_the_app_origin_and_json,
+        ),
+        (
+            "a_verdict_is_taken_back_by_someone_with_write_access",
+            a_verdict_is_taken_back_by_someone_with_write_access,
         ),
         (
             "a_bearer_token_never_gives_a_verdict_or_an_accept",
@@ -442,6 +450,14 @@ fn main() {
         (
             "an_open_note_follows_the_work_until_a_writer_resolves_it",
             notes::an_open_note_follows_the_work_until_a_writer_resolves_it,
+        ),
+        (
+            "a_note_is_edited_alone_or_with_the_notes_made_from_it",
+            notes::a_note_is_edited_alone_or_with_the_notes_made_from_it,
+        ),
+        (
+            "looks_right_resolves_the_pictures_open_notes",
+            notes::looks_right_resolves_the_pictures_open_notes,
         ),
         (
             "a_cli_token_reads_but_never_writes",
@@ -1263,6 +1279,39 @@ fn a_file_is_served_in_ranges_under_a_grant() {
     assert_eq!(answer.header("accept-ranges").unwrap(), "bytes");
     let base = files_base("owner/repo", &run, &[]);
     assert_eq!(get_url(&format!("{base}looks/none.png"), &[]).status, 404);
+}
+
+// A picture is asked for again each time it shows; its bytes' SHA-256 is its tag, so a browser
+// that holds it gets only a 304, not the bytes again from far away.
+fn a_file_the_browser_holds_is_not_sent_again() {
+    let still: &[u8] = b"a still the browser holds";
+    let run = run_with_file("feat/held", "looks/screens/held.png", still);
+    let path = format!(
+        "{}looks/screens/held.png",
+        files_base("owner/repo", &run, &[])
+    );
+    let tag = format!("\"{}\"", sha256(still));
+
+    let answer = get_url(&path, &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(
+        answer.header("etag"),
+        Some(tag.as_str()),
+        "tagged by its bytes"
+    );
+
+    let answer = get_url(&path, &[("If-None-Match", tag.as_str())]);
+    assert_eq!(
+        answer.status,
+        304,
+        "held, so not sent again: {}",
+        answer.text()
+    );
+    assert!(answer.body.is_empty(), "no bytes with a 304");
+
+    let answer = get_url(&path, &[("If-None-Match", "\"other\"")]);
+    assert_eq!(answer.status, 200, "other bytes held: {}", answer.text());
+    assert_eq!(answer.body, still, "the bytes again");
 }
 
 fn the_files_origin_refuses_a_missing_tampered_or_expired_grant() {
@@ -2128,6 +2177,25 @@ fn say(
     request("POST", &path, &all, Some(body.to_string().into_bytes()))
 }
 
+/// What the page sends to take back the verdict on a picture of run `run`.
+fn withdraw(run: &str, cookie: Option<&str>, body: &Value) -> Answer {
+    let origin = world().worker.url.clone();
+    let mut headers = vec![
+        ("Origin", origin.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    if let Some(cookie) = cookie {
+        headers.push(("Cookie", cookie));
+    }
+    let path = format!("/api/v2/runs/{run}/verdicts");
+    request(
+        "DELETE",
+        &path,
+        &headers,
+        Some(body.to_string().into_bytes()),
+    )
+}
+
 fn looks_right(picture: &str) -> Value {
     json!({"check": "screens", "picture": picture, "kind": "looks_right"})
 }
@@ -2313,6 +2381,50 @@ fn a_verdict_needs_a_session_write_access_the_app_origin_and_json() {
         "{review:#}"
     );
     assert_eq!(verdict["run"], run.as_str(), "{review:#}");
+}
+
+fn a_verdict_is_taken_back_by_someone_with_write_access() {
+    let job = Job::pull("owner/review", 142, "review/undo").at(&commit("a142"), 1142);
+    let (look, files) = one_still(b"undo before", b"undo after");
+    let run = proven(&job, &look, &files, &json!({}));
+    let body = looks_right("card/light.png");
+    let writer = sign_in("writer-code", "/");
+    let reader = sign_in("reader-code", "/");
+    let answer = say(&run, "verdicts", Some(&writer), &[], &body);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let state = |review: &Value| review.pointer("/state").cloned();
+    assert_eq!(
+        state(&review_of(142)),
+        Some(json!("approved")),
+        "the verdict approves it"
+    );
+
+    let answer = withdraw(&run, None, &body);
+    assert_eq!(answer.status, 401, "without a session: {}", answer.text());
+    let answer = withdraw(&run, Some(&reader), &body);
+    assert_eq!(answer.status, 403, "a reader: {}", answer.text());
+    assert_eq!(
+        state(&review_of(142)),
+        Some(json!("approved")),
+        "a reader takes nothing back"
+    );
+
+    let answer = withdraw(&run, Some(&writer), &body);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let review = review_of(142);
+    assert_eq!(state(&review), Some(json!("waits")), "{review:#}");
+    assert_eq!(
+        review.pointer("/pictures/0/standing"),
+        Some(&json!("waits")),
+        "{review:#}"
+    );
+    // A work with no verdicts leaves them out of its snapshot.
+    let snapshot = live("/owner/review/pull/142", &[]).json();
+    let verdicts = snapshot
+        .pointer("/verdicts")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    assert_eq!(verdicts, 0, "{snapshot:#}");
 }
 
 fn a_bearer_token_never_gives_a_verdict_or_an_accept() {
@@ -3477,7 +3589,8 @@ fn a_verdict_given_in_one_tab_shows_in_another() {
     // Each tab learns who is looking on its own, so the button shows here in its own time.
     browser.wait_for(r#"!!document.querySelector('button[data-say="looks_right"]')"#);
     browser.eval(r#"document.querySelector('button[data-say="looks_right"]').click()"#);
-    browser.wait_for(&verdict_shows("looks_right"));
+    // The stage here moves on to the next picture that waits, so the tile carries the verdict.
+    browser.wait_for(r#"document.querySelector('[data-picture="screens/card/light.png"]').dataset.verdict === "looks_right""#);
     browser.on(&second);
     browser.wait_for(&verdict_shows("looks_right"));
     assert_eq!(

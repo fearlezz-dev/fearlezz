@@ -456,6 +456,7 @@ pub struct NoteRow {
     at: f64,
     state: String,
     resolved_by: Option<String>,
+    link: Option<String>,
 }
 
 impl NoteRow {
@@ -487,12 +488,13 @@ impl NoteRow {
                 NoteState::Open
             },
             resolved_by: self.resolved_by,
+            link: self.link,
         }
     }
 }
 
 /// Every column of a note, as `NoteRow` reads it.
-pub const NOTE_COLUMNS: &str = "id, work, check_id, picture, run, head, side, x, y, w, h, time, words, login, at, state, resolved_by";
+pub(crate) const NOTE_COLUMNS: &str = "id, work, check_id, picture, run, head, side, x, y, w, h, time, words, login, at, state, resolved_by, link";
 
 /// The work's open notes, oldest first.
 fn open_notes(db: &D1Database, work: &str) -> worker::Result<D1PreparedStatement> {
@@ -652,9 +654,11 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         open_notes(db, work)?,
         crate::jobs::legs_statement(db, work, head)?,
     ];
+    // The head's runs, and the runs open notes were made on, to tell whether a picture changed
+    // since its note.
     statements.extend(run_statements(
         db,
-        "work = ?1 AND head = ?2",
+        "work = ?1 AND (head = ?2 OR id IN (SELECT run FROM notes WHERE work = ?1 AND state = 'open'))",
         &[work.into(), head.into()],
     )?);
     let results = db.batch(statements).await?;

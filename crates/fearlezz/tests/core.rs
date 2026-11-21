@@ -1003,6 +1003,28 @@ fn tools_in_the_project_folders_are_found() {
 }
 
 #[test]
+fn tools_in_the_project_folders_of_a_checks_dir_are_found() {
+    // A project in a folder keeps its own packages there, such as a web app in `app/`.
+    for folder in ["node_modules/.bin", ".venv/bin"] {
+        let repo = Repo::new(
+            "[check.lint]\nrun = \"lintr .\"\ndir = \"app\"\nstage = \"working\"\n",
+            &[
+                (".gitignore", "node_modules/\n.venv/\n"),
+                ("app/main.ts", "export {};\n"),
+            ],
+        );
+        repo.branch("feat/x");
+        // The root's own tool of the same name fails, so the check passes only when the
+        // folder's comes first.
+        install_tool(&repo, folder);
+        repo.write(&format!("{folder}/lintr"), "#!/bin/sh\nexit 1\n");
+        install_tool(&repo, &format!("app/{folder}"));
+        let out = repo.fz(&["run", "lint"]);
+        assert!(out.ok, "{folder}: {}{}", out.stdout, out.stderr);
+    }
+}
+
+#[test]
 fn a_command_the_shell_could_not_start_never_makes_the_check_unstable() {
     // A script whose interpreter is missing says so in its own words (`env: 'node': No such
     // file or directory`), with the shell's code for a command it could not find.

@@ -3,20 +3,24 @@
 // picture show as numbered regions, and a person who may make notes drags on either picture to
 // draw one.
 
-import { type JSX, For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, onCleanup, splitProps } from "solid-js";
+import { type JSX, For, Match, Show, Switch, createContext, createEffect, createMemo, createResource, createSignal, onCleanup, splitProps, untrack, useContext } from "solid-js";
 import { DiffLines } from "./DiffLines";
+import { Icon } from "./icons";
 import { fileUrl } from "./grant";
 import { type Draft, type Shown as Noted, meant, onSide, regionBetween } from "./notes";
 import { type Box, type Shown, WORDS, isFilm, isText, lanes, marksAt, plainSummary, stillMarks, title } from "./pictures";
 import type { Comparison } from "./proof";
+import { ready } from "./preload";
 import { short } from "./short";
+import { FIT, type View, panned, stepped, transform, zoomedAt } from "./zoom";
 
+/** The ways to compare: key, name, and the short name a phone shows. */
 export const MODES = [
-  ["side", "Side by side"],
-  ["slider", "Slider"],
-  ["onion", "Onion skin"],
-  ["diff", "Difference"],
-  ["blink", "Blink"],
+  ["side", "Side by side", "Side"],
+  ["slider", "Slider", "Slider"],
+  ["onion", "Onion skin", "Onion"],
+  ["diff", "Difference", "Diff"],
+  ["blink", "Blink", "Blink"],
 ] as const;
 
 export type Mode = (typeof MODES)[number][0];
@@ -35,10 +39,14 @@ export type Noting = {
   onDraft: (draft: Draft | undefined, done: boolean) => void;
 };
 
-/** The notes on one side of a picture, and the layer a person draws a new one on. */
-function NoteLayer(props: { side: Side; noting: Noting }) {
+/** The notes on one side of a picture, and the layer a person draws a new one on. On a film
+ * (`clock`), a click plays or pauses it, and a drag pauses it first, so its note marks the
+ * frame it was drawn on. */
+function NoteLayer(props: { side: Side; noting: Noting; clock?: Clock | undefined }) {
   let layer: HTMLDivElement | undefined;
   let start: [number, number] | undefined;
+  // Whether the film played when the pointer went down: a click then leaves it paused.
+  let played = false;
   const at = (e: PointerEvent): [number, number] => {
     const r = layer!.getBoundingClientRect();
     return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
@@ -52,23 +60,28 @@ function NoteLayer(props: { side: Side; noting: Noting }) {
   return (
     <div
       ref={layer}
-      class={`notes-layer ${props.noting.can ? "can" : ""}`}
+      class={`notes-layer ${props.noting.can ? "can" : ""} ${props.clock ? "plays" : ""}`}
       data-draw={props.side}
       onPointerDown={(e) => {
-        if (!props.noting.can || e.button !== 0) return;
+        if ((!props.noting.can && !props.clock) || e.button !== 0) return;
         e.preventDefault();
         layer!.setPointerCapture(e.pointerId);
         start = at(e);
+        played = !!props.clock?.playing();
+        if (played) props.clock!.toggle();
       }}
       onPointerMove={(e) => {
-        if (!start) return;
+        if (!start || !props.noting.can) return;
         props.noting.onDraft({ side: props.side, region: regionBetween(start, at(e)) }, false);
       }}
       onPointerUp={(e) => {
         if (!start) return;
         const region = regionBetween(start, at(e));
         start = undefined;
-        props.noting.onDraft(meant(region) ? { side: props.side, region } : undefined, meant(region));
+        const drawn = props.noting.can && meant(region);
+        if (props.noting.can) props.noting.onDraft(drawn ? { side: props.side, region } : undefined, drawn);
+        // A click, not a drag: a paused film plays.
+        if (!drawn && props.clock && !played) props.clock.toggle();
       }}
       onPointerCancel={() => {
         start = undefined;
@@ -106,23 +119,38 @@ function NoteLayer(props: { side: Side; noting: Noting }) {
   );
 }
 
-/** The films' one clock: where both are, whether they play, and the videos it moves. */
+/** How fast films play, against real time: slower to see a change happen, faster to get
+ * through a long film. */
+export const SPEEDS = [0.25, 0.5, 1, 2, 4] as const;
+
+// One speed for every film of the page, so it holds while a person steps from film to film.
+const [speed, setSpeed] = createSignal<number>(1);
+
+/** The next speed slower (`by` -1) or faster (1), staying at the slowest and fastest. */
+export function stepSpeed(by: -1 | 1) {
+  const at = SPEEDS.indexOf(speed() as (typeof SPEEDS)[number]);
+  setSpeed(SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, at + by))]!);
+}
+
+/** The films' one clock: where both are, whether they play, and the videos it moves. Its length
+ * grows to the longest film it moves, for a film alone that no comparison measured. */
 type Clock = {
   t: () => number;
   playing: () => boolean;
-  total: number;
+  total: () => number;
   add: (video: HTMLVideoElement) => void;
   seek: (t: number) => void;
   toggle: () => void;
 };
 
-function createClock(total: number): Clock {
+function createClock(length: number): Clock {
+  const [total, setTotal] = createSignal(length);
   const [t, setT] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
   const videos = new Set<HTMLVideoElement>();
   let frame = 0;
   // A film shorter than the clock rests on its last frame.
-  const end = (v: HTMLVideoElement) => (Number.isFinite(v.duration) ? v.duration : total) - 0.01;
+  const end = (v: HTMLVideoElement) => (Number.isFinite(v.duration) ? v.duration : total()) - 0.01;
   const place = (v: HTMLVideoElement, at: number) => {
     v.currentTime = Math.max(0, Math.min(at, end(v)));
   };
@@ -133,27 +161,36 @@ function createClock(total: number): Clock {
   };
   const seek = (at: number) => {
     stop();
-    const clamped = Math.max(0, Math.min(total, at));
+    const clamped = Math.max(0, Math.min(total(), at));
     setT(clamped);
     for (const v of videos) place(v, clamped);
   };
   const play = () => {
-    if (t() >= total - 0.05) seek(0);
+    if (t() >= total() - 0.05) seek(0);
     setPlaying(true);
-    const started = performance.now() - t() * 1000;
+    // Where the clock was and when, at the speed it has played since: a new speed starts here.
+    let from = t();
+    let since = performance.now();
+    let rate = speed();
     const tick = (now: number) => {
-      const at = (now - started) / 1000;
-      if (at >= total) {
-        setT(total);
+      if (speed() !== rate) {
+        from += ((now - since) / 1000) * rate;
+        since = now;
+        rate = speed();
+      }
+      const at = from + ((now - since) / 1000) * rate;
+      if (at >= total()) {
+        setT(total());
         stop();
         return;
       }
       setT(at);
       for (const v of videos) {
         if (at < end(v)) {
+          if (v.playbackRate !== rate) v.playbackRate = rate;
           if (v.paused) void v.play().catch(() => {});
           // Films drift apart as they play; one that falls behind the clock is put back.
-          if (Math.abs(v.currentTime - at) > 0.15) v.currentTime = at;
+          if (Math.abs(v.currentTime - at) > 0.15 * Math.max(1, rate)) v.currentTime = at;
         } else if (!v.paused) v.pause();
       }
       frame = requestAnimationFrame(tick);
@@ -167,7 +204,10 @@ function createClock(total: number): Clock {
     total,
     add: (video) => {
       videos.add(video);
-      video.addEventListener("loadedmetadata", () => place(video, t()));
+      video.addEventListener("loadedmetadata", () => {
+        if (Number.isFinite(video.duration)) setTotal((was) => Math.max(was, video.duration));
+        place(video, t());
+      });
       onCleanup(() => videos.delete(video));
     },
     seek,
@@ -175,13 +215,24 @@ function createClock(total: number): Clock {
   };
 }
 
-/** One side of a picture: an image, or a video the clock moves. */
+/** A still that keeps showing the picture before it until its own is fetched and decoded, so a
+ * step never blanks the stage or changes its height twice; one fetched ahead swaps in at once. */
+function Still(props: { src: string; side: Side; label: string }) {
+  const [shown, setShown] = createSignal(props.src);
+  createEffect(() => {
+    const src = props.src;
+    if (src === untrack(shown)) return;
+    void ready(src).then(() => {
+      if (props.src === src) setShown(src);
+    });
+  });
+  return <img src={shown()} alt={props.label} data-side={props.side} draggable={false} decoding="async" />;
+}
+
+/** One side of a picture: an image, or a video its clock moves. */
 function Media(props: { src: string; side: Side; clock: Clock | undefined; label: string }) {
   return (
-    <Show
-      when={props.clock}
-      fallback={<img src={props.src} alt={props.label} data-side={props.side} draggable={false} decoding="async" />}
-    >
+    <Show when={props.clock} fallback={<Still src={props.src} side={props.side} label={props.label} />}>
       {(clock) => (
         <video
           ref={(v) => clock().add(v)}
@@ -223,21 +274,102 @@ function Marks(props: { boxes: Box[]; size: [number, number] | undefined }) {
   );
 }
 
-/** A frame as large as its picture shows, so outlines sit on the picture and not on its mat. */
+/** The zoom every frame of the stage shares, so both sides always show the same place. */
+type Zooming = { view: () => View; onView: (view: View) => void; panning: () => boolean };
+const Zoom = createContext<Zooming>({ view: () => FIT, onView: () => {}, panning: () => false });
+
+/** Zooms with a pinch (a wheel with Control or Command held) around the pointer, and moves a
+ * zoomed picture with the wheel, or by dragging with Space held, the middle button, or anywhere
+ * a drag means nothing else. */
+function zoomable(frame: HTMLDivElement, zoom: Zooming) {
+  const at = (e: { clientX: number; clientY: number }): [number, number] => {
+    const r = frame.getBoundingClientRect();
+    return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+  };
+  frame.addEventListener(
+    "wheel",
+    (e) => {
+      const view = zoom.view();
+      if (e.ctrlKey || e.metaKey) zoom.onView(zoomedAt(view, Math.exp(-e.deltaY * 0.005), at(e)));
+      else if (view.s > 1) {
+        const r = frame.getBoundingClientRect();
+        zoom.onView(panned(view, [-e.deltaX / r.width, -e.deltaY / r.height]));
+      } else return;
+      e.preventDefault();
+    },
+    { passive: false },
+  );
+  let from: [number, number] | undefined;
+  frame.addEventListener(
+    "pointerdown",
+    (e) => {
+      const claimed = (e.target as Element).closest(".notes-layer.can, .slide");
+      if (zoom.view().s <= 1 || !(zoom.panning() || e.button === 1 || (e.button === 0 && !claimed))) return;
+      e.stopPropagation();
+      e.preventDefault();
+      frame.setPointerCapture(e.pointerId);
+      from = at(e);
+    },
+    true,
+  );
+  frame.addEventListener("pointermove", (e) => {
+    if (!from) return;
+    const now = at(e);
+    zoom.onView(panned(zoom.view(), [now[0] - from[0], now[1] - from[1]]));
+    from = now;
+  });
+  const end = () => (from = undefined);
+  frame.addEventListener("pointerup", end);
+  frame.addEventListener("pointercancel", end);
+}
+
+/** A frame as large as its picture shows, so outlines sit on the picture and not on its mat.
+ * What it holds zooms with the stage's one view. */
 function Frame(
-  props: { size: [number, number] | undefined; class?: string; children: JSX.Element } & Omit<
+  props: { size: [number, number] | undefined; class?: string; ref?: (el: HTMLDivElement) => void; children: JSX.Element } & Omit<
     JSX.HTMLAttributes<HTMLDivElement>,
-    "class" | "style" | "children"
+    "class" | "style" | "children" | "ref"
   >,
 ) {
-  const [own, rest] = splitProps(props, ["size", "class", "children"]);
+  const [own, rest] = splitProps(props, ["size", "class", "children", "ref"]);
+  const zoom = useContext(Zoom);
+  // The size its picture turned out to have, when no comparison said: without it the frame
+  // would be wider than a picture its height limit letterboxes, and notes, kept as fractions of
+  // the frame, would land elsewhere at another window height.
+  const [learned, setLearned] = createSignal<[number, number]>();
+  const learn = (e: Event) => {
+    const media = e.target;
+    const size: [number, number] | undefined =
+      media instanceof HTMLImageElement
+        ? [media.naturalWidth, media.naturalHeight]
+        : media instanceof HTMLVideoElement
+        ? [media.videoWidth, media.videoHeight]
+        : undefined;
+    if (size && size[0] > 0 && size[1] > 0) setLearned(size);
+  };
   const style = () => {
-    const size = own.size;
+    const size = own.size ?? learned();
     return size ? { "--ratio": `${size[0]} / ${size[1]}`, "--w": `${size[0]}`, "--h": `${size[1]}` } : {};
   };
   return (
-    <div {...rest} class={`frame ${own.size ? "sized" : ""} ${own.class ?? ""}`} style={style()}>
-      {own.children}
+    <div
+      {...rest}
+      ref={(el) => {
+        zoomable(el, zoom);
+        el.addEventListener("load", learn, true);
+        el.addEventListener("loadedmetadata", learn, true);
+        own.ref?.(el);
+      }}
+      class={`frame ${own.size ?? learned() ? "sized" : ""} ${zoom.view().s > 1 ? "zoomed" : ""} ${own.class ?? ""}`}
+      style={style()}
+    >
+      <div
+        class={`zoom-layer ${zoom.view().s >= 3 ? "sharp" : ""}`}
+        data-zoom-layer
+        style={{ transform: transform(zoom.view()), "--z": `${zoom.view().s}` }}
+      >
+        {own.children}
+      </div>
     </div>
   );
 }
@@ -272,7 +404,7 @@ function Compare(props: {
             <Frame size={props.size}>
               {media("before")}
               {marks()}
-              <NoteLayer side="before" noting={props.noting} />
+              <NoteLayer side="before" noting={props.noting} clock={props.clock} />
             </Frame>
           </figure>
           <figure>
@@ -280,7 +412,7 @@ function Compare(props: {
             <Frame size={props.size}>
               {media("after")}
               {marks()}
-              <NoteLayer side="after" noting={props.noting} />
+              <NoteLayer side="after" noting={props.noting} clock={props.clock} />
             </Frame>
           </figure>
         </div>
@@ -329,7 +461,8 @@ function Slider(props: Layered) {
     setAt(Math.max(0, Math.min(100, v)));
   };
   const fromPointer = (e: PointerEvent) => {
-    const r = frame!.getBoundingClientRect();
+    // The layer the picture zooms on, so the handle lands under the pointer at any zoom.
+    const r = (frame!.querySelector("[data-zoom-layer]") ?? frame!).getBoundingClientRect();
     return ((e.clientX - r.left) / r.width) * 100;
   };
   return (
@@ -341,7 +474,7 @@ function Slider(props: Layered) {
       <Frame
         size={props.size}
         class={`slide ${glide() ? "glide" : ""}`}
-        ref={frame}
+        ref={(el) => (frame = el)}
         onPointerDown={(e) => {
           dragging = true;
           frame!.setPointerCapture(e.pointerId);
@@ -432,29 +565,44 @@ function Blink(props: Layered) {
 }
 
 /** Both films' lanes on one clock: grey where the pictures match, the change colour where
- * they differ, a playhead, and a jump to each moment they differ. */
-function Timeline(props: { film: Comparison; clock: Clock }) {
-  const total = () => props.clock.total;
+ * they differ, a playhead, and a jump to each moment they differ. A film alone (no `film`
+ * comparison) has its one lane, on its `side`. */
+function Timeline(props: { film?: Comparison | undefined; side?: Side; clock: Clock }) {
+  const total = () => props.clock.total();
   let lane: HTMLDivElement | undefined;
   const at = (e: PointerEvent) => {
     const r = lane!.getBoundingClientRect();
     props.clock.seek(((e.clientX - r.left) / r.width) * total());
   };
   const pct = (s: number) => `${(s / total()) * 100}%`;
-  const sides = [
-    ["before", "Before", props.film.total_before],
-    ["after", "After", props.film.total_after],
-  ] as const;
+  const sides = (): (readonly [Side, string, number])[] =>
+    props.film
+      ? [
+          ["before", "Before", props.film.total_before],
+          ["after", "After", props.film.total_after],
+        ]
+      : [[props.side ?? "after", props.side === "before" ? "Before" : "After", total()]];
+  const segments = (side: Side, end: number) =>
+    props.film ? lanes(props.film.pairs, side, end) : [{ start: 0, stop: end, differs: false }];
   return (
     <div class="film">
       <div class="clock">
-        <button type="button" class="chip play" onClick={() => props.clock.toggle()}>
-          {props.clock.playing() ? "Pause" : "Play both"}
+        <button type="button" class="chip play" data-play title="Play or pause (Space)" onClick={() => props.clock.toggle()}>
+          {props.clock.playing() ? "Pause" : props.film ? "Play both" : "Play"}
         </button>
         <span class="t" data-clock>
           {props.clock.t().toFixed(2)} s
         </span>
-        <For each={props.film.moments}>
+        <div class="speeds seg" role="group" aria-label="Speed">
+          <For each={SPEEDS}>
+            {(x) => (
+              <button type="button" data-speed={x} aria-pressed={speed() === x} title={`Play at ${x}× (< and > step it)`} onClick={() => setSpeed(x)}>
+                {`${x}×`}
+              </button>
+            )}
+          </For>
+        </div>
+        <For each={props.film?.moments ?? []}>
           {(m) => (
             <button type="button" class="chip jump" data-seek={m.after[0]} onClick={() => props.clock.seek(m.after[0])}>
               {m.after[0].toFixed(2)} s
@@ -467,7 +615,7 @@ function Timeline(props: { film: Comparison; clock: Clock }) {
         ref={lane}
         role="slider"
         tabindex="0"
-        aria-label="Time in both films"
+        aria-label={props.film ? "Time in both films" : "Time in the film"}
         aria-valuemin="0"
         aria-valuemax={total().toFixed(2)}
         aria-valuenow={props.clock.t().toFixed(2)}
@@ -484,10 +632,10 @@ function Timeline(props: { film: Comparison; clock: Clock }) {
           e.preventDefault();
         }}
       >
-        <For each={sides}>
+        <For each={sides()}>
           {([side, label, end]) => (
             <div class="lane" data-lane={side}>
-              <For each={lanes(props.film.pairs, side, end)}>
+              <For each={segments(side, end)}>
                 {(s) => (
                   <i
                     data-differs={String(s.differs)}
@@ -538,6 +686,14 @@ export function Stage(props: {
   noting: Noting;
   /** Where a film's clock is, as it moves: the moment a note on the film marks. */
   onTime: (t: number | undefined) => void;
+  /** How far the pictures are zoomed and where, shared by both sides and kept across pictures. */
+  view: View;
+  onView: (view: View) => void;
+  /** Whether Space is held, so a drag moves a zoomed picture instead of drawing a note. */
+  panning: boolean;
+  /** Whether the stage and its review fill the screen. */
+  full: boolean;
+  onFull: () => void;
 }) {
   const picture = () => props.shown.picture;
   const url = (path: string | null) => (path && props.files ? fileUrl(props.files, path) : "");
@@ -563,8 +719,11 @@ export function Stage(props: {
       data-change={picture().change}
       data-flaky={String(!!picture().flaky)}
       aria-label={title(props.shown.parts)}
+      data-panning={props.panning && props.view.s > 1 ? "" : undefined}
     >
+      <Zoom.Provider value={{ view: () => props.view, onView: (v) => props.onView(v), panning: () => props.panning }}>
       <header class="stage-head">
+        <div class="named">
         <h3>{props.shown.parts.screen}</h3>
         <Show when={props.shown.parts.viewport}>
           <span class="tag">{props.shown.parts.viewport}</span>
@@ -581,25 +740,53 @@ export function Stage(props: {
         >
           {film() ? `${WORDS[picture().change]} film` : WORDS[picture().change]}
         </span>
+        </div>
+        <div class="tools">
+        <Show when={!text()}>
+          <div class="zoom seg" role="group" aria-label="Zoom">
+            <button type="button" data-zoom="out" title="Zoom out (-)" disabled={props.view.s <= 1} onClick={() => props.onView(stepped(props.view, -1))}>
+              −
+            </button>
+            <button type="button" data-zoom="fit" class="num" title="The whole picture (0); pinch or ⌘ scroll to zoom where the pointer is" onClick={() => props.onView(FIT)}>
+              {`${Math.round(props.view.s * 100)}%`}
+            </button>
+            <button type="button" data-zoom="in" title="Zoom in (+)" onClick={() => props.onView(stepped(props.view, 1))}>
+              +
+            </button>
+          </div>
+          <button
+            type="button"
+            class="full-screen"
+            data-full-screen
+            aria-pressed={props.full}
+            aria-label={props.full ? "Back to the page" : "Full screen"}
+            title={props.full ? "Back to the page (Esc)" : "Full screen (f)"}
+            onClick={() => props.onFull()}
+          >
+            <Icon name={props.full ? "shrink" : "expand"} />
+            <span>{props.full ? "Back" : "Full screen"}</span>
+          </button>
+        </Show>
         <Show when={both() && !text()}>
           <div class="modes seg" role="group" aria-label="How to compare">
             <For each={MODES}>
-              {([key, label], k) => (
+              {([key, label, brief], k) => (
                 <button type="button" data-mode={key} aria-pressed={props.mode === key} title={`${label} (${k() + 1})`} onClick={() => props.onMode(key)}>
-                  {label}
+                  <span class="long">{label}</span>
+                  <span class="brief" aria-hidden="true">
+                    {brief}
+                  </span>
                 </button>
               )}
             </For>
           </div>
         </Show>
+        </div>
       </header>
       <Show when={picture().flaky}>
         <p class="flaky-note" data-flaky-note title="This picture changes from run to run, so it is shown but never waits for you">
           Flaky, never waits for you
         </p>
-      </Show>
-      <Show when={props.shown.look.no_before}>
-        {(why) => <p class="look-note" title="Every picture of this check counts as new">No before: {why()}</p>}
       </Show>
       <Show
         when={!text()}
@@ -615,12 +802,37 @@ export function Stage(props: {
           <figure class="layers one">
             <figcaption title={picture().after ? afterLabel() : beforeLabel()}>{picture().after ? "After" : "Before"}</figcaption>
             <Show when={picture().after ?? picture().before} fallback={<p class="missing">Neither side could be read.</p>}>
-              {(path) => (
-                <Frame size={size()}>
-                  <Media src={url(path())} side={picture().after ? "after" : "before"} clock={undefined} label={picture().after ? afterLabel() : beforeLabel()} />
-                  <NoteLayer side={picture().after ? "after" : "before"} noting={props.noting} />
-                </Frame>
-              )}
+              {(path) => {
+                const side = () => (picture().after ? "after" : "before");
+                const label = () => (picture().after ? afterLabel() : beforeLabel());
+                return (
+                  <Show
+                    when={film() && path()}
+                    keyed
+                    fallback={
+                      <Frame size={size()}>
+                        <Media src={url(path())} side={side()} clock={undefined} label={label()} />
+                        <NoteLayer side={side()} noting={props.noting} />
+                      </Frame>
+                    }
+                  >
+                    {(alone) => {
+                      const clock = createClock(0.01);
+                      createEffect(() => props.onTime(clock.t()));
+                      onCleanup(() => props.onTime(undefined));
+                      return (
+                        <>
+                          <Frame size={size()}>
+                            <Media src={url(alone)} side={side()} clock={clock} label={label()} />
+                            <NoteLayer side={side()} noting={props.noting} clock={clock} />
+                          </Frame>
+                          <Timeline side={side()} clock={clock} />
+                        </>
+                      );
+                    }}
+                  </Show>
+                );
+              }}
             </Show>
           </figure>
         }
@@ -667,6 +879,7 @@ export function Stage(props: {
         </Show>
       </Show>
       </Show>
+      </Zoom.Provider>
     </article>
   );
 }

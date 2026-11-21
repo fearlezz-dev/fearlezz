@@ -1,2 +1,5 @@
 node_modules/
 dist/
+e2e/stills/
+e2e/results/
+e2e/films/

@@ -48,6 +48,18 @@ tests = "junit"
 test_files = ["ee/app/src/**/*.test.ts"]
 inputs = ["ee/app/**"]
 
+# The proof host's pages in every state worth seeing (ee/app/e2e/states.ts), on desktop and
+# mobile, light and dark, against a stand in host. Fearlezz compares each still with the same
+# run on the base commit, so a change to the pages shows on the pull request as pictures.
+[check.ee-page-look]
+run = "playwright test --update-snapshots=all"
+dir = "ee/app"
+stage = "look"
+tests = "junit"
+stills = "stills/**/*.png"
+films = "films/**/*.webm"
+inputs = ["ee/app/**", "devenv.nix", "devenv.lock"]
+
 [check.actionlint]
 run = "actionlint"
 stage = "working"

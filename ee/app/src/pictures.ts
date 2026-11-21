@@ -145,6 +145,42 @@ export function grouped(pictures: Shown[], by: GroupBy, filter: PictureChange | 
   return same.length ? [...out, unchanged] : out;
 }
 
+/** One screen of a check: its pictures that differ only in viewport and theme, its films
+ * among them, since they show the same screen. */
+export type Screen = {
+  /** Check and screen. */
+  key: string;
+  label: string;
+  /** Every variant, by viewport as first seen, films before stills (a film shows what its
+   * still shows, and more) and light before dark within one. */
+  variants: Shown[];
+  /** The same variants per viewport, for showing them as a viewport and its themes. */
+  viewports: { viewport: string; variants: Shown[] }[];
+};
+
+const themeRank = (theme: string) => (theme === "light" ? 0 : theme === "dark" ? 1 : 2);
+const variantRank = (p: Shown) => (isFilm(p.picture) ? 0 : 3) + themeRank(p.parts.theme);
+
+/** The pictures as screens, in the order each screen first comes, so the variants of a screen
+ * show as one; j and k step through them in this same order. */
+export function screensOf(pictures: Shown[]): Screen[] {
+  const byKey = new Map<string, Shown[]>();
+  for (const p of pictures) {
+    const key = `${p.check}/${p.parts.screen}`;
+    byKey.set(key, [...(byKey.get(key) ?? []), p]);
+  }
+  return [...byKey].map(([key, list]) => {
+    const viewports: Screen["viewports"] = [];
+    for (const p of list) {
+      const at = viewports.find((v) => v.viewport === p.parts.viewport);
+      if (at) at.variants.push(p);
+      else viewports.push({ viewport: p.parts.viewport, variants: [p] });
+    }
+    for (const v of viewports) v.variants.sort((a, b) => variantRank(a) - variantRank(b));
+    return { key, label: list[0]!.parts.screen, variants: viewports.flatMap((v) => v.variants), viewports };
+  });
+}
+
 /** How many pictures of each kind there are, in order. */
 export function counts(pictures: Shown[]): { change: PictureChange; n: number }[] {
   return ORDER.map((change) => ({ change, n: pictures.filter((p) => p.picture.change === change).length })).filter(

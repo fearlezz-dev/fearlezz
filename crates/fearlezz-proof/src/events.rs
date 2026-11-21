@@ -302,10 +302,28 @@ pub enum Change {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkChange {
-    /// Someone gave a verdict on a picture; it replaces one on the same content.
+    /// Someone gave a verdict on a picture; it replaces one on the same content. Saying it
+    /// looks right settles what its open notes asked, so they are resolved with it.
     Verdict {
         /// The verdict.
         verdict: Verdict,
+        /// The picture's notes the verdict resolved, as they are now.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        resolved: Vec<Note>,
+    },
+    /// Someone took back the verdict on a picture's content.
+    Withdrawn {
+        /// The check that took the picture.
+        check: String,
+        /// The picture's name.
+        picture: String,
+        /// The content the verdict was on.
+        key: String,
+    },
+    /// Someone changed the words of notes: one, or a group linked by `link`.
+    Edited {
+        /// The notes as they are now.
+        notes: Vec<Note>,
     },
     /// Where review of the newest head stands now.
     Review {

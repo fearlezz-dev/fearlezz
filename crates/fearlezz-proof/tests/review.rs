@@ -500,6 +500,7 @@ fn note(picture: &str, words: &str, state: NoteState) -> Note {
         at: 4.0,
         state,
         resolved_by: None,
+        link: None,
     }
 }
 
@@ -722,4 +723,142 @@ fn a_preview_that_is_no_plain_web_address_is_left_out() {
         let review = review::review("aaa", &[(r, Some(proof))], &BTreeMap::new(), &[], &[], None);
         assert_eq!(review.preview, None, "{bad}");
     }
+}
+
+#[test]
+fn a_picture_that_changed_since_it_looked_right_waits_and_says_so() {
+    let before = run(
+        "r0",
+        "aaa",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let given = verdict("card.png", &before.0.checks[0].keys["card.png"], "aaa");
+    let now = run(
+        "r1",
+        "bbb",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let review = review::review(
+        "bbb",
+        &[now, before],
+        &BTreeMap::new(),
+        std::slice::from_ref(&given),
+        &[],
+        None,
+    );
+    assert_eq!(
+        review.state,
+        State::Waits,
+        "other content waits for a look again"
+    );
+    let since = review.pictures[0]
+        .changed_since
+        .as_ref()
+        .expect("it says it changed");
+    assert_eq!(
+        since.verdict.as_ref(),
+        Some(&given),
+        "since the looks right on its old content"
+    );
+    assert!(since.notes.is_empty(), "no note: {since:?}");
+    assert!(
+        review
+            .summary()
+            .contains("- `screens` card.png, changed since writer said it looks right"),
+        "{}",
+        review.summary()
+    );
+}
+
+#[test]
+fn a_picture_that_looks_right_now_has_not_changed_since() {
+    let now = run(
+        "r1",
+        "bbb",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let old = verdict("card.png", "still:old:old", "aaa");
+    let given = verdict("card.png", &now.0.checks[0].keys["card.png"], "bbb");
+    let review = review::review("bbb", &[now], &BTreeMap::new(), &[old, given], &[], None);
+    assert_eq!(review.state, State::Approved);
+    assert_eq!(
+        review.pictures[0].changed_since, None,
+        "its content has a verdict"
+    );
+}
+
+#[test]
+fn an_open_note_on_older_content_says_the_picture_changed_since() {
+    let before = run(
+        "r0",
+        "aaa",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let now = run(
+        "r1",
+        "bbb",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let older = note("card.png", "made on r0", NoteState::Open);
+    let current = Note {
+        run: "r1".into(),
+        head: "bbb".into(),
+        ..note("card.png", "made on r1", NoteState::Open)
+    };
+    let review = review::review(
+        "bbb",
+        &[now, before],
+        &BTreeMap::new(),
+        &[],
+        &[older.clone(), current],
+        None,
+    );
+    assert_eq!(
+        review.state,
+        State::NeedsChange,
+        "a note holds until resolved"
+    );
+    let since = review.pictures[0]
+        .changed_since
+        .as_ref()
+        .expect("it says it changed");
+    assert_eq!(
+        since.notes,
+        vec![older.id.clone()],
+        "only the note on other content"
+    );
+    assert!(
+        review
+            .summary()
+            .contains("- `screens` card.png, changed since its note"),
+        "{}",
+        review.summary()
+    );
+}
+
+#[test]
+fn a_note_whose_run_is_not_known_says_nothing_about_change() {
+    let now = run(
+        "r1",
+        "bbb",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let review = review::review(
+        "bbb",
+        &[now],
+        &BTreeMap::new(),
+        &[],
+        &[note("card.png", "made on r0", NoteState::Open)],
+        None,
+    );
+    assert_eq!(
+        review.pictures[0].changed_since, None,
+        "nothing known to compare with"
+    );
 }

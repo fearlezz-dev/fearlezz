@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { applyWork } from "./live";
-import { type Draft, fromWhere, notesOn, onSide, regionBetween, sidesOf } from "./notes";
+import { type Draft, elsewhere, fromWhere, linkedWith, notesOn, onSide, regionBetween, sidesOf } from "./notes";
+import { parts } from "./pictures";
+import type { Shown as Picture } from "./pictures";
 import type { Note, Run, Snapshot } from "./proof";
 
 const note = (id: string, fields: Partial<Note> = {}): Note => ({
@@ -90,5 +92,60 @@ describe("applyWork with notes", () => {
     const resolved = applyWork(added, 3, { kind: "note", note: note("a", { state: "resolved", resolved_by: "writer" }) });
     expect(resolved.notes?.map((n) => n.id)).toEqual(["b"]);
     expect(applyWork(resolved, 3, { kind: "note", note: note("c") })).toBe(resolved);
+  });
+});
+
+describe("elsewhere", () => {
+  const size = (w: number, h: number) => ({ size_before: [w, h], size_after: [w, h] }) as never;
+  const shown = (name: string, more: { before?: boolean; size?: [number, number] } = {}): Picture =>
+    ({
+      key: `screens/${name}`,
+      check: "screens",
+      look: {} as never,
+      parts: parts(name),
+      picture: {
+        name,
+        kind: "still",
+        change: "changed",
+        summary: "",
+        before: more.before === false ? null : `b/${name}`,
+        after: `a/${name}`,
+        comparison: more.size ? size(...more.size) : null,
+      },
+    }) as Picture;
+  const light = shown("card/desktop/light.png", { size: [1440, 900] });
+  const dark = shown("card/desktop/dark.png", { size: [1440, 900] });
+  const phone = shown("card/mobile/light.png", { size: [412, 915], before: false });
+
+  test("the open notes on a screen's other variants, not those already here in the same words", () => {
+    const s = state([
+      note("a", { picture: light.picture.name, words: "banner overlaps" }),
+      note("b", { picture: light.picture.name, words: "already here" }),
+      note("c", { picture: dark.picture.name, words: "already here" }),
+      note("d", { picture: light.picture.name, words: "resolved", state: "resolved" }),
+    ]);
+    const from = elsewhere(s, dark, [light, dark, phone]);
+    expect(from.map((f) => [f.note.id, f.where, f.place])).toEqual([["a", "desktop / light", true]]);
+  });
+
+  test("a picture of another size takes the words, not the place", () => {
+    const s = state([note("a", { picture: light.picture.name, side: "both" })]);
+    const [from] = elsewhere(s, phone, [light, dark, phone]);
+    expect(from!.place).toBe(false);
+    // A new picture has only its after.
+    expect(from!.side).toBe("after");
+  });
+});
+
+describe("linkedWith", () => {
+  test("the notes made from the same first note, open, but the note itself", () => {
+    const first = note("n1");
+    const copy = note("n2", { picture: "card-dark.png", link: "n1" });
+    const other = note("n3", { link: "n1", state: "resolved" });
+    const alone = note("n4");
+    const state = { seq: 1, work: { repository: "o/r", branch: "b" }, runs: [], notes: [first, copy, other, alone] } as Snapshot;
+    expect(linkedWith(state, first).map((n) => n.id)).toEqual(["n2"]);
+    expect(linkedWith(state, copy).map((n) => n.id)).toEqual(["n1"]);
+    expect(linkedWith(state, alone)).toEqual([]);
   });
 });
