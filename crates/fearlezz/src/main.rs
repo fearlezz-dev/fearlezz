@@ -8,6 +8,7 @@ mod counts;
 mod coverage;
 mod env;
 mod feedback;
+mod ffmpeg;
 mod files;
 mod findings;
 mod floor;
@@ -267,6 +268,7 @@ fn main() -> ExitCode {
 fn ctx() -> Result<Ctx> {
     let git = Git::discover(&std::env::current_dir()?)?;
     let config = Config::load(&git.root, &git.common)?;
+    ffmpeg::within(&git.root, config.env.shell.as_deref());
     let store = Store::open(&git.common);
     let now = match std::env::var("FEARLEZZ_NOW") {
         Ok(s) => s.parse().context("FEARLEZZ_NOW is not a timestamp")?,
@@ -364,7 +366,7 @@ fn prepared() -> Result<Ctx> {
     Ok(ctx)
 }
 
-/// Proves this commit for CI. On GitHub Actions it installs ffmpeg when checks take pictures
+/// Proves this commit for CI. On GitHub Actions it finds ffmpeg when checks take pictures
 /// and names the pull request the event is for; it writes nothing to GitHub.
 fn ci_run(proof: Option<PathBuf>, leg: Option<legs::Asked>, scheduled: bool) -> Result<bool> {
     let workflow = action::Workflow::read();
@@ -381,14 +383,14 @@ fn ci_run(proof: Option<PathBuf>, leg: Option<legs::Asked>, scheduled: bool) -> 
     }
     if workflow.actions
         && needs_ffmpeg(&ctx.config)
-        && let Some(dir) = action::install_ffmpeg()?
+        && let Some(dir) = ffmpeg::on_runner()
     {
         let mut path = std::ffi::OsString::from(&dir);
         path.push(":");
         path.push(std::env::var_os("PATH").unwrap_or_default());
         #[expect(
             unsafe_code,
-            reason = "the checks find the installed ffmpeg through PATH"
+            reason = "the checks' own commands find the pinned ffmpeg through PATH"
         )]
         // SAFETY: Fearlezz runs no other thread yet, so nothing reads the environment while it
         // changes.

@@ -423,9 +423,10 @@ impl Run<'_> {
         // it is not run; anywhere else a missing tool fails with the one time fix, CI
         // included, since a runner of the right system is the one that proves it. Neither is
         // stored, so it is not called unstable once the tool is there.
+        // Reuse is asked first: finding the tools may start the project's shell.
         if (check.needs.screen.owned() || check.pictures.record.is_some())
-            && let Some(u) = record::unavailable(&check.needs.screen)
             && reuse.found(&ctx.store, &inputs.key).is_none()
+            && let Some(u) = record::unavailable(&check.needs.screen)
         {
             return Ok(Came::Away(
                 if self.mode.commit && !check.needs.screen.owned() {

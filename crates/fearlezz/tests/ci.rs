@@ -1230,30 +1230,39 @@ fn on_actions(
     name: &str,
     event: &serde_json::Value,
 ) -> (common::Output, String) {
+    on_actions_env(gh, dir, name, event, &[])
+}
+
+/// [`on_actions`], with `extra` set too.
+fn on_actions_env(
+    gh: &FakeGitHub,
+    dir: &std::path::Path,
+    name: &str,
+    event: &serde_json::Value,
+    extra: &[(&str, &str)],
+) -> (common::Output, String) {
     let temp = tempfile::tempdir().unwrap();
     let file = temp.path().join("event.json");
     std::fs::write(&file, event.to_string()).unwrap();
     let summary = temp.path().join("summary.md");
     let temp_dir = temp.path().to_str().unwrap();
     let graphql = format!("{}/graphql", gh.url);
-    let out = common::fz_at_env(
-        dir,
-        &["run", "--ci"],
-        &[
-            ("GITHUB_ACTIONS", "true"),
-            ("GITHUB_EVENT_NAME", name),
-            ("GITHUB_EVENT_PATH", file.to_str().unwrap()),
-            ("GITHUB_TOKEN", "token"),
-            ("GITHUB_API_URL", &gh.url),
-            ("GITHUB_GRAPHQL_URL", &graphql),
-            ("GITHUB_SERVER_URL", "https://github.com"),
-            ("GITHUB_REPOSITORY", "owner/repo"),
-            ("GITHUB_RUN_ID", "42"),
-            ("GITHUB_RUN_ATTEMPT", "1"),
-            ("GITHUB_STEP_SUMMARY", summary.to_str().unwrap()),
-            ("RUNNER_TEMP", temp_dir),
-        ],
-    );
+    let mut env = vec![
+        ("GITHUB_ACTIONS", "true"),
+        ("GITHUB_EVENT_NAME", name),
+        ("GITHUB_EVENT_PATH", file.to_str().unwrap()),
+        ("GITHUB_TOKEN", "token"),
+        ("GITHUB_API_URL", &gh.url),
+        ("GITHUB_GRAPHQL_URL", &graphql),
+        ("GITHUB_SERVER_URL", "https://github.com"),
+        ("GITHUB_REPOSITORY", "owner/repo"),
+        ("GITHUB_RUN_ID", "42"),
+        ("GITHUB_RUN_ATTEMPT", "1"),
+        ("GITHUB_STEP_SUMMARY", summary.to_str().unwrap()),
+        ("RUNNER_TEMP", temp_dir),
+    ];
+    env.extend_from_slice(extra);
+    let out = common::fz_at_env(dir, &["run", "--ci"], &env);
     let text = std::fs::read_to_string(&summary).unwrap_or_default();
     (out, text)
 }
@@ -1325,9 +1334,14 @@ fn a_weakening_still_fails_a_ci_run_outside_a_pull_request() {
 
 /// A push to `main` proven on the fake, with no pull request.
 fn pushed(repo: &Repo) -> common::Output {
+    pushed_env(repo, &[])
+}
+
+/// [`pushed`], with `extra` set too.
+fn pushed_env(repo: &Repo, extra: &[(&str, &str)]) -> common::Output {
     let gh = FakeGitHub::start();
     let event = serde_json::json!({ "ref": "refs/heads/main" });
-    let (out, _) = on_actions(&gh, &repo.root, "push", &event);
+    let (out, _) = on_actions_env(&gh, &repo.root, "push", &event, extra);
     assert!(gh.writes().is_empty(), "{:?}", gh.writes());
     out
 }
@@ -1373,6 +1387,87 @@ fn checks_that_record_pictures_get_ffmpeg_on_the_runner() {
     let plain = Repo::new("[check.unit]\nrun = \"true\"\nstage = \"working\"\n", &[]);
     let out = pushed(&plain);
     assert!(!out.stdout.contains("ffmpeg"), "{}", out.stdout);
+}
+
+/// A folder holding ffmpeg and ffprobe that do nothing.
+fn fake_ffmpeg(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::create_dir_all(dir).unwrap();
+    for name in ["ffmpeg", "ffprobe"] {
+        let path = dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// The pinned ffmpeg is the runner's last resort: the project's shell comes first, then PATH.
+#[test]
+fn the_pinned_ffmpeg_is_used_only_when_the_shell_and_path_have_none() {
+    let cache = tempfile::tempdir().unwrap();
+    // Already in the tool cache, so it is never downloaded here.
+    fake_ffmpeg(&cache.path().join("fearlezz-ffmpeg/b6.1.1"));
+    let cache = cache.path().to_str().unwrap();
+    let bare = tempfile::tempdir().unwrap();
+    for name in ["sh", "git", "env", "curl", "true"] {
+        let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|d| d.join(name))
+            .find(|p| p.is_file())
+            .unwrap();
+        std::os::unix::fs::symlink(real, bare.path().join(name)).unwrap();
+    }
+    let bare = bare.path().to_str().unwrap();
+    let check = "[check.ui]\nrun = \"true\"\nstage = \"working\"\nfilms = \"films/*.webm\"\n";
+
+    let shell = tempfile::tempdir().unwrap();
+    fake_ffmpeg(shell.path());
+    let config = format!(
+        "{check}[env]\nshell = 'env \"PATH={}:$PATH\"'\n",
+        shell.path().display()
+    );
+    let out = pushed_env(
+        &Repo::new(&config, &[]),
+        &[("RUNNER_TOOL_CACHE", cache), ("PATH", bare)],
+    );
+    assert!(
+        out.stdout
+            .contains("ffmpeg for the pictures: the project's shell"),
+        "{}",
+        out.stdout
+    );
+
+    let path = tempfile::tempdir().unwrap();
+    fake_ffmpeg(path.path());
+    let with_ffmpeg = format!("{}:{bare}", path.path().display());
+    // Without a shell of its own the project runs with Fearlezz's PATH.
+    let repo = Repo::new(check, &[]);
+    let out = pushed_env(
+        &repo,
+        &[("RUNNER_TOOL_CACHE", cache), ("PATH", &with_ffmpeg)],
+    );
+    assert!(
+        out.stdout
+            .contains("ffmpeg for the pictures: the one on PATH"),
+        "{}",
+        out.stdout
+    );
+
+    let out = pushed_env(&repo, &[("RUNNER_TOOL_CACHE", cache), ("PATH", bare)]);
+    if cfg!(target_os = "linux") {
+        assert!(
+            out.stdout.contains(&format!(
+                "ffmpeg for the pictures: 7.0.2, installed into {cache}"
+            )),
+            "{}",
+            out.stdout
+        );
+    } else {
+        // There is no pinned build for this system.
+        assert!(
+            out.stdout.contains("::warning::Fearlezz needs ffmpeg"),
+            "{}",
+            out.stdout
+        );
+    }
 }
 
 /// GitHub evaluates an expression anywhere in an action's metadata, so one in a description

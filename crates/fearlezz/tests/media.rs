@@ -296,3 +296,20 @@ fn a_file_ffmpeg_cannot_read_says_so() {
     assert!(!out.ok);
     assert!(out.stderr.contains("a.png"), "{}", out.stderr);
 }
+
+/// Outside a project there is no shell to add ffmpeg to, so the error only says to install it.
+#[test]
+fn compare_without_ffmpeg_outside_a_project_says_to_install_it() {
+    let dir = tempfile::tempdir().unwrap();
+    render(&dir.path().join("a.png"), 1.0, "");
+    render(&dir.path().join("b.png"), 1.0, "");
+    let empty = tempfile::tempdir().unwrap();
+    let out = common::fz_at_env(
+        dir.path(),
+        &["setup", "compare", "a.png", "b.png"],
+        &[("PATH", empty.path().to_str().unwrap())],
+    );
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(out.stderr.contains("install ffmpeg"), "{}", out.stderr);
+    assert!(!out.stderr.contains("[env]"), "{}", out.stderr);
+}
