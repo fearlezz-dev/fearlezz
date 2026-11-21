@@ -399,9 +399,11 @@ holds no grant, and a grant always holds a dot, so `showcase` never names one.
   it says so and sends none, and the proof never fails over it. The copy is a file of the run
   beside the film's after, its extension swapped for `.anim.webp`, and the look item's `webp`
   names it, so it travels with the check's other files.
-  A picture name ending in `.webp` that no item of the look has names the copy of the film
-  named the same with its own extension, or none: `home.webp` is the copy of `home.webm`,
-  `home.mp4` or `home`. A still the check took under that name wins.
+  A picture name that no item of the look has names the copy of the film whose name, with
+  `.webp` in place of an extension of four characters or fewer (or added when it has none), is
+  that name: `home.webp` is the copy of `home.webm`, `home.mp4` or `home`. One rule
+  (`fearlezz_proof::look::webp_name`) names it here and in `fearlezz setup showcase`. A still
+  the check took under that name wins.
 - **Any repository with the app, private ones included.** GitHub's image proxy (camo) loads a
   README's pictures without signing in, even for a private repository, so the address holds no
   grant: anyone who knows it can load the picture, whatever the repository's visibility. The

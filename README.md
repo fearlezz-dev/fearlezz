@@ -180,14 +180,7 @@ It always shows that picture from the newest push to the default branch whose pr
 </picture>
 ```
 
-GitHub plays no video in a README, only an animated image. So a push to the default branch also sends the animated WebP copy of each film, and the film's name with `.webp` in place of its extension addresses it: the film `flows/checkout.webm` plays at `.../<check>/flows/checkout.webp`. Embed it as an image, with a light and a dark film as two:
-
-```html
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://fearlezz.seamlezz.net/readme/owner/app/flows/checkout/dark.webp">
-  <img alt="Checking out" src="https://fearlezz.seamlezz.net/readme/owner/app/flows/checkout/light.webp">
-</picture>
-```
+GitHub plays no video in a README, only an animated image. So a push to the default branch also sends the animated WebP copy of each film, served at the film's name with `.webp` in place of its extension: the film `flows/checkout.webm` plays at `.../<check>/flows/checkout.webp`, and `fearlezz setup showcase` prints it so, as an `<img>`.
 
 The copy is 720 pixels wide at most (a smaller film keeps its size), 12 frames a second, and loops forever. It starts at the first frame with content, so the blank frames a recorder leaves before the page draws do not flash on every loop, and it holds the last frame 1.5 seconds before it starts over. A film that runs longer than 30 seconds from its first frame with content gets no copy, and the run says so. A still the check took under the same name wins over the copy. Pull requests make no copies.
 

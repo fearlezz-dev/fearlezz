@@ -593,11 +593,11 @@ fn main() {
         ),
         (
             "a_films_webp_address_serves_its_animated_copy",
-            readme::a_films_webp_address_serves_its_animated_copy,
+            showcase::a_films_webp_address_serves_its_animated_copy,
         ),
         (
             "a_still_named_like_a_films_copy_wins",
-            readme::a_still_named_like_a_films_copy_wins,
+            showcase::a_still_named_like_a_films_copy_wins,
         ),
         (
             "the_policy_decides_who_reads_a_private_repository",

@@ -168,20 +168,9 @@ fn markup(origin: &str, repository: &str, taken: &[Taken]) -> Vec<String> {
 /// The name a showcase serves a picture at: a film's animated WebP copy, a still as it is.
 fn served(name: &str, film: bool) -> String {
     if film {
-        format!("{}.webp", extension(name).0)
+        fearlezz_proof::look::webp_name(name)
     } else {
         name.to_owned()
-    }
-}
-
-/// `name` without its extension, and the extension: a short last part after a dot, as the
-/// proof page reads a picture's name.
-fn extension(name: &str) -> (&str, &str) {
-    match name.rsplit_once('.') {
-        Some((bare, ext)) if !bare.is_empty() && ext.len() <= 4 && !ext.contains('/') => {
-            (bare, ext)
-        }
-        _ => (name, ""),
     }
 }
 
@@ -213,7 +202,7 @@ struct Name {
 
 impl Name {
     fn read(full: &str) -> Name {
-        let (bare, ext) = extension(full);
+        let (bare, ext) = fearlezz_proof::look::extension(full);
         let mut theme = None;
         let mut segments = Vec::new();
         for segment in bare.split('/') {

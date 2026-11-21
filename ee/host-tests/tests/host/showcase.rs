@@ -544,7 +544,7 @@ fn film_with_copy(name: &str, after: &str, webp: &str) -> Value {
 }
 
 pub(crate) fn a_films_webp_address_serves_its_animated_copy() {
-    let main = Job::push("owner/readme", DEFAULT).at(&commit("w1"), 10401);
+    let main = Job::push("owner/showcase", DEFAULT).at(&commit("w1"), 10401);
     let (film, copy) = (
         "looks/webp_films/after/home.webm",
         "looks/webp_films/after/home.anim.webp",
@@ -561,17 +561,17 @@ pub(crate) fn a_films_webp_address_serves_its_animated_copy() {
             film_with_copy("intro", bare, bare_copy),
         ],
         &[
-            (film, b"readme webm film"),
-            (copy, b"readme webm copy"),
-            (bare, b"readme bare film"),
-            (bare_copy, b"readme bare copy"),
+            (film, b"showcase webm film"),
+            (copy, b"showcase webm copy"),
+            (bare, b"showcase bare film"),
+            (bare_copy, b"showcase bare copy"),
         ],
     );
 
-    let answer = get_url(&readme("owner/readme", "webp_films", "home.webp"), &[]);
+    let answer = get_url(&showcase("owner/showcase", "webp_films", "home.webp"), &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
     assert_eq!(
-        answer.body, b"readme webm copy",
+        answer.body, b"showcase webm copy",
         "the film's extension swapped"
     );
     assert_eq!(
@@ -581,12 +581,12 @@ pub(crate) fn a_films_webp_address_serves_its_animated_copy() {
     );
     assert_eq!(
         shows("webp_films", "intro.webp").as_deref(),
-        Ok(&b"readme bare copy"[..]),
+        Ok(&b"showcase bare copy"[..]),
         "a film named without an extension gets one"
     );
     assert_eq!(
         shows("webp_films", "home.webm").as_deref(),
-        Ok(&b"readme webm film"[..]),
+        Ok(&b"showcase webm film"[..]),
         "the film itself is still served as recorded"
     );
     assert_eq!(
@@ -597,7 +597,7 @@ pub(crate) fn a_films_webp_address_serves_its_animated_copy() {
 }
 
 pub(crate) fn a_still_named_like_a_films_copy_wins() {
-    let main = Job::push("owner/readme", DEFAULT).at(&commit("w2"), 10501);
+    let main = Job::push("owner/showcase", DEFAULT).at(&commit("w2"), 10501);
     let (film, copy) = (
         "looks/webp_both/after/home.webm",
         "looks/webp_both/after/home.anim.webp",
@@ -611,15 +611,15 @@ pub(crate) fn a_still_named_like_a_films_copy_wins() {
             still("home.webp", "new", None, Some(real)),
         ],
         &[
-            (film, b"readme both film"),
-            (copy, b"readme both copy"),
-            (real, b"readme both still"),
+            (film, b"showcase both film"),
+            (copy, b"showcase both copy"),
+            (real, b"showcase both still"),
         ],
     );
 
     assert_eq!(
         shows("webp_both", "home.webp").as_deref(),
-        Ok(&b"readme both still"[..]),
+        Ok(&b"showcase both still"[..]),
         "the still the check took, not the film's copy"
     );
 }

@@ -109,6 +109,24 @@ impl Item {
     }
 }
 
+/// `name` without its extension, and the extension: a short last part after a dot (four
+/// characters at most), as the proof page reads a picture's name. A name without one is whole.
+pub fn extension(name: &str) -> (&str, &str) {
+    match name.rsplit_once('.') {
+        Some((bare, ext)) if !bare.is_empty() && ext.len() <= 4 && !ext.contains('/') => {
+            (bare, ext)
+        }
+        _ => (name, ""),
+    }
+}
+
+/// The name a film's animated WebP copy is served at on the host: the film's name with `.webp`
+/// in place of its extension, or added when it has none (`home.webm` and `home` are
+/// `home.webp`). The CLI's showcase markup and the host's lookup both use this one rule.
+pub fn webp_name(film: &str) -> String {
+    format!("{}.webp", extension(film).0)
+}
+
 /// One check's pictures compared with its run on the base commit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
