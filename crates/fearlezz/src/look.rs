@@ -61,8 +61,9 @@ const FILM: &str = "film";
 
 /// Makes the animated WebP copy of each film `look` took (`Item::webp`), beside its after in the
 /// look folder. A film it cannot copy gets one line saying why and none; that never fails the
-/// proof, as the copy only shows what the proof already holds.
-pub(crate) fn webp_copies(look: &mut Look) {
+/// proof, as the copy only shows what the proof already holds. False when there is no ffmpeg to
+/// make any, said once, so the run makes no more.
+pub(crate) fn webp_copies(look: &mut Look) -> bool {
     for item in &mut look.items {
         let (FILM, Some(after)) = (item.kind.as_str(), &item.after) else {
             continue;
@@ -81,11 +82,8 @@ pub(crate) fn webp_copies(look: &mut Look) {
                 media::WEBP_LONGEST
             ),
             Ok(media::WebpCopy::NoFfmpeg) => {
-                println!(
-                    "look {}: no WebP copies of its films: there is no ffmpeg to make them",
-                    look.check
-                );
-                return;
+                println!("no WebP copies of films: there is no ffmpeg to make them");
+                return false;
             }
             Err(e) => format!("{e:#}"),
         };
@@ -94,6 +92,7 @@ pub(crate) fn webp_copies(look: &mut Look) {
             look.check, item.name
         );
     }
+    true
 }
 
 /// How many lines of a text's diff are shown where it is named.

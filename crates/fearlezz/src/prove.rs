@@ -494,7 +494,7 @@ impl Run<'_> {
         if self.report.webp_copies
             && let Some(look) = &mut look
         {
-            look::webp_copies(look);
+            self.report.webp_copies = look::webp_copies(look);
         }
         Ok(Came::Ran {
             result,

@@ -819,8 +819,10 @@ fn plays_ms(webp: &[u8]) -> u32 {
     while let Some(head) = webp.get(at..at + 8) {
         let size = u32::from_le_bytes(head[4..8].try_into().unwrap()) as usize;
         if &head[..4] == b"ANMF" {
-            let d = &webp[at + 8 + 12..at + 8 + 15];
-            total += u32::from(d[0]) | u32::from(d[1]) << 8 | u32::from(d[2]) << 16;
+            let [low, mid, high] = webp[at + 8 + 12..at + 8 + 15] else {
+                panic!("a short ANMF chunk");
+            };
+            total += u32::from(low) | (u32::from(mid) << 8) | (u32::from(high) << 16);
         }
         at += 8 + size + size % 2;
     }
@@ -839,7 +841,7 @@ fn a_push_to_the_default_branch_sends_an_animated_webp_copy_of_each_film() {
     let (film, files) = film_sent(&host);
     let (copy, bytes) = copy_of(&host, &film, &files);
     assert!(
-        copy.starts_with("looks/") && copy.ends_with(".webp"),
+        copy.starts_with("looks/") && copy.to_ascii_lowercase().ends_with(".webp"),
         "{copy}"
     );
     assert_ne!(
@@ -893,7 +895,7 @@ fn a_pull_request_sends_no_webp_copy() {
             .as_object()
             .unwrap()
             .keys()
-            .any(|k| k.ends_with(".webp")),
+            .any(|k| k.to_ascii_lowercase().ends_with(".webp")),
         "{files:#}"
     );
 }
