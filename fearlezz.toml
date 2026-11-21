@@ -53,7 +53,8 @@ run = "bun test ee/app --reporter=junit --reporter-outfile=\"$FEARLEZZ_OUT/junit
 stage = "working"
 tests = "junit"
 test_files = ["ee/app/src/**/*.test.ts"]
-inputs = ["ee/app/**"]
+# The demuxer's tests read the CLI's fixture film.
+inputs = ["ee/app/**", "crates/fearlezz/tests/fixtures/compare/**"]
 
 # The proof host's pages in every state worth seeing (ee/app/e2e/states.ts), on desktop and
 # mobile, light and dark, against a stand in host. Fearlezz compares each still with the same
@@ -65,7 +66,9 @@ stage = "look"
 tests = "junit"
 stills = "stills/**/*.png"
 films = "films/**/*.webm"
-inputs = ["ee/app/**", "devenv.nix", "devenv.lock"]
+# The page builds and runs the comparison (ee/compare over crates/fearlezz-compare) and compares
+# the CLI's fixtures with it.
+inputs = ["ee/app/**", "ee/compare/**", "ee/Cargo.toml", "ee/Cargo.lock", "crates/fearlezz-compare/**", "crates/fearlezz-proof/**", "crates/fearlezz/tests/fixtures/compare/**", "devenv.nix", "devenv.lock"]
 
 [check.actionlint]
 run = "actionlint"

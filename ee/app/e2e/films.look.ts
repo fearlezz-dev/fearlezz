@@ -10,7 +10,7 @@
 import { type Page, type TestInfo, test } from "@playwright/test";
 import type { Note, PictureVerdict, Snapshot } from "../src/proof";
 import { NOW, type Socket, type World, serve, settled } from "./host";
-import { WORK, WORK_PATH } from "./states";
+import { STRIP, WORK, WORK_PATH } from "./states";
 
 // Every test here is recorded, at the viewport scaled to fit 800 pixels, its proportions kept.
 test.use({ video: "on" });
@@ -333,4 +333,33 @@ test("film: sharing the work", async ({ page }, info) => {
   await page.locator("[data-share]").click();
   await pause(page, 1500);
   await keep(page, info, "share");
+});
+
+test("film: comparing with earlier runs on the strip", async ({ page }, info) => {
+  await pointer(page);
+  await serve(page, STRIP.world);
+  await page.goto(WORK_PATH);
+  await settled(page, true);
+  const said = page.locator("[data-pair-says]");
+  const dot = (key: string) => page.locator(`[data-strip] [data-dot="${key}"] button`);
+  // It opens on the still compared with your look, in the Look again colour.
+  await toStage(page);
+  await pause(page, 900);
+  await press(page, dot("base"));
+  await pause(page, 1200);
+  await press(page, dot("r1"));
+  await test.expect(said).toHaveAttribute("data-pair-says", "changed");
+  await pause(page, 1200);
+  await press(page, page.locator("[data-compare-look]"));
+  await pause(page, 1200);
+  // The film opens on your look too; both films play on one clock.
+  await press(page, page.locator(`[data-picture="${STRIP.film}"]`));
+  await pause(page, 500);
+  await toStage(page);
+  await test.expect(said).toHaveAttribute("data-pair-says", "changed");
+  await press(page, page.locator("[data-stage] [data-play]"));
+  await pause(page, 2600);
+  await press(page, dot("base"));
+  await pause(page, 1400);
+  await keep(page, info, "strip-of-runs");
 });

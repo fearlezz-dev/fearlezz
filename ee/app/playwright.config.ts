@@ -16,6 +16,9 @@ export default defineConfig({
     command: `vite --port ${port} --strictPort`,
     url: `http://localhost:${port}`,
     reuseExistingServer: false,
+    // The dev server builds the page's comparison to wasm first (vite.config.ts), which takes a
+    // few minutes on a cold cache.
+    timeout: 600_000,
   },
   // The full Chromium in its headless mode: nixpkgs ships it, not Playwright's headless shell.
   use: { baseURL: `http://localhost:${port}`, channel: "chromium" },

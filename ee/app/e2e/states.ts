@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import type {
   Live,
   Check,
+  Comparison,
   Listed,
   Look,
   Note,
@@ -87,6 +88,14 @@ const FILES: NonNullable<World["files"]> = {
   "looks/security/dark.svg": { type: SVG, body: screen({ accent: "#4b5563", rows: ["Password", "Two factor"], dark: true }) },
   "looks/checkout/after.webm": { type: "video/webm", body: readFileSync(new URL("./fixtures/checkout.webm", import.meta.url)) },
 };
+
+// Real PNGs and VP9 films of the same made up screen, for what the page compares itself (runs
+// other than the base), with the CLI's answers for them beside them.
+const COMPARE = new URL("../../../crates/fearlezz/tests/fixtures/compare/", import.meta.url);
+const fixture = (name: string) => readFileSync(new URL(name, COMPARE));
+export const answerOf = (name: string): Comparison => JSON.parse(fixture(name).toString()) as Comparison;
+const PNG = "image/png";
+const WEBM = "video/webm";
 
 function changedStill(name: string, at: string): Picture {
   return {
@@ -406,6 +415,12 @@ export const WORK: Record<string, { path?: string; world: World }> = {
     world: {
       viewer: WRITER,
       files: FILES,
+      // The page compares what the dark theme and the film show now with what they showed when
+      // mara said they look right, so those are real pictures, which it can decode.
+      runFiles: {
+        r2: { ...FILES, "looks/profile/dark/before.svg": { type: PNG, body: fixture("base.png") }, "looks/profile/dark/after.svg": { type: PNG, body: fixture("now.png") } },
+        r1: { ...FILES, "looks/profile/dark/after.svg": { type: PNG, body: fixture("look.png") }, "looks/checkout/after.webm": { type: WEBM, body: fixture("look.webm") } },
+      },
       live: live(
         snapshot(
           [
@@ -564,4 +579,86 @@ export const REPOSITORY_STATES: Record<string, World> = {
     },
   },
   empty: { live: { kind: "snapshot", repository: REPOSITORY, works: [] } },
+};
+
+// The strip of runs: a screen pushed three times, each run showing it differently. mara said
+// the second push looks right, an agent's local run showed the same, and the newest push
+// changed it again, so its still and its film open compared with that look. The pictures are
+// real PNGs and VP9 films, since the page compares runs other than the base itself; the CLI's
+// answers for the same files are beside them (crates/fearlezz/tests/fixtures/compare).
+const FIRST_HEAD = "5d1c0e9a7b3f2e4d6c8a0b1f3e5d7c9a2b4f6e81";
+const STRIP_STILL = "profile/desktop/light.png";
+const STRIP_FILM = "checkout/desktop.webm";
+const STRIP_LOOK: Look = {
+  check: "ee-page-look",
+  base_commit: OLD_HEAD,
+  base_result: "passed",
+  items: [
+    { name: STRIP_STILL, kind: "still", change: "changed", summary: "Changed in 1 place.", before: "looks/profile/before.png", after: "looks/profile/after.png", comparison: answerOf("base-still.json") },
+    { name: STRIP_FILM, kind: "film", change: "changed", summary: "Changed in 1 state.", before: "looks/checkout/before.webm", after: "looks/checkout/after.webm", comparison: answerOf("base-film.json") },
+  ],
+};
+/** What a run of the strip showed: `still` and `film` as the files it took. */
+const stripRun = (id: string, head: string, shows: "base" | "look" | "now", source: Source, opened: number): Run =>
+  run(
+    id,
+    head,
+    "done",
+    allPassed().map((c) =>
+      c.id === "ee-page-look"
+        ? {
+            ...c,
+            look: { ...STRIP_LOOK, items: STRIP_LOOK.items.map((p) => ({ ...p, change: shows === "base" ? ("same" as const) : p.change })) },
+            keys: { [STRIP_STILL]: `still-${shows}`, [STRIP_FILM]: `film-${shows}` },
+          }
+        : c,
+    ),
+    source,
+    opened,
+  );
+/** A run's files: the base's before and what it showed as its after. */
+const stripFiles = (shows: "base" | "look" | "now"): NonNullable<World["files"]> => ({
+  "looks/profile/before.png": { type: PNG, body: fixture("base.png") },
+  "looks/profile/after.png": { type: PNG, body: fixture(`${shows}.png`) },
+  "looks/checkout/before.webm": { type: WEBM, body: fixture("base.webm") },
+  "looks/checkout/after.webm": { type: WEBM, body: fixture(`${shows}.webm`) },
+});
+const lookedAt = (picture: string, run: string, head: string, at: number): PictureVerdict => ({
+  check: "ee-page-look",
+  picture,
+  key: picture === STRIP_STILL ? "still-look" : "film-look",
+  by: "mara",
+  at,
+  run,
+  head,
+});
+export const STRIP: { world: World; still: string; film: string } = {
+  still: `ee-page-look/${STRIP_STILL}`,
+  film: `ee-page-look/${STRIP_FILM}`,
+  world: {
+    viewer: WRITER,
+    runFiles: { r3: stripFiles("now"), l2: stripFiles("look"), r2: stripFiles("look"), r1: stripFiles("base") },
+    live: live(
+      snapshot(
+        [
+          stripRun("r3", HEAD, "now", ci("linux", 1201), NOW - 240),
+          stripRun("l2", OLD_HEAD, "look", { kind: "local", login: "claude" }, NOW - 3000),
+          stripRun("r2", OLD_HEAD, "look", ci("linux", 1188), NOW - 5400),
+          stripRun("r1", FIRST_HEAD, "base", ci("linux", 1150), NOW - 9000),
+        ],
+        {
+          review: review("waits", "2 pictures wait for your look at 8f3c2a1", {
+            pictures: [STRIP_STILL, STRIP_FILM].map((name) => ({
+              check: "ee-page-look",
+              name,
+              key: name === STRIP_STILL ? "still-now" : "film-now",
+              standing: "waits" as const,
+              changed_since: { verdict: lookedAt(name, "r2", OLD_HEAD, NOW - 5000) },
+            })),
+          }),
+          verdicts: [lookedAt(STRIP_STILL, "r2", OLD_HEAD, NOW - 5000), lookedAt(STRIP_FILM, "r2", OLD_HEAD, NOW - 5000)],
+        },
+      ),
+    ),
+  },
 };

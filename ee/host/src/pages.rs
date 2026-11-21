@@ -68,12 +68,13 @@ pub async fn app(env: &Env, config: &Config, extra: &Headers) -> Answer {
     // Who may see the work can change, so the page is asked for each time.
     headers.set("Cache-Control", "no-store")?;
     // Pictures, films and texts are a pull request's content: they load from the files origin
-    // only. The page reads a text from there to diff it.
+    // only. The page reads a text from there to diff it, and fetches two pictures there to
+    // compare them in its worker, which runs the comparison as wasm.
     let files = &config.files_origin;
     headers.set(
         "Content-Security-Policy",
         &format!(
-            "default-src 'self'; connect-src 'self' {files}; img-src {files} 'self' data:; media-src {files}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+            "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' {files}; img-src {files} 'self' data:; media-src {files}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         ),
     )?;
     headers.set("X-Frame-Options", "DENY")?;

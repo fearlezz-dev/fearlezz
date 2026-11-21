@@ -313,3 +313,25 @@ fn compare_without_ffmpeg_outside_a_project_says_to_install_it() {
     assert!(out.stderr.contains("install ffmpeg"), "{}", out.stderr);
     assert!(!out.stderr.contains("[env]"), "{}", out.stderr);
 }
+
+/// The proof host's page runs the same comparison as wasm on what the browser decodes, and its
+/// tests (ee/app/e2e/compare.look.ts) check it gives these same answers for these same files:
+/// a still and a VP9 film, as `setup compare --json` writes them.
+#[test]
+fn the_fixtures_the_page_compares_give_their_recorded_answers() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/compare");
+    for (before, after, answer) in [
+        ("look.png", "now.png", "still.json"),
+        ("look.webm", "now.webm", "film.json"),
+        ("base.png", "now.png", "base-still.json"),
+        ("base.webm", "now.webm", "base-film.json"),
+    ] {
+        let recorded: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(fixtures.join(answer)).unwrap()).unwrap();
+        assert_eq!(
+            compare(&fixtures.join(before), &fixtures.join(after)),
+            recorded,
+            "{before} against {after}"
+        );
+    }
+}

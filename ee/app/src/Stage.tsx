@@ -27,6 +27,34 @@ export type Mode = (typeof MODES)[number][0];
 
 type Side = "before" | "after";
 
+/** An earlier run's picture on the left side in place of the base: its file, what it is
+ * called, whether it is the person's last look (drawn in the Look again colour), and what
+ * comparing it with now in the page found, once it has (or why it could not). */
+export type Against = {
+  url: string;
+  word: string;
+  label: string;
+  look: boolean;
+  comparison: Comparison | undefined;
+  error: string | undefined;
+};
+
+/** What comparing an earlier run's picture with now came to, in a few words. */
+export function pairSummary(c: Comparison, word: string): string {
+  const than = word.toLowerCase();
+  switch (c.verdict) {
+    case "same":
+      return `Looks the same as ${than}.`;
+    case "timing":
+      return `The same pictures as ${than}, with other timing.`;
+    case "changed":
+      if (c.size_before[0] !== c.size_after[0] || c.size_before[1] !== c.size_after[1]) return `Another size than ${than}.`;
+      return c.still
+        ? `Changed since ${than} in ${c.moments.length} ${c.moments.length === 1 ? "place" : "places"}.`
+        : `Changed since ${than} at ${c.moments.map((m) => `${m.after[0].toFixed(2)} s`).join(", ")}.`;
+  }
+}
+
 /** What the stage needs to show notes and let a person draw one. */
 export type Noting = {
   /** The open notes on the picture, numbered. */
@@ -35,6 +63,9 @@ export type Noting = {
   draft: Draft | undefined;
   /** Whether the person looking may make notes. */
   can: boolean;
+  /** The one side notes show and are drawn on, when the other shows no picture of this run's
+   * proof (an earlier run's). */
+  only?: Side | undefined;
   /** A region was drawn (`done` once the pointer lifted), or the draft dropped. */
   onDraft: (draft: Draft | undefined, done: boolean) => void;
 };
@@ -52,18 +83,20 @@ function NoteLayer(props: { side: Side; noting: Noting; clock?: Clock | undefine
     return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
   };
   const pct = (v: number) => `${v * 100}%`;
-  const regions = () => props.noting.notes.filter((n) => onSide(n.note, props.side));
+  const here = () => !props.noting.only || props.noting.only === props.side;
+  const can = () => props.noting.can && here();
+  const regions = () => (here() ? props.noting.notes.filter((n) => onSide(n.note, props.side)) : []);
   const draft = () => {
     const d = props.noting.draft;
-    return d && (d.side === props.side || d.both) ? d : undefined;
+    return d && here() && (d.side === props.side || d.both) ? d : undefined;
   };
   return (
     <div
       ref={layer}
-      class={`notes-layer ${props.noting.can ? "can" : ""} ${props.clock ? "plays" : ""}`}
+      class={`notes-layer ${can() ? "can" : ""} ${props.clock ? "plays" : ""}`}
       data-draw={props.side}
       onPointerDown={(e) => {
-        if ((!props.noting.can && !props.clock) || e.button !== 0) return;
+        if ((!can() && !props.clock) || e.button !== 0) return;
         e.preventDefault();
         layer!.setPointerCapture(e.pointerId);
         start = at(e);
@@ -71,15 +104,15 @@ function NoteLayer(props: { side: Side; noting: Noting; clock?: Clock | undefine
         if (played) props.clock!.toggle();
       }}
       onPointerMove={(e) => {
-        if (!start || !props.noting.can) return;
+        if (!start || !can()) return;
         props.noting.onDraft({ side: props.side, region: regionBetween(start, at(e)) }, false);
       }}
       onPointerUp={(e) => {
         if (!start) return;
         const region = regionBetween(start, at(e));
         start = undefined;
-        const drawn = props.noting.can && meant(region);
-        if (props.noting.can) props.noting.onDraft(drawn ? { side: props.side, region } : undefined, drawn);
+        const drawn = can() && meant(region);
+        if (can()) props.noting.onDraft(drawn ? { side: props.side, region } : undefined, drawn);
         // A click, not a drag: a paused film plays.
         if (!drawn && props.clock && !played) props.clock.toggle();
       }}
@@ -391,6 +424,8 @@ function Compare(props: {
   clock: Clock | undefined;
   beforeLabel: string;
   afterLabel: string;
+  beforeWord: string;
+  afterWord: string;
   noting: Noting;
 }) {
   const media = (side: Side) => (
@@ -407,7 +442,7 @@ function Compare(props: {
       <Match when={props.mode === "side"}>
         <div class="layers side">
           <figure>
-            <figcaption title={props.beforeLabel}>Before</figcaption>
+            <figcaption title={props.beforeLabel} data-caption="before">{props.beforeWord}</figcaption>
             <Frame size={props.size}>
               {media("before")}
               {marks()}
@@ -415,7 +450,7 @@ function Compare(props: {
             </Frame>
           </figure>
           <figure>
-            <figcaption title={props.afterLabel}>After</figcaption>
+            <figcaption title={props.afterLabel} data-caption="after">{props.afterWord}</figcaption>
             <Frame size={props.size}>
               {media("after")}
               {marks()}
@@ -454,6 +489,8 @@ type Layered = {
   size: [number, number] | undefined;
   beforeLabel: string;
   afterLabel: string;
+  beforeWord: string;
+  afterWord: string;
   media: (side: Side) => JSX.Element;
   marks: () => JSX.Element;
 };
@@ -475,8 +512,8 @@ function Slider(props: Layered) {
   return (
     <figure class="layers one">
       <figcaption class="ends">
-        <span title={props.beforeLabel}>Before</span>
-        <span title={props.afterLabel}>After</span>
+        <span title={props.beforeLabel} data-caption="before">{props.beforeWord}</span>
+        <span title={props.afterLabel} data-caption="after">{props.afterWord}</span>
       </figcaption>
       <Frame
         size={props.size}
@@ -524,7 +561,7 @@ function Onion(props: Layered) {
   const [show, setShow] = createSignal(50);
   return (
     <figure class="layers one">
-      <figcaption>The after over the before</figcaption>
+      <figcaption>{props.afterWord} over {props.beforeWord.toLowerCase()}</figcaption>
       <Frame size={props.size}>
         {props.media("before")}
         <div class="over" style={{ opacity: show() / 100 }}>
@@ -533,7 +570,7 @@ function Onion(props: Layered) {
         {props.marks()}
       </Frame>
       <label class="range">
-        <span>Before</span>
+        <span data-caption="before">{props.beforeWord}</span>
         <input
           type="range"
           min="0"
@@ -542,7 +579,7 @@ function Onion(props: Layered) {
           aria-label="How much of the after shows"
           onInput={(e) => setShow(Number(e.currentTarget.value))}
         />
-        <span>After</span>
+        <span data-caption="after">{props.afterWord}</span>
       </label>
     </figure>
   );
@@ -555,7 +592,9 @@ function Blink(props: Layered) {
   onCleanup(() => clearInterval(timer));
   return (
     <figure class="layers one">
-      <figcaption title={before() ? props.beforeLabel : props.afterLabel}>{before() ? "Before" : "After"}</figcaption>
+      <figcaption title={before() ? props.beforeLabel : props.afterLabel} data-caption={before() ? "before" : "after"}>
+        {before() ? props.beforeWord : props.afterWord}
+      </figcaption>
       <Frame
         size={props.size}
         class={`blink ${before() ? "show-before" : ""}`}
@@ -574,8 +613,9 @@ function Blink(props: Layered) {
 /** Both films' lanes on one clock: grey where the pictures match, the change colour where
  * they differ, a playhead, and a jump to each moment they differ. A film alone (no `film`
  * comparison) has its one lane, on its `side`. */
-function Timeline(props: { film?: Comparison | undefined; side?: Side; clock: Clock }) {
+function Timeline(props: { film?: Comparison | undefined; side?: Side; clock: Clock; words?: [string, string] }) {
   const total = () => props.clock.total();
+  const words = () => props.words ?? ["Before", "After"];
   let lane: HTMLDivElement | undefined;
   const at = (e: PointerEvent) => {
     const r = lane!.getBoundingClientRect();
@@ -585,10 +625,10 @@ function Timeline(props: { film?: Comparison | undefined; side?: Side; clock: Cl
   const sides = (): (readonly [Side, string, number])[] =>
     props.film
       ? [
-          ["before", "Before", props.film.total_before],
-          ["after", "After", props.film.total_after],
+          ["before", words()[0], props.film.total_before],
+          ["after", words()[1], props.film.total_after],
         ]
-      : [[props.side ?? "after", props.side === "before" ? "Before" : "After", total()]];
+      : [[props.side ?? "after", props.side === "before" ? words()[0] : words()[1], total()]];
   const segments = (side: Side, end: number) =>
     props.film ? lanes(props.film.pairs, side, end) : [{ start: 0, stop: end, differs: false }];
   return (
@@ -701,22 +741,30 @@ export function Stage(props: {
   /** Whether the stage and its review fill the screen. */
   full: boolean;
   onFull: () => void;
+  /** What the left side shows in place of the base: an earlier run's picture, compared here. */
+  against?: Against | undefined;
+  /** The strip of runs to compare with, shown above the picture. */
+  strip?: JSX.Element;
 }) {
   const picture = () => props.shown.picture;
   const url = (path: string | null) => (path && props.files ? fileUrl(props.files, path) : "");
   const film = () => isFilm(picture());
   const text = () => isText(picture());
-  const comparison = () => picture().comparison;
+  // An earlier run's picture is compared in the page; until it is, there is no comparison.
+  const comparison = () => (props.against ? (props.against.comparison ?? null) : picture().comparison);
   const size = createMemo((): [number, number] | undefined => {
     const c = comparison();
     if (!c) return undefined;
     const [w, h] = c.size_after;
     return w > 0 && h > 0 ? [w, h] : undefined;
   });
-  const both = () => picture().before != null && picture().after != null;
+  const both = () => (props.against != null || picture().before != null) && picture().after != null;
   const base = () => short(props.shown.look.base_commit);
-  const beforeLabel = () => `Before, ${base()}`;
-  const afterLabel = () => `After, ${short(props.head)}`;
+  const beforeLabel = () => props.against?.label ?? `Before, ${base()}`;
+  const afterLabel = () => `${props.against ? "Now" : "After"}, ${short(props.head)}`;
+  const beforeWord = () => props.against?.word ?? "Before";
+  const afterWord = () => (props.against ? "Now" : "After");
+  const beforeUrl = () => (props.against ? props.against.url : url(picture().before));
   return (
     <article
       class="stage"
@@ -727,6 +775,7 @@ export function Stage(props: {
       data-flaky={String(!!picture().flaky)}
       aria-label={title(props.shown.parts)}
       data-panning={props.panning && props.view.s > 1 ? "" : undefined}
+      data-against={props.against ? (props.against.look ? "look" : "run") : undefined}
     >
       <Zoom.Provider value={{ view: () => props.view, onView: (v) => props.onView(v), panning: () => props.panning }}>
       <header class="stage-head">
@@ -790,6 +839,18 @@ export function Stage(props: {
         </Show>
         </div>
       </header>
+      {props.strip}
+      <Show when={props.against}>
+        {(a) => (
+          <p class="pair-says" data-pair-says={a().error ? "error" : a().comparison ? a().comparison!.verdict : "comparing"} aria-live="polite">
+            <Show when={!a().error} fallback={<>Could not compare here: {a().error}</>}>
+              <Show when={a().comparison} fallback={<>Comparing with {a().word.toLowerCase()}…</>}>
+                {(c) => <>{pairSummary(c(), a().word)}</>}
+              </Show>
+            </Show>
+          </p>
+        )}
+      </Show>
       <Show when={picture().flaky}>
         <p class="flaky-note" data-flaky-note title="This picture changes from run to run, so it is shown but never waits for you">
           Flaky, never waits for you
@@ -846,44 +907,51 @@ export function Stage(props: {
         }
       >
         <Show
-          when={film() && comparison()}
-          keyed
+          when={film()}
           fallback={
             <Compare
               mode={props.mode}
-              before={url(picture().before)}
+              before={beforeUrl()}
               after={url(picture().after)}
               size={size()}
               boxes={comparison() ? stillMarks(comparison()!) : []}
               clock={undefined}
               beforeLabel={beforeLabel()}
               afterLabel={afterLabel()}
+              beforeWord={beforeWord()}
+              afterWord={afterWord()}
               noting={props.noting}
             />
           }
         >
-          {(c) => {
-            const clock = createClock(Math.max(c.total_before, c.total_after, 0.01), untrack(() => props.full));
-            const sameSize = c.size_before[0] === c.size_after[0] && c.size_before[1] === c.size_after[1];
-            createEffect(() => props.onTime(clock.t()));
-            onCleanup(() => props.onTime(undefined));
-            return (
-              <>
-                <Compare
-                  mode={props.mode}
-                  before={url(picture().before)}
-                  after={url(picture().after)}
-                  size={size()}
-                  boxes={sameSize ? marksAt(c, clock.t()) : []}
-                  clock={clock}
-                  beforeLabel={beforeLabel()}
-                  afterLabel={afterLabel()}
-                  noting={props.noting}
-                />
-                <Timeline film={c} clock={clock} />
-              </>
-            );
-          }}
+          {/* Both films on one clock; with a comparison, lanes of where they differ. */}
+          <Show when={comparison() ?? "unmeasured"} keyed>
+            {(c) => {
+              const measured = typeof c === "string" ? undefined : c;
+              const clock = createClock(measured ? Math.max(measured.total_before, measured.total_after, 0.01) : 0.01, untrack(() => props.full));
+              const sameSize = !!measured && measured.size_before[0] === measured.size_after[0] && measured.size_before[1] === measured.size_after[1];
+              createEffect(() => props.onTime(clock.t()));
+              onCleanup(() => props.onTime(undefined));
+              return (
+                <>
+                  <Compare
+                    mode={props.mode}
+                    before={beforeUrl()}
+                    after={url(picture().after)}
+                    size={size()}
+                    boxes={sameSize ? marksAt(measured!, clock.t()) : []}
+                    clock={clock}
+                    beforeLabel={beforeLabel()}
+                    afterLabel={afterLabel()}
+                    beforeWord={beforeWord()}
+                    afterWord={afterWord()}
+                    noting={props.noting}
+                  />
+                  <Timeline film={measured} side="after" clock={clock} words={[beforeWord(), afterWord()]} />
+                </>
+              );
+            }}
+          </Show>
         </Show>
       </Show>
       </Show>

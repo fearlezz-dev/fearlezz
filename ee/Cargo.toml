@@ -2,7 +2,7 @@
 # built to wasm and the core never depends on anything here.
 [workspace]
 resolver = "3"
-members = ["host", "host-tests"]
+members = ["host", "host-tests", "compare"]
 
 [workspace.package]
 edition = "2024"
@@ -977,3 +977,10 @@ opt-level = 3
 opt-level = "z"
 lto = true
 codegen-units = 1
+
+# The page's comparison does the arithmetic of whole films in the browser: speed over size.
+[profile.release.package.fearlezz-page-compare]
+opt-level = 3
+
+[profile.release.package.fearlezz-compare]
+opt-level = 3
