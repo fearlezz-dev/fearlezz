@@ -1010,13 +1010,19 @@ fn the_work_page_is_served_for_a_navigation() {
         let end = start + html[start..].find('"').unwrap();
         let script = get(&html[start..end], &[]);
         assert_eq!(script.status, 200, "{}", &html[start..end]);
+        // Scripts under /assets come without the page's policy, so the comparing worker, a
+        // script there, runs its wasm under no policy and the page's needs no 'wasm-unsafe-eval'.
+        assert_eq!(
+            script.header("content-security-policy"),
+            None,
+            "assets carry no policy"
+        );
         let policy = answer.header("content-security-policy").unwrap();
         assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
         // Pictures, films and texts load from the files origin only; the page reads a text
-        // there to diff it, and compares two pictures it fetches there with wasm.
+        // there to diff it.
         let files = &world().worker.files;
         for directive in [
-            "script-src 'self' 'wasm-unsafe-eval';".to_owned(),
             format!("img-src {files}"),
             format!("media-src {files}"),
             format!("connect-src 'self' {files};"),

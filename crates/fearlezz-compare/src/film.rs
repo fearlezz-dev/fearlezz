@@ -51,9 +51,10 @@ impl Film {
         self.seen
     }
 
-    /// A frame as the comparison reads it.
+    /// A frame as the comparison reads it, given at its own size or already scaled to the size
+    /// it is compared at (by [`Picture::area`], as a caller that keeps frames keeps them).
     pub(crate) fn image(&self, picture: &Picture<'_>) -> Result<Image, Unfit> {
-        if picture.size() != (self.w, self.h) {
+        if picture.size() != (self.w, self.h) && picture.size() != self.seen {
             return Err(Unfit::Size {
                 film: (self.w, self.h),
                 frame: picture.size(),
@@ -148,6 +149,12 @@ impl Cut {
     #[must_use]
     pub fn states(&self) -> usize {
         self.film.states.len()
+    }
+
+    /// The size its frames are compared at (see [`Film::seen`]).
+    #[must_use]
+    pub fn seen(&self) -> (usize, usize) {
+        self.film.seen
     }
 
     /// The film, after its last frame.

@@ -16,8 +16,9 @@ no_proof = ["*.md", "docs/**", "LICENSE-*", ".gitignore"]
 inputs = ["crates/**/*.rs", "Cargo.toml", "crates/**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "skills/fearlezz/SKILL.md", "crates/fearlezz/presets/**", "crates/fearlezz/tests/fixtures/**", "README.md", ".github/workflows/proof.yml", "action.yml"]
 
 # The proof host in ee/ is a Cargo workspace of its own, built to wasm, so the rust piece runs
-# its checks there too (`fmt/ee`, `clippy/ee`, `tests/ee`). These read ee/ and the proof bundle
-# crate it shares with the core, so other core edits never rerun them; `fmt/ee` reads the core's
+# its checks there too (`fmt/ee`, `clippy/ee`, `tests/ee`). These read ee/ and the core crates it
+# shares (the proof bundle, and the comparison the page runs), so other core edits never rerun
+# them; `fmt/ee` reads the core's
 # sources too, since `--all` checks them through the path dependency on the proof bundle crate.
 [check."fmt/ee"]
 inputs = ["ee/**", "crates/fearlezz-proof/**", "crates/**/*.rs"]
@@ -26,12 +27,12 @@ inputs = ["ee/**", "crates/fearlezz-proof/**", "crates/**/*.rs"]
 [check."clippy/ee"]
 on = ["linux"]
 run = "cargo clippy --all-targets --all-features --quiet --message-format=json"
-inputs = ["ee/**", "crates/fearlezz-proof/**"]
+inputs = ["ee/**", "crates/fearlezz-proof/**", "crates/fearlezz-compare/**"]
 
 # Builds the worker and drives it under wrangler dev against a fake GitHub.
 [check."tests/ee"]
 on = ["linux"]
-inputs = ["ee/**", "crates/fearlezz-proof/**"]
+inputs = ["ee/**", "crates/fearlezz-proof/**", "crates/fearlezz-compare/**"]
 
 # The picture comparison runs in the proof host's page too, so it must keep building for wasm:
 # no I/O, no dependency that needs an operating system.

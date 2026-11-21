@@ -34,4 +34,10 @@ describe("demux", () => {
     expect(codecOf("V_VP9")).toBe("vp09.00.10.08");
     expect(() => codecOf("V_MPEG4/ISO/AVC")).toThrow("cannot decode V_MPEG4/ISO/AVC");
   });
+  // A film comes from a pull request, so its sizes are not trusted: a number element claiming
+  // terabytes is refused at once rather than looped over.
+  test("refuses a number element larger than 8 bytes", () => {
+    const hostile = new Uint8Array([0x2a, 0xd7, 0xb1, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]).buffer;
+    expect(() => demux(hostile)).toThrow("not WebM the page can read");
+  });
 });

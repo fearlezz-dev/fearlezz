@@ -94,9 +94,10 @@ request:
 The page is a Solid app (`ee/app`) the worker serves from its static assets: the same
 `index.html` for every page, which draws itself from its live connection. An unknown work, or a
 repository the host holds no work of, is `404`. It answers `no-store`, may not be framed, its `connect-src` is `'self'` and
-the files origin (the page reads a text there to diff it, and two pictures to compare them),
-its `script-src` is `'self'` with `'wasm-unsafe-eval'` (the comparison), and its `img-src` and
-`media-src` name the files origin, the only place pictures load from.
+the files origin (the page reads a text there to diff it), and its `img-src` and `media-src`
+name the files origin, the only place pictures load from. The comparing worker is a script of
+its own under `/assets`, served without the page's headers, so its wasm and its fetches of two
+pictures need nothing added to the page's policy.
 
 Every state of the pages worth seeing is a fixture in `ee/app/e2e/states.ts`, in the proof
 model's own types. The `ee-page-look` check shows each one with Playwright against a stand in
@@ -174,7 +175,10 @@ the CLI reads them from ffprobe) and decoded by WebCodecs to I420 planes, which 
 `yuv420p`. A film is decoded once: the wasm side keeps the frames that start its states for the
 comparison's second read. Answers are kept per pair of files by their SHA-256. The page's
 build builds the wasm first (`ee/app/vite.config.ts`, with cargo and the
-`wasm32-unknown-unknown` target), and its `script-src` allows `'wasm-unsafe-eval'`.
+`wasm32-unknown-unknown` target). A worker keeps at most 384 MiB of a film's frames for the
+second read, scaled to the size they are compared at; a film busier than that says it changes
+too often to compare here. A trap starts a new wasm instance, and a newer ask takes the place of
+one that has not started.
 
 The page gets a run's files with `GET /api/v2/runs/<run>/grant`, which answers
 `{"files": "<files origin>/<grant>/", "expires"}` to someone who may see the work (the page's
