@@ -403,7 +403,8 @@ holds no grant, and a grant always holds a dot, so `showcase` never names one.
   `.webp` in place of an extension of four characters or fewer (or added when it has none), is
   that name: `home.webp` is the copy of `home.webm`, `home.mp4` or `home`. One rule
   (`fearlezz_proof::look::webp_name`) names it here and in `fearlezz setup showcase`. A still
-  the check took under that name wins.
+  the check took under that name wins; of two films whose names give the same one, the look's
+  first.
 - **Any repository with the app, private ones included.** GitHub's image proxy (camo) loads a
   README's pictures without signing in, even for a private repository, so the address holds no
   grant: anyone who knows it can load the picture, whatever the repository's visibility. The
