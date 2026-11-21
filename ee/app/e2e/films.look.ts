@@ -237,6 +237,9 @@ test("film: a note edited on every note linked with it", async ({ page }, info) 
   const first = live.notes![0]!;
   await open(page, { ...world, live: { ...live, notes: [first, { ...first, id: "n2", picture: "profile/desktop/dark.png", link: first.id }] } });
   await page.route("**/api/v2/notes/*", (route) => route.fulfill({ json: { notes: [] } }));
+  // The page opens on what waits for a look; the note is on the light theme.
+  await press(page, page.locator('[data-picture="ee-page-look/profile/desktop/light.png"]'));
+  await pause(page, 600);
   await press(page, page.locator('[data-notes] [data-note="n1"] [data-edit]'));
   await pause(page, 400);
   await page.locator("textarea[data-edit-words]").fill("");

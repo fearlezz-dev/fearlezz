@@ -2,7 +2,7 @@
 // the order that directs attention, the one on the stage, the notes on it and the verdict. j
 // and k step between pictures, 1 to 5 pick the way to compare.
 
-import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { fileUrl, grantOf } from "./grant";
 import {
   GROUP_WORDS,
@@ -70,9 +70,21 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
   // The order j and k step through: what shows, screen by screen, folded groups left out until
   // opened.
   const order = createMemo(() => groups().flatMap((g) => (isOpen(g) ? (screens().get(g.key) ?? []).flatMap((s) => s.variants) : [])));
+  // What the page opens on: the first picture to look at again, since it changed after a look
+  // or a note, then the first that waits for a look, else the first.
+  const opening = () => {
+    const list = order().filter(toLookAt);
+    const again = list.find((p) => changedSince(props.state, props.run, p));
+    return again ?? list.find((p) => standingOf(props.state, props.run, p) === "none") ?? order()[0];
+  };
   const current = createMemo<Shown | undefined>(() => {
     const key = picked();
-    return order().find((p) => p.key === key) ?? pictures().find((p) => p.key === key) ?? order()[0];
+    return order().find((p) => p.key === key) ?? pictures().find((p) => p.key === key) ?? opening();
+  });
+  // Opened, it stays there while what waits changes, until a person moves on.
+  createEffect(() => {
+    const shown = current();
+    if (shown && untrack(picked) !== shown.key) setPicked(shown.key);
   });
   const currentKey = createMemo(() => current()?.key);
   // The note being drawn, and where a film's clock is, for the picture on the stage.

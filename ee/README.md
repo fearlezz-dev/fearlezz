@@ -208,7 +208,8 @@ ends with the newest review, and a GitHub that hangs or fails never fails or hol
   looks right verdict on its earlier content, when none is on what it shows now, and its open
   notes made on a run that showed other content (the host reads the runs open notes were made
   on to know). The verdict and the notes stay as they were: a person says looks right again,
-  or resolves the notes. The page marks it Look again, and moves on to it after a verdict.
+  or resolves the notes. The page marks it Look again (a film as well as a still), opens on the
+  first such picture (else the first that waits for a look), and moves on to it after a verdict.
 - **Notes** say what should change, on a CI run or a local one (so feedback reaches the agent
   before a pull request exists): a region of a picture's before, its after or both (in
   fractions of the picture), at a moment of a film, with the person's words. A note is kept by
