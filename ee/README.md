@@ -390,6 +390,21 @@ holds no grant, and a grant always holds a dot, so `showcase` never names one.
   leading segments spell, and the rest is the picture.
 - **Only stills and films.** png, jpeg, webp, gif, avif, mp4 and webm; a text of a look is
   `404`.
+- **A film as an animated WebP.** GitHub strips `<video>` from a README and plays no film from
+  another origin; only an animated image in `<img>` plays. So on a CI run a push to the default
+  branch started (and no other run, so a pull request pays nothing), the CLI makes each film's
+  animated WebP copy: 720 pixels wide at most and never upscaled, 12 frames a second, looping
+  forever, its last frame held 1.5 s, starting at its first frame that is not one flat colour,
+  quality 75. A film longer than 30 s from there gets none, and the CLI says so; without ffmpeg
+  it says so and sends none, and the proof never fails over it. The copy is a file of the run
+  beside the film's after, its extension swapped for `.anim.webp`, and the look item's `webp`
+  names it, so it travels with the check's other files.
+  A picture name that no item of the look has names the copy of the film whose name, with
+  `.webp` in place of an extension of four characters or fewer (or added when it has none), is
+  that name: `home.webp` is the copy of `home.webm`, `home.mp4` or `home`. One rule
+  (`fearlezz_proof::look::webp_name`) names it here and in `fearlezz setup showcase`. A still
+  the check took under that name wins; of two films whose names give the same one, the look's
+  first.
 - **Any repository with the app, private ones included.** GitHub's image proxy (camo) loads a
   README's pictures without signing in, even for a private repository, so the address holds no
   grant: anyone who knows it can load the picture, whatever the repository's visibility. The

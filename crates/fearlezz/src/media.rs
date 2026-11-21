@@ -1187,3 +1187,163 @@ pub(crate) fn noted(
     }
     bail!("ffmpeg took no frame from {}", source.display())
 }
+
+/// The longest film that gets an animated WebP copy, in seconds: the copy holds every frame
+/// whole, so a longer one would weigh more than a page should load.
+pub(crate) const WEBP_LONGEST: f64 = 30.0;
+
+/// How far apart, in 8 bit levels, the darkest and lightest sample of each channel of a frame
+/// may be for it to count as one flat colour: compression leaves a little noise on a blank
+/// frame, and a frame with anything drawn on it spans far more.
+const FLAT: u32 = 12;
+
+/// How the animated WebP copy of a film came out.
+pub(crate) enum WebpCopy {
+    /// Written.
+    Made,
+    /// Not made: from its first frame with content, the film runs this many seconds, longer
+    /// than [`WEBP_LONGEST`].
+    TooLong(f64),
+    /// Not made: Fearlezz found no ffmpeg to make it with, for this reason.
+    NoFfmpeg(crate::ffmpeg::Missing),
+}
+
+/// Writes `to`, the animated WebP copy of the film `film`, which it leaves as it is: it loops
+/// forever, 720 pixels wide at most (never larger than the film), at 12 frames a second,
+/// holding its last frame 1.5 s so each loop shows how it ends before it starts over.
+/// It starts at the film's first frame with content: a recorder that starts as the page opens
+/// leaves blank frames first, which would flash on every loop. A film all blank is kept whole.
+///
+/// Quality 75 at compression level 2: a 13.8 s app film of 1280 by 800 came out near 300 KB
+/// even at quality 80, and a 15 s test pattern that changes every pixel of every frame (the
+/// worst case) at 2 MB, in seconds where the default level 4 took ten times as long for 10%
+/// fewer bytes.
+///
+/// It runs the ffmpeg Fearlezz runs for every picture (`crate::ffmpeg`): the project's shell
+/// first, then PATH, then on GitHub Actions the pinned build.
+pub(crate) fn webp_copy(film: &Path, to: &Path) -> Result<WebpCopy> {
+    if let Some(missing) = crate::ffmpeg::missing() {
+        return Ok(WebpCopy::NoFfmpeg(missing));
+    }
+    let scan = scan(film).with_context(|| format!("ffmpeg could not read {}", film.display()))?;
+    let seconds = scan.end - scan.content;
+    if seconds > WEBP_LONGEST {
+        return Ok(WebpCopy::TooLong(seconds));
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    // A little before the frame, so rounding in its printed time never drops it.
+    let trim = if scan.content > scan.start {
+        format!(
+            "trim=start={:.4},setpts=PTS-STARTPTS,",
+            scan.content - 0.001
+        )
+    } else {
+        String::new()
+    };
+    crate::process::read(
+        crate::ffmpeg::ffmpeg()?
+            .args(["-v", "error", "-nostdin", "-y", "-i"])
+            .arg(film)
+            .arg("-vf")
+            .arg(format!(
+                "{trim}fps=12,scale=w='min(720,iw)':h=-1:flags=lanczos,\
+                 tpad=stop_mode=clone:stop_duration=1.5"
+            ))
+            .args(["-an", "-c:v", "libwebp_anim", "-quality", "75"])
+            .args(["-compression_level", "2", "-loop", "0", "-f", "webp"])
+            .arg(to),
+        None,
+    )
+    .with_context(|| format!("ffmpeg could not make a WebP of {}", film.display()))?;
+    Ok(WebpCopy::Made)
+}
+
+/// When a film's frames start and end, and when its first frame with content starts, in
+/// seconds on its own clock.
+struct Scan {
+    start: f64,
+    content: f64,
+    end: f64,
+}
+
+/// Reads every frame of the film at `path` once, small, for its time and the range of each
+/// channel (`signalstats`), and finds where it starts, where it ends (a recorded WebM often
+/// names no duration of its own) and its first frame that is not one flat colour (the start
+/// when every frame is).
+fn scan(path: &Path) -> Result<Scan> {
+    let out = crate::process::read(
+        crate::ffmpeg::ffmpeg()?
+            .args(["-v", "error", "-nostdin", "-i"])
+            .arg(path)
+            .args([
+                "-an",
+                "-vf",
+                "scale='min(160,iw)':-2,signalstats,metadata=mode=print:file=-",
+                "-f",
+                "null",
+                "-",
+            ]),
+        None,
+    )?;
+    // Each frame is a line `frame:N pts:P pts_time:T`, then one `key=value` line per stat.
+    let mut frames: Vec<(f64, bool)> = Vec::new();
+    let mut range = [(u32::MAX, 0u32); 3];
+    let flat =
+        |range: &[(u32, u32); 3]| range.iter().all(|(lo, hi)| hi.saturating_sub(*lo) <= FLAT);
+    for line in String::from_utf8_lossy(&out).lines() {
+        if let Some(time) = line
+            .split_whitespace()
+            .find_map(|w| w.strip_prefix("pts_time:"))
+        {
+            if let Some(last) = frames.last_mut() {
+                last.1 = flat(&range);
+            }
+            range = [(u32::MAX, 0); 3];
+            frames.push((time.parse().unwrap_or_default(), true));
+            continue;
+        }
+        let Some((key, value)) = line
+            .strip_prefix("lavfi.signalstats.")
+            .and_then(|l| l.split_once('='))
+        else {
+            continue;
+        };
+        let Ok(value) = value.trim().parse::<f64>() else {
+            continue;
+        };
+        let at = match key.get(..1) {
+            Some("Y") => 0,
+            Some("U") => 1,
+            Some("V") => 2,
+            _ => continue,
+        };
+        let Some(slot) = range.get_mut(at) else {
+            continue;
+        };
+        let value = value as u32;
+        match key.get(1..) {
+            Some("MIN") => slot.0 = value,
+            Some("MAX") => slot.1 = value,
+            _ => {}
+        }
+    }
+    if let Some(last) = frames.last_mut() {
+        last.1 = flat(&range);
+    }
+    let start = frames.first().map_or(0.0, |f| f.0);
+    let content = frames.iter().find(|f| !f.1).map_or(start, |f| f.0);
+    // The last frame lasts as long as the one before it.
+    let end = match frames.as_slice() {
+        [.., (before, _), (last, _)] => last + (last - before),
+        [(only, _)] => *only,
+        [] => 0.0,
+    };
+    Ok(Scan {
+        start,
+        content,
+        end,
+    })
+}

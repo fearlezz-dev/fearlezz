@@ -22,6 +22,7 @@ fn still(name: &str, change: Change) -> Item {
         comparison: None,
         flaky: false,
         diff: None,
+        webp: None,
     }
 }
 
@@ -64,6 +65,7 @@ fn film(changed: &[usize]) -> Item {
         }),
         flaky: false,
         diff: None,
+        webp: None,
     }
 }
 

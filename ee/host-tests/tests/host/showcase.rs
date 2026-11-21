@@ -489,7 +489,7 @@ pub(crate) fn a_showcase_serves_no_text_and_no_name_github_could_not_have() {
 pub(crate) fn a_showcase_picture_outlasts_many_newer_pushes_that_did_not_prove_it() {
     let main = Job::push("owner/showcase", DEFAULT);
     took(
-        &main.at(&commit("ol0"), 10401),
+        &main.at(&commit("ol0"), 10601),
         "lasting",
         "home.png",
         b"showcase lasting",
@@ -499,14 +499,14 @@ pub(crate) fn a_showcase_picture_outlasts_many_newer_pushes_that_did_not_prove_i
     // others fail: neither replaces the picture, however many there are.
     for n in 1..=24u64 {
         took(
-            &main.at(&commit(&format!("ol{n:02}")), 10401 + n),
+            &main.at(&commit(&format!("ol{n:02}")), 10601 + n),
             "elsewhere",
             "home.png",
             format!("showcase elsewhere {n}").as_bytes(),
             "passed",
         );
         took(
-            &main.at(&commit(&format!("olf{n:02}")), 10501 + n),
+            &main.at(&commit(&format!("olf{n:02}")), 10701 + n),
             "lasting",
             "home.png",
             format!("showcase broken {n}").as_bytes(),
@@ -518,5 +518,108 @@ pub(crate) fn a_showcase_picture_outlasts_many_newer_pushes_that_did_not_prove_i
         shows("lasting", "home.png").as_deref(),
         Ok(&b"showcase lasting"[..]),
         "the newest proven push that took it, however old"
+    );
+}
+
+/// A done, passed run of `job` whose check `check` took `items`, with `files` its pictures.
+fn took_look(job: &Job, check: &str, items: &[Value], files: &[(&str, &[u8])]) {
+    let run = job.open(&[check]);
+    let look = look_of(check, items);
+    let ended = entry(check, "passed");
+    let answer = job.finished_with_look(&run.id, &ended, files, &look);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    for (_, bytes) in files {
+        job.send(bytes);
+    }
+    let answer = job.close(&run.id, &[ended], &[look], files);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+}
+
+/// A new film `name` whose after is at `after`, with its animated WebP copy at `webp`.
+fn film_with_copy(name: &str, after: &str, webp: &str) -> Value {
+    let mut film = still(name, "new", None, Some(after));
+    film["kind"] = json!("film");
+    film["webp"] = json!(webp);
+    film
+}
+
+pub(crate) fn a_films_webp_address_serves_its_animated_copy() {
+    let main = Job::push("owner/showcase", DEFAULT).at(&commit("w1"), 10401);
+    let (film, copy) = (
+        "looks/webp_films/after/home.webm",
+        "looks/webp_films/after/home.anim.webp",
+    );
+    let (bare, bare_copy) = (
+        "looks/webp_films/after/intro",
+        "looks/webp_films/after/intro.anim.webp",
+    );
+    took_look(
+        &main,
+        "webp_films",
+        &[
+            film_with_copy("home.webm", film, copy),
+            film_with_copy("intro", bare, bare_copy),
+        ],
+        &[
+            (film, b"showcase webm film"),
+            (copy, b"showcase webm copy"),
+            (bare, b"showcase bare film"),
+            (bare_copy, b"showcase bare copy"),
+        ],
+    );
+
+    let answer = get_url(&showcase("owner/showcase", "webp_films", "home.webp"), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(
+        answer.body, b"showcase webm copy",
+        "the film's extension swapped"
+    );
+    assert_eq!(
+        answer.header("content-type"),
+        Some("image/webp"),
+        "a WebP image"
+    );
+    assert_eq!(
+        shows("webp_films", "intro.webp").as_deref(),
+        Ok(&b"showcase bare copy"[..]),
+        "a film named without an extension gets one"
+    );
+    assert_eq!(
+        shows("webp_films", "home.webm").as_deref(),
+        Ok(&b"showcase webm film"[..]),
+        "the film itself is still served as recorded"
+    );
+    assert_eq!(
+        shows("webp_films", "home.gif"),
+        Err(404),
+        "only a WebP copy"
+    );
+}
+
+pub(crate) fn a_still_named_like_a_films_copy_wins() {
+    let main = Job::push("owner/showcase", DEFAULT).at(&commit("w2"), 10501);
+    let (film, copy) = (
+        "looks/webp_both/after/home.webm",
+        "looks/webp_both/after/home.anim.webp",
+    );
+    let real = "looks/webp_both/after/home.webp";
+    took_look(
+        &main,
+        "webp_both",
+        &[
+            film_with_copy("home.webm", film, copy),
+            still("home.webp", "new", None, Some(real)),
+        ],
+        &[
+            (film, b"showcase both film"),
+            (copy, b"showcase both copy"),
+            (real, b"showcase both still"),
+        ],
+    );
+
+    assert_eq!(
+        shows("webp_both", "home.webp").as_deref(),
+        Ok(&b"showcase both still"[..]),
+        "the still the check took, not the film's copy"
     );
 }

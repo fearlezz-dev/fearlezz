@@ -57,6 +57,10 @@ pub(crate) struct Report {
     ci: bool,
     /// The platform of the leg it runs, which names each of its checks.
     platform: Option<String>,
+    /// Whether its films get animated WebP copies: a CI run that a push to the default branch
+    /// started, the only runs the host serves at a stable address, so a pull request pays
+    /// nothing.
+    pub webp_copies: bool,
 }
 
 /// The proof of the commit CI checked out, before any check: the pull request's head merged
@@ -163,6 +167,7 @@ impl Report {
             bundle: out.proof,
             ci: true,
             platform: leg.and_then(legs::Leg::platform_name),
+            webp_copies: workflow.pushed_default().is_some(),
         })
     }
 
@@ -201,6 +206,7 @@ impl Report {
             bundle: None,
             ci: false,
             platform: None,
+            webp_copies: false,
         })
     }
 

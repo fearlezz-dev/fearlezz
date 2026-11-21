@@ -66,6 +66,13 @@ pub struct Item {
     /// bundle from a CLI that did not write it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff: Option<Vec<DiffLine>>,
+    /// The animated WebP copy of a film's after inside the look folder, relative to it: the one
+    /// form of a film a page that allows only images (a README on GitHub) plays. The CLI makes it
+    /// only on a CI run that a push to the default branch started, the only runs the host serves
+    /// pictures of at a stable address; None
+    /// otherwise, and for a still or text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webp: Option<String>,
 }
 
 /// One line of a text's diff.
@@ -100,6 +107,24 @@ impl Item {
     pub fn to_look_at(&self) -> bool {
         self.change != Change::Same && !self.flaky
     }
+}
+
+/// `name` without its extension, and the extension: a short last part after a dot (four
+/// characters at most), as the proof page reads a picture's name. A name without one is whole.
+pub fn extension(name: &str) -> (&str, &str) {
+    match name.rsplit_once('.') {
+        Some((bare, ext)) if !bare.is_empty() && ext.len() <= 4 && !ext.contains('/') => {
+            (bare, ext)
+        }
+        _ => (name, ""),
+    }
+}
+
+/// The name a film's animated WebP copy is served at on the host: the film's name with `.webp`
+/// in place of its extension, or added when it has none (`home.webm` and `home` are
+/// `home.webp`). The CLI's showcase markup and the host's lookup both use this one rule.
+pub fn webp_name(film: &str) -> String {
+    format!("{}.webp", extension(film).0)
 }
 
 /// One check's pictures compared with its run on the base commit.

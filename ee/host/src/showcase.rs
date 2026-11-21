@@ -27,9 +27,16 @@
 //! The picture is the after of the look's item of that name: the commit's own picture. A check id
 //! and a picture name may both hold slashes, so the path names the longest check of the run that
 //! its leading segments spell, and the picture is the rest. Only stills and films are served.
+//!
+//! GitHub plays no film in a README, only an animated image in `<img>`, so a push run's CLI
+//! sends each film's animated WebP copy too (the look item's `webp`, a file of the run beside
+//! the film). A picture name that no item has names the copy of the film whose name with
+//! `.webp` in place of its extension (`fearlezz_proof::look::webp_name`, the rule `fearlezz setup
+//! showcase` prints by) is that name: `home.webp` is the copy of `home.webm`. A still the check
+//! took under that name wins.
 
 use fearlezz_proof::Proof;
-use fearlezz_proof::look::Look;
+use fearlezz_proof::look::{Item, Look};
 use serde::{Deserialize, Serialize};
 use worker::{Cache, Env, Headers, Request, Response, wasm_bindgen::JsValue};
 
@@ -234,12 +241,21 @@ async fn newest(
             };
             let look: Look = read(&taken.look)?;
             let picture = segments.get(at + 1..).unwrap_or_default().join("/");
-            let after = look
-                .items
-                .into_iter()
-                .find(|item| item.name == picture)
-                .and_then(|item| item.after);
-            return Ok(after.map(|after| (candidate.run, after)));
+            return Ok(named(look.items, &picture).map(|path| (candidate.run, path)));
         }
     }
+}
+
+/// The file of a look's `items` that `picture` names: the after of the item of that name; else
+/// the animated WebP copy of the film whose copy is served at that name
+/// (`fearlezz_proof::look::webp_name`: `home.webp` is the copy of `home.webm`, `home.mp4` or
+/// `home`).
+fn named(items: Vec<Item>, picture: &str) -> Option<String> {
+    if let Some(item) = items.iter().find(|item| item.name == picture) {
+        return item.after.clone();
+    }
+    items
+        .into_iter()
+        .find(|item| item.webp.is_some() && fearlezz_proof::look::webp_name(&item.name) == picture)
+        .and_then(|item| item.webp)
 }

@@ -142,8 +142,8 @@ pub(crate) fn write(proof: &Proof, dir: &Path) -> Result<()> {
         .with_context(|| format!("writing {}", path.display()))
 }
 
-/// A look as the bundle names it, its pictures at `looks/<folder>/<path>`, with each
-/// picture's path in the bundle and its file on this machine.
+/// A look as the bundle names it, its pictures (and a film's animated WebP copy) at
+/// `looks/<folder>/<path>`, with each file's path in the bundle and its file on this machine.
 pub(crate) fn bundled(look: &Look) -> (Look, Vec<(String, PathBuf)>) {
     let mut out = look.clone();
     let mut files = Vec::new();
@@ -152,7 +152,8 @@ pub(crate) fn bundled(look: &Look) -> (Look, Vec<(String, PathBuf)>) {
         .file_name()
         .map_or_else(|| look.check.clone(), |f| f.to_string_lossy().to_string());
     for item in &mut out.items {
-        for rel in [&mut item.before, &mut item.after].into_iter().flatten() {
+        let named = [&mut item.before, &mut item.after, &mut item.webp];
+        for rel in named.into_iter().flatten() {
             let to = format!("looks/{folder}/{rel}");
             files.push((to.clone(), look.dir.join(&*rel)));
             *rel = to;

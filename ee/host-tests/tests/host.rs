@@ -592,6 +592,14 @@ fn main() {
             showcase::a_showcase_picture_outlasts_many_newer_pushes_that_did_not_prove_it,
         ),
         (
+            "a_films_webp_address_serves_its_animated_copy",
+            showcase::a_films_webp_address_serves_its_animated_copy,
+        ),
+        (
+            "a_still_named_like_a_films_copy_wins",
+            showcase::a_still_named_like_a_films_copy_wins,
+        ),
+        (
             "the_policy_decides_who_reads_a_private_repository",
             access::the_policy_decides_who_reads_a_private_repository,
         ),

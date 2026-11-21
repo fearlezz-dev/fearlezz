@@ -56,6 +56,45 @@ pub(crate) fn lines(look: &Look) -> Vec<String> {
 /// The kind of a text in a look.
 pub(crate) const TEXT: &str = "text";
 
+/// The kind of a film in a look.
+const FILM: &str = "film";
+
+/// Makes the animated WebP copy of each film `look` took (`Item::webp`), beside its after in the
+/// look folder. A film it cannot copy gets one line saying why and none; that never fails the
+/// proof, as the copy only shows what the proof already holds. False when there is no ffmpeg to
+/// make any, said once, so the run makes no more.
+pub(crate) fn webp_copies(look: &mut Look) -> bool {
+    for item in &mut look.items {
+        let (FILM, Some(after)) = (item.kind.as_str(), &item.after) else {
+            continue;
+        };
+        let rel = Path::new(after)
+            .with_extension("anim.webp")
+            .to_string_lossy()
+            .into_owned();
+        let said = match media::webp_copy(&look.dir.join(after), &look.dir.join(&rel)) {
+            Ok(media::WebpCopy::Made) => {
+                item.webp = Some(rel);
+                continue;
+            }
+            Ok(media::WebpCopy::TooLong(seconds)) => format!(
+                "it runs {seconds:.0} s, longer than the {:.0} s a WebP copy may",
+                media::WEBP_LONGEST
+            ),
+            Ok(media::WebpCopy::NoFfmpeg(missing)) => {
+                println!("no WebP copies of films: {missing}");
+                return false;
+            }
+            Err(e) => format!("{e:#}"),
+        };
+        println!(
+            "look {}: {} gets no WebP copy: {said}",
+            look.check, item.name
+        );
+    }
+    true
+}
+
 /// How many lines of a text's diff are shown where it is named.
 pub(crate) const DIFF_LINES: usize = 40;
 
@@ -304,6 +343,7 @@ fn build(
             comparison: None,
             flaky: check.pictures.is_flaky(&a.name),
             diff: None,
+            webp: None,
         };
         let copies = (
             b.map(|(run, b)| copy("before", run, b)).transpose(),
@@ -342,6 +382,7 @@ fn build(
                 comparison: None,
                 flaky: check.pictures.is_flaky(&b.name),
                 diff: None,
+                webp: None,
             },
             None,
         ));
