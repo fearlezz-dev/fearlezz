@@ -68,8 +68,30 @@ async fn app_jwt(config: &Config) -> Result<String> {
     Ok(format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature)))
 }
 
-/// The app's installation on a repository, if it is installed there.
+/// Whether `segment` may be an owner or a repository name as GitHub spells them: letters,
+/// digits, `.`, `_` and `-`, never `.` or `..`. Anything else is never put in a URL to GitHub,
+/// where it could name another path of its API.
+pub(crate) fn named(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// Whether `repo` is `owner/name`, each part `named`.
+fn repository(repo: &str) -> bool {
+    repo.split_once('/')
+        .is_some_and(|(owner, name)| named(owner) && named(name))
+}
+
+/// The app's installation on a repository, if it is installed there; None for a name GitHub
+/// could not have.
 pub async fn installation(config: &Config, repo: &str) -> Result<Option<u64>> {
+    if !repository(repo) {
+        return Ok(None);
+    }
     let jwt = app_jwt(config).await?;
     let url = format!("{}/repos/{repo}/installation", config.github_api);
     let reply = call(Method::Get, &url, Some(&jwt), None).await?;
@@ -85,12 +107,31 @@ pub async fn installation(config: &Config, repo: &str) -> Result<Option<u64>> {
 /// Whether anyone may read a repository. Only the app can tell for someone without a session;
 /// a repository it is not installed on counts as private.
 pub async fn public(config: &Config, repo: &str) -> Result<bool> {
+    Ok(as_app(config, repo)
+        .await?
+        .is_some_and(|body| body["private"] == false))
+}
+
+/// The default branch of a repository the app is installed on, public or private (empty if
+/// GitHub names none); None for one the app is not installed on.
+pub(crate) async fn default_branch(config: &Config, repo: &str) -> Result<Option<String>> {
+    Ok(as_app(config, repo).await?.map(|body| {
+        body["default_branch"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    }))
+}
+
+/// GitHub's answer on a repository, as the app sees it; None when the app is not installed
+/// there or GitHub does not answer 200.
+async fn as_app(config: &Config, repo: &str) -> Result<Option<Value>> {
     let Some(token) = installation_token(config, repo).await? else {
-        return Ok(false);
+        return Ok(None);
     };
     let url = format!("{}/repos/{repo}", config.github_api);
     let reply = call(Method::Get, &url, Some(&token), None).await?;
-    Ok(reply.status == 200 && reply.body["private"] == false)
+    Ok((reply.status == 200).then_some(reply.body))
 }
 
 /// A token of the app's installation on a repository, to ask GitHub as the app; None when the

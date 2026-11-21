@@ -291,6 +291,8 @@ struct Run<'a> {
     fresh: bool,
     /// What names the preview: the pull request's number in CI, otherwise the branch.
     branch: Option<String>,
+    /// The default branch, when a push to it started this CI run: its pictures go as taken.
+    pushed_default: Option<String>,
     prepared: bool,
     held: Option<Hold>,
     started: Instant,
@@ -330,6 +332,10 @@ pub(crate) fn run(
         .and_then(|o| o.workflow.pull())
         .map(|pull| format!("pr-{}", pull.number))
         .or_else(|| wt.git.branch().ok());
+    let pushed_default = out
+        .as_ref()
+        .and_then(|o| o.workflow.pushed_default())
+        .map(str::to_string);
     let mut report = match out {
         Some(out) => Report::ci(ctx, &wt, &targets, out, leg.as_ref())?,
         None => Report::local(ctx, &targets)?,
@@ -348,6 +354,7 @@ pub(crate) fn run(
         final_stage,
         fresh,
         branch,
+        pushed_default,
         prepared: false,
         held: None,
         started: Instant::now(),
@@ -473,7 +480,14 @@ impl Run<'_> {
         )?;
         // Compared as soon as the check passed, so its look goes with it to the proof host.
         let look = if result.outcome == Outcome::Passed {
-            look_at(ctx, &self.wt, check, &result, &self.stage)?
+            look_at(
+                ctx,
+                &self.wt,
+                check,
+                &result,
+                &self.stage,
+                self.pushed_default.as_deref(),
+            )?
         } else {
             None
         };
@@ -777,18 +791,36 @@ fn red_before_green(
 }
 
 /// Compares the stills and films of a green check with the base commit, says what it found,
-/// and records the comparison against it. The look it made, if any.
+/// and records the comparison against it. The look it made, if any. On a push to the default
+/// branch (`pushed_default`) nothing is compared: its pull request showed what changed, so
+/// the pictures go as taken, with no before and no run on the base.
 fn look_at(
     ctx: &Ctx,
     wt: &Worktree,
     check: &Check,
     result: &RunResult,
     stage: &str,
+    pushed_default: Option<&str>,
 ) -> Result<Option<look::Look>> {
     // A check that takes pictures is compared even without any, so all gone shows.
     let has_media = look::has_media(result);
     if !has_media && !ctx.config.takes_pictures(check) {
         return Ok(None);
+    }
+    if let Some(branch) = pushed_default {
+        if !has_media {
+            return Ok(None);
+        }
+        let taken = format!("a push to {branch}, its pictures sent as taken");
+        let look = look::without_before(check, result, &ctx.git.common, &taken)?;
+        store::AgainstBase::update(result, &wt.base, |a| {
+            a.look = Some(store::Looked::At(look.dir.clone()));
+        })?;
+        println!("look {}: {taken}; {}", check.id, look.counts());
+        for line in look::lines(&look) {
+            println!("{line}");
+        }
+        return Ok(Some(look));
     }
     let base = ctx.bases.at(&wt.git, &wt.base);
     let site = match &base {

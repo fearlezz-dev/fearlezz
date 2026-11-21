@@ -338,7 +338,7 @@ answers on two origins and tells them apart by the request's host:
 - the **app origin** (`APP_ORIGIN`, `https://fearlezz.seamlezz.com` by default): sign in, the
   API, the pages and their live connections;
 - the **files origin** (`FILES_ORIGIN`, `https://fearlezz.seamlezz.net` by default): the runs'
-  files, and nothing else. It reads no cookies and sets none.
+  files under a grant, and showcase media (below), and nothing else. It reads no cookies and sets none.
 
 Files origin: `/<grant>/<path>` is the run's picture, film or text at that path, with `Range`
 support (films need it). Only png, jpeg, webp, gif, avif, mp4, webm and txt are served, each with
@@ -350,7 +350,68 @@ URL is what opens it. The grant is
 `base64url(json).base64url(mac)`: the JSON names the repository, the run and an expiry one hour
 out, and the mac is HMAC-SHA256 with `SIGNING_KEY`. A missing, expired or altered grant, or one
 for another run, gets `404`. Files answer with `Content-Security-Policy: frame-ancestors
-<APP_ORIGIN>`.
+<APP_ORIGIN>`. Each file's `ETag` is its SHA-256: `If-None-Match` with it gets `304`, and a
+`Range` whose `If-Range` names another tag (or a date, since no file says when it changed) gets
+the whole file with `200`, so a cache never joins the bytes of two versions.
+
+### Showcase media
+
+`<FILES_ORIGIN>/showcase/<owner>/<repo>/<check>/<picture>` is a stable address for a README, a
+docs site or a website to embed: the picture `<picture>` (its name in the check's look, its after) of the newest push to
+the repository's default branch whose done CI run ran the check and whose proof did not fail. It
+holds no grant, and a grant always holds a dot, so `showcase` never names one.
+
+- **Which run.** Only a run a push started: its OIDC token's `event_name` was `push`, its ref
+  `refs/heads/<default branch>`, and the commit it proves is the token's `sha`. The ref alone is
+  not enough: `pull_request_target`, `workflow_run`, `issue_comment`, `workflow_dispatch` and
+  `schedule` runs carry it too, and the first two often check out a fork's code. So a pull
+  request, another branch, another event, a run proving another commit and a local run never
+  count. Each run keeps its token's `event_name` and `sha` (`runs.event`, `runs.sha`); runs
+  opened before they were kept never count.
+- **What it sends.** On a push to the default branch, `fearlezz run --ci` compares nothing:
+  the pull request already showed and approved what changed, so each check's look holds every
+  picture as taken, with no before and no run on the base. A push whose run takes no picture of
+  a check (its pass reused from the base commit's proof, say) leaves the older push's picture,
+  which is the same.
+- **Did not fail.** Its proof must not have failed as review judges it
+  (`fearlezz_proof::review::failed`: nothing to fix, no failed check, and what it weakens
+  covered by the host's own accept of its head, so an accepted weakening counts and one not
+  accepted does not). A newer push that failed, or whose run is not done, leaves the older
+  picture, and a picture the newest proven push no longer takes is `404`. The bar is the run's
+  proof, not the check alone: a showcase shows what the default branch proved. Of a split proof,
+  each leg's run counts on its own, since the gate does not stream to the host.
+- **Newest push.** Pushes are ordered as the host first saw their commit (its first run's
+  place in `runs`, since `opened` holds whole seconds), not by when a run opened: a run of an older push started again (after a flake, or by an admin's accept)
+  never brings its picture back over a newer push's. Of one push, its newest run that did not
+  fail counts. There is no cap on how far back: the runs of pushes that ran the check are read
+  newest push first, 20 at a time, until one whose proof did not fail, so a picture outlasts
+  any number of newer pushes that failed or reused the check's earlier result.
+- **Check and picture.** Both may hold slashes; the path names the longest check of the run its
+  leading segments spell, and the rest is the picture.
+- **Only stills and films.** png, jpeg, webp, gif, avif, mp4 and webm; a text of a look is
+  `404`.
+- **Any repository with the app, private ones included.** GitHub's image proxy (camo) loads a
+  README's pictures without signing in, even for a private repository, so the address holds no
+  grant: anyone who knows it can load the picture, whatever the repository's visibility. The
+  app asks GitHub for the repository (`GET /repos/{owner}/{repo}`) and its default branch, kept
+  5 minutes like every answer of GitHub; a repository without the app, and anything not there,
+  is `404`. An owner or name holding anything but
+  letters, digits, `.`, `_` and `-`, or that is `.` or `..`, is `404` without asking GitHub.
+- **Caching.** The host keeps which file an address names in the worker's cache
+  (`caches.default`, keyed by the address without its query) for five minutes, so a view looks
+  up neither GitHub nor the runs. The answer says `Cache-Control: public, max-age=300` and
+  carries the `ETag`, `If-Range` and `Range` handling of every file of this origin, the type its
+  name pins and `nosniff`. A push shows within five minutes, and a repository that removes the app
+  can stay visible through these caches for those few minutes.
+
+- **Any website.** Unlike a run's files, a showcase answer says `Access-Control-Allow-Origin: *`
+  and `Cross-Origin-Resource-Policy: cross-origin`, so any site may embed it, also under
+  cross-origin isolation, and read it from a script or a canvas. It holds only what the address
+  already gives anyone.
+
+A light and a dark variant are two pictures, chosen in the README with
+`<picture><source media="(prefers-color-scheme: dark)" srcset="...">` (the root README shows it).
+`fearlezz setup showcase` prints that markup for every picture of the work's last run.
 
 ### Who sees a page
 
@@ -372,7 +433,8 @@ read it, and their role on it.
   only the row's random 128 bit id. Logging out deletes the row, so an old cookie signs in
   no one.
 - **GitHub's answers are cached** in D1 (`cache`): who may read a repository and their role
-  there, per login and repository, and whether a repository is public, each for 5 minutes; GitHub's OIDC keys for
+  there, per login and repository, and whether a repository is public and the default branch its
+  showcase pictures come from, each for 5 minutes; GitHub's OIDC keys for
   an hour, fetched again once when a token names a key id the cached set lacks. So a change
   of access on GitHub shows here within 5 minutes.
 - **A live page follows the same rule while it stays open.** Its room asks again for each page

@@ -429,7 +429,7 @@ pub(crate) struct Ran<'a> {
     pub outcome: Outcome,
 }
 
-fn latest_ran<'a>(journal: &'a Journal, check: &str) -> Option<Ran<'a>> {
+pub(crate) fn latest_ran<'a>(journal: &'a Journal, check: &str) -> Option<Ran<'a>> {
     journal.entries.iter().rev().find_map(|e| {
         if let Event::Ran {
             check: c,

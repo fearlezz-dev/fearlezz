@@ -736,6 +736,89 @@ fn the_base_commit_runs_in_its_own_shell_for_the_look() {
     );
 }
 
+#[test]
+fn a_push_to_the_default_branch_sends_its_pictures_as_taken() {
+    let repo = Repo::new(
+        CONFIG,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", RECORD),
+            ("src/color.txt", "red"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    let counter = repo.path(".runs/screens").to_string_lossy().to_string();
+    // The merged pull request lands on main: the push's base is its own commit.
+    repo.write("src/color.txt", "blue");
+    repo.commit("feat: blue");
+    let event = repo.path(".runs/event.json");
+    std::fs::write(
+        &event,
+        serde_json::json!({"repository": {"default_branch": "main"}}).to_string(),
+    )
+    .unwrap();
+    let proof_dir = repo.path(".runs/proof");
+    let out = repo.fz_env(
+        &["run", "--ci", "--proof", proof_dir.to_str().unwrap()],
+        &[
+            ("COUNTER", &counter),
+            ("GITHUB_EVENT_NAME", "push"),
+            ("GITHUB_REF", "refs/heads/main"),
+            ("GITHUB_EVENT_PATH", event.to_str().unwrap()),
+        ],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("look screens: a push to main, its pictures sent as taken; 2 new"),
+        "{}",
+        out.stdout
+    );
+    // The pull request already showed what changed: nothing runs on a base.
+    assert_eq!(runs(std::path::Path::new(&counter)), 1);
+    let proof: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(proof_dir.join("proof.json")).unwrap())
+            .unwrap();
+    let items = proof["looks"][0]["items"].as_array().expect("a look");
+    let names: Vec<&str> = items.iter().filter_map(|i| i["name"].as_str()).collect();
+    assert_eq!(names, ["about.png", "home.png"], "{proof:#}");
+    for item in items {
+        assert!(
+            item["after"].is_string(),
+            "each picture as taken: {proof:#}"
+        );
+        assert!(item["before"].is_null(), "no before: {proof:#}");
+    }
+}
+
+#[test]
+fn a_push_to_another_branch_still_compares_with_its_base() {
+    let (repo, counter) = repo();
+    repo.commit("feat: blue");
+    let event = repo.path(".runs/event.json");
+    std::fs::write(
+        &event,
+        serde_json::json!({"repository": {"default_branch": "main"}}).to_string(),
+    )
+    .unwrap();
+    let out = repo.fz_env(
+        &["run", "--ci"],
+        &[
+            ("COUNTER", &counter),
+            ("GITHUB_EVENT_NAME", "push"),
+            ("GITHUB_REF", "refs/heads/feat/blue"),
+            ("GITHUB_EVENT_PATH", event.to_str().unwrap()),
+        ],
+    );
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout
+            .contains("look screens: 1 changed, 1 new, 1 same"),
+        "{}",
+        out.stdout
+    );
+}
+
 // Which ffmpeg compares
 
 /// A check that writes one still without ffmpeg: 64 by 48 pixels of the colour

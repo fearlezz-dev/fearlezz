@@ -975,16 +975,17 @@ fn a_readme_without_the_proofs_pictures_hints_at_them() {
     assert!(
         out.stdout
             .contains("hint README.md:1  readme-media  this change could prove more")
-            && out
-                .stdout
-                .contains("https://fearlezz.seamlezz.net/readme/<owner>/<repo>/<check>/<picture>")
-            && out.stdout.contains("Pictures in your README"),
+            && out.stdout.contains(
+                "https://fearlezz.seamlezz.net/showcase/<owner>/<repo>/<check>/<picture>"
+            )
+            && out.stdout.contains("fearlezz setup showcase")
+            && out.stdout.contains("Showcase media"),
         "{}",
         out.stdout
     );
 
     // A README that shows pictures from the proof host has them.
-    let shown = "# app\n\n![home](https://fearlezz.seamlezz.net/readme/acme/app/look/home.png)\n";
+    let shown = "# app\n\n![home](https://fearlezz.seamlezz.net/showcase/acme/app/look/home.png)\n";
     let out = grown(
         config,
         &[("README.md", shown)],

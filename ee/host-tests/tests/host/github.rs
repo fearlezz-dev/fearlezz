@@ -197,6 +197,11 @@ impl FakeGitHub {
                 ),
                 // Its check runs fail or hang when a test says so.
                 ("owner/stalled".to_owned(), reviewed(false, 11)),
+                // Showcase pictures: public with an admin who accepts weakenings, private with the
+                // app so they are served all the same, and private without it so they are not.
+                ("owner/showcase".to_owned(), reviewed(false, 13)),
+                ("owner/unseen".to_owned(), repo(true, Some(14), &[])),
+                ("owner/hidden".to_owned(), repo(true, None, &[])),
                 // The local run tests: each CLI test signs in as a login of its own.
                 (
                     "owner/local".to_owned(),
@@ -529,6 +534,7 @@ fn answer(
                 json!({
                     "full_name": full,
                     "private": repo.private,
+                    "default_branch": "main",
                     "permissions": {"admin": false, "push": false, "pull": reads},
                 }),
             )

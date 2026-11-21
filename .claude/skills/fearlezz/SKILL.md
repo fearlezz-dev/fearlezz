@@ -51,6 +51,7 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 - Changed pictures are not failures and never hold the work. Read the before and after files, and when the change is not the intended one, fix it. A person reviews them on the pull request; when you are unsure a change is wanted, ask the developer with `fearlezz say ask`.
 - When the repository sends its proof to the proof host, a person reviews the pictures on its page: per picture "Looks right", or notes that mark a region of the before, the after or both (at a moment of a film) and say what should change; a picture with an open note needs change. To read them, the developer signs the CLI in once with `fearlezz setup login` (a token kept outside the repository, which never gives a verdict). Once signed in, every `fearlezz run` also shows on the host as an unproven local run, so a person can leave notes before a pull request exists; `fearlezz setup logout` stops that. Then `fearlezz` shows each picture's verdict and its open notes, and `fearlezz --notes` prints every open note with its words and saves its pictures with the region drawn; read those PNGs, change the code so each note is settled, and prove it again. You cannot resolve a note or give a verdict; a person does that on the page. While notes are open, stopping is held once.
 - `fearlezz setup compare BEFORE AFTER` compares any two stills or films directly, for quick tries while exploring.
+- To show the proof's pictures in a README, a docs site or a website, `fearlezz setup showcase` prints the markup for each still and film of the work's last run, from its stable address on the proof host's files origin (the newest passing proof of the default branch; the repository needs the Fearlezz app). A light and a dark variant, named apart by one `light` or `dark` folder or file name, become one `<picture>` that follows the reader's theme.
 
 ## Texts and generated code
 
@@ -146,7 +147,7 @@ Proof that people can see should grow with the project. When setting up, or when
 
 - A UI no check takes pictures of: `use = ["playwright"]` for a web app, `record` for a desktop window, `flutter-look` and `flutter-film` for a Flutter app, films for flows.
 - Rendered output (kustomize, helm, terraform) no check keeps: write it into `$FEARLEZZ_OUT` and name it with `texts`.
-- Checks that take stills and films while README.md shows none: a public repository can show each from its stable address, `https://fearlezz.seamlezz.net/readme/<owner>/<repo>/<check>/<picture>` (Fearlezz's README, "Pictures in your README").
+- Checks that take stills and films while README.md shows none: `fearlezz setup showcase` prints the markup that shows each from its stable address, `https://fearlezz.seamlezz.net/showcase/<owner>/<repo>/<check>/<picture>` (Fearlezz's README, "Showcase media").
 
 `fearlezz setup init` lists what the project could prove, one `could prove:` line each. While working, the `settings` check gives one as a hint when the change touches files of that kind; it never blocks, whatever level `[lints.fearlezz]` gives it. `[lints.fearlezz]` turns one off for the repository: `pictures`, `texts` or `readme-media` = `"off"`.
 

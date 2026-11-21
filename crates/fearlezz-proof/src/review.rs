@@ -379,15 +379,11 @@ pub fn review(
         .filter(|a| !weakened.is_empty() && a.covers(head, &weakened))
         .cloned();
 
-    // What a proof weakens fails it unless the host's own accept covers it: the accept a
-    // proof names is the run's word, so the host never takes it alone.
     let failed = live.iter().any(|(run, proof)| {
         run.state == RunState::Done
-            && proof.as_ref().is_none_or(|p| {
-                let weakened = !p.weakened.is_empty()
-                    && accept.as_ref().is_none_or(|a| !a.covers(head, &p.weakened));
-                p.to_fix() > 0 || weakened || p.checks.iter().any(|c| c.outcome == Ran::Failed)
-            })
+            && proof
+                .as_ref()
+                .is_none_or(|p| failed(p, head, accept.as_ref()))
     });
     let state = if seen.is_empty() {
         State::Ci
@@ -415,6 +411,15 @@ pub fn review(
         title: Title::default(),
     }
     .titled()
+}
+
+/// Whether the proof of a done run of `head` failed, as the host judges it: something to fix, a
+/// failed check, or what it weakens unless `accept`, the host's own accept of the head, covers
+/// it. The accept a proof names is the run's word, so the host never takes it alone.
+pub fn failed(proof: &Proof, head: &str, accept: Option<&Accept>) -> bool {
+    let weakened =
+        !proof.weakened.is_empty() && accept.is_none_or(|a| !a.covers(head, &proof.weakened));
+    proof.to_fix() > 0 || weakened || proof.checks.iter().any(|c| c.outcome == Ran::Failed)
 }
 
 /// Whether `url` is a plain `http://` or `https://` address with a host: nothing that runs

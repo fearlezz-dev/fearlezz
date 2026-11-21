@@ -22,6 +22,8 @@ mod notes;
 mod repository;
 #[path = "host/share.rs"]
 mod share;
+#[path = "host/showcase.rs"]
+mod showcase;
 #[path = "host/worker.rs"]
 mod worker;
 
@@ -532,6 +534,62 @@ fn main() {
         (
             "the_repository_page_updates_live",
             repository::the_repository_page_updates_live,
+        ),
+        (
+            "a_showcase_picture_is_the_newest_proven_push_to_the_default_branch",
+            showcase::a_showcase_picture_is_the_newest_proven_push_to_the_default_branch,
+        ),
+        (
+            "a_showcase_picture_never_comes_from_another_branch_or_a_pull_request",
+            showcase::a_showcase_picture_never_comes_from_another_branch_or_a_pull_request,
+        ),
+        (
+            "a_showcase_picture_of_a_check_in_a_folder_names_the_check_then_the_picture",
+            showcase::a_showcase_picture_of_a_check_in_a_folder_names_the_check_then_the_picture,
+        ),
+        (
+            "a_showcase_picture_of_a_private_repository_with_the_app_is_served",
+            showcase::a_showcase_picture_of_a_private_repository_with_the_app_is_served,
+        ),
+        (
+            "an_unknown_showcase_picture_is_not_found",
+            showcase::an_unknown_showcase_picture_is_not_found,
+        ),
+        (
+            "a_showcase_picture_comes_only_from_a_run_a_push_started",
+            showcase::a_showcase_picture_comes_only_from_a_run_a_push_started,
+        ),
+        (
+            "a_rerun_of_an_older_push_never_takes_the_showcase_picture_back",
+            showcase::a_rerun_of_an_older_push_never_takes_the_showcase_picture_back,
+        ),
+        (
+            "a_showcase_picture_counts_a_weakening_only_once_an_admin_accepted_it",
+            showcase::a_showcase_picture_counts_a_weakening_only_once_an_admin_accepted_it,
+        ),
+        (
+            "a_picture_the_newest_proven_push_no_longer_takes_is_not_found",
+            showcase::a_picture_the_newest_proven_push_no_longer_takes_is_not_found,
+        ),
+        (
+            "a_showcase_picture_names_the_longest_check_of_its_run",
+            showcase::a_showcase_picture_names_the_longest_check_of_its_run,
+        ),
+        (
+            "a_showcase_film_answers_a_range",
+            showcase::a_showcase_film_answers_a_range,
+        ),
+        (
+            "a_showcase_picture_waits_for_a_newer_push_to_finish",
+            showcase::a_showcase_picture_waits_for_a_newer_push_to_finish,
+        ),
+        (
+            "a_showcase_serves_no_text_and_no_name_github_could_not_have",
+            showcase::a_showcase_serves_no_text_and_no_name_github_could_not_have,
+        ),
+        (
+            "a_showcase_picture_outlasts_many_newer_pushes_that_did_not_prove_it",
+            showcase::a_showcase_picture_outlasts_many_newer_pushes_that_did_not_prove_it,
         ),
         (
             "the_policy_decides_who_reads_a_private_repository",
@@ -1341,6 +1399,11 @@ fn the_files_origin_serves_only_pictures_films_and_plain_text() {
         answer.header("access-control-allow-origin"),
         Some(world().worker.url.as_str()),
         "the app origin may read a text"
+    );
+    assert_eq!(
+        answer.header("cross-origin-resource-policy"),
+        None,
+        "only showcase pictures are for other sites"
     );
     for (path, _) in refused {
         let answer = get_url(&format!("{base}{path}"), &[]);
@@ -3722,6 +3785,10 @@ struct Job {
     cli: Option<String>,
     /// The leg of a split proof it runs, and every leg of its plan.
     leg: Option<(String, Vec<String>)>,
+    /// The event its token names instead of the one its pull request or push gives.
+    event: Option<&'static str>,
+    /// The commit its token names instead of the one it proves.
+    sha: Option<String>,
 }
 
 /// The runner a job runs on unless a test names another.
@@ -3745,6 +3812,8 @@ impl Job {
             runner: RUNNER.to_owned(),
             cli: None,
             leg: None,
+            event: None,
+            sha: None,
         }
     }
 
@@ -3759,6 +3828,8 @@ impl Job {
             runner: RUNNER.to_owned(),
             cli: None,
             leg: None,
+            event: None,
+            sha: None,
         }
     }
 
@@ -3776,6 +3847,23 @@ impl Job {
         Job {
             head: head.to_owned(),
             workflow_run,
+            ..self.clone()
+        }
+    }
+
+    /// The same job in a workflow `event` started, which carries the same ref: a
+    /// `pull_request_target` run on the default branch, say.
+    fn by(&self, event: &'static str) -> Job {
+        Job {
+            event: Some(event),
+            ..self.clone()
+        }
+    }
+
+    /// The same job whose token names `sha` as the commit of its event, while it proves its own.
+    fn naming(&self, sha: &str) -> Job {
+        Job {
+            sha: Some(sha.to_owned()),
             ..self.clone()
         }
     }
@@ -3860,6 +3948,7 @@ impl Job {
             ),
             None => (format!("refs/heads/{}", self.branch), String::new(), "push"),
         };
+        let event = self.event.unwrap_or(event);
         json!({
             "iss": ISSUER,
             "aud": AUDIENCE,
@@ -3869,6 +3958,7 @@ impl Job {
             "ref": git_ref,
             "head_ref": head_ref,
             "event_name": event,
+            "sha": self.sha.as_deref().unwrap_or(&self.head),
             "iat": now,
             "nbf": now,
             "exp": now + 300,

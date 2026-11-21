@@ -253,15 +253,15 @@ pub(crate) fn find(root: &Path, files: &[String], have: &Have, host: &str) -> Ve
     if have.pictures
         && let Ok(text) = std::fs::read_to_string(root.join("README.md"))
         && !text.contains(host)
-        && !text.contains(&format!("{}/readme/", crate::host::FILES))
+        && !text.contains(&format!("{}/showcase/", crate::host::FILES))
     {
         found.push(Opportunity::new(
             Kind::ReadmeMedia,
             format!(
-                "checks take stills and films, and README.md shows none: a public repository \
-                 can show each with ![name]({}/readme/<owner>/<repo>/<check>/<picture>), the \
-                 picture from the newest passing proof of the default branch (Fearlezz's README, \
-                 Pictures in your README)",
+                "checks take stills and films, and README.md shows none: fearlezz setup \
+                 showcase prints the markup that shows each from \
+                 {}/showcase/<owner>/<repo>/<check>/<picture>, the picture from the newest \
+                 passing proof of the default branch (Fearlezz's README, Showcase media)",
                 crate::host::FILES
             ),
             readme,

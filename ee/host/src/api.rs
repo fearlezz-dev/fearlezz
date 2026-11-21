@@ -182,8 +182,13 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
             planned.push(check);
         }
     }
+    // The event and commit CI's token names, which showcase pictures ask for; none for a local run.
+    let (event, sha) = match &writer {
+        Writer::Ci(token) => (token.event.as_str().into(), token.sha.as_str().into()),
+        Writer::Local(_) => (Value::Null, Value::Null),
+    };
     let mut statements = vec![Statement::new(
-        "INSERT INTO runs (id, work, git_ref, head, base, source, state, opened, touched) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7, ?7)",
+        "INSERT INTO runs (id, work, git_ref, head, base, source, state, opened, touched, event, sha) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7, ?7, ?8, ?9)",
         [
             id.as_str().into(),
             work.id.as_str().into(),
@@ -192,6 +197,8 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
             open.base.as_str().into(),
             source.into(),
             opened.into(),
+            event,
+            sha,
         ],
     )];
     for (position, check) in planned.iter().enumerate() {
