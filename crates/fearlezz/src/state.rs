@@ -507,7 +507,7 @@ fn compared(
         && !crate::red::test_files(check, wt).is_empty()
         && match *fix {
             Some(fix) => fix,
-            None => *fix.insert(crate::red::is_fix_change(&wt.git, &wt.base)?),
+            None => *fix.insert(crate::red::is_fix_change(&wt.git, &wt.base)?.is),
         };
     Ok(Compared {
         look,
@@ -528,7 +528,7 @@ fn red_hold(wt: &Worktree, checks: &[CheckView]) -> Result<Option<String>> {
         .filter_map(|c| Some((c.id.as_str(), c.red.as_ref()?)))
         .filter(|(_, mark)| mark.unshown.is_some())
         .collect();
-    if held.is_empty() || !crate::red::is_fix_change(&wt.git, &wt.base)? {
+    if held.is_empty() || !crate::red::is_fix_change(&wt.git, &wt.base)?.is {
         return Ok(None);
     }
     Ok(held.into_iter().find_map(|(id, mark)| mark.next(id)))

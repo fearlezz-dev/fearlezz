@@ -717,7 +717,11 @@ fn red_before_green(
     stage: &str,
     proof: &mut proof::Proof,
 ) -> Result<bool> {
-    let fix = red::is_fix_change(&wt.git, &wt.base)?;
+    let decided = red::is_fix_change(&wt.git, &wt.base)?;
+    let fix = decided.is;
+    // Said once, before the first check red before green compares, so a fix shows what
+    // made it one.
+    let mut said = false;
     let mut blocks = false;
     for &(check, head) in green {
         let ran = red::run(
@@ -734,6 +738,9 @@ fn red_before_green(
             store::AgainstBase::update(head, &wt.base, |a| a.red = Some(red::Mark { unshown }))
         };
         let mut record = |red: proof::Red| {
+            if !std::mem::replace(&mut said, true) {
+                println!("{}", decided.line());
+            }
             for line in red.lines(id) {
                 println!("{line}");
             }

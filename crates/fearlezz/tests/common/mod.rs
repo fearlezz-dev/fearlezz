@@ -92,6 +92,26 @@ impl Repo {
         git_in(&self.root, args)
     }
 
+    /// Points `origin` at GitHub and puts a fake `gh` running `script` first on a PATH, which
+    /// it returns, so a run asks it for the branch's pull request. The fake lives in the git
+    /// folder, outside the work, and fails unless it is asked `pr view --json title,state`.
+    pub(crate) fn fake_gh(&self, script: &str) -> String {
+        self.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ]);
+        let bin = self.path(".git/fake-bin");
+        fs::create_dir_all(&bin).unwrap();
+        let gh = bin.join("gh");
+        let asked =
+            r#"[ "$*" = "pr view --json title,state" ] || { echo "gh asked: $*" >&2; exit 2; }"#;
+        fs::write(&gh, format!("#!/bin/sh\n{asked}\n{script}\n")).unwrap();
+        fs::set_permissions(&gh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        format!("{}:{}", bin.display(), std::env::var("PATH").unwrap())
+    }
+
     pub(crate) fn commit(&self, message: &str) {
         self.git(&["add", "-A"]);
         self.git(&["commit", "-q", "-m", message]);
@@ -238,6 +258,13 @@ fn fearlezz(dir: &Path, cache: Option<&Path>, args: &[&str], env: &[(&str, &str)
     }
     // Never the developer's own sign in to a proof host: a test that wants one gives its own.
     cmd.env("XDG_CONFIG_HOME", no_config());
+    // Never the developer's own `gh`: a test that wants one puts a fake first with `fake_gh`.
+    let path = format!(
+        "{}:{}",
+        sealed_gh().display(),
+        std::env::var("PATH").unwrap()
+    );
+    cmd.env("PATH", path);
     // Tests choose for themselves whether they run as on CI.
     cmd.args(args)
         .current_dir(dir)
@@ -260,6 +287,23 @@ fn run(cmd: &mut Command) -> Output {
         stdout: String::from_utf8(out.stdout).unwrap(),
         stderr: String::from_utf8(out.stderr).unwrap(),
     }
+}
+
+/// A folder holding a `gh` that always fails, as one signed out of GitHub, first on every
+/// test's PATH so no test reaches the developer's own pull requests.
+fn sealed_gh() -> PathBuf {
+    static SEALED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    SEALED
+        .get_or_init(|| {
+            let bin = std::env::temp_dir()
+                .join(format!("fearlezz-tests-sealed-gh-{}", std::process::id()));
+            fs::create_dir_all(&bin).unwrap();
+            let gh = bin.join("gh");
+            fs::write(&gh, "#!/bin/sh\necho 'gh is sealed in tests' >&2\nexit 1\n").unwrap();
+            fs::set_permissions(&gh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            bin
+        })
+        .clone()
 }
 
 /// A config folder with no sign in to any proof host, which Fearlezz only reads.

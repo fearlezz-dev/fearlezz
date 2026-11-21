@@ -130,16 +130,6 @@ impl Git {
         self.short("HEAD")
     }
 
-    /// The subjects of the commits on HEAD since `commit`, newest first.
-    pub(crate) fn subjects_since(&self, commit: &str) -> Result<Vec<String>> {
-        let range = format!("{commit}..HEAD");
-        Ok(self
-            .git(&["log", "--format=%s", &range])?
-            .lines()
-            .map(str::to_string)
-            .collect())
-    }
-
     /// The commits since `commit` up to HEAD, oldest first, without merge commits: each one's
     /// short id and subject.
     pub(crate) fn commits_since(&self, commit: &str) -> Result<Vec<(String, String)>> {
