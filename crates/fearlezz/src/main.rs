@@ -191,6 +191,9 @@ enum Setup {
         #[arg(long, value_enum)]
         ci: Option<init::Ci>,
     },
+    /// Print the guide an agent follows to set Fearlezz up in a repository: learn it, ask the
+    /// developer what it cannot answer, take over what proves work today.
+    Guide,
     /// Write the shared settings into each tool's own file (lint levels and more).
     Sync,
     /// Move pieces from a repository to their newest tag of the same major version (or only
@@ -870,6 +873,10 @@ fn setup(what: Setup) -> Result<bool> {
             after,
             json,
         } => setup_compare(&before, &after, json)?,
+        Setup::Guide => {
+            print!("{}", settings::GUIDE);
+            println!("\nnext: follow the guide from step 1, learning the project");
+        }
         Setup::Sync => setup_sync()?,
         Setup::Hook { agent, event } => setup_hook(agent, event)?,
         Setup::Down { all } => setup_down(all)?,

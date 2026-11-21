@@ -4,6 +4,12 @@ Proof, not "trust me". Fearlezz helps coding agents show that their work is righ
 
 Status: early. The core loop, stills and films, environments, settings and rules work.
 
+**Set it up with your coding agent.** Paste this into it, in your repository; [SETUP.md](SETUP.md) has it install Fearlezz, ask you only what the repository cannot answer, and set it up:
+
+```text
+Read https://github.com/fearlezz-dev/fearlezz/blob/main/SETUP.md and set up Fearlezz in this repository.
+```
+
 ## How it works
 
 - A project declares **checks** in `fearlezz.toml`: any command and the stage it belongs to. `use = ["rust"]` pulls in ready pieces (built in, from the repo, or from someone's repo) that the project tunes field by field.
@@ -44,7 +50,7 @@ Or pick what fits the project:
 | devenv | add `fearlezz.url = "github:fearlezz-dev/fearlezz"` to `inputs` in `devenv.yaml`, and `inputs.fearlezz.packages.${pkgs.stdenv.system}.default` to `packages` |
 | Cargo | `cargo install --git https://github.com/fearlezz-dev/fearlezz fearlezz` |
 
-In a project, `fearlezz setup init` writes a starter `fearlezz.toml` from the languages it finds; `fearlezz setup sync` then writes the agent skill, hooks and lint settings.
+In a project, `fearlezz setup init` writes a starter `fearlezz.toml` from the languages it finds; `fearlezz setup sync` then writes the agent skill, hooks and lint settings. `fearlezz setup guide` prints the whole setup an agent follows, matching the installed version.
 
 A check that needs two commands lists them as steps, never joined with `&&`:
 
