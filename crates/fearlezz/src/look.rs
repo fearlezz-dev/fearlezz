@@ -148,7 +148,7 @@ pub(crate) enum LookOutcome {
 /// `$FEARLEZZ_OUT` matching the glob is a still (or film), for tools that write pictures into a
 /// folder and no `proof.jsonl`. Each is named by its path below the glob's fixed folders,
 /// without the extension: `stills/desktop/home.png` matched by `stills/**/*.png` is
-/// `desktop/home`.
+/// `desktop/home`. Its look adds a film's extension back (`media_proofs`).
 pub(crate) struct MediaGlob {
     kind: &'static str,
     glob: crate::read::Glob,
@@ -181,7 +181,8 @@ impl MediaGlob {
     }
 }
 
-/// A still, film or text a run lists, by the name its look gives it.
+/// A still, film or text a run lists, by the name its look gives it: its id, a film's with its
+/// file's extension.
 pub(crate) struct MediaProof {
     pub name: String,
     pub kind: String,
@@ -190,8 +191,21 @@ pub(crate) struct MediaProof {
 
 /// The stills, films and texts `result` lists, in its order.
 pub(crate) fn media_proofs(result: &RunResult) -> Vec<MediaProof> {
-    result
-        .proofs
+    media_of(&result.proofs)
+}
+
+/// The name two pictures of `proofs` share, if any: a look, a verdict and a note know a picture
+/// only by its name, so a run that gives two one name fails.
+pub(crate) fn shared_name(proofs: &[serde_json::Value]) -> Option<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    media_of(proofs)
+        .into_iter()
+        .find(|p| !seen.insert(p.name.clone()))
+        .map(|p| p.name)
+}
+
+fn media_of(proofs: &[serde_json::Value]) -> Vec<MediaProof> {
+    proofs
         .iter()
         .filter_map(|p| {
             let kind = p["kind"].as_str()?;
@@ -199,7 +213,13 @@ pub(crate) fn media_proofs(result: &RunResult) -> Vec<MediaProof> {
                 return None;
             }
             let file = p["file"].as_str()?.to_string();
-            let name = p["id"].as_str().map(String::from).unwrap_or(file.clone());
+            let mut name = p["id"].as_str().map(String::from).unwrap_or(file.clone());
+            // A film keeps its file's extension, so a still and a film of one screen (`home`
+            // and `home.webm`) never share a name, nor with it their verdicts and notes.
+            let (_, ext) = fearlezz_proof::look::extension(&file);
+            if kind == FILM && !ext.is_empty() && fearlezz_proof::look::extension(&name).1 != ext {
+                name = format!("{name}.{ext}");
+            }
             Some(MediaProof {
                 name,
                 kind: kind.to_string(),

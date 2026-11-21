@@ -5,6 +5,13 @@ name = "fearlezz-host"
 main = "build/index.js"
 compatibility_date = "2026-10-01"
 
+# The Worker runs beside its D1 database (in Western Europe), not beside the person: one write
+# makes some twenty queries one after another, and from the far side of the world each would
+# cross it. The rooms get the same region (`room::REGION`).
+[placement]
+mode = "smart"
+hint = "weur"
+
 # Both origins are custom domains of this Worker: the app, and the proof files on another site.
 routes = [
   { pattern = "fearlezz.seamlezz.com", custom_domain = true },

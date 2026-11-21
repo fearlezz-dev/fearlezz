@@ -11,6 +11,7 @@
 
 use fearlezz_proof::events::{Source, WorkChange};
 use fearlezz_proof::look::Look;
+use fearlezz_proof::notes::{Note, NoteState};
 use fearlezz_proof::review::{self, Verdict};
 use fearlezz_proof::{Proof, events::RunState};
 use serde::Deserialize;
@@ -18,7 +19,7 @@ use serde_json::json;
 use worker::{D1Database, Env, Request, Response};
 
 use crate::access::{self, Action, Viewer};
-use crate::work::{self, Derive, Event, RunRow, Statement, Write, read};
+use crate::work::{self, Derive, Event, NOTE_COLUMNS, NoteRow, RunRow, Statement, Write, read};
 use crate::{Answer, Config, Refusal, github, jobs, not_found, now, room, session};
 
 #[derive(Deserialize)]
@@ -74,6 +75,76 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
     let run = run(env, config, &db, viewer, id).await?;
     reviewed(&run, "verdicts are given")?;
     access::can(env, config, viewer, Action::Verdict, &run.repository).await?;
+    let key = content(&db, id, &ask).await?;
+    let verdict = Verdict {
+        check: ask.check,
+        picture: ask.picture,
+        key,
+        by: person.login,
+        at: now() as f64,
+        run: id.to_owned(),
+        head: run.head,
+    };
+    // Saying it looks right settles what the picture's open notes asked: they are resolved by
+    // the same person, in the same write.
+    let open: Vec<NoteRow> = db
+        .prepare(format!(
+            "SELECT {NOTE_COLUMNS} FROM notes WHERE work = ?1 AND check_id = ?2 AND picture = ?3 AND state = 'open' ORDER BY at, rowid"
+        ))
+        .bind(&[
+            run.work.as_str().into(),
+            verdict.check.as_str().into(),
+            verdict.picture.as_str().into(),
+        ])?
+        .all()
+        .await?
+        .results()?;
+    let resolved: Vec<Note> = open
+        .into_iter()
+        .map(|row| {
+            let mut note = row.note();
+            note.state = NoteState::Resolved;
+            note.resolved_by = Some(verdict.by.clone());
+            note
+        })
+        .collect();
+    let resolves = resolved.iter().map(|note| {
+        Statement::new(
+            "UPDATE notes SET state = 'resolved', resolved_by = ?2 WHERE id = ?1 AND state = 'open'",
+            [note.id.as_str().into(), verdict.by.as_str().into()],
+        )
+    });
+    let write = Write {
+        statements: [Statement::new(
+            "INSERT INTO verdicts (work, check_id, picture, key, login, at, run, head) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             ON CONFLICT (work, check_id, picture, key) DO UPDATE SET login = excluded.login, at = excluded.at, run = excluded.run, head = excluded.head",
+            [
+                run.work.as_str().into(),
+                verdict.check.as_str().into(),
+                verdict.picture.as_str().into(),
+                verdict.key.as_str().into(),
+                verdict.by.as_str().into(),
+                verdict.at.into(),
+                verdict.run.as_str().into(),
+                verdict.head.as_str().into(),
+            ],
+        )]
+        .into_iter()
+        .chain(resolves)
+        .collect(),
+        event: Some(Event::work(WorkChange::Verdict {
+            verdict: verdict.clone(),
+            resolved: resolved.clone(),
+        })),
+        derive: Derive::Review,
+    };
+    room::write(env, &run.work, &write).await?;
+    Ok(Response::from_json(&json!({ "verdict": verdict, "resolved": resolved }))?.with_status(201))
+}
+
+/// The content key of the picture `ask` names in run `id`, which a verdict is on: refused when
+/// the run has no such picture to look at, or not all its files yet.
+async fn content(db: &D1Database, id: &str, ask: &Ask) -> Result<String, Refusal> {
     let look: Option<String> = db
         .prepare("SELECT look FROM checks WHERE run = ?1 AND id = ?2")
         .bind(&[id.into(), ask.check.as_str().into()])?
@@ -93,40 +164,45 @@ pub async fn verdict(mut req: Request, env: &Env, config: &Config, id: &str) -> 
                 ),
             )
         })?;
-    let held = work::held(&db, id).await?;
-    let key = review::key(item, |path| held.get(path).cloned())
-        .ok_or_else(|| Refusal::new(409, "its pictures are not all in yet; wait for them"))?;
-    let verdict = Verdict {
-        check: ask.check,
-        picture: ask.picture,
-        key,
-        by: person.login,
-        at: now() as f64,
-        run: id.to_owned(),
-        head: run.head,
-    };
+    let held = work::held(db, id).await?;
+    review::key(item, |path| held.get(path).cloned())
+        .ok_or_else(|| Refusal::new(409, "its pictures are not all in yet; wait for them"))
+}
+
+/// `DELETE /api/v2/runs/<run>/verdicts`: a person with write access takes back the verdict on
+/// a picture's content, which then waits for a look again wherever it shows. Taking back a
+/// verdict that is not there changes nothing.
+pub(crate) async fn withdraw(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
+    let person = access::speaker(&req, env, config, "take back a verdict").await?;
+    let ask: Ask = req
+        .json()
+        .await
+        .map_err(|_not_json| Refusal::new(400, "send {\"check\", \"picture\"}"))?;
+    let db = env.d1("DB")?;
+    let viewer = Viewer::Person(&person);
+    let run = run(env, config, &db, viewer, id).await?;
+    reviewed(&run, "verdicts are taken back")?;
+    access::can(env, config, viewer, Action::Verdict, &run.repository).await?;
+    let key = content(&db, id, &ask).await?;
     let write = Write {
         statements: vec![Statement::new(
-            "INSERT INTO verdicts (work, check_id, picture, key, login, at, run, head) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-             ON CONFLICT (work, check_id, picture, key) DO UPDATE SET login = excluded.login, at = excluded.at, run = excluded.run, head = excluded.head",
+            "DELETE FROM verdicts WHERE work = ?1 AND check_id = ?2 AND picture = ?3 AND key = ?4",
             [
                 run.work.as_str().into(),
-                verdict.check.as_str().into(),
-                verdict.picture.as_str().into(),
-                verdict.key.as_str().into(),
-                verdict.by.as_str().into(),
-                verdict.at.into(),
-                verdict.run.as_str().into(),
-                verdict.head.as_str().into(),
+                ask.check.as_str().into(),
+                ask.picture.as_str().into(),
+                key.as_str().into(),
             ],
         )],
-        event: Some(Event::work(WorkChange::Verdict {
-            verdict: verdict.clone(),
+        event: Some(Event::work(WorkChange::Withdrawn {
+            check: ask.check,
+            picture: ask.picture,
+            key,
         })),
         derive: Derive::Review,
     };
     room::write(env, &run.work, &write).await?;
-    Ok(Response::from_json(&json!({ "verdict": verdict }))?.with_status(201))
+    Ok(Response::from_json(&json!({}))?)
 }
 
 /// `POST /api/v2/runs/<run>/accept`: an admin accepts exactly what a finished CI run's change

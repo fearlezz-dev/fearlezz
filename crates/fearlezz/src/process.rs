@@ -100,7 +100,7 @@ impl<'a> Project<'a> {
         if let Some(vars) = vars {
             cleared(&mut cmd, vars);
         }
-        if let Some(path) = self.path() {
+        if let Some(path) = self.path(folder) {
             cmd.env("PATH", path);
         }
         if let Some(folder) = folder {
@@ -110,11 +110,14 @@ impl<'a> Project<'a> {
         cmd
     }
 
-    /// PATH with the project's tool folders that exist in front, or None when there are none.
-    pub(crate) fn path(&self) -> Option<OsString> {
-        let dirs: Vec<PathBuf> = TOOL_DIRS
-            .iter()
-            .map(|d| self.root.join(d))
+    /// PATH with the project's tool folders that exist in front, or None when there are none:
+    /// those of the command's `folder` first, where a project in a folder keeps its own
+    /// packages, then the root's.
+    pub(crate) fn path(&self, folder: Option<&Path>) -> Option<OsString> {
+        let dirs: Vec<PathBuf> = folder
+            .into_iter()
+            .chain([self.root])
+            .flat_map(|base| TOOL_DIRS.iter().map(move |d| base.join(d)))
             .filter(|d| d.is_dir())
             .collect();
         if dirs.is_empty() {

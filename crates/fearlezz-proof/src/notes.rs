@@ -109,6 +109,10 @@ pub struct Note {
     /// Who resolved it, once someone did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_by: Option<String>,
+    /// The note it was made from, such as the same note on another variant of the screen: the
+    /// first of them, so a group's notes share one link and an edit can reach them all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 impl Note {
@@ -134,6 +138,21 @@ pub struct Ask {
     pub time: Option<f64>,
     /// What should change there.
     pub words: String,
+    /// The note it is made from, to keep them linked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+}
+
+/// What a person sends to change a note's words: on that note alone, or with `linked` on every
+/// open note linked with it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "NoteEdit"))]
+pub struct Edit {
+    /// What should change there now.
+    pub words: String,
+    /// Whether the notes linked with it take the words too.
+    #[serde(default)]
+    pub linked: bool,
 }
 
 /// The longest words a note takes.

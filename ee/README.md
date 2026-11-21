@@ -97,6 +97,18 @@ repository the host holds no work of, is `404`. It answers `no-store`, may not b
 the files origin (the page reads a text there to diff it), and its `img-src` and `media-src`
 name the files origin, the only place pictures load from.
 
+Every state of the pages worth seeing is a fixture in `ee/app/e2e/states.ts`, in the proof
+model's own types. The `ee-page-look` check shows each one with Playwright against a stand in
+host (`ee/app/e2e/host.ts`: the live connection, the API and the files origin), at a fixed
+clock, on desktop and mobile, light and dark, and Fearlezz compares the stills with the base
+commit's. A new state of a page gets a fixture there, so its pull request shows it. The pages
+in motion are films beside them (`ee/app/e2e/films.look.ts`: a run arriving live, comparing,
+reviewing with the keys, a note made again on another theme and edited, full screen and zoom,
+a picture to look at again, a failed run, a weaker proof, a new film and sharing), compared the
+same way. Run it alone with
+`fearlezz run ee-page-look`, or with `bunx playwright test --update-snapshots=all` in
+`ee/app`; the stills land in `e2e/stills` and the films in `e2e/films`.
+
 **Live.** D1 is the one record; the Durable Object of a work (`WorkRoom`) holds the WebSockets
 of its open pages, which hibernate with it, and runs every write to the work, one at a time
 (`blockConcurrencyWhile`): the write and the bump of the work's `seq` in one D1 batch, then the
@@ -113,7 +125,8 @@ seconds. The live connection's messages are `events::Live`:
   (a new run), `started`, `finished` (with the check's look and its pictures' content keys, if
   any), `done` (with every look and key) or `cancelled` (its job ended without done);
 - and `{"kind": "work", "seq", "change"}` for what belongs to the work, not one run: a
-  `verdict`, the head's `review` as it now stands, or the CI jobs `waiting` for a runner.
+  `verdict`, a verdict `withdrawn` (its `check`, `picture` and content `key`), the head's `review`
+  as it now stands, or the CI jobs `waiting` for a runner.
 
 The snapshot also carries the work's `review`, its `verdicts` and its `waiting` jobs.
 
@@ -182,15 +195,33 @@ ends with the newest review, and a GitHub that hangs or fails never fails or hol
   the SHA-256 of its before and after like a still. So a picture
   that did not change keeps its verdict across runs and pushes; the page says "carried over".
   A verdict only says a picture looks right: what should change is a note.
+  The page says it of several pictures of a screen at once (each its own verdict): a film's
+  looks right reaches the still of its viewport and theme, and a person can reach the
+  screen's viewport, theme or every variant.
+  Saying a picture looks right resolves its open notes in the same write, by the same
+  person (the `verdict` event carries them as `resolved`).
 - **A picture needs change while an open note is on it**, whatever verdict its content has;
   that is derived, never stored. Resolving its last note brings it back to looks right when a
   verdict holds for its current content, and to not looked at yet otherwise. Each picture of
   the review says where it stands (`standing`: `waits`, `needs_change` or `looks_right`).
+- **A picture that changed since a person looked says so** (`changed_since`): the newest
+  looks right verdict on its earlier content, when none is on what it shows now, and its open
+  notes made on a run that showed other content (the host reads the runs open notes were made
+  on to know). The verdict and the notes stay as they were: a person says looks right again,
+  or resolves the notes. The page marks it Look again (a film as well as a still), opens on the
+  first such picture (else the first that waits for a look), and moves on to it after a verdict.
 - **Notes** say what should change, on a CI run or a local one (so feedback reaches the agent
   before a pull request exists): a region of a picture's before, its after or both (in
   fractions of the picture), at a moment of a film, with the person's words. A note is kept by
   check and picture, so an open note shows on every later run of the work until a person with
-  write access resolves it.
+  write access resolves it. A note made again from another (on another variant of the screen)
+  keeps a `link` to the first of its group, so editing one offers to edit every open note of
+  the group in the same write (the `edited` event carries them).
+- **The page shows what a person says at once**: a verdict, its undo, a note, an edit or a
+  resolve shows as the event the host will send (`ee/app/src/hopes.ts`), until the host's own
+  event comes; a refusal takes it back and says why. The Worker runs beside D1 (`placement` in
+  `wrangler.toml`) and rooms are made there, since one write queries D1 some twenty times in
+  turn.
 - **An accept is per head**, by an admin of the repository, of exactly what a finished CI run
   of it weakens, which failed its proof job. The host keeps it and runs that failed job again
   as the app: it lists the jobs of the run's workflow run attempt (`GET /repos/{owner}/{repo}/
@@ -203,7 +234,9 @@ ends with the newest review, and a GitHub that hangs or fails never fails or hol
 | Call | Does |
 | --- | --- |
 | `POST /api/v2/runs/<run>/verdicts` | Body `{"check", "picture"}`: it looks right. `201 {"verdict"}`. `403` without write access; `409` for a local run, a picture with nothing to look at, or one whose files are not all in yet. |
-| `POST /api/v2/runs/<run>/notes` | On a CI or a local run. Body `{"check", "picture", "side": "before" \| "after" \| "both", "region": {"x", "y", "w", "h"}, "time"?, "words"}`. `201 {"note"}`. `400` for empty words (at most 2000 characters), a region outside the picture, a side the picture lacks, or a time on a still; `403` without write access; `409` for a picture the run does not have. |
+| `DELETE /api/v2/runs/<run>/verdicts` | Body `{"check", "picture"}`: take back the verdict on that picture's content, which waits for a look again. `200 {}`, also when it had none. `403` without write access; `409` as for a verdict. |
+| `POST /api/v2/runs/<run>/notes` | On a CI or a local run. Body `{"check", "picture", "side": "before" \| "after" \| "both", "region": {"x", "y", "w", "h"}, "time"?, "words", "link"?}` (`link`: the note it was made again from). `201 {"note"}`. `400` for empty words (at most 2000 characters), a region outside the picture, a side the picture lacks, or a time on a still; `403` without write access; `409` for a picture the run does not have. |
+| `PATCH /api/v2/notes/<id>` | Body `{"words", "linked"?}`: new words for that open note, or with `linked` for every open note of its group. `200 {"notes"}`. `400` for empty words; `403` without write access; `409` for a resolved note. |
 | `POST /api/v2/notes/<id>/resolve` | Body `{}`. `200 {"note"}`. `403` without write access. |
 | `POST /api/v2/runs/<run>/accept` | Body `{}`. `201 {"accept"}`, once GitHub runs the failed proof job again. `403` unless admin, `409` unless the run is done with weakenings; `502` when the accept is kept but GitHub did not run the job again (run it again on GitHub). |
 | `GET /api/v2/viewer/<owner>/<repo>` | `{"login", "role": "admin" \| "write" \| "read"}`, or `{"login": null}` signed out. |
@@ -341,7 +374,9 @@ answers on two origins and tells them apart by the request's host:
   files under a grant, and showcase media (below), and nothing else. It reads no cookies and sets none.
 
 Files origin: `/<grant>/<path>` is the run's picture, film or text at that path, with `Range`
-support (films need it). Only png, jpeg, webp, gif, avif, mp4, webm and txt are served, each with
+support (films need it), and its bytes' SHA-256 as its `ETag`, so a browser that holds it gets
+`304` (`no-cache`: a path of a run may be replaced while the run goes). The page fetches the
+next pictures a person will see ahead (`ee/app/src/preload.ts`). Only png, jpeg, webp, gif, avif, mp4, webm and txt are served, each with
 the content type its name pins (a text of a look is kept as `.txt`, served as
 `text/plain; charset=utf-8`) and `X-Content-Type-Options: nosniff`; anything else (svg, html, a
 log) is `404`, so nothing a pull request wrote ever runs as a page. Each answer allows the app

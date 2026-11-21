@@ -91,6 +91,28 @@ describe("review", () => {
     expect(applyWork(two, 5, { kind: "verdict", verdict: verdict("x") })).toBe(two);
   });
 
+  test("a verdict taken back leaves the work's, only that content's", () => {
+    const one = applyWork(snapshot, 4, { kind: "verdict", verdict: verdict("writer") });
+    const other = { ...verdict("writer"), key: "still:c:d" };
+    const two = applyWork(one, 5, { kind: "verdict", verdict: other });
+    const three = applyWork(two, 6, { kind: "withdrawn", check: "screens", picture: verdict("x").picture, key: "still:b:a" });
+    expect(three.verdicts).toEqual([other]);
+  });
+
+  test("a verdict that resolved notes takes them off the page", () => {
+    const note = { id: "n1", check: "screens", picture: verdict("x").picture, run: "r1", head: "abc1234", side: "after" as const, region: { x: 0, y: 0, w: 1, h: 1 }, words: "tight", by: "w", at: 1, state: "open" as const };
+    const noted = { ...snapshot, notes: [note, { ...note, id: "n2", picture: "other.png" }] };
+    const next = applyWork(noted, 4, { kind: "verdict", verdict: verdict("writer"), resolved: [{ ...note, state: "resolved", resolved_by: "writer" }] });
+    expect(next.notes?.map((n) => n.id)).toEqual(["n2"]);
+  });
+
+  test("edited notes take their new words", () => {
+    const note = { id: "n1", check: "screens", picture: "card.png", run: "r1", head: "abc1234", side: "after" as const, region: { x: 0, y: 0, w: 1, h: 1 }, words: "tight", by: "w", at: 1, state: "open" as const };
+    const noted = { ...snapshot, notes: [note, { ...note, id: "n2", words: "dark" }] };
+    const next = applyWork(noted, 4, { kind: "edited", notes: [{ ...note, words: "more room" }] });
+    expect(next.notes?.map((n) => n.words)).toEqual(["more room", "dark"]);
+  });
+
   test("the review and the waiting jobs are replaced as they come", () => {
     const title = { read: "", write: "", admin: "" };
     const review: Review = { head: "abc1234", state: "waits", pictures: [], weakened: [], title };

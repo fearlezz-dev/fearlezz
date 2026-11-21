@@ -3,13 +3,17 @@
 
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { type CheckState, Feed, type Status, type TestState, connect, namedTests, stateOf } from "./live";
+import { type CheckState, Feed, type Status, connect, namedTests, stateOf } from "./live";
 import { PicturesPanel } from "./PicturesPanel";
-import { picturesOf } from "./pictures";
 import type { Job, Review, Run, RunCheck, Snapshot, Weakening } from "./proof";
 import { DiffLines } from "./DiffLines";
-import { type Looker, accept, canAccept, canSay, localBy, maySignIn, roleOf, signIn, signedIn, toLookAt, viewerOf } from "./review";
+import { Failures, failedOf } from "./Failures";
+import { type Looker, accept, canAccept, canSay, localBy, maySignIn, opening, signIn, signedIn, viewerOf } from "./review";
 import { ShareControl } from "./ShareControl";
+import { type Crumb, Placeholder, TopBar } from "./Shell";
+import { Icon, type IconName } from "./icons";
+import { hoped, seen } from "./hopes";
+import { headline } from "./standing";
 import { ago } from "./ago";
 import { short } from "./short";
 
@@ -26,23 +30,28 @@ export function App(props: { shared?: string | undefined }) {
   const [status, setStatus] = createSignal<Status["kind"]>("connecting");
   const [gone, setGone] = createSignal("");
   const [work, setWork] = createStore<{ state?: Snapshot }>({});
-  // The run a person picked; until then the newest, so a new run shows as it opens.
+  // The run a person picked; until then the one `opening` names, so a new run shows as it opens.
   const [picked, setPicked] = createSignal<string | null>(null);
   // Running checks show their time as it passes.
   const [now, setNow] = createSignal(Date.now() / 1000);
   const tick = setInterval(() => setNow(Date.now() / 1000), 1000);
   const stop = connect(location.pathname, () => new Feed(), (next: Status) => {
     setStatus(next.kind);
-    if (next.kind === "live") setWork("state", reconcile(next.state, { key: "id" }));
+    if (next.kind === "live") {
+      setWork("state", reconcile(next.state, { key: "id" }));
+      seen();
+    }
     if (next.kind === "gone") setGone(next.why);
   });
   onCleanup(() => {
     stop();
     clearInterval(tick);
   });
+  // The work with what this person said that the host has not settled yet, for the pictures.
+  const said = createMemo(() => work.state && hoped(work.state));
   const shown = createMemo(() => {
     const runs = work.state?.runs ?? [];
-    return runs.find((r) => r.id === picked()) ?? runs[0];
+    return runs.find((r) => r.id === picked()) ?? opening(runs);
   });
   // Who looks, asked once the work says its repository.
   const [viewer, setViewer] = createSignal<Looker>();
@@ -64,81 +73,132 @@ export function App(props: { shared?: string | undefined }) {
     return r && r.head === shown()?.head ? r : undefined;
   });
 
+  const crumbs = (): Crumb[] => {
+    const w = work.state?.work;
+    if (!w) return [];
+    const pull = w.pull;
+    return [
+      { label: w.repository, href: props.shared ? undefined : `/${w.repository}`, data: "repository" },
+      pull ? { label: `#${pull.number}` } : { label: w.branch, mono: true },
+    ];
+  };
+
   return (
-    <main>
-      <Switch>
-        <Match when={status() === "gone"}>
-          <p class="note">{gone()}</p>
-        </Match>
-        <Match when={work.state}>
-          {(state) => (
-            <>
-              <header class="top">
-                <div class="crumb">
-                  <Show when={!props.shared} fallback={<span>{state().work.repository}</span>}>
-                    <a href={`/${state().work.repository}`} data-repository>
-                      {state().work.repository}
-                    </a>
-                  </Show>
-                  <code class="branch">{state().work.branch}</code>
-                  <span class={`live ${status()}`} title={status() === "live" ? "Updates live" : "Reconnecting"}>
-                    {status() === "live" ? "live" : "reconnecting"}
-                  </span>
-                  <Show when={!props.shared && canSay(viewer())}>
-                    <ShareControl work={state().work} />
-                  </Show>
-                </div>
-                <h1 data-title>{title(state())}</h1>
-                <div class="status">
-                  <Show when={shown()}>{(run) => <Standing run={run()} review={review()} viewer={viewer()} />}</Show>
-                  <Show when={props.shared}>
-                    <span class="shared" data-shared title="A shared link: this page only views">
-                      Shared, only views
+    <>
+      <TopBar crumbs={crumbs()} status={status()}>
+        <Show when={!props.shared && canSay(viewer()) && work.state}>{(state) => <ShareControl work={state().work} />}</Show>
+      </TopBar>
+      <main>
+        <Switch>
+          <Match when={status() === "gone"}>
+            <div class="empty" data-gone>
+              <Icon name="alert" size={22} />
+              <p class="note">{gone()}</p>
+            </div>
+          </Match>
+          <Match when={work.state}>
+            {(state) => (
+              <>
+                <header class="hero">
+                  <h1 data-title>{title(state())}</h1>
+                  <div class="meta">
+                    <span class="meta-item">
+                      <Icon name="branch" />
+                      <code class="branch">{state().work.branch}</code>
                     </span>
-                  </Show>
-                </div>
-              </header>
-              <Show when={state().runs.length > 0} fallback={<p class="note">No runs yet.</p>}>
-                <div class="cols">
-                  <div class="main">
-                    <Show when={review()?.weakened.length ? review() : undefined}>
-                      {(r) => <Weakenings review={r()} runs={state().runs} viewer={viewer()} repository={state().work.repository} />}
-                    </Show>
-                    <Show when={shown()} keyed>
-                      {(run) => <Looks run={run} state={state()} viewer={viewer()} />}
-                    </Show>
-                  </div>
-                  <aside class="runs" aria-label="Runs">
-                    <h2>Runs</h2>
-                    <For each={state().waiting ?? []}>{(job) => <Waiting job={job} now={now()} />}</For>
-                    <For each={latest(state().runs)}>
-                      {(run) => <RunView run={run} now={now()} shown={shown()?.id === run.id} onShow={() => setPicked(run.id)} />}
-                    </For>
-                    <Show when={earlier(state().runs).length}>
-                      {(n) => (
-                        <details class="earlier" open={earlier(state().runs).some((r) => r.id === shown()?.id)}>
-                          <summary>
-                            {n()} earlier {n() === 1 ? "run" : "runs"}
-                          </summary>
-                          <For each={earlier(state().runs)}>
-                            {(run) => (
-                              <RunView run={run} now={now()} shown={shown()?.id === run.id} onShow={() => setPicked(run.id)} />
-                            )}
-                          </For>
-                        </details>
+                    <Show when={shown()}>
+                      {(run) => (
+                        <span class="meta-item" title="The commit the run shown proves">
+                          <Icon name="commit" />
+                          <code class="head">{short(run().head)}</code>
+                        </span>
                       )}
                     </Show>
-                  </aside>
-                </div>
-              </Show>
-            </>
-          )}
-        </Match>
-        <Match when={true}>
-          <p class="note">Connecting…</p>
-        </Match>
-      </Switch>
-    </main>
+                    <Show when={state().work.pull?.url}>
+                      {(url) => (
+                        <a class="meta-item link" href={url()} target="_blank" rel="noopener noreferrer">
+                          <Icon name="pull" />
+                          Pull request
+                        </a>
+                      )}
+                    </Show>
+                    {/* The deploy its proof made of this head, which a person can open and try. */}
+                    <Show when={review()?.head === shown()?.head && webAddress(review()?.preview)}>
+                      {(url) => (
+                        <a class="meta-item link" data-preview href={url()} target="_blank" rel="noopener noreferrer">
+                          <Icon name="external" />
+                          Preview
+                        </a>
+                      )}
+                    </Show>
+                    <Show when={props.shared}>
+                      <span class="meta-item shared" data-shared title="A shared link: this page only views">
+                        <Icon name="eye" />
+                        Shared, only views
+                      </span>
+                    </Show>
+                  </div>
+                  <Show when={shown()}>{(run) => <Standing run={run()} review={review()} viewer={viewer()} />}</Show>
+                </header>
+                <Show
+                  when={state().runs.length > 0}
+                  fallback={
+                    <div class="empty">
+                      <Icon name="clock" size={22} />
+                      <p class="note">No runs yet.</p>
+                    </div>
+                  }
+                >
+                  <div class="cols">
+                    <div class="main">
+                      <Show when={review()?.weakened.length ? review() : undefined}>
+                        {(r) => <Weakenings review={r()} runs={state().runs} viewer={viewer()} repository={state().work.repository} />}
+                      </Show>
+                      <Show when={shown()} keyed>
+                        {(run) => (
+                          <>
+                            <Show when={failedOf(run).length}>
+                              <Failures checks={failedOf(run)} />
+                            </Show>
+                            <Looks run={run} state={said() ?? state()} viewer={viewer()} />
+                          </>
+                        )}
+                      </Show>
+                    </div>
+                    <aside class="runs" aria-label="Runs">
+                      <h2>Runs</h2>
+                      <For each={state().waiting ?? []}>{(job) => <Waiting job={job} now={now()} />}</For>
+                      <For each={latest(state().runs)}>
+                        {(run) => <RunView run={run} now={now()} shown={shown()?.id === run.id} onShow={() => setPicked(run.id)} />}
+                      </For>
+                      <Show when={earlier(state().runs).length}>
+                        {(n) => (
+                          <details class="earlier" open={earlier(state().runs).some((r) => r.id === shown()?.id)}>
+                            <summary>
+                              {n()} earlier {n() === 1 ? "run" : "runs"}
+                            </summary>
+                            <div class="earlier-runs">
+                              <For each={earlier(state().runs)}>
+                                {(run) => (
+                                  <RunView run={run} now={now()} shown={shown()?.id === run.id} onShow={() => setPicked(run.id)} />
+                                )}
+                              </For>
+                            </div>
+                          </details>
+                        )}
+                      </Show>
+                    </aside>
+                  </div>
+                </Show>
+              </>
+            )}
+          </Match>
+          <Match when={true}>
+            <Placeholder />
+          </Match>
+        </Switch>
+      </main>
+    </>
   );
 }
 
@@ -148,81 +208,23 @@ function title(state: Snapshot): string {
   return pull.title ? `#${pull.number} ${pull.title}` : `#${pull.number}`;
 }
 
-/** Where the run shown stands, in one line: once it ran, what waits for the person looking. A
- * local run is the agent's word, so it says so first and waits for no one. */
+/** Where the run shown stands, in one line, as `headline` words it; a bar while it runs. */
 function Standing(props: { run: Run; review: Review | undefined; viewer: Looker | undefined }) {
+  const line = () => headline(props.run, props.review, props.viewer);
   const ended = () => props.run.checks.filter((c) => c.entry).length;
-  const failed = () => props.run.checks.filter((c) => c.entry?.outcome === "failed").length;
-  const toLook = () => picturesOf(props.run).filter(toLookAt).length;
-  const head = () => short(props.run.head);
-  const kind = () => {
-    if (localBy(props.run)) return "local";
-    if (props.run.state === "running") return "run";
-    const state = props.review?.state;
-    // A weakening that waits for an accept is a decision, not a failure: it reads as one.
-    if (state === "waits" || (state === "failed" && props.review?.weakened.length && !props.review.accept)) return "look";
-    if (state === "needs_change") return "bad";
-    if (state === "approved") return "ok";
-    if (failed() || state === "failed" || props.run.state === "cancelled") return "bad";
-    return toLook() ? "look" : "ok";
-  };
-  const pictures = (n: number) => `${n} ${n === 1 ? "picture" : "pictures"}`;
-  const local = () => {
-    const by = localBy(props.run);
-    const what = `Unproven: ${by}'s local run of ${head()}`;
-    if (props.run.state === "running") return `${what}, ${ended()} of ${props.run.checks.length} checks`;
-    if (props.run.state === "cancelled") return `${what} stopped without its proof`;
-    if (failed()) return `${what}: ${failed()} ${failed() === 1 ? "check" : "checks"} failed`;
-    if (toLook()) return `${what}: ${pictures(toLook())} changed`;
-    return `${what}: its checks passed`;
-  };
-  const text = () => {
-    if (localBy(props.run)) return local();
-    if (props.run.state === "running") {
-      const looking = toLook() ? `, ${pictures(toLook())} to look at already` : "";
-      return `Proving ${head()}: ${ended()} of ${props.run.checks.length} checks${looking}`;
-    }
-    if (props.run.state === "cancelled") return `The run of ${head()} ended without its proof`;
-    if (failed()) return `${failed()} ${failed() === 1 ? "check" : "checks"} failed at ${head()}`;
-    // Once the review of this head failed, needs change, waits or is approved, the host's line
-    // for this person says it.
-    const review = props.review;
-    const said = review?.title[roleOf(props.viewer)];
-    if (said && review && ["failed", "needs_change", "waits", "approved"].includes(review.state)) return said;
-    if (toLook()) return `${pictures(toLook())} changed at ${head()}`;
-    return `Proved ${head()}`;
-  };
-  // The word on the pill; the sentence it shortens is its title.
-  const word = () => {
-    const by = localBy(props.run);
-    if (by) return props.run.state === "running" ? "Running locally" : "Unproven";
-    if (props.run.state === "running") return `Proving ${ended()} of ${props.run.checks.length}`;
-    if (props.run.state === "cancelled") return "Stopped";
-    if (failed()) return `${failed()} failed`;
-    const review = props.review;
-    if (review?.state === "failed") {
-      if (!review.weakened.length || review.accept) return "Failed";
-      return canAccept(props.viewer) ? "Waits for you" : "Waits for an admin";
-    }
-    if (review?.state === "needs_change") return "Needs change";
-    if (review?.state === "waits") return canSay(props.viewer) ? "Waits for you" : "Waits for a look";
-    if (review?.state === "approved") return review.pictures.length || review.weakened.length ? "Looks right" : "Proved";
-    if (toLook()) return "Pictures changed";
-    return "Proved";
-  };
   return (
-    <p class={`standing ${kind()}`} data-standing={kind()} title={text()}>
-      <span class="pill">{word()}</span>
-      <code class="head">{head()}</code>
-      {/* The deploy its proof made of this head, which a person can open and try. */}
-      <Show when={props.review?.head === props.run.head && webAddress(props.review?.preview)}>
-        {(url) => (
-          <a class="preview" data-preview href={url()} target="_blank" rel="noopener noreferrer">
-            Preview
-          </a>
-        )}
+    <div class={`standing ${line().tone}`} data-standing={line().tone} title={line().title} role="status">
+      <span class="standing-icon">
+        <Icon name={line().icon} size={18} />
+      </span>
+      <span class="pill">{line().word}</span>
+      <span class="detail">{line().detail}</span>
+      <Show when={props.run.state === "running"}>
+        <span class="progress" aria-hidden="true">
+          <i style={{ width: `${(ended() / Math.max(1, props.run.checks.length)) * 100}%` }} />
+        </span>
       </Show>
-    </p>
+    </div>
   );
 }
 
@@ -248,7 +250,10 @@ function Weakenings(props: { review: Review; runs: Run[]; viewer: Looker | undef
   return (
     <section class="weakenings" data-weakenings data-accepted={String(!!props.review.accept)} aria-labelledby="weakenings-title">
       <div class="weakenings-head">
-        <h2 id="weakenings-title">Weaker proof</h2>
+        <h2 id="weakenings-title">
+          <Icon name="shield" size={18} />
+          Weaker proof
+        </h2>
         <Switch>
           <Match when={props.review.accept}>
             {(a) => (
@@ -353,15 +358,13 @@ function Waiting(props: { job: Job; now: number }) {
 /** The run's pictures, or what to expect of them. */
 function Looks(props: { run: Run; state: Snapshot; viewer: Looker | undefined }) {
   const any = () => props.run.checks.some((c) => c.look);
+  // A run that failed says why above; that it took no pictures is no news then.
+  const empty = () => {
+    if (props.run.state === "running") return "Pictures show here as checks take them.";
+    return failedOf(props.run).length ? "" : "No pictures in this run.";
+  };
   return (
-    <Show
-      when={any()}
-      fallback={
-        <p class="pictures empty">
-          {props.run.state === "running" ? "Pictures show here as checks take them." : "No pictures in this run."}
-        </p>
-      }
-    >
+    <Show when={any()} fallback={<Show when={empty()}>{(words) => <p class="pictures empty">{words()}</p>}</Show>}>
       <PicturesPanel run={props.run} state={props.state} viewer={props.viewer} />
     </Show>
   );
@@ -372,7 +375,12 @@ function Looks(props: { run: Run; state: Snapshot; viewer: Looker | undefined })
 function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => void }) {
   const done = () => props.run.checks.filter((c) => c.entry).length;
   const by = () => localBy(props.run);
-  const name = () => (props.run.source.kind === "ci" ? props.run.source.job : "local");
+  // A leg's job is the same for every leg, so its name says the leg too, as GitHub's check does.
+  const name = () => {
+    const source = props.run.source;
+    if (source.kind !== "ci") return "local";
+    return source.leg && !source.job.includes(source.leg) ? `${source.job} ${source.leg}` : source.job;
+  };
   // A local run proves nothing: it ran, it did not prove.
   const verb = () => {
     if (props.run.state === "cancelled") return "Stopped";
@@ -408,9 +416,7 @@ function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => v
         </span>
       </button>
       <Show when={props.shown}>
-        <ul class="checks">
-          <For each={props.run.checks}>{(check) => <CheckView check={check} now={props.now} />}</For>
-        </ul>
+        <Checks checks={props.run.checks} now={props.now} />
         <Show when={props.run.source.kind === "ci" ? props.run.source : undefined}>
           {(ci) => (
             <Show when={ci().run_url}>
@@ -427,12 +433,62 @@ function RunView(props: { run: Run; now: number; shown: boolean; onShow: () => v
   );
 }
 
-const TEST_SHORT: Record<TestState, string> = { failed: "failed", flaky: "flaky", listed: "flaky, listed" };
-const TEST_WORDS: Record<TestState, string> = {
-  failed: "It failed.",
-  flaky: "It failed, then passed on a rerun. That fails the check: a pass only on a rerun is not a pass.",
-  listed: "It failed, then passed on a rerun. The check lists it in flaky_tests, so it passes.",
+/** The checks of the run shown: those that failed or still run each on a line, and the rest
+ * folded by how they stand, since a list of passes says nothing a count does not. */
+function Checks(props: { checks: RunCheck[]; now: number }) {
+  // A passed check that passes only because it lists a flaky test stays in view, with that test.
+  const shown = (c: RunCheck) => ["failed", "running"].includes(stateOf(c)) || listedFlaky(c).length > 0;
+  const listed = () => props.checks.filter(shown);
+  const folded = () =>
+    (["passed", "not_run", "planned"] as const).flatMap((state) => {
+      const checks = props.checks.filter((c) => stateOf(c) === state && !shown(c));
+      return checks.length ? [{ state, checks }] : [];
+    });
+  return (
+    <ul class="checks">
+      <For each={listed()}>{(check) => <CheckView check={check} now={props.now} />}</For>
+      <For each={folded()}>
+        {(group) => (
+          <li class="fold" data-fold={group.state}>
+            <details>
+              <summary>
+                <StateIcon state={group.state} />
+                <span>
+                  <span class="num">{group.checks.length}</span> {WORDS[group.state]}
+                </span>
+              </summary>
+              <ul class="checks">
+                <For each={group.checks}>{(check) => <CheckView check={check} now={props.now} />}</For>
+              </ul>
+            </details>
+          </li>
+        )}
+      </For>
+    </ul>
+  );
+}
+
+const STATE_ICONS: Record<CheckState, IconName> = {
+  planned: "circle",
+  running: "spinner",
+  passed: "check",
+  failed: "cross",
+  not_run: "minus",
 };
+
+/** How a check stands, as an icon in its colour. */
+function StateIcon(props: { state: CheckState }) {
+  return (
+    <span class={`si ${props.state}`} role="img" aria-label={WORDS[props.state]} title={WORDS[props.state]}>
+      <Icon name={STATE_ICONS[props.state]} size={14} />
+    </span>
+  );
+}
+
+/** The tests a check passed with only because its `flaky_tests` lists them; a failed check's
+ * tests show with why it failed. */
+const listedFlaky = (check: RunCheck) =>
+  check.entry?.outcome === "failed" ? [] : namedTests(check.entry).tests.flatMap((t) => (t.state === "listed" ? [t.name] : []));
 
 function CheckView(props: { check: RunCheck; now: number }) {
   const state = () => stateOf(props.check);
@@ -443,23 +499,21 @@ function CheckView(props: { check: RunCheck; now: number }) {
     const started = props.check.started;
     return started == null ? "" : `${Math.max(0, props.now - started).toFixed(0)} s`;
   };
-  const named = () => namedTests(props.check.entry);
   return (
     <li data-check={props.check.id} data-state={state()}>
-      <span class={`dot ${state()}`} role="img" aria-label={WORDS[state()]} title={WORDS[state()]} />
+      <StateIcon state={state()} />
       <span class="id">{props.check.id}</span>
       <span class="seconds">{seconds()}</span>
-      <Show when={named().tests.length}>
+      <Show when={listedFlaky(props.check).length}>
         <ul class="tests">
-          <For each={named().tests}>
-            {(test) => (
-              <li data-test={test.state} title={TEST_WORDS[test.state]}>
-                <span class="test-name">{test.name}</span>
-                <span class="test-state">{TEST_SHORT[test.state]}</span>
+          <For each={listedFlaky(props.check)}>
+            {(name) => (
+              <li data-test="listed" title="It failed, then passed on a rerun. The check lists it in flaky_tests, so it passes.">
+                <span class="test-name">{name}</span>
+                <span class="test-state">flaky, listed</span>
               </li>
             )}
           </For>
-          <Show when={named().more}>{(more) => <li class="more">and {more()} more failed</li>}</Show>
         </ul>
       </Show>
     </li>

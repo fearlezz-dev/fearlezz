@@ -7,7 +7,7 @@
 
 use fearlezz_proof::events::WorkChange;
 use fearlezz_proof::look::Look;
-use fearlezz_proof::notes::{Ask, Note, NoteState, Side, WORDS_MAX};
+use fearlezz_proof::notes::{Ask, Edit, Note, NoteState, Side, WORDS_MAX};
 use serde_json::json;
 use worker::{Env, Request, Response};
 
@@ -23,16 +23,10 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     let ask: Ask = req.json().await.map_err(|_| {
         Refusal::new(
             400,
-            "send {\"check\", \"picture\", \"side\": \"before\" | \"after\" | \"both\", \"region\": {\"x\", \"y\", \"w\", \"h\"}, \"time\"?, \"words\"}",
+            "send {\"check\", \"picture\", \"side\": \"before\" | \"after\" | \"both\", \"region\": {\"x\", \"y\", \"w\", \"h\"}, \"time\"?, \"words\", \"link\"?}",
         )
     })?;
-    let words = ask.words.trim();
-    if words.is_empty() || words.chars().count() > WORDS_MAX {
-        return Err(Refusal::new(
-            400,
-            format!("say what should change, in at most {WORDS_MAX} characters"),
-        ));
-    }
+    let words = said(&ask.words)?;
     if !ask.region.fits() {
         return Err(Refusal::new(
             400,
@@ -81,6 +75,25 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
         }
         _ => {}
     }
+    // A note made from another joins its group: the first note's id is the group's link.
+    let link = match &ask.link {
+        None => None,
+        Some(from) => {
+            #[derive(serde::Deserialize)]
+            struct Linked {
+                id: String,
+                link: Option<String>,
+            }
+            let linked: Option<Linked> = db
+                .prepare("SELECT id, link FROM notes WHERE id = ?1 AND work = ?2")
+                .bind(&[from.as_str().into(), run.work.as_str().into()])?
+                .first(None)
+                .await?;
+            let linked =
+                linked.ok_or_else(|| Refusal::new(409, "this work has no such note to link to"))?;
+            Some(linked.link.unwrap_or(linked.id))
+        }
+    };
     let note = Note {
         id: crypto::random_id()?,
         check: ask.check,
@@ -95,6 +108,7 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
         at: now() as f64,
         state: NoteState::Open,
         resolved_by: None,
+        link,
     };
     let side = match note.side {
         Side::Before => "before",
@@ -102,8 +116,8 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
         Side::Both => "both",
     };
     let insert = Statement::new(
-        "INSERT INTO notes (id, work, check_id, picture, run, head, side, x, y, w, h, time, words, login, at, state) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'open')",
+        "INSERT INTO notes (id, work, check_id, picture, run, head, side, x, y, w, h, time, words, login, at, state, link) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'open', ?16)",
         [
             note.id.as_str().into(),
             run.work.as_str().into(),
@@ -120,6 +134,7 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
             note.words.as_str().into(),
             note.by.as_str().into(),
             note.at.into(),
+            note.link.clone().into(),
         ],
     );
     changed(env, &run.work, insert, &note).await?;
@@ -131,7 +146,93 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
 /// resolved it no longer needs change: it looks right when a verdict holds for its content, and
 /// waits for a look otherwise.
 pub async fn resolve(req: Request, env: &Env, config: &Config, id: &str) -> Answer {
-    let person = access::speaker(&req, env, config, "resolve a note").await?;
+    let (person, row) = settler(&req, env, config, id, "resolve a note").await?;
+    let work_id = row.work.clone();
+    let mut note = row.note();
+    note.state = NoteState::Resolved;
+    note.resolved_by = Some(person.login);
+    let update = Statement::new(
+        "UPDATE notes SET state = 'resolved', resolved_by = ?2 WHERE id = ?1",
+        [id.into(), note.resolved_by.clone().into()],
+    );
+    changed(env, &work_id, update, &note).await?;
+    Ok(Response::from_json(&json!({ "note": note }))?)
+}
+
+/// `PATCH /api/v2/notes/<id>`: a person with write access changes an open note's words, on
+/// that note alone, or with `"linked": true` on every open note linked with it (made from it,
+/// or from the same first note). `200 {"notes"}`, as they are now.
+pub(crate) async fn edit(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
+    let (_person, row) = settler(&req, env, config, id, "edit a note").await?;
+    let ask: Edit = req
+        .json()
+        .await
+        .map_err(|_not_json| Refusal::new(400, "send {\"words\", \"linked\"?}"))?;
+    let words = said(&ask.words)?.to_owned();
+    let work_id = row.work.clone();
+    let note = row.note();
+    if note.state != NoteState::Open {
+        return Err(Refusal::new(409, "this note is resolved"));
+    }
+    let group = note.link.clone().unwrap_or_else(|| note.id.clone());
+    let mut notes = if ask.linked {
+        let db = env.d1("DB")?;
+        let rows: Vec<NoteRow> = db
+            .prepare(format!(
+                "SELECT {NOTE_COLUMNS} FROM notes WHERE work = ?1 AND state = 'open' AND (id = ?2 OR link = ?2) ORDER BY at, rowid"
+            ))
+            .bind(&[work_id.as_str().into(), group.as_str().into()])?
+            .all()
+            .await?
+            .results()?;
+        rows.into_iter().map(NoteRow::note).collect::<Vec<Note>>()
+    } else {
+        vec![note]
+    };
+    for n in &mut notes {
+        n.words.clone_from(&words);
+    }
+    let write = Write {
+        statements: notes
+            .iter()
+            .map(|n| {
+                Statement::new(
+                    "UPDATE notes SET words = ?2 WHERE id = ?1",
+                    [n.id.as_str().into(), words.as_str().into()],
+                )
+            })
+            .collect(),
+        event: Some(Event::work(WorkChange::Edited {
+            notes: notes.clone(),
+        })),
+        derive: Derive::Review,
+    };
+    room::write(env, &work_id, &write).await?;
+    Ok(Response::from_json(&json!({ "notes": notes }))?)
+}
+
+/// The words a person gave a note, trimmed: refused when empty or too long.
+fn said(words: &str) -> Result<&str, Refusal> {
+    let words = words.trim();
+    if words.is_empty() || words.chars().count() > WORDS_MAX {
+        return Err(Refusal::new(
+            400,
+            format!("say what should change, in at most {WORDS_MAX} characters"),
+        ));
+    }
+    Ok(words)
+}
+
+/// Note `id` and who asks to change it (`doing` it), once they may: they read its work, and
+/// have write access to its repository.
+async fn settler(
+    req: &Request,
+    env: &Env,
+    config: &Config,
+    id: &str,
+    doing: &str,
+) -> Result<(access::Person, NoteRow), Refusal> {
+    let person = access::speaker(req, env, config, doing).await?;
     let db = env.d1("DB")?;
     let row: Option<NoteRow> = db
         .prepare(format!("SELECT {NOTE_COLUMNS} FROM notes WHERE id = ?1"))
@@ -158,16 +259,7 @@ pub async fn resolve(req: Request, env: &Env, config: &Config, id: &str) -> Answ
         .await
         .map_err(Refusal::hidden)?;
     access::can(env, config, viewer, Action::Resolve, &work.repository).await?;
-    let work_id = row.work.clone();
-    let mut note = row.note();
-    note.state = NoteState::Resolved;
-    note.resolved_by = Some(person.login);
-    let update = Statement::new(
-        "UPDATE notes SET state = 'resolved', resolved_by = ?2 WHERE id = ?1",
-        [id.into(), note.resolved_by.clone().into()],
-    );
-    changed(env, &work_id, update, &note).await?;
-    Ok(Response::from_json(&json!({ "note": note }))?)
+    Ok((person, row))
 }
 
 /// Writes a note's change with the work's next event, which goes to the open pages, and derives

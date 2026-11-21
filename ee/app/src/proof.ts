@@ -175,7 +175,27 @@ export type WorkChange = { "kind": "verdict",
 /**
  * The verdict.
  */
-verdict: PictureVerdict, } | { "kind": "review", 
+verdict: PictureVerdict, 
+/**
+ * The picture's notes the verdict resolved, as they are now.
+ */
+resolved?: Array<Note>, } | { "kind": "withdrawn", 
+/**
+ * The check that took the picture.
+ */
+check: string, 
+/**
+ * The picture's name.
+ */
+picture: string, 
+/**
+ * The content the verdict was on.
+ */
+key: string, } | { "kind": "edited", 
+/**
+ * The notes as they are now.
+ */
+notes: Array<Note>, } | { "kind": "review", 
 /**
  * The review, none while the work has no head.
  */
@@ -262,7 +282,23 @@ standing: PictureStanding,
 /**
  * The looks right verdict on it, when someone gave one on this content.
  */
-verdict?: PictureVerdict | null, };
+verdict?: PictureVerdict | null, 
+/**
+ * What a person said about what it showed before it changed, so it shows for a look
+ * again; none when nothing was said about other content.
+ */
+changed_since?: ChangedSince | null, };
+
+export type ChangedSince = { 
+/**
+ * The newest looks right verdict on what it showed before, when none is on what it shows
+ * now.
+ */
+verdict?: PictureVerdict | null, 
+/**
+ * The ids of its open notes made on what it showed before.
+ */
+notes?: Array<string>, };
 
 export type PictureStanding = "waits" | "needs_change" | "looks_right";
 
@@ -366,7 +402,22 @@ state: NoteState,
 /**
  * Who resolved it, once someone did.
  */
-resolved_by?: string | null, };
+resolved_by?: string | null, 
+/**
+ * The note it was made from, such as the same note on another variant of the screen: the
+ * first of them, so a group's notes share one link and an edit can reach them all.
+ */
+link?: string | null, };
+
+export type NoteEdit = { 
+/**
+ * What should change there now.
+ */
+words: string, 
+/**
+ * Whether the notes linked with it take the words too.
+ */
+linked: boolean, };
 
 export type NoteSide = "before" | "after" | "both";
 
