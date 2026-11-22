@@ -96,6 +96,22 @@ test("a held Y opens the board: a shape picks, a tile is taken out, and Y says i
   await expect(swatch(page, "mobile/light.png")).toHaveAttribute("data-verdict", "none");
 });
 
+test("on the board H, J, K and L move the cursor as the arrows do, never the page's own keys", async ({ page }) => {
+  await show(page, WORK_PATH, WORK["no-before"]!.world);
+  await swatch(page, "desktop/dark.png").click();
+  await board(page);
+  await page.keyboard.press("h");
+  await expect(tile(page, "desktop/light.png")).toHaveAttribute("data-cursor", "");
+  await page.keyboard.press("l");
+  await expect(tile(page, "desktop/dark.png")).toHaveAttribute("data-cursor", "");
+  // J would step to the next picture on the page; on the board it goes down a row and back.
+  await page.keyboard.press("j");
+  await expect(tile(page, "desktop/dark.png")).not.toHaveAttribute("data-cursor", "");
+  await page.keyboard.press("k");
+  await expect(tile(page, "desktop/dark.png")).toHaveAttribute("data-cursor", "");
+  await expect(page.locator("[data-say-menu]")).toBeVisible();
+});
+
 test("the board stays open with its picks while the picture behind it follows the focused tile", async ({ page }) => {
   await show(page, WORK_PATH, WORK["no-before"]!.world);
   await swatch(page, "desktop/dark.png").click();

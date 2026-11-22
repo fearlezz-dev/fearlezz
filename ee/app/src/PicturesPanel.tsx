@@ -586,7 +586,7 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
 const KEYS: [string[], string][] = [
   [["J", "K"], "Next and previous picture"],
   [["Y"], "Looks right, then on to the next that waits; a film's reaches its still"],
-  [["Hold Y"], "The board of this screen's variants: 1 to 4 pick a shape, arrows and Space a tile, Y says it"],
+  [["Hold Y"], "The board of this screen's variants: 1 to 4 pick a shape, arrows or H J K L and Space a tile, Y says it"],
   [["U"], "Take back looks right"],
   [["N"], "Note the whole picture; drag on it to mark a region"],
   [["A"], "Add a note of another variant here, in its place"],
