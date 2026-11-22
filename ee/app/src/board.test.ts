@@ -86,6 +86,13 @@ describe("the board", () => {
     expect(names([moved(rows, at("tablet/light").key, "ArrowUp")])).toEqual(["desktop/light"]);
   });
 
+  test("H, J, K and L move as the arrows do", () => {
+    expect(names([moved(rows, here.key, "l")])).toEqual(["desktop/dark"]);
+    expect(names([moved(rows, at("desktop/dark").key, "h")])).toEqual(["desktop/light"]);
+    expect(names([moved(rows, at("desktop/dark").key, "j")])).toEqual(["tablet/dark"]);
+    expect(names([moved(rows, at("tablet/light").key, "k")])).toEqual(["desktop/light"]);
+  });
+
   test("an unchanged picture is never looked at", () => {
     const same = picturesOf({ ...run, checks: [{ id: "screens", look: { check: "screens", base_commit: "b", base_result: "passed", items: [variant("x/desktop/light.png", { change: "same" })] } }] })[0]!;
     expect(standingFrom(same, "none")).toBe("never");

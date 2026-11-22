@@ -49,8 +49,21 @@ export function tally(picked: ReadonlySet<string>, variants: readonly Shown[], s
   };
 }
 
-/** The tile the cursor lands on from `at` for an arrow `key`, over the board's `rows`: left and
- * right within a row, up and down to the same place in the row above or below (or its last). */
+/** The keys that move the cursor: the arrows, and H, J, K and L as in vim. */
+export const MOVES: Record<string, "left" | "right" | "up" | "down"> = {
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  ArrowUp: "up",
+  ArrowDown: "down",
+  h: "left",
+  l: "right",
+  k: "up",
+  j: "down",
+};
+
+/** The tile the cursor lands on from `at` for a moving `key` (`MOVES`), over the board's `rows`:
+ * left and right within a row, up and down to the same place in the row above or below (or its
+ * last). */
 export function moved(rows: readonly (readonly Shown[])[], at: string, key: string): string {
   const r = rows.findIndex((row) => row.some((q) => q.key === at));
   if (r < 0) return rows[0]?.[0]?.key ?? at;
@@ -59,14 +72,14 @@ export function moved(rows: readonly (readonly Shown[])[], at: string, key: stri
     const line = rows[row]!;
     return line[Math.max(0, Math.min(line.length - 1, col))]!.key;
   };
-  switch (key) {
-    case "ArrowLeft":
+  switch (MOVES[key]) {
+    case "left":
       return to(r, c - 1);
-    case "ArrowRight":
+    case "right":
       return to(r, c + 1);
-    case "ArrowUp":
+    case "up":
       return to(Math.max(0, r - 1), c);
-    case "ArrowDown":
+    case "down":
       return to(Math.min(rows.length - 1, r + 1), c);
     default:
       return at;

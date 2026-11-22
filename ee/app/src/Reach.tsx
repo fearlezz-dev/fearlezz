@@ -2,7 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMou
 import { notesOn } from "./notes";
 import { type Screen, type Shown, isFilm, title } from "./pictures";
 import type { Run, Snapshot } from "./proof";
-import { type Standing, moved, shape, shapeOf, standingFrom, tally, toggled } from "./board";
+import { MOVES, type Standing, moved, shape, shapeOf, standingFrom, tally, toggled } from "./board";
 import { SCOPES, type Scope, standingOf } from "./review";
 import { Thumb } from "./Thumb";
 
@@ -12,7 +12,7 @@ export type Menu = false | "here" | "float";
 
 /** The board of a screen's variants that a looks right reaches: a row per viewport, a tile per
  * picture showing where it stands, what is picked lit. It opens on this picture; 1 to 4 pick a
- * shape, arrows and Space (or a press and a sweep) pick tiles, and Y or Enter says it. */
+ * shape, arrows or H, J, K and L and Space (or a press and a sweep) pick tiles, and Y or Enter says it. */
 export function Reach(props: {
   shown: Shown;
   variants: Shown[];
@@ -93,7 +93,7 @@ export function Reach(props: {
       const target = e.target as HTMLElement | null;
       if (e.metaKey || e.ctrlKey || e.altKey || target?.closest("input, textarea, select, [contenteditable]")) return;
       if (/^[1-4]$/.test(e.key)) pick(SCOPES[Number(e.key) - 1]!);
-      else if (e.key.startsWith("Arrow")) focus(moved(rows(), cursor(), e.key));
+      else if (e.key in MOVES) focus(moved(rows(), cursor(), e.key));
       else if (e.key === " ") flip(cursor());
       // A Y still held from opening the board repeats; only a new press says it.
       else if (e.key === "Enter" || e.key.toLowerCase() === "y") {
@@ -225,7 +225,7 @@ export function Reach(props: {
         </div>
       </div>
       <p class="reach-keys">
-        <kbd>1</kbd>–<kbd>4</kbd> shape · <kbd>←↑↓→</kbd> <kbd>Space</kbd> pick · <kbd>Y</kbd> says it
+        <kbd>1</kbd>–<kbd>4</kbd> shape · <kbd>←↑↓→</kbd> or <kbd>hjkl</kbd> <kbd>Space</kbd> pick · <kbd>Y</kbd> says it
       </p>
     </div>
   );
