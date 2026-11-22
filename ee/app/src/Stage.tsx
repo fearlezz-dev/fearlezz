@@ -179,7 +179,7 @@ type Clock = {
   t: () => number;
   /** Where one film is now, in its own time. */
   film: (side: Side) => number;
-  /** Whether one film has no footage now and holds a frame. */
+  /** Whether one film has no footage now, long enough to show, and holds a frame. */
   held: (side: Side) => boolean;
   playing: () => boolean;
   total: () => number;
@@ -272,7 +272,7 @@ function createClock(
   return {
     t,
     film: (side) => filmAt(timeline(), side, t()).t,
-    held: (side) => filmAt(timeline(), side, t()).held,
+    held: (side) => filmAt(timeline(), side, t()).shown,
     playing,
     total,
     ready,
@@ -332,7 +332,7 @@ function Media(props: { src: string; side: Side; clock: Clock | undefined; label
           />
           <Show when={clock().held(props.side)}>
             <span class="no-footage" data-no-footage={props.side}>
-              No footage
+              <span>No footage</span>
             </span>
           </Show>
         </>
@@ -798,7 +798,7 @@ function Timeline(props: {
                     class="span"
                     data-span={s.name}
                     data-timing={s.timing}
-                    title={s.timing === "free" ? `${s.name}: its timing may change` : `${s.name}: its timing must stay the same`}
+                    title={s.timing === "free" ? `${s.name}: neither its look nor its timing is judged, only where it ends` : `${s.name}: its timing must stay the same`}
                     style={{ left: pct(s.start), width: pct(Math.max(0, s.end - s.start)) }}
                   />
                 )}

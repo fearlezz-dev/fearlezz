@@ -173,7 +173,9 @@ pub enum Timing {
     /// Its states start as long after its start as before, as everywhere a span does not cover.
     #[default]
     Same,
-    /// It takes as long as it takes, such as loading: its pictures are compared, its timing not.
+    /// It takes as long as it takes and looks different each time, such as loading or a fade:
+    /// only the state it ends on is compared, its timing is not, and what comes after it is
+    /// timed from its end. It is no anchor, so a film may have more or fewer of them.
     Free,
 }
 
@@ -184,12 +186,13 @@ impl Marks {
         self.marks.is_empty() && self.spans.is_empty()
     }
 
-    /// The moments a film is timed from, in order: each mark, and each span's start and end.
+    /// The moments a film is timed from, in order: each mark, and each start and end of a span
+    /// whose timing is the same. A free span is none, since how often one happens is free too.
     #[must_use]
     pub fn anchors(&self) -> Vec<(String, f64)> {
         let mut all: Vec<(String, f64)> =
             self.marks.iter().map(|m| (m.name.clone(), m.at)).collect();
-        for s in &self.spans {
+        for s in self.spans.iter().filter(|s| s.timing == Timing::Same) {
             all.push((format!("{} starts", s.name), s.start));
             all.push((format!("{} ends", s.name), s.end));
         }
@@ -203,5 +206,25 @@ impl Marks {
         self.spans
             .iter()
             .any(|s| s.timing == Timing::Free && s.start <= t && t < s.end)
+    }
+
+    /// Whether the stretch from `start` to `end` lies within one free span, or starts at most
+    /// `early` seconds before it, so its pictures are not compared: a state that runs on past a
+    /// span's end is the state it ends on.
+    #[must_use]
+    pub fn free_over(&self, start: f64, end: f64, early: f64) -> bool {
+        self.spans
+            .iter()
+            .any(|s| s.timing == Timing::Free && s.start <= start + early && end <= s.end + 1e-3)
+    }
+
+    /// Where the last free span that ended by moment `t` ended, which what follows is timed from.
+    #[must_use]
+    pub fn freed_by(&self, t: f64) -> Option<f64> {
+        self.spans
+            .iter()
+            .filter(|s| s.timing == Timing::Free && s.end <= t)
+            .map(|s| s.end)
+            .max_by(f64::total_cmp)
     }
 }

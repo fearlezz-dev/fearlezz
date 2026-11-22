@@ -158,7 +158,7 @@ picture's name (screen, viewport, theme), changed pictures first, then new and g
 timing, and the same ones folded. The picture on the stage compares its before and after in
 five ways (side by side, slider, onion skin, difference, blink) with outlines of where they
 differ; films play on one clock, the comparison's timeline aligned at their marks (a film with no
-footage in a stretch holds its frame, dimmed), with a lane per film and a jump to each change. A text shows as
+footage in a stretch holds its frame, under a veil when the stretch is long enough to see), with a lane per film and a jump to each change. A text shows as
 its diff, line by line with the words that differ marked, read from the files origin. Flaky
 pictures show, marked. `j` and `k` step between pictures, `1` to `5` pick the way to compare.
 

@@ -1079,9 +1079,10 @@ html, * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--quiet
 .btn > kbd { margin-left: 6px; font-size: 0.68rem; }
 @media (hover: none) and (pointer: coarse) { .btn > kbd { display: none; } }
 
-/* A film with no footage on the timeline holds a frame, dimmed and named, until its next mark. */
-.frame video[data-held] { opacity: 0.35; filter: grayscale(1); transition: opacity 0.2s var(--out), filter 0.2s var(--out); }
-.no-footage { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 2px 8px; border-radius: 999px; background: var(--ink); color: var(--raised); font-size: 0.75rem; font-weight: 700; pointer-events: none; }
-.over .no-footage { left: auto; right: 8px; }
+/* A film with no footage here holds its frame under a veil that washes it toward the page and
+   takes its colour, so the side that plays reads first; the words sit centred on a card of their
+   own, since a frame sets no line height. */
+.no-footage { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; background: color-mix(in srgb, var(--page) 50%, transparent); backdrop-filter: grayscale(1); -webkit-backdrop-filter: grayscale(1); pointer-events: none; animation: fade 0.2s var(--out) both; }
+.no-footage span { padding: 6px 14px; border-radius: 999px; background: var(--raised); color: var(--quiet); border: 1px solid var(--line); box-shadow: var(--float); font-size: 0.8rem; font-weight: 700; line-height: 1.4; }
 .lane .gap { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--ink) 10%, transparent) 0 3px, transparent 3px 7px), var(--sunk); }
-@media (prefers-reduced-motion: reduce) { .frame video[data-held] { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .no-footage { animation: none; } }
