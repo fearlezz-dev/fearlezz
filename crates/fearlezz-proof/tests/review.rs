@@ -1027,3 +1027,20 @@ fn a_run_compares_each_picture_with_the_ones_a_person_said_something_about() {
         "the newest looks right and the open note's picture, not older looks or resolved notes"
     );
 }
+
+#[test]
+fn an_open_note_on_a_picture_the_head_does_not_show_lapses() {
+    // Its picture was renamed or removed: nothing on the page shows it, so it holds nothing.
+    let runs = [run(
+        "r1",
+        "aaa1234",
+        RunState::Done,
+        &[still("card/light.png", Change::Changed)],
+    )];
+    let notes = [note("card.png", "the old name", NoteState::Open)];
+    let key = runs[0].0.checks[0].keys["card/light.png"].clone();
+    let verdicts = [verdict("card/light.png", &key, "aaa1234")];
+    let review = review::review("aaa1234", &runs, &BTreeMap::new(), &verdicts, &notes, None);
+    assert_eq!(review.state, State::Approved, "{review:#?}");
+    assert!(review.notes.is_empty(), "{review:#?}");
+}

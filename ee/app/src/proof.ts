@@ -237,7 +237,8 @@ weakened: Array<Weakening>,
  */
 accept?: Accept | null, 
 /**
- * The work's open notes, oldest first: they follow the work, not the head.
+ * The work's open notes on pictures the head asks a person to look at, oldest first: they
+ * follow the work, not the head, and one whose picture the head does not show lapses.
  */
 notes?: Array<Note>, 
 /**

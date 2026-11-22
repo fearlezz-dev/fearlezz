@@ -248,7 +248,9 @@ ends with the newest review, and a GitHub that hangs or fails never fails or hol
   before a pull request exists): a region of a picture's before, its after or both (in
   fractions of the picture), at a moment of a film, with the person's words. A note is kept by
   check and picture, so an open note shows on every later run of the work until a person with
-  write access resolves it. A note made again from another (on another variant of the screen)
+  write access resolves it, or until the head no longer asks anyone to look at its picture
+  (renamed, removed or unchanged): then it lapses, holding neither the review nor the agent,
+  since nothing shows it. A note made again from another (on another variant of the screen)
   keeps a `link` to the first of its group, so editing one offers to edit every open note of
   the group in the same write (the `edited` event carries them).
 - **The page shows what a person says at once**: a verdict, its undo, a note, an edit or a

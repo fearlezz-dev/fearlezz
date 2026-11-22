@@ -258,3 +258,7 @@ export function plainSummary(picture: Picture): string {
       return `Changes at ${c.moments.map((m) => `${m.after[0].toFixed(2)} s`).join(", ")}.`;
   }
 }
+
+/** A film's moment as the page shows and keeps it: to the hundredth of a second, rounded once,
+ * so the clock a person reads and the moment a note keeps are the same. */
+export const hundredths = (t: number) => Math.round(t * 100) / 100;
