@@ -3,7 +3,7 @@
 // CLI does for the same files.
 
 import { type Page, expect, test } from "@playwright/test";
-import { show } from "./host";
+import { serve, settled, show } from "./host";
 import { LONG_STRIP, STRIP, WORK, WORK_PATH, answerOf } from "./states";
 
 const dots = (page: Page) => page.locator("[data-strip] [data-dot]");
@@ -114,6 +114,36 @@ test("the film to look at next is compared with your look ahead, so it opens com
   await page.locator(`[data-picture="${STRIP.film}"]`).click();
   const at = await page.evaluate(() => document.querySelector("[data-pair-says]")?.getAttribute("data-pair-says"));
   expect(at, "compared before it was shown").not.toBe("comparing");
+});
+
+test("a film pair's lanes grow in once, and are not drawn again as its films load or its run changes", async ({ page }) => {
+  const socket = await serve(page, STRIP.world);
+  // Films that take a moment, as they do over a real connection.
+  await page.route(/\.webm/, async (route) => {
+    await new Promise((done) => setTimeout(done, 1500));
+    await route.fallback();
+  });
+  await page.goto(WORK_PATH);
+  await settled(page, true);
+  // Every lane that grows in, kept to see whether it is still the one shown.
+  await page.evaluate(() => {
+    const w = window as unknown as { grown: Element[] };
+    w.grown = [];
+    document.addEventListener("animationstart", (e) => {
+      if (e.animationName === "grow") w.grown.push(e.target as Element);
+    });
+  });
+  await page.locator(`[data-picture="${STRIP.film}"]`).click();
+  await dot(page, "r1").click();
+  await compared(page);
+  await expect.poll(() => page.locator("[data-stage] video").evaluateAll((all) => all.map((v) => (v as HTMLVideoElement).readyState))).toEqual([4, 4]);
+  // Another check of the run ends, as checks do while CI runs.
+  const live = STRIP.world.live as { seq: number };
+  socket.send({ kind: "event", seq: live.seq + 1, run: "r3", change: { kind: "finished", check: { id: "clippy", outcome: "passed", seconds: 1 } } });
+  await page.waitForTimeout(800);
+  const grown = await page.evaluate(() => (window as unknown as { grown: Element[] }).grown.map((e) => e.isConnected));
+  expect(grown.length, "the lanes grew in").toBeGreaterThan(0);
+  expect(grown.every(Boolean), "each lane that grew in is still the one shown").toBe(true);
 });
 
 // The strip as shown, a fold as + and the runs it holds.

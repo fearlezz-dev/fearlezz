@@ -3,7 +3,7 @@
 
 import { expect, test } from "@playwright/test";
 import { show } from "./host";
-import { WORK, WORK_PATH } from "./states";
+import { STRIP, WORK, WORK_PATH } from "./states";
 
 const current = "[data-picture][aria-current=true]";
 
@@ -391,6 +391,24 @@ test("Space plays and pauses a film", async ({ page }) => {
   await page.keyboard.press(" ");
   await expect(page.locator("[data-stage] [data-play]")).toHaveText("Play");
   expect(await page.evaluate(() => window.scrollY), "the page did not scroll").toBe(scrolled);
+});
+
+test("the stage's tools stay beside the name, and the ways to compare wrap first", async ({ page, isMobile }) => {
+  test.skip(isMobile, "a phone stacks the head");
+  await show(page, WORK_PATH, STRIP.world);
+  const top = async (sel: string) => Math.round((await page.locator(`[data-stage] ${sel}`).first().boundingBox())!.y + 10);
+  const line = async () => [await top(".named h3"), await top(".zoom"), await top(".full-screen"), await top(".modes")];
+  await page.setViewportSize({ width: 1100, height: 900 });
+  const [name, zoom, full, modes] = await line();
+  expect(Math.abs(zoom! - name!), "zoom beside the name").toBeLessThan(16);
+  expect(Math.abs(full! - zoom!), "full screen beside zoom").toBeLessThan(4);
+  expect(modes!, "the ways to compare below").toBeGreaterThan(zoom! + 20);
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.keyboard.press("f");
+  await expect.poll(async () => {
+    const wide = await line();
+    return Math.abs(wide[3]! - wide[1]!);
+  }, { message: "all on one line when they fit" }).toBeLessThan(4);
 });
 
 test("in full screen, a film stepped to plays at once", async ({ page }) => {

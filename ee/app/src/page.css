@@ -470,6 +470,13 @@ details.group > .sheet { margin-top: 10px; }
 .stage-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 0 12px; }
 .stage-head .named, .stage-head .tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0; }
 .stage-head .tools { margin-left: auto; }
+/* Wider than a phone, the tools are items of the head itself, pushed right: when they do not
+   fit beside the name, the ways to compare wrap first, onto a line of their own, still right. */
+@media (min-width: 701px) {
+  .stage-head { justify-content: flex-end; }
+  .stage-head .named { margin-right: auto; }
+  .stage-head .tools { display: contents; }
+}
 .stage-head h3 { font-size: 1.15rem; margin-right: 2px; }
 .tag { font-size: 0.8rem; padding: 0 8px; border-radius: 6px; background: var(--sunk); color: var(--quiet); white-space: nowrap; }
 .word { font-weight: 700; font-size: 0.82rem; white-space: nowrap; cursor: help; }
@@ -746,7 +753,7 @@ kbd {
   .btn.ok[aria-pressed="true"] .icon path { stroke-dasharray: 24; animation: draw 0.4s var(--out) both; }
   .share-panel { animation: unfold 0.2s var(--out) both; }
   .change, .compose { animation: rise 0.25s var(--out) both; }
-  .lane i { transform-origin: left; animation: grow 0.5s var(--out) both; }
+  .timeline[data-measured] .lane i { transform-origin: left; animation: grow 0.5s var(--out) both; }
   .ph { background: linear-gradient(90deg, var(--sunk) 0% 35%, color-mix(in srgb, var(--sunk) 35%, var(--raised)) 50%, var(--sunk) 65% 100%) 100% 0 / 250% 100%; animation: shimmer 1.5s linear infinite; }
   details::details-content {
     height: 0; overflow: clip; transition: height 0.3s var(--out), content-visibility 0.3s allow-discrete;

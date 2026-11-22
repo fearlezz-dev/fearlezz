@@ -649,12 +649,20 @@ function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?:
         ]
       : props.pair
         ? [
-            ["before", words()[0], total()],
-            ["after", words()[1], total()],
+            ["before", words()[0], 0],
+            ["after", words()[1], 0],
           ]
-        : [[props.side ?? "after", props.side === "before" ? words()[0] : words()[1], total()]];
+        : [[props.side ?? "after", props.side === "before" ? words()[0] : words()[1], 0]];
   const segments = (side: Side, end: number) =>
-    props.film ? lanes(props.film.pairs, side, end) : [{ start: 0, stop: end, differs: false }];
+    props.film ? lanes(props.film.pairs, side, end) : [{ start: 0, stop: Number.POSITIVE_INFINITY, differs: false }];
+  // Each lane as drawn, kept while what it draws is the same: a live event that redraws the run,
+  // or a film whose length becomes known, never draws the lanes again, which would play their
+  // growing in again.
+  const drawn = createMemo(
+    () => sides().map(([side, label, end]) => ({ side, label, segments: segments(side, end) })),
+    undefined,
+    { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) },
+  );
   return (
     <div class="film">
       <div class="clock">
@@ -685,6 +693,7 @@ function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?:
       </div>
       <div
         class="timeline"
+        data-measured={props.film ? "" : undefined}
         ref={lane}
         role="slider"
         tabindex="0"
@@ -705,14 +714,14 @@ function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?:
           e.preventDefault();
         }}
       >
-        <For each={sides()}>
-          {([side, label, end]) => (
+        <For each={drawn()}>
+          {({ side, label, segments }) => (
             <div class="lane" data-lane={side}>
-              <For each={segments(side, end)}>
+              <For each={segments}>
                 {(s) => (
                   <i
                     data-differs={String(s.differs)}
-                    style={{ left: pct(s.start), width: pct(Math.max(0, s.stop - s.start)) }}
+                    style={{ left: pct(s.start), width: Number.isFinite(s.stop) ? pct(Math.max(0, s.stop - s.start)) : "100%" }}
                   />
                 )}
               </For>
