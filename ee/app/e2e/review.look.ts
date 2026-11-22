@@ -232,10 +232,11 @@ test("a note of another variant is made here in its place and words, or lends it
   const ask = (await made).postDataJSON();
   expect(ask).toMatchObject({ picture: "profile/desktop/dark.png", side: "after", region: { x: 0.25, y: 0.13, w: 0.5, h: 0.07 } });
   expect(ask.words).toContain("The banner pushes the card down");
-  // On the phone the place differs: only the words, of either note (the one just made shows
-  // at once).
+  // On the phone the place differs: only the words, once though two variants say them (the one
+  // just made shows at once), naming both.
   await page.locator('[data-picture="ee-page-look/profile/mobile/light.png"]').click();
-  await expect(page.locator("[data-use-words]")).toHaveCount(2);
+  await expect(page.locator("[data-use-words]")).toHaveCount(1);
+  await expect(page.locator("[data-elsewhere] .who")).toHaveText("desktop / light, desktop / dark");
   await page.locator("[data-use-words]").first().click();
   await expect(page.locator("textarea[data-words]")).toHaveValue(/The banner pushes the card down/);
 });
@@ -514,4 +515,27 @@ test("the share panel opens without an error when the work has no links", async 
   await expect(page.locator("[data-make-share]")).toBeVisible();
   await page.waitForTimeout(300);
   await expect(page.locator("[data-shares] [role=alert]")).toHaveCount(0);
+});
+
+// Full screen never scrolls: the pictures take the height the rest leaves, and a long review
+// scrolls within itself with its buttons in sight.
+test("full screen fits the window, with a long review scrolling within itself", async ({ page }) => {
+  const world = WORK["needs-change"]!.world;
+  const live = world.live as import("../src/proof").Snapshot & { kind: "snapshot" };
+  const first = live.notes![0]!;
+  const long = Array.from({ length: 6 }, (_, k) => ({ ...first, id: `long${k}`, words: `${first.words} `.repeat(8) }));
+  await show(page, WORK_PATH, { ...world, live: { ...live, notes: [...live.notes!, ...long] } });
+  await page.keyboard.press("f");
+  const table = page.locator(".table[data-full]");
+  await expect(table).toBeVisible();
+  await expect
+    .poll(() =>
+      table.evaluate((t) => {
+        const bottom = Math.max(...[...t.children].map((c) => c.getBoundingClientRect().bottom));
+        return bottom <= innerHeight + 1 && t.scrollHeight <= t.clientHeight + 1;
+      }),
+    )
+    .toBe(true);
+  await expect(page.locator('[data-say="looks_right"]')).toBeInViewport();
+  await expect(page.locator('[data-stage] [data-side="after"]').first()).toBeInViewport({ ratio: 1 });
 });

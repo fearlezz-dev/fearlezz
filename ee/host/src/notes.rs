@@ -17,7 +17,8 @@ use crate::{Answer, Config, Refusal, crypto, not_found, now, room, say};
 
 /// `POST /api/v2/runs/<run>/notes`: a person with write access notes what should change on a
 /// picture of a run. A local run takes notes too, though never a verdict: that is how feedback
-/// reaches the agent before a pull request exists. `201 {"note"}`.
+/// reaches the agent before a pull request exists. The looks right on the picture is taken back:
+/// a picture with a note is not right now. `201 {"note"}`.
 pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
     let person = access::speaker(&req, env, config, "make a note").await?;
     let ask: Ask = req.json().await.map_err(|_| {
@@ -137,7 +138,16 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
             note.link.clone().into(),
         ],
     );
-    changed(env, &run.work, insert, &note).await?;
+    // A note says the picture is not right now: the looks right on it is taken back with it.
+    let take_back = Statement::new(
+        "DELETE FROM verdicts WHERE work = ?1 AND check_id = ?2 AND picture = ?3",
+        [
+            run.work.as_str().into(),
+            note.check.as_str().into(),
+            note.picture.as_str().into(),
+        ],
+    );
+    changed(env, &run.work, vec![insert, take_back], &note).await?;
     Ok(Response::from_json(&json!({ "note": note }))?.with_status(201))
 }
 
@@ -155,7 +165,7 @@ pub async fn resolve(req: Request, env: &Env, config: &Config, id: &str) -> Answ
         "UPDATE notes SET state = 'resolved', resolved_by = ?2 WHERE id = ?1",
         [id.into(), note.resolved_by.clone().into()],
     );
-    changed(env, &work_id, update, &note).await?;
+    changed(env, &work_id, vec![update], &note).await?;
     Ok(Response::from_json(&json!({ "note": note }))?)
 }
 
@@ -264,9 +274,14 @@ async fn settler(
 
 /// Writes a note's change with the work's next event, which goes to the open pages, and derives
 /// the review again.
-async fn changed(env: &Env, work: &str, write: Statement, note: &Note) -> Result<(), Refusal> {
+async fn changed(
+    env: &Env,
+    work: &str,
+    statements: Vec<Statement>,
+    note: &Note,
+) -> Result<(), Refusal> {
     let write = Write {
-        statements: vec![write],
+        statements,
         event: Some(Event::work(WorkChange::Note { note: note.clone() })),
         derive: Derive::Review,
     };

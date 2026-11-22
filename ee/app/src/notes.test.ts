@@ -128,6 +128,17 @@ describe("elsewhere", () => {
     expect(from.map((f) => [f.note.id, f.where, f.place])).toEqual([["a", "desktop / light", true]]);
   });
 
+  test("the same words on several variants are one, naming each, copied from one of the same size", () => {
+    const tablet = shown("card/tablet/light.png", { size: [800, 1000] });
+    const s = state([
+      note("p", { picture: phone.picture.name, words: "too tight" }),
+      note("a", { picture: light.picture.name, words: "too tight" }),
+      note("t", { picture: tablet.picture.name, words: "too tight" }),
+    ]);
+    const from = elsewhere(s, dark, [light, dark, phone, tablet]);
+    expect(from.map((f) => [f.note.id, f.where, f.place])).toEqual([["a", "desktop / light, mobile / light, tablet / light", true]]);
+  });
+
   test("a picture of another size takes the words, not the place", () => {
     const s = state([note("a", { picture: light.picture.name, side: "both" })]);
     const [from] = elsewhere(s, phone, [light, dark, phone]);

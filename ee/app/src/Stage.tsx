@@ -919,17 +919,23 @@ export function Stage(props: {
         </Show>
         </div>
       </header>
-      {props.strip}
-      <Show when={props.against}>
-        {(a) => (
-          <p class="pair-says" data-pair-says={a().error ? "error" : a().comparison ? a().comparison!.verdict : "comparing"} aria-live="polite">
-            <Show when={!a().error} fallback={<>Could not compare here: {a().error}</>}>
-              <Show when={a().comparison} fallback={<>Comparing with {a().word.toLowerCase()}…</>}>
-                {(c) => <>{pairSummary(c(), a().word, a().said)}</>}
-              </Show>
-            </Show>
-          </p>
-        )}
+      {/* What it is compared with and what that came to share a line where both fit, the words
+          beside the strip; where not, the words go below it. */}
+      <Show when={props.strip || props.against}>
+        <div class="against">
+          <Show when={props.against}>
+            {(a) => (
+              <p class="pair-says" data-pair-says={a().error ? "error" : a().comparison ? a().comparison!.verdict : "comparing"} aria-live="polite">
+                <Show when={!a().error} fallback={<>Could not compare here: {a().error}</>}>
+                  <Show when={a().comparison} fallback={<>Comparing with {a().word.toLowerCase()}…</>}>
+                    {(c) => <>{pairSummary(c(), a().word, a().said)}</>}
+                  </Show>
+                </Show>
+              </p>
+            )}
+          </Show>
+          {props.strip}
+        </div>
       </Show>
       <Show when={picture().flaky}>
         <p class="flaky-note" data-flaky-note title="This picture changes from run to run, so it is shown but never waits for you">
