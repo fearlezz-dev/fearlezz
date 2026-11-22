@@ -4,6 +4,8 @@
 
 import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { fitting } from "./fit";
+import { type Menu, Reach } from "./Reach";
+import { Thumb } from "./Thumb";
 import { fileUrl, grantOf, granted } from "./grant";
 import {
   GROUP_WORDS,
@@ -24,7 +26,7 @@ import {
 } from "./pictures";
 import { type Draft, type Elsewhere, type Shown as Noted, editNote, elsewhere, fromWhere, linkedWith, makeNote, notesOn, pending, resolveNote, sidesOf } from "./notes";
 import type { Note, PictureChange, Run, Snapshot } from "./proof";
-import { type Looker, SCOPES, type Scope, canSay, carried, changedSince, covered, localBy, maySignIn, onlyViews, signIn, signedIn, standingOf, toLookAt, verdict as say, verdictOf, withdraw } from "./review";
+import { type Looker, canSay, carried, changedSince, covered, localBy, maySignIn, onlyViews, signIn, signedIn, standingOf, toLookAt, verdict as say, verdictOf, withdraw } from "./review";
 import { type Against, MODES, type Mode, type Noting, Stage, stepSpeed } from "./Stage";
 import { opensOn, stripOf, worthShowing } from "./runs";
 import { Strip, dotName } from "./Strip";
@@ -38,9 +40,6 @@ import { short } from "./short";
 // The way to compare and the grouping stay as a person moves between pictures and runs.
 const [mode, setMode] = createSignal<Mode>("side");
 const [by, setBy] = createSignal<GroupBy>("change");
-
-/** Where the choice of how far looks right reaches is open, if it is. */
-type Menu = false | "here" | "float";
 
 /** Grows a textarea with its words from three lines to six, then it scrolls inside; CSS does
  * it where the browser knows `field-sizing`, this elsewhere. */
@@ -321,23 +320,14 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
     let holding: ReturnType<typeof setTimeout> | undefined;
     // Keys press what a person could press, so they do only what the page offers them.
     const press = (selector: string) => document.querySelector<HTMLButtonElement>(selector)?.click();
-    const scoped = (scope: Scope) => press(`[data-say-scope="${scope}"]:not(:disabled)`);
     const keys = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (e.metaKey || e.ctrlKey || target?.closest("input, textarea, select, [contenteditable]")) return;
-      // ⌥Y (which a Mac types as ¥, so by its place on the keyboard): this whole viewport.
-      if (e.altKey) {
-        if (e.code !== "KeyY") return;
-        scoped("viewport");
-        e.preventDefault();
-        return;
-      }
-      if (menu() && /^[1-4]$/.test(e.key)) scoped(SCOPES[Number(e.key) - 1]!);
-      else if (menu() && e.key === "Escape") setMenu(false);
-      else if (e.key === "y") {
+      if (e.altKey) return;
+      // The board, while open, takes its own keys first (see Reach).
+      if (e.key === "y") {
         if (!e.repeat && !holding) holding = setTimeout(() => ((holding = undefined), setMenu("float")), HOLD_MS);
-      } else if (e.key === "Y") scoped("screen");
-      else if (e.key === "j") step(1);
+      } else if (e.key === "j") step(1);
       else if (e.key === "k") step(-1);
       else if (/^[1-5]$/.test(e.key)) setMode(MODES[Number(e.key) - 1]![0]);
       else if (e.key === "u") press("[data-withdraw]:not(:disabled)");
@@ -553,6 +543,8 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
               return look && look.key !== dotKey() ? () => pickDot(look.key) : undefined;
             })()}
             variants={screenOf()?.variants ?? []}
+            viewports={screenOf()?.viewports ?? []}
+            files={files()}
             menu={menu()}
             onMenu={setMenu}
             onDraft={(d) => {
@@ -585,9 +577,7 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
 const KEYS: [string[], string][] = [
   [["J", "K"], "Next and previous picture"],
   [["Y"], "Looks right, then on to the next that waits; a film's reaches its still"],
-  [["Hold Y"], "How far: 1 this picture, 2 its viewport, 3 its theme, 4 the whole screen"],
-  [["⇧", "Y"], "Looks right on the whole screen"],
-  [["⌥", "Y"], "Looks right on this viewport"],
+  [["Hold Y"], "The board of this screen's variants: 1 to 4 pick a shape, arrows and Space a tile, Y says it"],
   [["U"], "Take back looks right"],
   [["N"], "Note the whole picture; drag on it to mark a region"],
   [["T"], "The other theme of this screen"],
@@ -711,42 +701,6 @@ function ScreenTile(props: {
   );
 }
 
-/** A picture in the sheet, small: its after, or its before when it is gone; a film's last
- * frame, where it ends up (its first is often still blank); a text's summary. Empty until the files origin grants the run's files. */
-function Thumb(props: { shown: Shown; files: string }) {
-  if (isText(props.shown.picture)) {
-    return (
-      <span class="text-thumb" data-text-thumb>
-        {props.shown.picture.summary}
-      </span>
-    );
-  }
-  const path = () => props.shown.picture.after ?? props.shown.picture.before;
-  const src = () => {
-    const p = path();
-    return p && props.files ? fileUrl(props.files, p) : "";
-  };
-  return (
-    <Show when={src()} fallback={<span class="blank" />}>
-      {(url) => (
-        <Show when={isFilm(props.shown.picture)} fallback={<img src={url()} alt="" loading="lazy" decoding="async" draggable={false} />}>
-          <video
-            src={url()}
-            muted
-            playsinline
-            preload="metadata"
-            aria-hidden="true"
-            onLoadedMetadata={(e) => {
-              const v = e.currentTarget;
-              if (Number.isFinite(v.duration)) v.currentTime = Math.max(0, v.duration - 0.05);
-            }}
-          />
-        </Show>
-      )}
-    </Show>
-  );
-}
-
 /** Under the picture on the stage: what this person can say about it and where it stands, the
  * way to the next picture, the notes on it, and the note being written. */
 function ReviewBar(props: {
@@ -773,6 +727,9 @@ function ReviewBar(props: {
   onDraft: (draft: Draft | undefined) => void;
   /** Every variant of the screen, for a looks right that reaches more than this picture. */
   variants: Shown[];
+  /** The same variants per viewport, as the board of how far looks right reaches shows them. */
+  viewports: Screen["viewports"];
+  files: string;
   /** Compares now with the run of the last looks right, when the strip has it and it is not
    * shown already. */
   onLook: (() => void) | undefined;
@@ -810,35 +767,14 @@ function ReviewBar(props: {
   const both = () => !props.onlyNow && props.shown.picture.before != null && props.shown.picture.after != null;
   // Who says it: the page shows what they say at once, and the host settles it behind.
   const by = () => signedIn(props.viewer)?.login ?? "";
-  // What a looks right at `scope` says looks right: this picture, and the others it reaches
-  // that do not look right yet.
-  const reach = (scope: Scope) =>
+  // What a plain looks right says looks right: this picture, and a film's still that does not
+  // look right yet.
+  const reach = (scope: "this") =>
     covered(props.shown, props.variants, scope).filter((q, k) => k === 0 || standingOf(props.state, props.run, q) !== "looks_right");
-  // What each reach is called, and whether it reaches more than this picture does.
-  const scopes = createMemo(() => {
-    const here = reach("this").length;
-    const { viewport, theme } = props.shown.parts;
-    const name = (scope: Scope) =>
-      scope === "this"
-        ? here > 1
-          ? "This film and its still"
-          : "This picture"
-        : scope === "viewport"
-        ? `All of ${viewport || "this viewport"}`
-        : scope === "theme"
-        ? `All ${theme || "of this theme"}`
-        : "The whole screen";
-    return SCOPES.map((scope) => {
-      const n = reach(scope).length;
-      const named = scope === "viewport" ? !!viewport : scope === "theme" ? !!theme : true;
-      return { scope, name: name(scope), n, more: scope === "this" || (named && n > here) };
-    });
-  });
   // On to the next picture at once; a refusal is said on whichever picture shows then.
-  const send = async (scope: Scope = "this") => {
+  const send = async (list: Shown[] = reach("this")) => {
     setError("");
     props.onMenu(false);
-    const list = reach(scope);
     const named = title(props.shown.parts);
     const said = list.map((q) => say(props.state, props.run, q, by()));
     props.onSaid();
@@ -975,7 +911,7 @@ function ReviewBar(props: {
                 type="button"
                 class="btn ok more"
                 data-say-more
-                aria-haspopup="menu"
+                aria-haspopup="dialog"
                 aria-expanded={!!props.menu}
                 aria-label="How far looks right reaches"
                 title="How far looks right reaches (hold Y)"
@@ -983,20 +919,17 @@ function ReviewBar(props: {
               >
                 <Icon name="chevron" size={14} />
               </button>
-              <div class="say-menu" data-say-menu role="menu" aria-label="Looks right on" hidden={!props.menu} data-float={props.menu === "float" ? "" : undefined}>
-                <p class="say-head">
-                  Looks right on <span class="esc">Esc closes</span>
-                </p>
-                <For each={scopes()}>
-                  {(s, k) => (
-                    <button type="button" role="menuitem" data-say-scope={s.scope} disabled={!s.more} onClick={() => void send(s.scope)}>
-                      <kbd>{k() + 1}</kbd>
-                      <span class="what">{s.name}</span>
-                      <span class="n">{s.n}</span>
-                    </button>
-                  )}
-                </For>
-              </div>
+              <Reach
+                shown={props.shown}
+                variants={props.variants}
+                viewports={props.viewports}
+                state={props.state}
+                run={props.run}
+                files={props.files}
+                menu={props.menu}
+                onMenu={props.onMenu}
+                onSay={(list: Shown[]) => void send(list)}
+              />
             </span>
           </Match>
           <Match when={signedIn(props.viewer)}>

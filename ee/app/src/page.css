@@ -897,22 +897,78 @@ kbd {
 .btn.ok.more { padding-left: 8px; padding-right: 8px; border-top-left-radius: 0; border-bottom-left-radius: 0; box-shadow: inset 1px 0 0 color-mix(in srgb, var(--on-accent) 30%, transparent); }
 [data-say="looks_right"]:has(+ .say-more) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .say-menu {
-  position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 20; min-width: 230px; display: grid; gap: 2px; padding: 6px;
-  background: var(--raised); border-radius: 12px; box-shadow: 0 0 0 1px var(--line), var(--float);
+  position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 20; display: grid; gap: 10px; padding: 10px 12px 12px;
+  width: max-content; max-width: min(680px, calc(100vw - 32px));
+  background: var(--raised); border-radius: 14px; box-shadow: 0 0 0 1px var(--line), var(--float);
   transform-origin: bottom left;
 }
 .say-menu[hidden] { display: none; }
 /* Held Y: on the screen wherever Looks right is, which full screen often leaves below view. */
-.say-menu[data-float] { position: fixed; left: 50%; bottom: 28px; translate: -50% 0; z-index: 60; min-width: 260px; transform-origin: bottom center; }
-.say-head { margin: 2px 9px 4px; display: flex; justify-content: space-between; gap: 12px; font-size: 0.75rem; font-weight: 650; color: var(--quiet); }
+.say-menu[data-float] { position: fixed; left: 50%; bottom: 28px; max-height: calc(100dvh - 40px); overflow: auto; translate: -50% 0; z-index: 60; transform-origin: bottom center; }
+.say-head { margin: 0; display: flex; justify-content: space-between; gap: 12px; font-size: 0.75rem; font-weight: 650; color: var(--quiet); }
 .say-head .esc { font-weight: 500; color: var(--faint); }
-.say-menu button {
-  all: unset; box-sizing: border-box; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px;
-  padding: 7px 9px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; color: var(--ink);
+
+/* The board: a row per viewport, a tile per picture; what is picked is lit, what already looks
+   right carries its check, what has a note its red mark, which turns to a check once picked. */
+.reach-body { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-start; }
+.reach-board { display: grid; gap: 8px; user-select: none; -webkit-user-select: none; touch-action: none; }
+.reach-row { display: flex; align-items: center; gap: 6px; }
+.reach-row .vp { width: 52px; flex: none; font-size: 0.72rem; color: var(--faint); }
+.reach-tile {
+  all: unset; box-sizing: border-box; position: relative; width: 74px; display: grid; gap: 3px; padding: 3px; cursor: pointer;
+  border-radius: 9px; box-shadow: inset 0 0 0 1.5px var(--line-strong); outline: 2px solid transparent; outline-offset: 2px;
+  transition: box-shadow 0.15s, transform 0.2s var(--out);
 }
-.say-menu button:hover:not(:disabled), .say-menu button:focus-visible { background: var(--sunk); }
-.say-menu button:disabled { color: var(--faint); cursor: default; }
-.say-menu .n { font-variant-numeric: tabular-nums; color: var(--quiet); font-size: 0.82rem; }
+.reach-tile .reach-shot { position: relative; display: block; height: 44px; border-radius: 6px; overflow: hidden; background: var(--sunk); }
+.reach-tile .reach-shot img, .reach-tile .reach-shot video { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+.reach-tile .reach-shot .film-mark { left: 5px; bottom: 5px; }
+.reach-tile .reach-tag { padding: 0 2px; font-size: 0.64rem; line-height: 1.2; color: var(--quiet); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reach-tile[data-here] { box-shadow: inset 0 0 0 1.5px var(--ink); }
+.reach-tile[data-cursor] { outline-color: var(--focus); }
+.reach-tile:disabled { opacity: 0.4; cursor: default; }
+.reach-tile[data-reach-standing="right"] .reach-shot { opacity: 0.5; }
+.reach-tile[data-reach-standing="right"] .reach-tag { color: var(--ok); font-weight: 650; }
+.reach-tile[data-reach-standing="note"] .reach-tag { color: var(--bad); font-weight: 650; }
+.reach-tile .reach-mark { position: absolute; top: 3px; right: 3px; width: 15px; height: 15px; border-radius: 50%; display: none; box-shadow: 0 0 0 2px var(--raised); }
+.reach-tile .reach-mark::before { content: ""; position: absolute; left: 5px; top: 3px; width: 3px; height: 6px; border: solid var(--on-accent); border-width: 0 2px 2px 0; rotate: 45deg; }
+.reach-tile[data-reach-standing="right"] .reach-mark { display: block; background: var(--ok); }
+.reach-tile[data-reach-standing="note"] .reach-mark { display: block; background: var(--bad); }
+.reach-tile[data-reach-standing="note"] .reach-mark::before { left: 6.5px; top: 3px; width: 2px; height: 5px; border: 0; rotate: none; background: var(--on-accent); box-shadow: 0 7px 0 var(--on-accent); height: 4.5px; }
+.reach-tile[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--ok), 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+.reach-tile[aria-pressed="true"]:not([data-reach-standing="right"]) .reach-tag { color: var(--ok); font-weight: 650; }
+.reach-tile[aria-pressed="true"][data-reach-standing="note"] .reach-mark { background: var(--ok); }
+.reach-tile[aria-pressed="true"][data-reach-standing="note"] .reach-mark::before { left: 5px; top: 3px; width: 3px; height: 6px; background: none; box-shadow: none; border: solid var(--on-accent); border-width: 0 2px 2px 0; rotate: 45deg; }
+.reach-tile[aria-pressed="true"][data-reach-standing="right"] { box-shadow: inset 0 0 0 1.5px var(--line-strong); outline: 1.5px dashed var(--ok); outline-offset: 1px; }
+.reach-tile[aria-pressed="true"][data-reach-standing="right"][data-cursor] { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.reach-side { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.reach-shapes { display: flex; gap: 6px; flex-wrap: wrap; }
+.reach-shape {
+  all: unset; box-sizing: border-box; display: grid; justify-items: center; gap: 4px; padding: 6px 7px 4px; border-radius: 9px; cursor: pointer;
+  box-shadow: inset 0 0 0 1.5px var(--line-strong); transition: box-shadow 0.15s;
+}
+.reach-shape:hover:not(:disabled) { box-shadow: inset 0 0 0 1.5px var(--quiet); }
+.reach-shape:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.reach-shape[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--ok); }
+.reach-shape:disabled { opacity: 0.35; cursor: default; }
+.reach-shape kbd { font-size: 0.66rem; }
+.reach-mini { display: grid; gap: 2px; }
+.reach-mini-row { display: flex; gap: 2px; }
+.reach-mini b { width: 8px; height: 6px; border-radius: 1.5px; background: var(--sunk); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.reach-mini b.dark { background: color-mix(in srgb, var(--ink) 55%, var(--sunk)); }
+.reach-mini b.right { background: color-mix(in srgb, var(--ok) 35%, var(--sunk)); box-shadow: none; }
+.reach-mini b.note { background: var(--bad); box-shadow: none; }
+.reach-mini b.lit { background: var(--ok); box-shadow: none; }
+.reach-mini b.here { outline: 1px solid var(--ink); outline-offset: 0.5px; }
+.reach-tally { margin: 0; display: flex; flex-wrap: wrap; gap: 5px; font-size: 0.8rem; }
+.reach-tally span { padding: 3px 9px; border-radius: 999px; background: var(--sunk); }
+.reach-tally .reach-marks { background: color-mix(in srgb, var(--ok) 18%, var(--sunk)); color: var(--ok); font-weight: 650; }
+.reach-tally .reach-notes { background: color-mix(in srgb, var(--bad) 14%, var(--sunk)); color: var(--bad); font-weight: 650; }
+.reach-tally .reach-none { color: var(--quiet); }
+.reach-side .btn { justify-self: start; }
+.reach-side .btn kbd { margin-left: 4px; color: inherit; border-color: color-mix(in srgb, var(--on-accent) 40%, transparent); background: none; }
+.reach-keys { margin: 0; font-size: 0.72rem; color: var(--faint); }
+.reach-keys kbd { font-size: 0.66rem; }
 @media (prefers-reduced-motion: no-preference) {
   .say-menu:not([hidden]) { animation: say-in 0.16s var(--out) both; }
   @keyframes say-in { from { opacity: 0; transform: translateY(4px) scale(0.98); } }
@@ -989,4 +1045,10 @@ html, * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--quiet
   .strip li + li::before { transition: background-color 0.25s var(--ease); }
   .strip .pip { transition: background-color 0.2s var(--ease), box-shadow 0.2s var(--ease); }
   .strip li.fold button { transition: box-shadow 0.2s var(--ease), color 0.2s var(--ease), background-color 0.2s var(--ease); }
+}
+/* A phone: each viewport's name above its row, so four tiles fit across. */
+@media (max-width: 560px) {
+  .reach-row { flex-wrap: wrap; }
+  .reach-row .vp { width: 100%; }
+  .reach-tile { width: 66px; }
 }

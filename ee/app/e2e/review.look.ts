@@ -48,7 +48,7 @@ test("the next picture is fetched before a person steps to it", async ({ page })
 });
 
 // A screen's films come first; a film's looks right reaches the still of its viewport and
-// theme, and a held Y, ⇧Y or ⌥Y reach further.
+// theme, and the board a held Y opens reaches further.
 const swatch = (page: import("@playwright/test").Page, name: string) => page.locator(`.variant[data-picture="ee-page-look/profile/${name}"]`);
 
 test("a film's looks right reaches the still of its viewport and theme", async ({ page }) => {
@@ -62,21 +62,67 @@ test("a film's looks right reaches the still of its viewport and theme", async (
   await expect(swatch(page, "desktop/dark.png")).toHaveAttribute("data-verdict", "none");
 });
 
-test("a held Y chooses how far looks right reaches", async ({ page }) => {
-  await show(page, WORK_PATH, WORK["no-before"]!.world);
-  await swatch(page, "desktop/dark.png").click();
+const tile = (page: import("@playwright/test").Page, name: string) => page.locator(`[data-reach-tile="ee-page-look/profile/${name}"]`);
+const board = async (page: import("@playwright/test").Page) => {
   await page.keyboard.down("y");
   await expect(page.locator("[data-say-menu]")).toBeVisible();
   await page.keyboard.up("y");
+};
+
+test("a held Y opens the board: a shape picks, a tile is taken out, and Y says it", async ({ page }) => {
+  await show(page, WORK_PATH, WORK["no-before"]!.world);
+  await swatch(page, "desktop/dark.png").click();
+  await board(page);
   await expect(page.locator("[data-say-menu]")).toBeVisible();
-  await expect(page.locator('[data-say-scope="viewport"]')).toContainText("All of desktop");
-  await expect(page.locator('[data-say-scope="viewport"] .n')).toHaveText("4");
-  await expect(page.locator('[data-say-scope="screen"] .n')).toHaveText("8");
+  await expect(tile(page, "desktop/dark.png")).toHaveAttribute("aria-pressed", "true");
+  await expect(tile(page, "desktop/light.png")).toHaveAttribute("aria-pressed", "false");
   await page.keyboard.press("2");
-  await expect(page.locator("[data-say-menu]")).toBeHidden();
+  await expect(page.locator('[data-say-scope="viewport"]')).toHaveAttribute("aria-pressed", "true");
   for (const name of ["desktop/light.webm", "desktop/dark.webm", "desktop/light.png", "desktop/dark.png"])
+    await expect(tile(page, name)).toHaveAttribute("aria-pressed", "true");
+  await expect(tile(page, "mobile/light.png")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator("[data-reach-tally]")).toContainText("Marks 4");
+  // The cursor starts on this picture; one to the left is the light still, which Space takes out.
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press(" ");
+  await expect(tile(page, "desktop/light.png")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator("[data-reach-tally]")).toContainText("Marks 3");
+  await expect(page.locator('[data-say-scope="viewport"]')).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.press("y");
+  await expect(page.locator("[data-say-menu]")).toBeHidden();
+  for (const name of ["desktop/light.webm", "desktop/dark.webm", "desktop/dark.png"])
     await expect(swatch(page, name)).toHaveAttribute("data-verdict", "looks_right");
+  await expect(swatch(page, "desktop/light.png")).toHaveAttribute("data-verdict", "none");
   await expect(swatch(page, "mobile/light.png")).toHaveAttribute("data-verdict", "none");
+});
+
+test("the board shows what already looks right and the note a looks right resolves", async ({ page }) => {
+  await show(page, WORK_PATH, WORK["no-before"]!.world);
+  await swatch(page, "desktop/dark.png").click();
+  await board(page);
+  await page.keyboard.press("2");
+  await page.keyboard.press("y");
+  await swatch(page, "mobile/dark.png").click();
+  await page.keyboard.press("n");
+  await page.locator("textarea[data-words]").fill("Too tight");
+  await page.locator("[data-add-note]").click();
+  await expect(swatch(page, "mobile/dark.png")).toHaveAttribute("data-verdict", "needs_change");
+  await swatch(page, "mobile/light.png").click();
+  await board(page);
+  await expect(tile(page, "desktop/dark.png")).toHaveAttribute("data-reach-standing", "right");
+  await expect(tile(page, "mobile/dark.png")).toHaveAttribute("data-reach-standing", "note");
+  await page.keyboard.press("4");
+  await expect(tile(page, "mobile/dark.png")).toHaveAttribute("aria-pressed", "true");
+  await expect(tile(page, "mobile/dark.png")).toContainText("resolves note");
+  await expect(page.locator("[data-reach-tally]")).toContainText("resolves 1 note");
+  await expect(page.locator("[data-reach-tally]")).toContainText("4 already right");
+  // Pressed, a tile that already looks right stays as it is.
+  await tile(page, "desktop/light.png").click();
+  await expect(tile(page, "desktop/light.png")).toHaveAttribute("aria-pressed", "false");
+  await tile(page, "desktop/light.png").click();
+  await expect(tile(page, "desktop/light.png")).toHaveAttribute("aria-pressed", "false");
+  await page.locator("[data-say-reach]").click();
+  await expect(swatch(page, "mobile/dark.png")).toHaveAttribute("data-verdict", "looks_right");
 });
 
 // Full screen often leaves Looks right below the window: a held Y floats the choice on the
@@ -137,18 +183,6 @@ test("a held Y shows the choice on the screen, and Esc closes it", async ({ page
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
   await expect(page.locator("[data-table]")).toHaveAttribute("data-full", "");
-});
-
-test("⌥Y says looks right on the viewport, ⇧Y on the whole screen", async ({ page }) => {
-  await show(page, WORK_PATH, WORK["no-before"]!.world);
-  await swatch(page, "mobile/light.png").click();
-  await page.keyboard.press("Alt+KeyY");
-  await expect(swatch(page, "mobile/dark.webm")).toHaveAttribute("data-verdict", "looks_right");
-  await expect(swatch(page, "desktop/light.png")).toHaveAttribute("data-verdict", "none");
-  await swatch(page, "desktop/light.png").click();
-  await page.keyboard.press("Shift+Y");
-  for (const name of ["desktop/light.webm", "desktop/dark.png", "mobile/light.png"])
-    await expect(swatch(page, name)).toHaveAttribute("data-verdict", "looks_right");
 });
 
 test("the next films are fetched ahead too", async ({ page }) => {
