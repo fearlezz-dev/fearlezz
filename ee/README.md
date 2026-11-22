@@ -58,8 +58,10 @@ The bodies are the serde types of `crates/fearlezz-proof/src/events.rs`.
 | `GET /api/v2/installed` | `200 {"installed": true}`, or `200 {"installed": false, "install": "<url>"}`. |
 | `POST /api/v2/runs` | Body `Open` (an OIDC token opens only a CI source, a CLI token only a local one with no `pull`, `400` otherwise): `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?, "run_id", "run_attempt", "runner_name", "leg"?, "planned"?}, "checks": ["<id>", ...]}`, the checks it plans in order; a CI source names its job exactly with `GITHUB_JOB`,
 `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and `RUNNER_NAME`, which tell the legs of a matrix apart. A run of a proof Fearlezz split over several jobs (`fearlezz run --ci --leg`) also names its `leg` (`linux`, `macos/ui`), the leg it counts as in review whatever GitHub names its job, and `planned`, every leg of its plan: the review stays running until each has a run. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
-| `POST /api/v2/runs/<run>/checks` | Body `{"started": {"check": "<id>"}}` when a check starts, or `{"finished": {"check": <proof.json check entry>, "files": {"<path>": {"sha256", "size"}}, "look"?: <look>}}` when it ends, with the files it made (its output at `outputs/<id>.log`, its pictures at `looks/<folder>/...`) and, for a check that takes pictures, its look: the pictures compared with the base commit, as in `proof.json` (`400` when the look is of another check). A check the run did not plan joins at the end. `200 {"missing": ["<sha256>", ...]}`: the blobs the host does not hold yet. |
+| `POST /api/v2/runs/<run>/checks` | Body `{"started": {"check": "<id>"}}` when a check starts, or `{"finished": {"check": <proof.json check entry>, "files": {"<path>": {"sha256", "size"}}, "look"?: <look>, "since"?: {"<picture>": {"<key>": <same>}}}}` when it ends, with the files it made (its output at `outputs/<id>.log`, its pictures at `looks/<folder>/...`) and, for a check that takes pictures, its look: the pictures compared with the base commit, as in `proof.json` (`400` when the look is of another check), and `since`: for each picture, whether it looks the same as each picture `approved` named for it. A check the run did not plan joins at the end. `200 {"missing": ["<sha256>", ...]}`: the blobs the host does not hold yet. |
 | `POST /api/v2/runs/<run>/weakenings` | A CI run asks this before it judges what its change weakens; a closed run answers too, so the gate of a split proof asks through a leg's run. Body `{"weakened": [<weakening>, ...]}`, one per part, each `{"check" or "setting", "hows", "was"?, "now"?}`: the part by name, every way it weakened, and the part as TOML in the base and the head config where it is there. `200 {"accepted": <accept> \| null}`: the admin's accept of the run's head (`{"head", "weakened", "by", "at"}`) when it covers exactly these weakenings (each part and its ways, in any order; never the TOML), nothing more or less, else `null`. `409` for a local run. |
+| `GET /api/v2/runs/<run>/approved` | `200 {"<check>": {"<picture>": ["<key>", ...]}}`: for each picture of the work, the key of the newest looks right and of the pictures its open notes were made on. A CI run compares each of its pictures with these before it says the check finished. |
+| `GET /api/v2/runs/<run>/blobs/<sha256>` | The bytes of a file of the run's repository by its SHA-256, so the run can compare with an approved picture; `404` for one the host does not hold. |
 | `PUT /api/v2/blobs/<sha256>` | The bytes of one missing file, with `Content-Length`. Stored by content, per repository, so a file that did not change is sent once. `204`. |
 | `POST /api/v2/runs/<run>/done` | Body `{"proof": <proof.json>, "files": {...}}`: every file of the bundle. `409 {"error", "missing": [...]}` while a blob is missing (send them and say done again); otherwise the run is done, the proof's entries and looks are the checks' final word, and it answers `200 {"url": "<page url>"}`. |
 
@@ -126,8 +128,8 @@ seconds. The live connection's messages are `events::Live`:
   its checks in order (planned, `started` at a time, or with their `entry`, and their `look`
   once compared);
 - then `{"kind": "event", "seq", "run", "change"}` for each write, where `change` is `opened`
-  (a new run), `started`, `finished` (with the check's look and its pictures' content keys, if
-  any), `done` (with every look and key) or `cancelled` (its job ended without done);
+  (a new run), `started`, `finished` (with the check's look, its pictures' content keys and its
+  `since`, if any), `done` (with every look and key) or `cancelled` (its job ended without done);
 - and `{"kind": "work", "seq", "change"}` for what belongs to the work, not one run: a
   `verdict`, a verdict `withdrawn` (its `check`, `picture` and content `key`), the head's `review`
   as it now stands, or the CI jobs `waiting` for a runner.
@@ -161,7 +163,8 @@ pictures show, marked. `j` and `k` step between pictures, `1` to `5` pick the wa
 
 **Comparing with any run.** Above a picture with earlier runs, a strip of runs: the base, each
 earlier run that showed the picture (CI and local runs; runs whose content key is the same are
-one dot, and those that showed what now shows fold into now), and now. A long history folds:
+one dot, and those that showed what now shows, or a picture now's run found the same, fold
+into now), and now. A long history folds:
 the base, your look, the run just before now (not on a phone), now and the dot picked stay, and
 each stretch of two or more runs between them is one chip ("+5") that opens them. A dot compares what
 that run showed (left) with now (right), in every way to compare, with notes on now's side
@@ -217,11 +220,14 @@ ends with the newest review, and a GitHub that hangs or fails never fails or hol
 
 - **Verdicts are per picture**, on a CI run only, by a signed in person with write access.
   A picture to look at is changed, new, gone, timing or unreadable, and not flaky. A verdict is
-  kept by check, picture and content: a still by the SHA-256 of its before and after, a changed
-  film by which of its stable states changed (its bytes differ each time it is recorded), a new
-  or gone film by its bytes, so its verdict never carries over to another recording, and a text by
-  the SHA-256 of its before and after like a still. So a picture
-  that did not change keeps its verdict across runs and pushes; the page says "carried over".
+  kept by check, picture and the picture's own file: its SHA-256 (`gone:<before>` for a gone
+  one). It holds for a later picture with the same file, or one its run found the same: before a
+  CI run says a check finished, its CLI fetches each picture a person said something about
+  (`approved`, then `blobs`) and compares it with its own by the one comparison of
+  `fearlezz-compare` (render noise and fewer than 30 changed pixels in a still are the same; a
+  film whose timing alone changed is not), and sends what it found as `since`. So a picture
+  that looks as it did keeps its verdict across runs, pushes and rerecordings; the page says
+  "carried over".
   A verdict only says a picture looks right: what should change is a note.
   The page says it of several pictures of a screen at once (each its own verdict): a film's
   looks right reaches the still of its viewport and theme, and a person can reach the

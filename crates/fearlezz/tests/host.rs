@@ -649,6 +649,82 @@ fn a_finished_check_sends_its_look_with_the_pictures() {
     );
 }
 
+#[test]
+fn a_finished_check_says_whether_each_picture_looks_like_the_approved_ones() {
+    // Before the check says it finished, CI fetches each picture a person said something
+    // about and compares its own with it, so a looks right follows a picture that looks the
+    // same though its bytes differ.
+    let host = FakeHost::start();
+    let dir = tempfile::tempdir().unwrap();
+    let still = |color: &str, level: &str| {
+        let path = dir.path().join(format!("{color}{level}.png"));
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-nostdin", "-f", "lavfi", "-i"])
+            .arg(format!("color=c={color}:s=64x48"))
+            .args(["-frames:v", "1", "-compression_level", level])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        std::fs::read(path).unwrap()
+    };
+    // The same blue, written another way, and the red of before.
+    let blue = still("blue", "0");
+    let red = still("red", "0");
+    {
+        let mut s = host.state.lock().unwrap();
+        s.approved =
+            Some(json!({"screens": {"home.png": [sha256(&blue), sha256(&red), "gone:aa"]}}));
+        s.approved_files.insert(sha256(&blue), blue.clone());
+        s.approved_files.insert(sha256(&red), red.clone());
+    }
+    let config = format!(
+        "{}\n[check.screens]\nrun = \"sh record.sh\"\nstage = \"working\"\ninputs = [\"src/**\", \"record.sh\"]\n\n[host]\nurl = \"{}\"\n",
+        checks(&host),
+        host.url
+    );
+    let repo = Repo::new(
+        &config,
+        &[
+            (".gitignore", ".runs/\n"),
+            ("record.sh", STILLS),
+            ("src/a.txt", "a\n"),
+            ("src/color.txt", "red"),
+        ],
+    );
+    std::fs::create_dir_all(repo.path(".runs")).unwrap();
+    repo.branch("feat/x");
+    repo.write("src/color.txt", "blue");
+    repo.commit("blue");
+    let (out, _) = ci(&repo, &host.token_env());
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+
+    let finished = host
+        .api()
+        .into_iter()
+        .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap_or_default())
+        .find(|b| b["finished"]["check"]["id"] == "screens")
+        .expect("a finished screens check");
+    let after = finished["finished"]["look"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["name"] == "home.png")
+        .and_then(|i| i["after"].as_str())
+        .unwrap_or_else(|| panic!("{finished:#}"));
+    assert_ne!(
+        finished["finished"]["files"][after]["sha256"],
+        sha256(&blue),
+        "the bytes differ"
+    );
+    // A gone picture has no file to compare with.
+    assert_eq!(
+        finished["finished"]["since"],
+        json!({"home.png": {sha256(&blue): true, sha256(&red): false}}),
+        "{finished:#}"
+    );
+}
+
 /// `fearlezz run --ci` with `args` on a push of `feat/x`, as `ci` runs it.
 fn ci_with(repo: &Repo, args: &[&str], env: &[(String, String)]) -> common::Output {
     let mut all: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();

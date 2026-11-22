@@ -106,6 +106,32 @@ fn stills_are_same_or_changed_with_the_changed_area() {
     assert!(out.stdout.starts_with("changed: x "), "{}", out.stdout);
 }
 
+/// A still of the proof host's page while it connects, from two CI runs: its loading
+/// skeleton moved 12px down, dark grey on near black (22 of 255 apart at most). A comparison
+/// that took the codec noise allowance of films for stills called it the same.
+#[test]
+fn a_faint_move_in_a_still_is_a_change() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/compare");
+    let c = compare(
+        &fixtures.join("skeleton-before.png"),
+        &fixtures.join("skeleton-after.png"),
+    );
+    assert_eq!(c["verdict"], "changed", "{c}");
+}
+
+/// A phone still of the proof host's page from two CI runs of the same code: Chromium drew
+/// the edges of an icon a fraction of a pixel apart, 22 pixels that are not antialiasing by
+/// its rule. Fewer than 30 changed pixels are no change a person sees.
+#[test]
+fn render_jitter_in_a_still_is_the_same() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/compare");
+    let c = compare(
+        &fixtures.join("jitter-before.png"),
+        &fixtures.join("jitter-after.png"),
+    );
+    assert_eq!(c["verdict"], "same", "{c}");
+}
+
 /// Runs ffmpeg with `args` and asserts it wrote `path`.
 fn ffmpeg(path: &std::path::Path, args: &[&str]) -> std::path::PathBuf {
     let out = std::process::Command::new("ffmpeg")

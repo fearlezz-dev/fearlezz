@@ -69,16 +69,26 @@ export function opening(runs: Run[]): Run | undefined {
   return runs.find((r) => legOf(r) && picturesOf(r).some(toLookAt)) ?? newest;
 }
 
-/** What a picture of a run shows, as a verdict follows it; none until the host knows. */
+/** What a picture of a run shows, as a verdict follows it: its own file; none until the host
+ * knows. */
 export function keyOf(run: Run, p: Shown): string | undefined {
   return run.checks.find((c) => c.id === p.check)?.keys?.[p.picture.name];
 }
 
-/** The verdict on what a picture of a run shows, given on this run or any other. */
+/** Whether picture `p` of `run`, whose content is `key`, looks like the picture whose content
+ * was `then`: the same file, or one the run's CLI compared it with and found the same. The
+ * host's review uses the same rule. */
+function alike(run: Run, p: Shown, key: string, then: string): boolean {
+  return then === key || run.checks.find((c) => c.id === p.check)?.since?.[p.picture.name]?.[then] === true;
+}
+
+/** The newest verdict on a picture of a run that looks like it, given on this run or any other. */
 export function verdictOf(state: Snapshot, run: Run, p: Shown): PictureVerdict | undefined {
   const key = keyOf(run, p);
   if (!key) return undefined;
-  return (state.verdicts ?? []).find((v) => v.check === p.check && v.picture === p.picture.name && v.key === key);
+  return (state.verdicts ?? [])
+    .filter((v) => v.check === p.check && v.picture === p.picture.name && alike(run, p, key, v.key))
+    .sort((a, b) => b.at - a.at)[0];
 }
 
 /** Where a picture of a run stands: an open note on it says it needs change, which outweighs a
@@ -91,17 +101,17 @@ export function standingOf(state: Snapshot, run: Run, p: Shown): "needs_change" 
 }
 
 /** What a person said about what a picture showed before it changed: the newest looks right
- * on other content (unless one is on this content), and the ids of its open notes made on a run
- * that showed other content. The host's review says the same as `changed_since`; the page reads
- * what it holds, so a new verdict clears it at once. A note whose run the page does not hold
- * says nothing. */
+ * on a picture that does not look like it (unless one does), and the ids of its open notes made
+ * on a run whose picture does not look like it. The host's review says the same as
+ * `changed_since`; the page reads what it holds, so a new verdict clears it at once. A note
+ * whose run the page does not hold says nothing. */
 export type Since = { verdict: PictureVerdict | undefined; notes: string[] };
 export function changedSince(state: Snapshot, run: Run, p: Shown): Since | undefined {
   const key = keyOf(run, p);
   if (!key) return undefined;
   const verdict = verdictOf(state, run, p)
     ? undefined
-    : (state.verdicts ?? []).filter((v) => v.check === p.check && v.picture === p.picture.name && v.key !== key).sort((a, b) => b.at - a.at)[0];
+    : (state.verdicts ?? []).filter((v) => v.check === p.check && v.picture === p.picture.name).sort((a, b) => b.at - a.at)[0];
   const then = (id: string) => {
     const made = state.runs.find((r) => r.id === id);
     return made && keyOf(made, p);
@@ -109,7 +119,7 @@ export function changedSince(state: Snapshot, run: Run, p: Shown): Since | undef
   const notes = notesOn(state, p.check, p.picture.name, run)
     .filter((n) => {
       const was = then(n.note.run);
-      return was !== undefined && was !== key;
+      return was !== undefined && !alike(run, p, key, was);
     })
     .map((n) => n.note.id);
   return verdict || notes.length ? { verdict, notes } : undefined;

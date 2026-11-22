@@ -223,6 +223,7 @@ pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
                 entry: None,
                 look: None,
                 keys: Keys::new(),
+                since: Default::default(),
             })
             .collect(),
     };
@@ -386,7 +387,12 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
             );
             (vec![statement], Change::Started { check, at }, Files::new())
         }
-        Step::Finished { check, files, look } => {
+        Step::Finished {
+            check,
+            files,
+            look,
+            since,
+        } => {
             refuse_empty(&check.id)?;
             refuse_bad_files(&files)?;
             if let Some(look) = &look
@@ -401,11 +407,22 @@ pub async fn step(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
             if let Some(look) = &look {
                 statements.push(record_look(id, look)?);
             }
+            if !since.is_empty() {
+                statements.push(Statement::new(
+                    "UPDATE checks SET since = ?3 WHERE run = ?1 AND id = ?2",
+                    [
+                        id.into(),
+                        check.id.as_str().into(),
+                        serde_json::to_string(&since)?.into(),
+                    ],
+                ));
+            }
             statements.extend(record_files(id, &files));
             let change = Change::Finished {
                 check: *check,
                 look,
                 keys: Keys::new(),
+                since,
             };
             (statements, change, files)
         }
@@ -449,6 +466,42 @@ pub async fn weakenings(mut req: Request, env: &Env, config: &Config, id: &str) 
         .await?
         .filter(|a| a.covers(&run.head, &ask.weakened));
     Ok(Response::from_json(&Accepted { accepted })?)
+}
+
+/// `GET /api/v2/runs/<run>/approved`: the pictures a person said something about in the run's
+/// work, by check and picture name ([`review::Approved`](fearlezz_proof::review::Approved)),
+/// which the run compares its own pictures with. Each key is a file the run fetches from
+/// `/api/v2/runs/<run>/blobs/<key>`; a gone picture's key names none.
+pub(crate) async fn approved(req: &Request, env: &Env, config: &Config, id: &str) -> Answer {
+    let writer = Writer::of(req, env, config).await?;
+    let db = env.d1("DB")?;
+    let run = owned(env, config, &db, &writer, id).await?;
+    let of = work::of_head(&db, &run.work, &run.head).await?;
+    let approved = fearlezz_proof::review::approved(&of.runs, &of.verdicts, &of.notes);
+    Ok(Response::from_json(&approved)?)
+}
+
+/// `GET /api/v2/runs/<run>/blobs/<sha256>`: a file the run's repository holds, by its SHA-256,
+/// for the run to compare a picture with one a person approved. Only the writer of the run may
+/// ask, and only for its own repository's files; `404` for any other.
+pub(crate) async fn approved_blob(
+    req: &Request,
+    env: &Env,
+    config: &Config,
+    id: &str,
+    sha256: &str,
+) -> Answer {
+    let writer = Writer::of(req, env, config).await?;
+    let db = env.d1("DB")?;
+    let run = owned(env, config, &db, &writer, id).await?;
+    if !is_sha256(sha256) {
+        return Err(Refusal::new(404, "no such file"));
+    }
+    let body = files::body(env, &files::blob_key(&run.repo, sha256), None).await?;
+    let headers = worker::Headers::new();
+    headers.set("Content-Type", "application/octet-stream")?;
+    headers.set("Cache-Control", "no-store")?;
+    Ok(Response::from_body(body)?.with_headers(headers))
 }
 
 /// The statement that records a check's entry, adding the check when the run did not plan it.
@@ -747,13 +800,14 @@ async fn show_completed_looks(
         source: String,
         entry: String,
         look: String,
+        since: Option<String>,
     }
     // Starts from the runs that name these bytes (`files_by_blob`), so it reads only those runs
     // and their checks. CROSS JOIN keeps that order: started from the repository instead, it
     // read every check of every run the repository ever had.
     let rows = db
         .prepare(
-            "SELECT c.run, r.work, r.source, c.entry, c.look \
+            "SELECT c.run, r.work, r.source, c.entry, c.look, c.since \
              FROM (SELECT DISTINCT run FROM files WHERE sha256 = ?2) f \
              CROSS JOIN runs r ON r.id = f.run \
              CROSS JOIN works w ON w.id = r.work \
@@ -773,6 +827,12 @@ async fn show_completed_looks(
             check: work::read(&row.entry)?,
             look: Some(Box::new(look)),
             keys: Keys::new(),
+            since: row
+                .since
+                .as_deref()
+                .map(work::read)
+                .transpose()?
+                .unwrap_or_default(),
         };
         let write = Write {
             statements: Vec::new(),

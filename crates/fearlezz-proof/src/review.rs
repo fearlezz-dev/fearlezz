@@ -6,14 +6,14 @@
 //! A verdict follows the picture, not the run: it is kept by check, picture name and content, so
 //! a picture that did not change keeps its verdict across pushes and runs of the same work.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::events::{Run, RunState, Source};
+use crate::events::{Run, RunCheck, RunState, Source};
 use crate::floor::Weakening;
 use crate::look::Item;
-use crate::notes::Note;
+use crate::notes::{Note, NoteState};
 use crate::{Proof, Ran, short};
 
 /// What a person may do on a repository, as GitHub's collaborator permission says it. Which
@@ -257,42 +257,73 @@ pub struct Job {
     pub since: f64,
 }
 
-/// What a picture or text shows, as a verdict follows it, from `sha`, the SHA-256 of a file of
-/// the run by its path. A still is its before's and after's bytes (`still:<before>:<after>`,
-/// `-` for a side it lacks), and a text likewise (`text:<before>:<after>`). A compared film's
-/// bytes differ each time it is recorded, so it is which of its stable states changed, as its
-/// comparison says (`film:<states before>:<states after>:<pairs that differ>`). A film nothing compared (new, gone) is its bytes like a
-/// still (`film:<before>:<after>`), so its verdict never carries over to another recording.
+/// What a picture or text shows, as a verdict follows it: the SHA-256 of its own file (its
+/// after), from `sha`, the SHA-256 of a file of the run by its path; a gone one is the one it
+/// was (`gone:<before>`). Only the picture a person saw counts, so a base drawn again keeps it;
+/// whether another picture looks the same as it is what a run's CLI compares ([`Since`]).
 /// None while a file it names is not known.
 pub fn key(item: &Item, sha: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let kind = match item.kind.as_str() {
-        "film" => "film",
-        "text" => "text",
-        _ => "still",
-    };
-    if let (true, Some(c)) = (kind == "film", &item.comparison) {
-        let changed: Vec<String> = c
-            .pairs
-            .iter()
-            .filter(|p| p.px > 0)
-            .map(|p| format!("{}-{}", p.before, p.after))
-            .collect();
-        return Some(format!(
-            "film:{}:{}:{}",
-            c.states_before,
-            c.states_after,
-            changed.join(",")
-        ));
+    match (&item.after, &item.before) {
+        (Some(after), _) => sha(after),
+        (None, Some(before)) => Some(format!("gone:{}", sha(before)?)),
+        (None, None) => None,
     }
-    let side = |path: &Option<String>| match path {
-        Some(path) => sha(path),
-        None => Some("-".to_owned()),
-    };
-    Some(format!(
-        "{kind}:{}:{}",
-        side(&item.before)?,
-        side(&item.after)?
-    ))
+}
+
+/// What a run's CLI found comparing each picture of a check with pictures a person said
+/// something about ([`approved`]): by picture name, the key of each and whether the picture
+/// looks the same as it now, by the one comparison the CLI and the page share (a film that only
+/// changed its timing does not).
+pub type Since = BTreeMap<String, BTreeMap<String, bool>>;
+
+/// The pictures a person said something about, which a run compares its own with: by check
+/// and picture name, the key of the newest looks right on it and of the picture each open
+/// note was made on.
+pub type Approved = BTreeMap<String, BTreeMap<String, BTreeSet<String>>>;
+
+/// The pictures of `runs` (every run known) a person said something about, which a new run
+/// compares its own with: the newest looks right on each picture, and the picture each open
+/// note was made on.
+pub fn approved(runs: &[ProvenRun], verdicts: &[Verdict], notes: &[Note]) -> Approved {
+    let mut approved = Approved::new();
+    let mut newest: BTreeMap<(&str, &str), &Verdict> = BTreeMap::new();
+    for v in verdicts {
+        let at = newest.entry((&v.check, &v.picture)).or_insert(v);
+        if v.at > at.at {
+            *at = v;
+        }
+    }
+    for ((check, name), v) in newest {
+        approved
+            .entry(check.to_owned())
+            .or_default()
+            .entry(name.to_owned())
+            .or_default()
+            .insert(v.key.clone());
+    }
+    for n in notes.iter().filter(|n| n.state == NoteState::Open) {
+        if let Some(key) = key_in(runs, &n.run, &n.check, &n.picture) {
+            approved
+                .entry(n.check.clone())
+                .or_default()
+                .entry(n.picture.clone())
+                .or_default()
+                .insert(key.clone());
+        }
+    }
+    approved
+}
+
+/// Whether picture `name` of `check`, now `key`, looks as the picture of key `then` did: the
+/// same file, or one its run's CLI found the same.
+fn alike(check: &RunCheck, name: &str, key: &str, then: &str) -> bool {
+    then == key
+        || check
+            .since
+            .get(name)
+            .and_then(|s| s.get(then))
+            .copied()
+            .unwrap_or(false)
 }
 
 /// The content key `check` gave picture `name` in run `id`, when that run is among `runs`.
@@ -301,29 +332,33 @@ fn key_in<'a>(runs: &'a [ProvenRun], id: &str, check: &str, name: &str) -> Optio
     run.checks.iter().find(|c| c.id == check)?.keys.get(name)
 }
 
-/// What was said about other content of picture `name` of `check`, whose content is now `key`:
-/// the newest looks right verdict on other content (unless one is on this content), and the
-/// open notes made on a run that showed other content. A note whose run is not known says
-/// nothing.
+/// What was said about another look of picture `name` of `check` (`run_check` its check in the
+/// run shown), whose content is now `key`: the newest looks right verdict on a picture that
+/// does not look alike (unless one is on a picture alike), and the open notes made on a run
+/// whose picture does not look alike. A note whose run is not known says nothing.
 fn changed_since(
     runs: &[ProvenRun],
-    (check, name, key): (&str, &str, &str),
+    (run_check, name, key): (&RunCheck, &str, &str),
     verdicts: &[Verdict],
     verdict: Option<&Verdict>,
     open: &[&Note],
 ) -> Option<ChangedSince> {
+    let check = run_check.id.as_str();
     let verdict = match verdict {
         Some(_) => None,
         None => verdicts
             .iter()
-            .filter(|v| v.check == check && v.picture == name && v.key != key)
+            .filter(|v| v.check == check && v.picture == name)
             .max_by(|a, b| a.at.total_cmp(&b.at))
+            .filter(|v| !alike(run_check, name, key, &v.key))
             .cloned(),
     };
     let notes: Vec<String> = open
         .iter()
         .filter(|n| n.check == check && n.picture == name)
-        .filter(|n| key_in(runs, &n.run, check, name).is_some_and(|then| then != key))
+        .filter(|n| {
+            key_in(runs, &n.run, check, name).is_some_and(|then| !alike(run_check, name, key, then))
+        })
         .map(|n| n.id.clone())
         .collect();
     (verdict.is_some() || !notes.is_empty()).then_some(ChangedSince { verdict, notes })
@@ -352,9 +387,12 @@ fn looked_at(
                 if seen {
                     continue;
                 }
+                // The newest looks right on a picture that looks alike.
                 let verdict = verdicts
                     .iter()
-                    .find(|v| v.check == check.id && v.picture == item.name && &v.key == key)
+                    .filter(|v| v.check == check.id && v.picture == item.name)
+                    .filter(|v| alike(check, &item.name, key, &v.key))
+                    .max_by(|a, b| a.at.total_cmp(&b.at))
                     .cloned();
                 let noted = open
                     .iter()
@@ -366,7 +404,7 @@ fn looked_at(
                 };
                 let changed_since = changed_since(
                     runs,
-                    (&check.id, &item.name, key),
+                    (check, &item.name, key),
                     verdicts,
                     verdict.as_ref(),
                     open,

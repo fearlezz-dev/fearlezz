@@ -248,6 +248,7 @@ async fn settle(db: &D1Database, work: &str, seq: u64, event: Event) -> worker::
                 Change::Finished {
                     check,
                     look: Some(look),
+                    since,
                     ..
                 } => {
                     let (look, keys) = shown(*look, &held(db, &run).await?).unzip();
@@ -255,6 +256,7 @@ async fn settle(db: &D1Database, work: &str, seq: u64, event: Event) -> worker::
                         check,
                         look: look.map(Box::new),
                         keys: keys.unwrap_or_default(),
+                        since,
                     }
                 }
                 Change::Done { checks, looks, .. } => {
@@ -350,6 +352,7 @@ struct CheckRow {
     started: Option<f64>,
     entry: Option<String>,
     look: Option<String>,
+    since: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -526,7 +529,7 @@ fn run_statements(
     Ok(vec![
         db.prepare(&runs).bind(binds)?,
         db.prepare(format!(
-            "SELECT c.run, c.id, c.started, c.entry, c.look FROM checks c WHERE c.run IN ({ids}) ORDER BY c.position"
+            "SELECT c.run, c.id, c.started, c.entry, c.look, c.since FROM checks c WHERE c.run IN ({ids}) ORDER BY c.position"
         ))
         .bind(binds)?,
         db.prepare(format!("{HELD} WHERE f.run IN ({ids})"))
@@ -563,6 +566,12 @@ fn assemble(results: &[D1Result]) -> worker::Result<Vec<(Run, Option<Proof>)>> {
                         entry: c.entry.as_deref().map(read::<Check>).transpose()?,
                         look,
                         keys: keys.unwrap_or_default(),
+                        since: c
+                            .since
+                            .as_deref()
+                            .map(read)
+                            .transpose()?
+                            .unwrap_or_default(),
                     })
                 })
                 .collect::<worker::Result<Vec<_>>>()?;

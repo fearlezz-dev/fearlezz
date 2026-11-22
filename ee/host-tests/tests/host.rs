@@ -344,8 +344,8 @@ fn main() {
             a_verdict_carries_over_to_a_later_run_with_the_same_pictures,
         ),
         (
-            "a_film_verdict_follows_its_changed_states",
-            a_film_verdict_follows_its_changed_states,
+            "a_verdict_follows_what_the_run_found_comparing_with_the_approved_picture",
+            a_verdict_follows_what_the_run_found_comparing_with_the_approved_picture,
         ),
         (
             "accept_needs_an_admin_and_runs_the_failed_proof_job_again",
@@ -2541,9 +2541,10 @@ fn film_look(bytes: &[u8], changed: &[usize]) -> (Value, Vec<(&'static str, Vec<
     (look_of("screens", &[item]), files)
 }
 
-fn a_film_verdict_follows_its_changed_states() {
+fn a_verdict_follows_what_the_run_found_comparing_with_the_approved_picture() {
     let first = Job::pull("owner/review", 105, "review/film").at(&commit("a105"), 1105);
-    let (look, files) = film_look(b"film after, recording 1", &[1]);
+    let recording = b"film after, recording 1";
+    let (look, files) = film_look(recording, &[1]);
     let run = proven(&first, &look, &files, &json!({}));
     let writer = sign_in("writer-code", "/");
     let answer = say(
@@ -2554,24 +2555,90 @@ fn a_film_verdict_follows_its_changed_states() {
         &looks_right("checkout.webm"),
     );
     assert_eq!(answer.status, 201, "{}", answer.text());
-    // Films differ in their bytes each time they are recorded; the same change keeps it.
+
+    // A later run asks which pictures a person said something about, and fetches each.
+    let second = first.at(&commit("b105"), 2105);
+    let opened = second.open(&["screens"]);
+    let approved = api(
+        "GET",
+        &format!("/api/v2/runs/{}/approved", opened.id),
+        &second.token(),
+        None,
+    );
+    assert_eq!(approved.status, 200, "{}", approved.text());
+    let then = sha256(recording);
+    assert_eq!(
+        approved.json()["screens"]["checkout.webm"],
+        json!([then]),
+        "{}",
+        approved.text()
+    );
+    let fetched = api(
+        "GET",
+        &format!("/api/v2/runs/{}/blobs/{then}", opened.id),
+        &second.token(),
+        None,
+    );
+    assert_eq!(fetched.status, 200, "{}", fetched.text());
+    assert_eq!(fetched.body, recording.to_vec(), "the approved recording");
+    let stranger = Job::pull("owner/other", 1, "x").at(&commit("a1"), 1);
+    let refused = api(
+        "GET",
+        &format!("/api/v2/runs/{}/blobs/{then}", opened.id),
+        &stranger.token(),
+        None,
+    );
+    assert_eq!(refused.status, 404, "another repository's run");
+
+    // Recorded again its bytes differ; the run found it the same, so the look holds.
     let (again, again_files) = film_look(b"film after, recording 2", &[1]);
-    proven(
-        &first.at(&commit("b105"), 2105),
-        &again,
-        &again_files,
+    let found = |same: bool| json!({ "checkout.webm": { (then.clone()): same } });
+    finish_with_since(&second, &opened.id, &again, &again_files, &found(true));
+    let review = review_of(105);
+    assert_eq!(review["state"], "approved", "{review:#}");
+    assert_eq!(
+        review["pictures"][0]["verdict"]["run"],
+        run.as_str(),
+        "{review:#}"
+    );
+
+    // Found changed (a film whose timing alone changed is too): look again.
+    let third = first.at(&commit("c105"), 3105);
+    let opened = third.open(&["screens"]);
+    let (other, other_files) = film_look(b"film after, recording 3", &[1]);
+    finish_with_since(&third, &opened.id, &other, &other_files, &found(false));
+    let review = review_of(105);
+    assert_eq!(review["state"], "waits", "{review:#}");
+    assert_eq!(
+        review["pictures"][0]["changed_since"]["verdict"]["run"],
+        run.as_str(),
+        "{review:#}"
+    );
+}
+
+/// Ends check `screens` of run `run` of `job` with `look`, its files and what the run found
+/// comparing its pictures with the approved ones (`since`), then closes the run.
+fn finish_with_since(job: &Job, run: &str, look: &Value, files: &[(&str, Vec<u8>)], since: &Value) {
+    let files: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    let finished = json!({
+        "check": entry("screens", "passed"),
+        "files": manifest(&files),
+        "look": look,
+        "since": since,
+    });
+    let answer = job.step(run, &json!({ "finished": finished }));
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    for (_, bytes) in &files {
+        job.send(bytes);
+    }
+    let answer = job.close_with(
+        run,
+        &[entry("screens", "passed")],
+        std::slice::from_ref(look),
+        &files,
         &json!({}),
     );
-    assert_eq!(review_of(105)["state"], "approved");
-    // Another state that changed is another change.
-    let (other, other_files) = film_look(b"film after, recording 3", &[1, 2]);
-    proven(
-        &first.at(&commit("c105"), 3105),
-        &other,
-        &other_files,
-        &json!({}),
-    );
-    assert_eq!(review_of(105)["state"], "waits");
+    assert_eq!(answer.status, 200, "{}", answer.text());
 }
 
 fn accept_needs_an_admin_and_runs_the_failed_proof_job_again() {

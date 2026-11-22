@@ -50,6 +50,13 @@ describe("stripOf", () => {
     expect(dots(s, now)).toEqual(["base:", "run:r1", "run:r4+r2", "now:r5+r3"]);
   });
 
+  test("folds a run whose picture now's run found the same into now", () => {
+    const found = run("r3", "k3");
+    const now: Run = { ...found, checks: [{ ...found.checks[0]!, since: { "card.png": { k2: true, k1: false } } }] };
+    const s = state([now, run("r2", "k2"), run("r1", "k1")], [verdict("k2", 20, "r2")]);
+    expect(dots(s, now)).toEqual(["base:", "run:r1", "now:r3+r2"]);
+  });
+
   test("leaves out runs newer than the one shown, and the base when the picture is new", () => {
     const shownRun = run("r2", "k2", card("looks/s/after/card.png", null));
     const s = state([run("r3", "k3"), shownRun, run("r1", "k1")]);

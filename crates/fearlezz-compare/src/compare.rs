@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::diff::{diff, outside_range};
+use crate::diff::{diff, outside_range, still_diff};
 use crate::film::Window;
 use crate::{Box4, Comparison, Film, Moment, Pair, Reread, State, Verdict};
 
@@ -107,7 +107,7 @@ where
         Window::new(before, before_again),
         Window::new(after, after_again),
     );
-    out.pairs = pairs(&mut windows, &path)?;
+    out.pairs = pairs(&mut windows, &path, still)?;
     let max_shift = max_shift(ko, kn, &path, &cost);
     out.max_shift = round3(max_shift.0);
     out.max_shift_at = max_shift.1.map(round3);
@@ -130,6 +130,7 @@ where
 fn pairs<B, A>(
     (wo, wn): &mut (Window<'_, B>, Window<'_, A>),
     path: &[(usize, usize)],
+    still: bool,
 ) -> Result<Vec<Pair>, B::Error>
 where
     B: Reread,
@@ -148,13 +149,18 @@ where
             if let Some(d) = cache.get(&(i, j)) {
                 return Ok(d.clone());
             }
-            let d = diff(wo.image(i)?, wn.image(j)?, true);
+            let d = if still {
+                still_diff(wo.image(i)?, wn.image(j)?)
+            } else {
+                diff(wo.image(i)?, wn.image(j)?, true)
+            };
             let d = (d.px, d.boxes);
             cache.insert((i, j), d.clone());
             Ok(d)
         };
         let (mut px, mut boxes) = pd(i, j)?;
-        if px > 0 {
+        // A still has one state, so nothing it could have been caught between.
+        if px > 0 && !still {
             // When the films caught a transition at different moments, each side of the pair
             // has its true counterpart next to the other: a neighbour the path also visits
             // that matches it fully, or the other film's neighbours, whose range it sits in.

@@ -900,8 +900,10 @@ html, * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--quiet
    The pair shown is drawn in ink, the run of the person's last look and its line to now in
    the Look again colour, so what changed since they looked stands out. A phone scrolls it
    sideways. */
-.strip { margin: 0 0 12px; overflow-x: auto; scrollbar-width: thin; overscroll-behavior-x: contain; }
-.strip ol { display: flex; margin: 0; padding: 2px 2px 4px; list-style: none; min-width: max-content; }
+/* Right aligned under the compare tools; an auto margin, unlike flex-end, keeps an overflowing
+   strip's start reachable by scrolling. */
+.strip { display: flex; margin: 0 0 12px; overflow-x: auto; scrollbar-width: thin; overscroll-behavior-x: contain; }
+.strip ol { display: flex; margin: 0 0 0 auto; padding: 2px 2px 4px; list-style: none; min-width: max-content; }
 .strip li { position: relative; display: flex; --dot: var(--line-strong); --into: var(--line-strong); }
 .strip li + li { padding-left: 40px; }
 /* The line into a dot, from the one before it. */

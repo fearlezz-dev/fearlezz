@@ -47,6 +47,11 @@ pub(crate) struct State {
     /// What `POST /api/v2/runs/r1/weakenings` answers as the admin's accept, whatever the run
     /// asks, so a test can show the CLI holds it to its own weakenings and head.
     pub accepted: Option<Value>,
+    /// What `GET /api/v2/runs/r1/approved` answers: the pictures a person said something
+    /// about, by check and picture; none is an empty answer.
+    pub approved: Option<Value>,
+    /// The approved pictures CI reads at `/api/v2/runs/r1/blobs/<sha256>`, by that SHA-256.
+    pub approved_files: BTreeMap<String, Vec<u8>>,
     /// Its own address, which the pages it names start with.
     base: String,
 }
@@ -150,6 +155,18 @@ fn serve(request: Request, state: &Arc<Mutex<State>>) -> Answer {
             body: bytes.clone(),
         };
     }
+    let oidc = auth.as_deref() == Some(&format!("Bearer {OIDC}"));
+    let approved = path.strip_prefix("/api/v2/runs/r1/blobs/");
+    if let Some(bytes) = approved
+        .and_then(|sha| s.approved_files.get(sha))
+        .filter(|_| oidc)
+    {
+        return Answer::Body {
+            status: 200,
+            kind: "application/octet-stream",
+            body: bytes.clone(),
+        };
+    }
     let (status, value) = answer(&mut s, &method, &path, auth.as_deref(), &body);
     Answer::json(status, &value)
 }
@@ -220,6 +237,7 @@ fn answer(
             json!({"installed": false, "install": "https://github.com/apps/fearlezz"}),
         ),
         ("POST", "/api/v2/runs") => (201, json!({"run": RUN, "url": page})),
+        ("GET", "/api/v2/runs/r1/approved") => (200, s.approved.clone().unwrap_or(json!({}))),
         ("POST", "/api/v2/runs/r1/checks") => {
             let missing = s.lacks(&sent["finished"]["files"]);
             (200, json!({ "missing": missing }))
