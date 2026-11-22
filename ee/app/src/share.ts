@@ -13,6 +13,7 @@ export async function listShares(work: Work): Promise<{ shares: Share[] } | { er
     const answer = await fetch(`/api/v2/shares?${query(work)}`, { credentials: "same-origin" });
     const body = (await answer.json().catch(() => ({}))) as { shares?: Share[]; error?: string };
     if (answer.ok && body.shares) return { shares: body.shares };
+    if (answer.ok) return { error: "the host's answer could not be read; reload the page" };
     return { error: body.error ?? `the host answered ${answer.status}` };
   } catch {
     return { error: "the host could not be reached; try again" };

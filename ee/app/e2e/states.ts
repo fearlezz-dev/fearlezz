@@ -9,6 +9,7 @@ import type {
   Comparison,
   Listed,
   Look,
+  Marks,
   Note,
   Picture,
   PictureVerdict,
@@ -589,13 +590,21 @@ export const REPOSITORY_STATES: Record<string, World> = {
 const FIRST_HEAD = "5d1c0e9a7b3f2e4d6c8a0b1f3e5d7c9a2b4f6e81";
 const STRIP_STILL = "profile/desktop/light.png";
 const STRIP_FILM = "checkout/desktop.webm";
+/** What the strip's films say happened in them: a load whose timing may change, then two steps. */
+const STRIP_MARKS: Marks = {
+  marks: [
+    { name: "opened", at: 0.3 },
+    { name: "paid", at: 0.8 },
+  ],
+  spans: [{ name: "loading", start: 0, end: 0.3, timing: "free" }],
+};
 const STRIP_LOOK: Look = {
   check: "ee-page-look",
   base_commit: OLD_HEAD,
   base_result: "passed",
   items: [
     { name: STRIP_STILL, kind: "still", change: "changed", summary: "Changed in 1 place.", before: "looks/profile/before.png", after: "looks/profile/after.png", comparison: answerOf("base-still.json") },
-    { name: STRIP_FILM, kind: "film", change: "changed", summary: "Changed in 1 state.", before: "looks/checkout/before.webm", after: "looks/checkout/after.webm", comparison: answerOf("base-film.json") },
+    { name: STRIP_FILM, kind: "film", change: "changed", summary: "Changed in 1 state.", before: "looks/checkout/before.webm", after: "looks/checkout/after.webm", comparison: answerOf("base-film.json"), marks: STRIP_MARKS, before_marks: STRIP_MARKS },
   ],
 };
 /** What a run of the strip showed: `still` and `film` as the files it took. */

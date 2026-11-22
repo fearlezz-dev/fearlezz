@@ -12,7 +12,9 @@ use fearlezz_proof::events::{
 use fearlezz_proof::findings::{Finding, Level};
 use fearlezz_proof::floor::Weakening;
 use fearlezz_proof::look::{Change as PictureChange, DiffLine, Item as Picture, Look};
-use fearlezz_proof::media::{Comparison, Moment, Pair, Verdict as Likeness};
+use fearlezz_proof::media::{
+    Comparison, Mark, Marks, Moment, Pair, Span, Timing, Verdict as Likeness,
+};
 use fearlezz_proof::notes::{Edit as NoteEdit, Note, NoteState, Region, Side as NoteSide};
 use fearlezz_proof::review::{
     Accept, ChangedSince, Job, Picture as ReviewPicture, Review, Role, Standing as PictureStanding,
@@ -64,6 +66,10 @@ fn declarations() -> String {
         DiffLine::decl(&cfg),
         Comparison::decl(&cfg),
         Likeness::decl(&cfg),
+        Marks::decl(&cfg),
+        Mark::decl(&cfg),
+        Span::decl(&cfg),
+        Timing::decl(&cfg),
         Moment::decl(&cfg),
         Pair::decl(&cfg),
         Check::decl(&cfg),

@@ -120,11 +120,16 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
     const left = leftFiles();
     const right = files();
     if (d?.kind !== "run" || !d.path || !p?.picture.after || !left || !right) return undefined;
-    return { before: fileUrl(left, d.path), after: fileUrl(right, p.picture.after), film: isFilm(p.picture) };
+    return {
+      before: fileUrl(left, d.path),
+      after: fileUrl(right, p.picture.after),
+      film: isFilm(p.picture),
+      marks: [d.marks, p.picture.marks ?? null] as const,
+    };
     // The same files are the same pair, so a live event that redraws the run compares nothing again.
   }, undefined, { equals: (a, b) => a?.before === b?.before && a?.after === b?.after && a?.film === b?.film });
   // Its comparison with now, made in the page.
-  const [pair] = createResource(pairUrls, (u) => compared(u.before, u.after, u.film));
+  const [pair] = createResource(pairUrls, (u) => compared({ url: u.before, marks: u.marks[0] }, { url: u.after, marks: u.marks[1] }, u.film));
   const against = createMemo<Against | undefined>(() => {
     const d = dot();
     if (d?.kind !== "run") return undefined;
@@ -135,6 +140,12 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
       word: dotName(d),
       label: `${dotName(d)}, ${short(d.head)}`,
       look: d.look,
+      marks: d.marks,
+      said: (() => {
+        const p = current();
+        const v = d.look && p ? changedSince(props.state, props.run, p)?.verdict : undefined;
+        return v ? `${v.by}'s look at ${short(v.head)}` : undefined;
+      })(),
       comparison: urls && pair.state === "ready" ? pair() : undefined,
       error,
     };
@@ -287,7 +298,7 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
           if (stale) return;
           const before = fileUrl(g.files, path);
           (isFilm(p.picture) ? prefetch : preload)([before]);
-          compared(before, fileUrl(grant, after), isFilm(p.picture), true).catch(() => {});
+          compared({ url: before, marks: d.marks }, { url: fileUrl(grant, after), marks: p.picture.marks ?? null }, isFilm(p.picture), true).catch(() => {});
         },
         () => {},
       );
@@ -525,6 +536,7 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
             onSaid={onward}
             onKeys={() => setKeysShown((v) => !v)}
             elsewhere={fromVariants()}
+            onYourLook={!!against()?.said}
             onLook={(() => {
               const look = dots().find((d) => d.look);
               return look && look.key !== dotKey() ? () => pickDot(look.key) : undefined;
@@ -753,6 +765,9 @@ function ReviewBar(props: {
   /** Compares now with the run of the last looks right, when the strip has it and it is not
    * shown already. */
   onLook: (() => void) | undefined;
+  /** Whether the stage compares with your look, whose line above the picture says who said it
+   * looks right, so it is not said again here. */
+  onYourLook: boolean;
   /** Where the choice of how far a looks right reaches is open: beside its arrow, or floating
    * on the screen for a held Y. */
   menu: Menu;
@@ -1010,7 +1025,7 @@ function ReviewBar(props: {
             </p>
           )}
         </Show>
-        <Show when={since()}>
+        <Show when={since() && (sinceNotes().length || !props.onYourLook) ? since() : undefined}>
           {(s) => (
             <p class="said again" data-again title="The verdict and the notes stay as they were: say looks right again, or resolve the notes">
               <Show

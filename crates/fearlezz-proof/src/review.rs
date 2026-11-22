@@ -6,13 +6,14 @@
 //! A verdict follows the picture, not the run: it is kept by check, picture name and content, so
 //! a picture that did not change keeps its verdict across pushes and runs of the same work.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::events::{Run, RunCheck, RunState, Source};
 use crate::floor::Weakening;
 use crate::look::Item;
+use crate::media::Marks;
 use crate::notes::{Note, NoteState};
 use crate::{Proof, Ran, short};
 
@@ -279,8 +280,9 @@ pub type Since = BTreeMap<String, BTreeMap<String, bool>>;
 
 /// The pictures a person said something about, which a run compares its own with: by check
 /// and picture name, the key of the newest looks right on it and of the picture each open
-/// note was made on.
-pub type Approved = BTreeMap<String, BTreeMap<String, BTreeSet<String>>>;
+/// note was made on, each with what its check said happened in that film (its marks), which
+/// a film is timed from.
+pub type Approved = BTreeMap<String, BTreeMap<String, BTreeMap<String, Option<Marks>>>>;
 
 /// The pictures of `runs` (every run known) a person said something about, which a new run
 /// compares its own with: the newest looks right on each picture, and the picture each open
@@ -294,25 +296,35 @@ pub fn approved(runs: &[ProvenRun], verdicts: &[Verdict], notes: &[Note]) -> App
             *at = v;
         }
     }
-    for ((check, name), v) in newest {
-        approved
+    let mut add = |check: &str, name: &str, key: &str, run: &str| {
+        let marks = item_in(runs, run, check, name).and_then(|i| i.marks.clone());
+        let known = approved
             .entry(check.to_owned())
             .or_default()
             .entry(name.to_owned())
             .or_default()
-            .insert(v.key.clone());
+            .entry(key.to_owned())
+            .or_default();
+        if known.is_none() {
+            *known = marks;
+        }
+    };
+    for ((check, name), v) in newest {
+        add(check, name, &v.key, &v.run);
     }
     for n in notes.iter().filter(|n| n.state == NoteState::Open) {
         if let Some(key) = key_in(runs, &n.run, &n.check, &n.picture) {
-            approved
-                .entry(n.check.clone())
-                .or_default()
-                .entry(n.picture.clone())
-                .or_default()
-                .insert(key.clone());
+            add(&n.check, &n.picture, key, &n.run);
         }
     }
     approved
+}
+
+/// Picture `name` of `check` as run `id` showed it, when that run is among `runs`.
+fn item_in<'a>(runs: &'a [ProvenRun], id: &str, check: &str, name: &str) -> Option<&'a Item> {
+    let (run, _) = runs.iter().find(|(run, _)| run.id == id)?;
+    let check = run.checks.iter().find(|c| c.id == check)?;
+    check.look.as_ref()?.items.iter().find(|i| i.name == name)
 }
 
 /// Whether picture `name` of `check`, now `key`, looks as the picture of key `then` did: the

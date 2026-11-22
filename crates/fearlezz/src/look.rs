@@ -229,6 +229,59 @@ fn media_of(proofs: &[serde_json::Value]) -> Vec<MediaProof> {
         .collect()
 }
 
+/// What a check said happened in its film `file` (as its `proof.jsonl` names it, a path below
+/// `$FEARLEZZ_OUT`), from its lines, in seconds into the film; None when it said nothing:
+///
+/// - `{"kind": "mark", "film", "name", "at" | "wall", "hidden"?}`: a moment;
+/// - `{"kind": "span", "film", "name", "start" | "wall_start", "end" | "wall_end", "timing"?}`:
+///   a stretch, its timing `same` (the default) or `free`;
+/// - `{"kind": "start", "film", "wall"}`: the wall clock, in milliseconds since the epoch, at
+///   the film's first frame, which turns each `wall` moment into seconds into the film.
+///
+/// A line without a moment it can place is left out.
+fn marks_of(proofs: &[serde_json::Value], file: &str) -> Option<fearlezz_proof::media::Marks> {
+    use fearlezz_proof::media::{Mark, Marks, Span, Timing};
+    let of = |kind: &'static str| {
+        proofs
+            .iter()
+            .filter(move |p| p["kind"] == kind && p["film"].as_str() == Some(file))
+    };
+    let started = of("start").find_map(|p| p["wall"].as_f64());
+    let at = |p: &serde_json::Value, secs: &str, wall: &str| {
+        p[secs]
+            .as_f64()
+            .or_else(|| Some((p[wall].as_f64()? - started?) / 1000.0))
+            .map(|t| t.max(0.0))
+    };
+    let name = |p: &serde_json::Value| p["name"].as_str().map(String::from);
+    let marks = Marks {
+        marks: of("mark")
+            .filter_map(|p| {
+                Some(Mark {
+                    name: name(p)?,
+                    at: at(p, "at", "wall")?,
+                    hidden: p["hidden"].as_bool().unwrap_or(false),
+                })
+            })
+            .collect(),
+        spans: of("span")
+            .filter_map(|p| {
+                Some(Span {
+                    name: name(p)?,
+                    start: at(p, "start", "wall_start")?,
+                    end: at(p, "end", "wall_end")?,
+                    timing: if p["timing"] == "free" {
+                        Timing::Free
+                    } else {
+                        Timing::Same
+                    },
+                })
+            })
+            .collect(),
+    };
+    (!marks.is_empty()).then_some(marks)
+}
+
 pub(crate) fn has_media(result: &RunResult) -> bool {
     !media_proofs(result).is_empty()
 }
@@ -364,6 +417,8 @@ fn build(
             flaky: check.pictures.is_flaky(&a.name),
             diff: None,
             webp: None,
+            marks: marks_of(&after.proofs, &a.file),
+            before_marks: b.and_then(|(run, b)| marks_of(&run.proofs, &b.file)),
         };
         let copies = (
             b.map(|(run, b)| copy("before", run, b)).transpose(),
@@ -403,6 +458,8 @@ fn build(
                 flaky: check.pictures.is_flaky(&b.name),
                 diff: None,
                 webp: None,
+                marks: None,
+                before_marks: before.and_then(|run| marks_of(&run.proofs, &b.file)),
             },
             None,
         ));
@@ -481,7 +538,11 @@ fn compare_one(item: &Item, pair: Option<&(PathBuf, PathBuf)>) -> Item {
             }
         }
     } else if let Some((b, a)) = pair {
-        let compared = media::decode_both(b, a).and_then(|(fb, fa)| media::compare(&fb, &fa));
+        let compared = media::decode_both(b, a).and_then(|(mut fb, mut fa)| {
+            fb.cut.marks = item.before_marks.clone().unwrap_or_default();
+            fa.cut.marks = item.marks.clone().unwrap_or_default();
+            media::compare(&fb, &fa)
+        });
         match compared {
             Ok(c) => {
                 item.change = match c.verdict {

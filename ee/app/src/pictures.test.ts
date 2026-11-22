@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { apply } from "./live";
-import { counts, grouped, groupings, hundredths, lanes, marksAt, parts, picturesOf, screensOf, stillMarks } from "./pictures";
+import { counts, grouped, groupings, hundredths, lanes, marksAt, parts, picturesOf, screensOf, stepAt, stillMarks } from "./pictures";
 import type { Check, Comparison, Look, Pair, Picture, PictureChange, Run, Snapshot } from "./proof";
 
 const picture = (name: string, change: PictureChange, extra: Partial<Picture> = {}): Picture => ({
@@ -247,5 +247,25 @@ describe("hundredths", () => {
     // 0.045 shown with toFixed alone reads 0.04, while the note kept 0.05.
     for (const t of [0.045, 0.125, 1.005, 2.675, 0.04]) expect(Number.parseFloat(hundredths(t).toFixed(2))).toBe(hundredths(t));
     expect(hundredths(0.045)).toBe(0.05);
+  });
+});
+
+describe("stepAt", () => {
+  const marks = {
+    marks: [
+      { name: "opened", at: 0.5 },
+      { name: "timer", at: 1, hidden: true },
+      { name: "pressed y", at: 2 },
+    ],
+    spans: [{ name: "loading", start: 0.2, end: 1.5, timing: "free" as const }],
+  };
+  test("names the newest shown mark or the span that started later", () => {
+    expect(stepAt(marks, 0.1)).toBeUndefined();
+    expect(stepAt(marks, 0.3)).toBe("loading");
+    expect(stepAt(marks, 0.7)).toBe("opened");
+    expect(stepAt(marks, 1.2)).toBe("opened");
+    expect(stepAt(marks, 1.7)).toBe("opened");
+    expect(stepAt(marks, 2.5)).toBe("pressed y");
+    expect(stepAt(null, 2)).toBeUndefined();
   });
 });

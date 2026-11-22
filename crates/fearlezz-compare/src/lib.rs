@@ -30,7 +30,7 @@ mod film;
 mod picture;
 
 pub use compare::compare;
-pub use fearlezz_proof::media::{Box4, Comparison, Moment, Pair, Verdict};
+pub use fearlezz_proof::media::{Box4, Comparison, Marks, Moment, Pair, Verdict};
 pub use film::{Cut, Film, Reread, State};
 pub use picture::{FILM_MAX, Format, Image, Picture, fit};
 

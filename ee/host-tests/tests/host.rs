@@ -2569,7 +2569,7 @@ fn a_verdict_follows_what_the_run_found_comparing_with_the_approved_picture() {
     let then = sha256(recording);
     assert_eq!(
         approved.json()["screens"]["checkout.webm"],
-        json!([then]),
+        json!({ &then: null }),
         "{}",
         approved.text()
     );

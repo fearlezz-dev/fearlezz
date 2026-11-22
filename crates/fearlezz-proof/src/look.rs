@@ -73,6 +73,12 @@ pub struct Item {
     /// otherwise, and for a still or text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webp: Option<String>,
+    /// What the check said happened in its after film (marks and spans), timing it from them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marks: Option<crate::media::Marks>,
+    /// What the check said happened in its before film, on the base commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_marks: Option<crate::media::Marks>,
 }
 
 /// One line of a text's diff.

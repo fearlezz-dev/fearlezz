@@ -4,6 +4,7 @@
 #![cfg(test)]
 
 use fearlezz_compare::{Comparison, Cut, Film, Format, Picture, Reread, Unfit, Verdict, compare};
+use fearlezz_proof::media::{Mark, Marks, Span, Timing};
 
 /// A film in memory: each frame's bytes, in one format and size, a tenth of a second each.
 struct Frames {
@@ -319,4 +320,109 @@ fn a_change_of_fewer_than_30_pixels_in_a_still_is_the_same() {
     );
     let c = compared(&blank, &dot(6));
     assert_eq!(c.verdict, Verdict::Changed, "36 pixels: {c:?}");
+}
+
+/// Marks at `at` seconds, named in order.
+fn marks(at: &[(&str, f64)]) -> Marks {
+    Marks {
+        marks: at
+            .iter()
+            .map(|(name, at)| Mark {
+                name: (*name).into(),
+                at: *at,
+                hidden: false,
+            })
+            .collect(),
+        spans: Vec::new(),
+    }
+}
+
+/// Compares `before` and `after`, each film with the marks its check said.
+fn marked(before: (&Frames, Marks), after: (&Frames, Marks)) -> Comparison {
+    let (mut b, mut a) = (before.0.cut(), after.0.cut());
+    b.marks = before.1;
+    a.marks = after.1;
+    compare(&b, before.0.again(None), &a, after.0.again(None)).unwrap()
+}
+
+#[test]
+fn a_box_as_long_after_its_mark_is_the_same_however_late_the_mark() {
+    // The page took half a second longer to answer: the box came as long after the press.
+    let c = marked(
+        (
+            &Frames::boxed(64, 48, 20, 10, 10),
+            marks(&[("pressed", 0.9)]),
+        ),
+        (
+            &Frames::boxed(64, 48, 25, 10, 15),
+            marks(&[("pressed", 1.4)]),
+        ),
+    );
+    assert_eq!(c.verdict, Verdict::Same, "{c:?}");
+}
+
+#[test]
+fn a_box_later_after_the_same_mark_is_timing() {
+    let c = marked(
+        (
+            &Frames::boxed(64, 48, 20, 10, 10),
+            marks(&[("pressed", 0.9)]),
+        ),
+        (
+            &Frames::boxed(64, 48, 25, 10, 15),
+            marks(&[("pressed", 0.9)]),
+        ),
+    );
+    assert_eq!(c.verdict, Verdict::Timing, "{c:?}");
+    assert!((c.max_shift - 0.5).abs() < 1e-9, "{c:?}");
+}
+
+#[test]
+fn a_box_later_inside_a_free_span_is_the_same() {
+    let loading = |end: f64| Marks {
+        marks: Vec::new(),
+        spans: vec![Span {
+            name: "loading".into(),
+            start: 0.0,
+            end,
+            timing: Timing::Free,
+        }],
+    };
+    // The box ends the loading; whatever came after it comes as long after.
+    let c = marked(
+        (&Frames::boxed(64, 48, 20, 10, 10), loading(1.05)),
+        (&Frames::boxed(64, 48, 25, 10, 15), loading(1.55)),
+    );
+    assert_eq!(c.verdict, Verdict::Same, "{c:?}");
+}
+
+/// A film taken before its check marked anything is compared from its start, as it always was,
+/// so marking a check's films is not itself a change.
+#[test]
+fn a_film_without_marks_is_timed_from_its_start() {
+    let c = marked(
+        (&Frames::boxed(64, 48, 20, 10, 10), Marks::default()),
+        (
+            &Frames::boxed(64, 48, 20, 10, 10),
+            marks(&[("pressed", 0.9)]),
+        ),
+    );
+    assert_eq!(c.verdict, Verdict::Same, "{c:?}");
+    assert!(!c.marks_changed, "{c:?}");
+}
+
+#[test]
+fn a_mark_one_film_has_and_the_other_not_is_a_change() {
+    let c = marked(
+        (
+            &Frames::boxed(64, 48, 20, 10, 10),
+            marks(&[("pressed", 0.9)]),
+        ),
+        (
+            &Frames::boxed(64, 48, 20, 10, 10),
+            marks(&[("pressed", 0.9), ("saved", 1.5)]),
+        ),
+    );
+    assert_eq!(c.verdict, Verdict::Changed, "{c:?}");
+    assert!(c.marks_changed, "{c:?}");
 }

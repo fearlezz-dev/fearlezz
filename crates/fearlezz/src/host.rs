@@ -17,6 +17,7 @@ use std::process::Command;
 use anyhow::{Context as _, Result, anyhow, bail};
 use fearlezz_proof::events::{self, Accepted, Done, Files, Missing, Open, Opened, Step, Weakened};
 use fearlezz_proof::floor::Weakening;
+use fearlezz_proof::media::Marks;
 use fearlezz_proof::review::{Accept, Approved, Since};
 use serde::Serialize;
 use serde_json::Value;
@@ -288,11 +289,14 @@ impl Stream {
             let Some(now) = local.iter().find(|f| &f.path == after) else {
                 continue;
             };
-            for key in keys {
+            for (key, marks) in keys {
                 if key == &now.file.sha256 || key.starts_with("gone:") {
                     continue;
                 }
-                if let Ok(same) = self.alike(key, now, item.kind == crate::look::TEXT, dir.path()) {
+                let marks = (marks.as_ref(), item.marks.as_ref());
+                if let Ok(same) =
+                    self.alike(key, now, marks, item.kind == crate::look::TEXT, dir.path())
+                {
                     since
                         .entry(item.name.clone())
                         .or_default()
@@ -304,8 +308,16 @@ impl Stream {
     }
 
     /// Whether the run's file `now` looks the same as the repository's file of SHA-256 `key`,
-    /// fetched into `dir`: a text only when it is the same file.
-    fn alike(&self, key: &str, now: &Local, text: bool, dir: &Path) -> Result<bool> {
+    /// fetched into `dir`, a film timed from the marks of each (`key`'s, then `now`'s): a text
+    /// only when it is the same file.
+    fn alike(
+        &self,
+        key: &str,
+        now: &Local,
+        (then_marks, now_marks): (Option<&Marks>, Option<&Marks>),
+        text: bool,
+        dir: &Path,
+    ) -> Result<bool> {
         if text {
             return Ok(false);
         }
@@ -320,7 +332,9 @@ impl Stream {
         if status != 200 {
             bail!("the proof host answered {status}");
         }
-        let (a, b) = crate::media::decode_both(&then, &now.on_disk)?;
+        let (mut a, mut b) = crate::media::decode_both(&then, &now.on_disk)?;
+        a.cut.marks = then_marks.cloned().unwrap_or_default();
+        b.cut.marks = now_marks.cloned().unwrap_or_default();
         Ok(crate::media::compare(&a, &b)?.verdict == fearlezz_compare::Verdict::Same)
     }
 

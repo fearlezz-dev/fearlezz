@@ -392,6 +392,54 @@ films = "films/**/*.gif"
     );
 }
 
+/// A film whose box shows after a load that takes `src/load.txt` seconds, with a mark where the
+/// load ends when `src/mark.txt` says so.
+const WRITE_MARKED_FILM: &str = r#"set -e
+mkdir -p "$FEARLEZZ_OUT/films/home"
+load=$(cat src/load.txt)
+ffmpeg -v error -nostdin -f lavfi -i "color=c=white:s=64x48:r=10:d=$(echo "$load + 1" | bc)" -vf "drawbox=x=5:y=10:w=20:h=20:color=blue:t=fill:enable='gte(t,$load)'" "$FEARLEZZ_OUT/films/home/video.gif"
+if [ "$(cat src/mark.txt)" = yes ]; then
+  echo "{\"kind\":\"mark\",\"film\":\"films/home/video.gif\",\"name\":\"loaded\",\"at\":$load}" >> "$FEARLEZZ_OUT/proof.jsonl"
+fi
+"#;
+
+fn marked_film_after(load: &str, mark: &str) -> String {
+    let repo = Repo::new(
+        r#"
+[check.screens]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+films = "films/**/*.gif"
+"#,
+        &[
+            ("record.sh", WRITE_MARKED_FILM),
+            ("src/load.txt", "0.3"),
+            ("src/mark.txt", mark),
+        ],
+    );
+    repo.branch("feat/slow");
+    repo.write("src/load.txt", load);
+    repo.fz(&["run", "--stage", "look", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    out.stdout
+}
+
+#[test]
+fn a_film_that_loads_longer_before_its_mark_looks_the_same() {
+    let unmarked = marked_film_after("0.8", "no");
+    assert!(
+        unmarked.contains("look screens: 1 timing"),
+        "without a mark the late box is a change of timing: {unmarked}"
+    );
+    let marked = marked_film_after("0.8", "yes");
+    assert!(
+        marked.contains("look screens: 1 same"),
+        "timed from its mark the film is the same: {marked}"
+    );
+}
+
 #[test]
 fn flaky_pictures_are_shown_apart() {
     let repo = Repo::new(

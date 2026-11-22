@@ -708,7 +708,15 @@ diff?: Array<DiffLine> | null,
  * pictures of at a stable address; None
  * otherwise, and for a still or text.
  */
-webp?: string | null, };
+webp?: string | null, 
+/**
+ * What the check said happened in its after film (marks and spans), timing it from them.
+ */
+marks?: Marks | null, 
+/**
+ * What the check said happened in its before film, on the base commit.
+ */
+before_marks?: Marks | null, };
 
 export type PictureChange = "changed" | "timing" | "new" | "gone" | "unreadable" | "same";
 
@@ -778,9 +786,57 @@ moments: Array<Moment>,
 /**
  * The states matched between the films.
  */
-pairs: Array<Pair>, };
+pairs: Array<Pair>, 
+/**
+ * The films' marks differ: one has a mark or span the other does not, or in another order.
+ */
+marks_changed?: boolean, };
 
 export type Likeness = "same" | "timing" | "changed";
+
+export type Marks = { 
+/**
+ * Moments, in order.
+ */
+marks?: Array<Mark>, 
+/**
+ * Spans of time, in order.
+ */
+spans?: Array<Span>, };
+
+export type Mark = { 
+/**
+ * What happened, as the check wrote it.
+ */
+name: string, 
+/**
+ * Seconds into the film.
+ */
+at: number, 
+/**
+ * Only for timing, not drawn on the film's timeline.
+ */
+hidden?: boolean, };
+
+export type Span = { 
+/**
+ * What happens in it, as the check wrote it.
+ */
+name: string, 
+/**
+ * Seconds into the film it starts.
+ */
+start: number, 
+/**
+ * Seconds into the film it ends.
+ */
+end: number, 
+/**
+ * How its timing counts: the same by default.
+ */
+timing: Timing, };
+
+export type Timing = "same" | "free";
 
 export type Moment = { 
 /**

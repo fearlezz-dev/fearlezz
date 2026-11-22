@@ -41,6 +41,22 @@ pieces:
   - id: look-again-by-comparison
     status: built
     tries: []
+  - id: film-marks
+    status: built
+    open: whether this project's films stop asking for a new look on CI (two CI runs to compare)
+    tries:
+      - id: retime-data
+        what: the state times of the same films across CI runs
+        taught: constant offsets of 0.1 to 0.2 s (the page loading) and steps of 0.3 to 1.2 s (waits on answers and comparisons); no visual regression tool aligns timing
+        state: picked
+        why: timing has to be anchored on what happened, not on the film's start
+      - id: marks-and-spans
+        what: a check writes marks (shown or hidden) and spans (timing same or free) to proof.jsonl; the comparison times each state from the anchor before it
+        state: picked
+        evidence: [crates/fearlezz-compare/tests/compare.rs a_box_*_mark*, crates/fearlezz/tests/look.rs a_film_that_loads_longer_before_its_mark_looks_the_same, crates/fearlezz/tests/host.rs an_approved_film_that_loaded_faster_is_alike_timed_from_its_marks, ee/compare/tests/feed.rs a_film_is_timed_from_its_marks, ee/app/e2e/compare.look.ts a film's timeline draws]
+      - id: presses-as-marks
+        what: this project's Playwright films note every key and pointer press in the page, and the loading as a free span (ee/app/e2e/marks.ts)
+        state: working
   - id: render-noise
     status: dropped
     open: the floor makes it no change a person sees
@@ -73,6 +89,12 @@ decided:
     what: "Timing is Look again": a film that only changed its timing since the look asks for a new look
   - id: in-59
     what: part of #59, the same work on the review page (was a separate PR)
+  - id: marks-model
+    what: "visible markers and invisible markers", spans whose timing is same or free ("loading... should be ignorant to retimes... animation should still be the same")
+  - id: marks-strict
+    what: "Strict (Recommended)": after each mark the timing must match
+  - id: marks-sources
+    what: "Yes, those three (Recommended)": proof.jsonl lines, a Playwright helper, Fearlezz's own recorder; test.step and performance.mark later; OpenTelemetry not now (too noisy)
 
 open: []
 

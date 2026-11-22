@@ -325,14 +325,18 @@ test("a picture or film that changed since its look or its note says to look aga
   // The page opens on the first picture to look at again: the film, as a screen's films come
   // first, which looked right before it changed.
   await expect(page.locator(current)).toHaveAttribute("data-picture", "ee-page-look/profile/desktop/light.webm");
-  await expect(page.locator(".verdict [data-again]")).toContainText("Changed since mara said it looks right at 2b7e91c");
+  // Compared with that look, the line above the picture says who said it, once.
+  await expect(page.locator("[data-pair-says]")).toContainText("Changed since mara's look at 2b7e91c");
+  await expect(page.locator(".verdict [data-again]")).toHaveCount(0);
   // The light theme's note was made before it changed: check it, then resolve or keep it.
   await profile.locator('[data-picture="ee-page-look/profile/desktop/light.png"]').click();
   await expect(page.locator(".verdict [data-again]")).toContainText("Changed since note 1");
   await expect(page.locator('[data-notes] [data-note="n1"] [data-changed-since]')).toBeVisible();
   // The dark theme looked right before it changed.
   await page.keyboard.press("t");
-  await expect(page.locator(".verdict [data-again]")).toContainText("Changed since mara said it looks right at 2b7e91c");
+  // Compared with that look, the line above the picture says who said it, once.
+  await expect(page.locator("[data-pair-says]")).toContainText("Changed since mara's look at 2b7e91c");
+  await expect(page.locator(".verdict [data-again]")).toHaveCount(0);
   await expect(page.locator("[data-standing]")).toContainText("changed since a look");
 });
 
@@ -432,22 +436,31 @@ test("a film plays slower or faster at the speed picked", async ({ page }) => {
   await page.locator('[data-picture="ee-page-look/checkout/desktop.webm"]').click();
   const film = page.locator('[data-stage] video[data-side="after"]');
   await expect.poll(() => film.evaluate((v) => (v as HTMLVideoElement).readyState)).toBeGreaterThan(0);
-  const clock = page.locator("[data-stage] [data-clock]");
-  const at = async () => Number.parseFloat((await clock.textContent())!);
   const layer = page.locator('[data-stage] [data-draw="after"]');
-  // Plays for a moment at `speed`; how far the clock went.
+  // Plays for a moment at `speed`; how far the film went in 200 ms, measured in the page from
+  // when it plays: on a busy machine its seek and start, and each step of the test, take a
+  // while, which would let a two second film run to its end.
   const played = async (speed: string) => {
     await page.locator(`[data-speed="${speed}"]`).click();
     await page.locator("[data-stage] .timeline").click({ position: { x: 1, y: 4 } });
-    const from = await at();
+    const went = film.evaluate(
+      (v: HTMLVideoElement) =>
+        new Promise<number>((done) => {
+          const go = () => {
+            const from = v.currentTime;
+            setTimeout(() => done(v.currentTime - from), 200);
+          };
+          v.addEventListener("playing", go, { once: true });
+        }),
+    );
     await layer.click();
-    await page.waitForTimeout(400);
+    const moved = await went;
     await layer.click();
-    return (await at()) - from;
+    return moved;
   };
   const slow = await played("0.25");
   const fast = await played("4");
-  expect(slow, "a quarter speed moves little").toBeLessThan(0.3);
+  expect(slow, "a quarter speed moves little").toBeLessThan(0.2);
   expect(fast, "four times moves far").toBeGreaterThan(slow * 4);
 
   await page.keyboard.press("<");
@@ -493,4 +506,12 @@ test("next and previous step on from a film", async ({ page }) => {
   await expect(page.locator(current)).not.toHaveAttribute("data-picture", "ee-page-look/checkout/desktop.webm");
   await page.getByRole("button", { name: "Previous picture" }).click();
   await expect(page.locator(current)).toHaveAttribute("data-picture", "ee-page-look/checkout/desktop.webm");
+});
+
+test("the share panel opens without an error when the work has no links", async ({ page }) => {
+  await show(page, WORK_PATH, WORK["waits-for-you"]!.world);
+  await page.locator("[data-share]").click();
+  await expect(page.locator("[data-make-share]")).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(page.locator("[data-shares] [role=alert]")).toHaveCount(0);
 });
