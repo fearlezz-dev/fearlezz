@@ -14,7 +14,7 @@
 
 use std::cell::RefCell;
 
-use fearlezz_compare::{Comparison, Cut, Format, Picture, Reread, Unfit};
+use fearlezz_compare::{Comparison, Cut, Format, Marks, Picture, Reread, Unfit};
 
 /// The most bytes a feed keeps for the second read: a film whose states' first frames need more
 /// (a long scroll or animation, where every frame starts a state) is refused rather than let run
@@ -45,6 +45,7 @@ impl Given {
 pub struct Feed {
     cut: Cut,
     frames: Frames,
+    marks: Marks,
 }
 
 /// What a feed keeps of its frames for the second read.
@@ -81,7 +82,13 @@ impl Feed {
                 held: 0,
                 fed: 0,
             },
+            marks: Marks::default(),
         }
+    }
+
+    /// Times it from what its check said happened in it, rather than from its start.
+    pub fn mark(&mut self, marks: Marks) {
+        self.marks = marks;
     }
 
     /// Takes the next frame, which starts at `start` and lasts `dur` seconds.
@@ -91,7 +98,7 @@ impl Feed {
     /// When its bytes do not fill the size the feed was started with, or the film needs more
     /// than [`KEPT_MAX`] kept for the second read.
     pub fn push(&mut self, bytes: &[u8], start: f64, dur: f64) -> Result<(), String> {
-        let Feed { cut, frames: f } = self;
+        let Feed { cut, frames: f, .. } = self;
         let format = f.given.format();
         let owned;
         let data = match f.given {
@@ -171,12 +178,13 @@ impl Reread for Kept<'_> {
 ///
 /// When a feed is not whole, such as a film whose frames stopped before its states' first.
 pub fn compare(before: Feed, after: Feed) -> Result<Comparison, Unfit> {
-    fearlezz_compare::compare(
-        &before.cut.finish(),
-        Kept::new(&before.frames),
-        &after.cut.finish(),
-        Kept::new(&after.frames),
-    )
+    let film = |feed: Feed| {
+        let mut film = feed.cut.finish();
+        film.marks = feed.marks;
+        (film, feed.frames)
+    };
+    let ((b, bf), (a, af)) = (film(before), film(after));
+    fearlezz_compare::compare(&b, Kept::new(&bf), &a, Kept::new(&af))
 }
 
 /// What the exports hold between calls: the frame being handed over, the feeds by id, and the
@@ -256,6 +264,26 @@ pub extern "C" fn frame(id: u32, start: f64, dur: f64) -> u32 {
         let Page { input, feeds, .. } = &mut *page;
         let said = match feeds.get_mut(id as usize).and_then(Option::as_mut) {
             Some(feed) => feed.push(input, start, dur).map(|()| Vec::new()),
+            None => Err(format!("no film {id}")),
+        };
+        answer(page, said)
+    })
+}
+
+/// Times feed `id` from the marks in [`input`], as the JSON of a look item's `marks`.
+#[expect(
+    unsafe_code,
+    reason = "an export the page calls by name needs an unmangled symbol"
+)]
+#[unsafe(no_mangle)]
+pub extern "C" fn marks(id: u32) -> u32 {
+    PAGE.with_borrow_mut(|page| {
+        let Page { input, feeds, .. } = &mut *page;
+        let said = match feeds.get_mut(id as usize).and_then(Option::as_mut) {
+            Some(feed) => serde_json::from_slice(input)
+                .map(|marks| feed.mark(marks))
+                .map(|()| Vec::new())
+                .map_err(|e| format!("the film's marks could not be read: {e}")),
             None => Err(format!("no film {id}")),
         };
         answer(page, said)

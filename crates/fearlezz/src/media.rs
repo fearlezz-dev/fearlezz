@@ -52,7 +52,11 @@ pub(crate) fn summary(c: &Comparison) -> String {
                 .iter()
                 .map(|m| format!("{:.2} s", m.after.0))
                 .collect();
-            format!("changed at {}", at.join(", "))
+            match (at.is_empty(), c.marks_changed) {
+                (true, _) => "changed: its marks differ".into(),
+                (false, true) => format!("changed at {}, and its marks differ", at.join(", ")),
+                (false, false) => format!("changed at {}", at.join(", ")),
+            }
         }
     }
 }
@@ -65,8 +69,8 @@ pub(crate) struct Film {
     path: PathBuf,
     /// The form ffmpeg gives its frames in.
     format: Format,
-    /// Its states, from the first read.
-    cut: fearlezz_compare::Film,
+    /// Its states, from the first read, and the marks its check said, which a caller sets.
+    pub(crate) cut: fearlezz_compare::Film,
     /// Each frame's start and duration, in seconds, so the second read needs no probe.
     times: Vec<(f64, f64)>,
 }

@@ -32,7 +32,9 @@ test("a picture to look again opens compared with your look, in the Look again c
   await expect(caption(page, "before")).toHaveText("Your look");
   await expect(caption(page, "after")).toHaveText("Now");
   await compared(page);
-  await expect(page.locator("[data-pair-says]")).toHaveText("Changed since your look in 1 place.");
+  // Who said it looks right, said once: above the picture, not again below it.
+  await expect(page.locator("[data-pair-says]")).toHaveText(/^Changed since mara's look at [0-9a-f]{7} in 1 place\.$/);
+  await expect(page.locator(".verdict [data-again]")).toHaveCount(0);
   const again = await page.evaluate(() => {
     const probe = document.createElement("i");
     probe.style.color = "var(--again)";
@@ -65,6 +67,23 @@ test("a dot shows its run's picture beside now, and the Look again line goes bac
   await page.locator("[data-compare-look]").click();
   await expect(stage(page)).toHaveAttribute("data-against", "look");
   await expect(page.locator("[data-compare-look]")).toHaveCount(0);
+});
+
+test("a film's timeline draws what its check said happened: its steps, and a load whose timing may change", async ({ page }) => {
+  await show(page, WORK_PATH, STRIP.world);
+  await page.locator(`[data-picture="${STRIP.film}"]`).click();
+  await compared(page);
+  for (const side of ["before", "after"]) {
+    const lane = page.locator(`[data-stage] [data-lane="${side}"]`);
+    expect(await lane.locator("[data-mark]").evaluateAll((all) => all.map((m) => m.getAttribute("data-mark")))).toEqual(["opened", "paid"]);
+    await expect(lane.locator('[data-span="loading"][data-timing="free"]')).toHaveCount(1);
+  }
+  await expect(page.locator("[data-stage] [data-step]")).toHaveText("loading");
+  // Both films are two seconds long, so 45% along is 0.9 s, after paying.
+  const timeline = page.locator("[data-stage] .timeline");
+  const box = (await timeline.boundingBox())!;
+  await timeline.click({ position: { x: box.width * 0.45, y: 4 } });
+  await expect(page.locator("[data-stage] [data-step]")).toHaveText("paid");
 });
 
 test("in full screen, two films play once both can play through and the page has compared them", async ({ page }) => {
@@ -183,7 +202,7 @@ test("the page compares a still and a film as the CLI does", async ({ page }) =>
         // The dev server serves the page's own module, worker and wasm.
         const module = "/src/compare.ts";
         const { compared } = (await import(/* @vite-ignore */ module)) as typeof import("../src/compare");
-        return compared(b, a, f);
+        return compared({ url: b }, { url: a }, f);
       },
       [before, after, film] as const,
     );

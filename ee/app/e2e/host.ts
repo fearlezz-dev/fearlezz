@@ -54,7 +54,7 @@ export async function serve(page: Page, world: World): Promise<Socket> {
       const run = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
       return route.fulfill({ json: { files: world.runFiles?.[run] ? `/files/${run}/` : "/files/", expires: NOW + 3600 } });
     }
-    if (url.pathname === "/api/v2/shares") return route.fulfill({ json: [] });
+    if (url.pathname === "/api/v2/shares") return route.fulfill({ json: { shares: [] } });
     // A verdict is taken; the page then waits for the live event that carries it.
     if (url.pathname.endsWith("/verdicts") || url.pathname.endsWith("/notes")) return route.fulfill({ json: {} });
     return route.fulfill({ status: 404, json: { error: "not in this world" } });

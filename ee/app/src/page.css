@@ -554,6 +554,11 @@ details.group > .sheet { margin-top: 10px; }
 .lane i { position: absolute; top: 3px; bottom: 3px; border-radius: 3px; background: var(--line); }
 .lane i[data-differs="true"] { background: color-mix(in srgb, var(--changed) 55%, transparent); }
 .lane em { position: absolute; left: 8px; top: 0; font-style: normal; font-size: 0.75rem; font-weight: 700; line-height: 20px; color: var(--ink); }
+.lane .span { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+.lane .span[data-timing="free"] { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--ink) 16%, transparent) 0 2px, transparent 2px 6px); }
+.lane .span[data-timing="same"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent); }
+.lane .tick { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: color-mix(in srgb, var(--ink) 55%, transparent); }
+.clock .step { font-size: 0.85rem; font-weight: 700; color: var(--quiet); }
 .playhead { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; }
 
 

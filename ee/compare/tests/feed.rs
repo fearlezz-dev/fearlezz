@@ -62,6 +62,35 @@ fn a_film_is_compared_from_the_frames_kept_as_it_was_fed() {
     assert!((c.moments[0].after.0 - 1.0).abs() < 1e-9, "{c:?}");
 }
 
+/// A box that shows later after a load the page was told about is timed from where the load
+/// ended, so the film looks the same.
+#[test]
+fn a_film_is_timed_from_its_marks() {
+    let film = |load: usize| -> Vec<Vec<u8>> {
+        (0..load + 10)
+            .map(|i| yuv(64, 48, if i < load { 5 } else { 40 }))
+            .collect()
+    };
+    let marked = |load: usize| {
+        let mut feed = fed(Given::Yuv420, &film(load));
+        feed.mark(
+            serde_json::from_value(serde_json::json!({
+                "marks": [{"name": "loaded", "at": load as f64 / 10.0}]
+            }))
+            .unwrap(),
+        );
+        feed
+    };
+    let plain = compare(fed(Given::Yuv420, &film(3)), fed(Given::Yuv420, &film(8))).unwrap();
+    assert_eq!(
+        plain.verdict,
+        fearlezz_compare::Verdict::Timing,
+        "{plain:?}"
+    );
+    let timed = compare(marked(3), marked(8)).unwrap();
+    assert_eq!(timed.verdict, fearlezz_compare::Verdict::Same, "{timed:?}");
+}
+
 #[test]
 fn a_frame_that_does_not_fill_the_size_is_refused() {
     let mut feed = Feed::new(64, 48, 1, Given::Rgba);

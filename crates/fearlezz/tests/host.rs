@@ -673,8 +673,9 @@ fn a_finished_check_says_whether_each_picture_looks_like_the_approved_ones() {
     let red = still("red", "0");
     {
         let mut s = host.state.lock().unwrap();
-        s.approved =
-            Some(json!({"screens": {"home.png": [sha256(&blue), sha256(&red), "gone:aa"]}}));
+        s.approved = Some(
+            json!({"screens": {"home.png": {sha256(&blue): null, sha256(&red): null, "gone:aa": null}}}),
+        );
         s.approved_files.insert(sha256(&blue), blue.clone());
         s.approved_files.insert(sha256(&red), red.clone());
     }
@@ -721,6 +722,51 @@ fn a_finished_check_says_whether_each_picture_looks_like_the_approved_ones() {
     assert_eq!(
         finished["finished"]["since"],
         json!({"home.png": {sha256(&blue): true, sha256(&red): false}}),
+        "{finished:#}"
+    );
+}
+
+#[test]
+fn an_approved_film_that_loaded_faster_is_alike_timed_from_its_marks() {
+    // The film a person approved loaded for a second; this run's loads for two. Each film
+    // marks where its load ended, so they are compared from there and look the same.
+    let host = FakeHost::start();
+    let dir = tempfile::tempdir().unwrap();
+    let approved = dir.path().join("approved.webm");
+    let made = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-f", "lavfi", "-i"])
+        .arg("color=c=black:s=96x64:r=10:d=1[a];testsrc=s=96x64:r=10:d=1,drawbox=w=20:h=20:color=blue:t=fill[b];[a][b]concat=n=2")
+        .args(["-c:v", "libvpx", "-b:v", "200k"])
+        .arg(&approved)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let approved = std::fs::read(approved).unwrap();
+    let key = sha256(&approved);
+    {
+        let mut s = host.state.lock().unwrap();
+        s.approved = Some(
+            json!({"screens": {"home.webm": {&key: {"marks": [{"name": "loaded", "at": 1.0}]}}}}),
+        );
+        s.approved_files.insert(key.clone(), approved);
+    }
+    let repo = filmed(&host, 2, 1, Some("feat/x"));
+    repo.write(
+        "record.sh",
+        &format!("{FILM}echo \"{{\\\"kind\\\":\\\"mark\\\",\\\"film\\\":\\\"home.webm\\\",\\\"name\\\":\\\"loaded\\\",\\\"at\\\":$lead}}\" >> \"$FEARLEZZ_OUT/proof.jsonl\"\n"),
+    );
+    repo.commit("mark where the load ends");
+    let (out, _) = ci(&repo, &host.token_env());
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    let finished = host
+        .api()
+        .into_iter()
+        .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap_or_default())
+        .find(|b| b["finished"]["check"]["id"] == "screens")
+        .expect("a finished screens check");
+    assert_eq!(
+        finished["finished"]["since"],
+        json!({"home.webm": {&key: true}}),
         "{finished:#}"
     );
 }

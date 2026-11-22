@@ -8,8 +8,8 @@ import { DiffLines } from "./DiffLines";
 import { Icon } from "./icons";
 import { fileUrl } from "./grant";
 import { type Draft, type Shown as Noted, meant, onSide, regionBetween } from "./notes";
-import { type Box, type Shown, WORDS, hundredths, isFilm, isText, lanes, marksAt, plainSummary, stillMarks, title } from "./pictures";
-import type { Comparison } from "./proof";
+import { type Box, type Shown, WORDS, hundredths, isFilm, isText, lanes, marksAt, plainSummary, stepAt, stillMarks, title } from "./pictures";
+import type { Comparison, Marks } from "./proof";
 import { ready } from "./preload";
 import { short } from "./short";
 import { FIT, type View, panned, stepped, transform, zoomedAt } from "./zoom";
@@ -35,13 +35,18 @@ export type Against = {
   word: string;
   label: string;
   look: boolean;
+  /** Who said it looks right and at which commit, when it is your look: `mara's look at
+   * 2b7e91c`, said once, here, rather than again below the picture. */
+  said?: string | undefined;
+  /** What the check said happened in its film, which the timeline draws. */
+  marks: Marks | null;
   comparison: Comparison | undefined;
   error: string | undefined;
 };
 
 /** What comparing an earlier run's picture with now came to, in a few words. */
-export function pairSummary(c: Comparison, word: string): string {
-  const than = word.toLowerCase();
+export function pairSummary(c: Comparison, word: string, said?: string): string {
+  const than = said ?? word.toLowerCase();
   switch (c.verdict) {
     case "same":
       return `Looks the same as ${than}.`;
@@ -49,9 +54,9 @@ export function pairSummary(c: Comparison, word: string): string {
       return `The same pictures as ${than}, with other timing.`;
     case "changed":
       if (c.size_before[0] !== c.size_after[0] || c.size_before[1] !== c.size_after[1]) return `Another size than ${than}.`;
-      return c.still
-        ? `Changed since ${than} in ${c.moments.length} ${c.moments.length === 1 ? "place" : "places"}.`
-        : `Changed since ${than} at ${c.moments.map((m) => `${m.after[0].toFixed(2)} s`).join(", ")}.`;
+      if (c.still) return `Changed since ${than} in ${c.moments.length} ${c.moments.length === 1 ? "place" : "places"}.`;
+      if (!c.moments.length) return `The steps it marked changed since ${than}.`;
+      return `Changed since ${than} at ${c.moments.map((m) => `${m.after[0].toFixed(2)} s`).join(", ")}.`;
   }
 }
 
@@ -630,9 +635,18 @@ function Blink(props: Layered) {
 }
 
 /** Both films' lanes on one clock: grey where the pictures match, the change colour where
- * they differ, a playhead, and a jump to each moment they differ. A film alone (no `film`
+ * they differ, a playhead, and a jump to each moment they differ. Each lane draws what its
+ * check said happened in it: a tick for each shown mark, a band for each span, hatched where
+ * its timing is free; the clock names the step the playhead is in. A film alone (no `film`
  * comparison) has its one lane, on its `side`. */
-function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?: Side; clock: Clock; words?: [string, string] }) {
+function Timeline(props: {
+  film?: Comparison | undefined;
+  pair?: boolean;
+  side?: Side;
+  clock: Clock;
+  words?: [string, string];
+  marks: { before: Marks | null; after: Marks | null };
+}) {
   const total = () => props.clock.total();
   const words = () => props.words ?? ["Before", "After"];
   let lane: HTMLDivElement | undefined;
@@ -659,7 +673,17 @@ function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?:
   // or a film whose length becomes known, never draws the lanes again, which would play their
   // growing in again.
   const drawn = createMemo(
-    () => sides().map(([side, label, end]) => ({ side, label, segments: segments(side, end) })),
+    () =>
+      sides().map(([side, label, end]) => {
+        const marks = props.marks[side];
+        return {
+          side,
+          label,
+          segments: segments(side, end),
+          ticks: (marks?.marks ?? []).filter((m) => !m.hidden),
+          spans: marks?.spans ?? [],
+        };
+      }),
     undefined,
     { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) },
   );
@@ -672,6 +696,13 @@ function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?:
         <span class="t" data-clock>
           {hundredths(props.clock.t()).toFixed(2)} s
         </span>
+        <Show when={stepAt(props.marks[props.film || props.pair ? "after" : (props.side ?? "after")], props.clock.t())}>
+          {(step) => (
+            <span class="step" data-step>
+              {step()}
+            </span>
+          )}
+        </Show>
         <div class="speeds seg" role="group" aria-label="Speed">
           <For each={SPEEDS}>
             {(x) => (
@@ -715,7 +746,7 @@ function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?:
         }}
       >
         <For each={drawn()}>
-          {({ side, label, segments }) => (
+          {({ side, label, segments, ticks, spans }) => (
             <div class="lane" data-lane={side}>
               <For each={segments}>
                 {(s) => (
@@ -725,6 +756,18 @@ function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?:
                   />
                 )}
               </For>
+              <For each={spans}>
+                {(s) => (
+                  <span
+                    class="span"
+                    data-span={s.name}
+                    data-timing={s.timing}
+                    title={s.timing === "free" ? `${s.name}: its timing may change` : `${s.name}: its timing must stay the same`}
+                    style={{ left: pct(s.start), width: pct(Math.max(0, s.end - s.start)) }}
+                  />
+                )}
+              </For>
+              <For each={ticks}>{(m) => <span class="tick" data-mark={m.name} title={m.name} style={{ left: pct(m.at) }} />}</For>
               <em>{label}</em>
             </div>
           )}
@@ -882,7 +925,7 @@ export function Stage(props: {
           <p class="pair-says" data-pair-says={a().error ? "error" : a().comparison ? a().comparison!.verdict : "comparing"} aria-live="polite">
             <Show when={!a().error} fallback={<>Could not compare here: {a().error}</>}>
               <Show when={a().comparison} fallback={<>Comparing with {a().word.toLowerCase()}…</>}>
-                {(c) => <>{pairSummary(c(), a().word)}</>}
+                {(c) => <>{pairSummary(c(), a().word, a().said)}</>}
               </Show>
             </Show>
           </p>
@@ -933,7 +976,7 @@ export function Stage(props: {
                             <Media src={url(alone)} side={side()} clock={clock} label={label()} />
                             <NoteLayer side={side()} noting={props.noting} clock={clock} />
                           </Frame>
-                          <Timeline side={side()} clock={clock} />
+                          <Timeline side={side()} clock={clock} marks={{ before: picture().before_marks ?? null, after: picture().marks ?? null }} />
                         </>
                       );
                     }}
@@ -1005,7 +1048,14 @@ export function Stage(props: {
                       )}
                     </Show>
                   </div>
-                  <Timeline film={measured()} pair side="after" clock={clock} words={[beforeWord(), afterWord()]} />
+                  <Timeline
+                    film={measured()}
+                    pair
+                    side="after"
+                    clock={clock}
+                    words={[beforeWord(), afterWord()]}
+                    marks={{ before: props.against ? props.against.marks : (picture().before_marks ?? null), after: picture().marks ?? null }}
+                  />
                 </>
               );
             }}

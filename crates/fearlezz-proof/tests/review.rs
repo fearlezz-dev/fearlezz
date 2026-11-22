@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use fearlezz_proof::events::{Run, RunCheck, RunState, Source};
 use fearlezz_proof::floor::{Part, Weakening};
 use fearlezz_proof::look::{Change, Item, Look};
-use fearlezz_proof::media::{Comparison, Pair, Verdict as Likeness};
+use fearlezz_proof::media::{Comparison, Mark, Marks, Pair, Verdict as Likeness};
 use fearlezz_proof::notes::{Note, NoteState, Region, Side};
 use fearlezz_proof::review::{self, Accept, State, Verdict};
 use fearlezz_proof::{Check, Proof, Ran};
@@ -23,6 +23,8 @@ fn still(name: &str, change: Change) -> Item {
         flaky: false,
         diff: None,
         webp: None,
+        marks: None,
+        before_marks: None,
     }
 }
 
@@ -56,6 +58,7 @@ fn film(changed: &[usize]) -> Item {
             total_after: 3.0,
             max_shift: 0.0,
             max_shift_at: None,
+            marks_changed: false,
             states_before: 3,
             states_after: 3,
             moments: Vec::new(),
@@ -66,6 +69,8 @@ fn film(changed: &[usize]) -> Item {
         flaky: false,
         diff: None,
         webp: None,
+        marks: None,
+        before_marks: None,
     }
 }
 
@@ -1017,7 +1022,7 @@ fn a_run_compares_each_picture_with_the_ones_a_person_said_something_about() {
     };
     let approved = review::approved(&[r1, r0], &[older, newest], &[open, resolved]);
     let card: Vec<&str> = approved["screens"]["card.png"]
-        .iter()
+        .keys()
         .map(String::as_str)
         .collect();
     let mut want = vec![k0.as_str(), k1.as_str()];
@@ -1026,6 +1031,32 @@ fn a_run_compares_each_picture_with_the_ones_a_person_said_something_about() {
         card, want,
         "the newest looks right and the open note's picture, not older looks or resolved notes"
     );
+}
+
+#[test]
+fn an_approved_film_carries_the_marks_its_run_said() {
+    // A run compares its film with the approved one timed from both films' marks, so the
+    // approved key comes with the marks of the run the person looked at.
+    let marks = Marks {
+        marks: vec![Mark {
+            name: "loaded".into(),
+            at: 0.4,
+            hidden: false,
+        }],
+        spans: Vec::new(),
+    };
+    let r0 = run(
+        "r0",
+        "aaa1234",
+        RunState::Done,
+        &[Item {
+            marks: Some(marks.clone()),
+            ..film(&[1])
+        }],
+    );
+    let key = r0.0.checks[0].keys["checkout.webm"].clone();
+    let approved = review::approved(&[r0], &[verdict("checkout.webm", &key, "aaa1234")], &[]);
+    assert_eq!(approved["screens"]["checkout.webm"][&key], Some(marks));
 }
 
 #[test]

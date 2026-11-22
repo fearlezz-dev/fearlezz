@@ -35,6 +35,9 @@ pub struct Film {
     pub total: f64,
     /// Its stable states, in order.
     pub states: Vec<State>,
+    /// What its check said happened in it, which its timing is compared from; none by
+    /// default, which a caller that knows them sets.
+    pub marks: fearlezz_proof::media::Marks,
 }
 
 impl Film {
@@ -113,6 +116,7 @@ impl Cut {
                 frames: 0,
                 total: 0.0,
                 states: Vec::new(),
+                marks: fearlezz_proof::media::Marks::default(),
             },
             first: None,
         }

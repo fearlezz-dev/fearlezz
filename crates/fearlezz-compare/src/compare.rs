@@ -88,6 +88,7 @@ where
         states_after: after.states.len(),
         moments: Vec::new(),
         pairs: Vec::new(),
+        marks_changed: false,
     };
     if before.w != after.w || before.h != after.h {
         out.verdict = Verdict::Changed;
@@ -108,15 +109,19 @@ where
         Window::new(after, after_again),
     );
     out.pairs = pairs(&mut windows, &path, still)?;
-    let max_shift = max_shift(ko, kn, &path, &cost);
+    let clock = Clock::of(before, after);
+    out.marks_changed = clock.is_none();
+    let clock = clock.unwrap_or_default();
+    let max_shift = max_shift(ko, kn, &path, &cost, &clock);
     out.max_shift = round3(max_shift.0);
     out.max_shift_at = max_shift.1.map(round3);
     out.moments = moments(&out.pairs, ko, kn);
 
-    out.verdict = if !out.moments.is_empty() {
+    out.verdict = if !out.moments.is_empty() || out.marks_changed {
         Verdict::Changed
     } else if !still
-        && ((after.total - before.total).abs() > TIMING_TOL || max_shift.0.abs() > TIMING_TOL)
+        && (clock.tail(before.total, after.total).abs() > TIMING_TOL
+            || max_shift.0.abs() > TIMING_TOL)
     {
         Verdict::Timing
     } else {
@@ -199,13 +204,77 @@ where
     Ok(pairs)
 }
 
-/// Timing: how much later each held state of the before film shows in the after film, the
-/// largest shift and the moment of the before film it is at.
+/// How the two films are timed against each other: from the moments their checks marked,
+/// matched in order, each state's start measured from the anchor before it; a film without
+/// marks is timed from its start. Inside a span whose timing is free nothing is timed.
+#[derive(Default)]
+struct Clock {
+    /// Each matched anchor's moment in the before film and the after film, in order.
+    anchors: Vec<(f64, f64)>,
+    free: (fearlezz_proof::media::Marks, fearlezz_proof::media::Marks),
+}
+
+impl Clock {
+    /// The clock of two films, or None when their marks differ: one names a moment the other
+    /// does not, or in another order. A film without marks says nothing about what happened
+    /// in it, such as one taken before its check marked anything, so both are timed from their
+    /// start.
+    fn of(before: &Film, after: &Film) -> Option<Clock> {
+        if before.marks.is_empty() || after.marks.is_empty() {
+            return Some(Clock::default());
+        }
+        let (b, a) = (before.marks.anchors(), after.marks.anchors());
+        let names = |v: &[(String, f64)]| v.iter().map(|x| x.0.clone()).collect::<Vec<_>>();
+        if names(&b) != names(&a) {
+            return None;
+        }
+        Some(Clock {
+            anchors: b.iter().zip(&a).map(|(b, a)| (b.1, a.1)).collect(),
+            free: (before.marks.clone(), after.marks.clone()),
+        })
+    }
+
+    /// The anchor before moment `t` of the before film: its moment in each film, (0, 0) for the
+    /// films' start.
+    fn from(&self, t: f64) -> (f64, f64) {
+        self.anchors
+            .iter()
+            .rev()
+            .find(|(b, _)| *b <= t)
+            .copied()
+            .unwrap_or((0.0, 0.0))
+    }
+
+    /// How much later a state that starts at `b` in the before film starts at `a` in the after
+    /// film, each from its anchor; None inside a free span of either film.
+    fn shift(&self, b: f64, a: f64) -> Option<f64> {
+        if self.free.0.free_at(b) || self.free.1.free_at(a) {
+            return None;
+        }
+        let (fb, fa) = self.from(b);
+        Some((a - fa) - (b - fb))
+    }
+
+    /// How much longer the after film runs after its last anchor than the before film, 0 when
+    /// it ends inside a free span.
+    fn tail(&self, before: f64, after: f64) -> f64 {
+        let end = |m: &fearlezz_proof::media::Marks, t: f64| m.free_at((t - 1e-6).max(0.0));
+        if end(&self.free.0, before) || end(&self.free.1, after) {
+            return 0.0;
+        }
+        let (fb, fa) = self.anchors.last().copied().unwrap_or((0.0, 0.0));
+        (after - fa) - (before - fb)
+    }
+}
+
+/// Timing: how much later each held state of the before film shows in the after film, from
+/// the anchor before it, the largest shift and the moment of the before film it is at.
 fn max_shift(
     ko: &[State],
     kn: &[State],
     path: &[(usize, usize)],
     cost: &[Vec<f32>],
+    clock: &Clock,
 ) -> (f64, Option<f64>) {
     let mut best: BTreeMap<usize, usize> = BTreeMap::new();
     for &(i, j) in path {
@@ -219,7 +288,9 @@ fn max_shift(
         if k.dur >= STABLE_MIN
             && let Some(j) = best.get(&i)
         {
-            let shift = kn[*j].start - k.start;
+            let Some(shift) = clock.shift(k.start, kn[*j].start) else {
+                continue;
+            };
             if max_shift.1.is_none() || shift.abs() > max_shift.0.abs() {
                 max_shift = (shift, Some(k.start));
             }

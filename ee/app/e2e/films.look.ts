@@ -10,10 +10,13 @@
 import { type Page, type TestInfo, test } from "@playwright/test";
 import type { Note, PictureVerdict, Snapshot } from "../src/proof";
 import { NOW, type Socket, type World, serve, settled } from "./host";
+import { loaded, noting, write } from "./marks";
 import { STRIP, WORK, WORK_PATH } from "./states";
 
-// Every test here is recorded, at the viewport scaled to fit 800 pixels, its proportions kept.
+// Every test here is recorded, at the viewport scaled to fit 800 pixels, its proportions kept,
+// with what happens in it noted for Fearlezz to time the film from (marks.ts).
 test.use({ video: "on" });
+test.beforeEach(({ page }) => noting(page));
 
 const pause = (page: Page, ms: number) => page.waitForTimeout(ms);
 const snapshotOf = (name: string) => WORK[name]!.world.live as Snapshot & { kind: "snapshot" };
@@ -24,7 +27,9 @@ async function keep(page: Page, info: TestInfo, name: string) {
   const theme = (await page.evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches)) ? "dark" : "light";
   await page.close();
   const out = process.env.FEARLEZZ_OUT ?? "e2e";
-  await page.video()?.saveAs(`${out}/films/${info.project.name}/work/${name}/${theme}.webm`);
+  const film = `films/${info.project.name}/work/${name}/${theme}.webm`;
+  await page.video()?.saveAs(`${out}/${film}`);
+  write(page, out, film);
 }
 
 /** Scrolls the picture under review to the top of the screen, as a person would before looking
@@ -61,6 +66,7 @@ test("film: a run arrives live", async ({ page }, info) => {
   const { live: _first, ...world } = WORK["waits-for-you"]!.world;
   const socket = await serve(page, world);
   await page.goto(WORK_PATH);
+  loaded(page);
   await pause(page, 1200);
   let seq = running.seq;
   socket.send({ ...running, runs: [running.runs[0]] });
@@ -98,6 +104,7 @@ async function waiting(page: Page) {
   await answers(page, socket, { n: snapshotOf("waits-for-you").seq + 100 });
   await page.goto(WORK_PATH);
   await settled(page, true);
+  loaded(page);
   await pause(page, 600);
   await toStage(page);
 }
@@ -177,6 +184,7 @@ async function open(page: Page, world: World) {
   await serve(page, world);
   await page.goto(WORK_PATH);
   await settled(page, !!world.files);
+  loaded(page);
   await pause(page, 600);
 }
 
@@ -232,6 +240,7 @@ test("film: a picture that changed since its look, looked at again", async ({ pa
   await answers(page, socket, { n: snapshotOf("look-again").seq + 100 });
   await page.goto(WORK_PATH);
   await settled(page, true);
+  loaded(page);
   await pause(page, 600);
   await toStage(page);
   await page.keyboard.press("t");
@@ -340,6 +349,7 @@ test("film: comparing with earlier runs on the strip", async ({ page }, info) =>
   await serve(page, STRIP.world);
   await page.goto(WORK_PATH);
   await settled(page, true);
+  loaded(page);
   const said = page.locator("[data-pair-says]");
   const dot = (key: string) => page.locator(`[data-strip] [data-dot="${key}"] button`);
   // It opens on the still compared with your look, in the Look again colour.

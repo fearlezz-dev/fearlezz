@@ -3,7 +3,7 @@
 // such as what it showed when they last said it looks right ("your look").
 
 import type { Shown } from "./pictures";
-import type { Run, Snapshot } from "./proof";
+import type { Marks, Run, Snapshot } from "./proof";
 import { changedSince, keyOf } from "./review";
 
 /** One dot of the strip. */
@@ -22,6 +22,8 @@ export type Dot = {
   path: string | null;
   /** The run of the newest looks right on this picture, when that was on other content. */
   look: boolean;
+  /** What the check said happened in its film, which the page times a comparison from. */
+  marks: Marks | null;
 };
 
 /** The picture as `run` showed it, if it did. */
@@ -34,13 +36,14 @@ export function stripOf(state: Snapshot, run: Run, p: Shown): Dot[] {
   const nowKey = keyOf(run, p);
   // What this run found comparing its picture with those a person said something about.
   const same = run.checks.find((c) => c.id === p.check)?.since?.[p.picture.name] ?? {};
-  const now: Dot = { key: "now", kind: "now", runs: [run], head: run.head, path: p.picture.after, look: false };
+  const now: Dot = { key: "now", kind: "now", runs: [run], head: run.head, path: p.picture.after, look: false, marks: p.picture.marks ?? null };
   // Runs are newest first; those after the one shown came before it.
   const at = state.runs.findIndex((r) => r.id === run.id);
   const earlier = at < 0 ? [] : state.runs.slice(at + 1);
   const folded = new Map<string, Dot>();
   for (const r of earlier) {
-    const path = pictureIn(r, p)?.after;
+    const item = pictureIn(r, p);
+    const path = item?.after;
     if (!path) continue;
     const key = keyOf(r, p);
     if (key !== undefined && (key === nowKey || same[key])) {
@@ -50,13 +53,13 @@ export function stripOf(state: Snapshot, run: Run, p: Shown): Dot[] {
     const fold = key === undefined ? `run:${r.id}` : `key:${key}`;
     const dot = folded.get(fold);
     if (dot) dot.runs.push(r);
-    else folded.set(fold, { key: r.id, kind: "run", runs: [r], head: r.head, path, look: false });
+    else folded.set(fold, { key: r.id, kind: "run", runs: [r], head: r.head, path, look: false, marks: item.marks ?? null });
   }
   const runs = [...folded.values()].reverse();
   const look = yourLook(state, run, p);
   const lookDot = look && (runs.find((d) => keyOf(d.runs[0]!, p) === look.key) ?? runs.find((d) => d.runs.some((r) => r.id === look.run)));
   if (lookDot) lookDot.look = true;
-  const base: Dot[] = p.picture.before ? [{ key: "base", kind: "base", runs: [], head: p.look.base_commit, path: p.picture.before, look: false }] : [];
+  const base: Dot[] = p.picture.before ? [{ key: "base", kind: "base", runs: [], head: p.look.base_commit, path: p.picture.before, look: false, marks: p.picture.before_marks ?? null }] : [];
   return [...base, ...runs, now];
 }
 

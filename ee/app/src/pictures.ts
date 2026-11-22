@@ -2,7 +2,7 @@
 // order that directs attention (what changed first, what stayed the same folded last), grouped
 // by the parts of their names, and what a film's lanes and outlines show at a time.
 
-import type { Comparison, Look, Pair, Picture, PictureChange, Run } from "./proof";
+import type { Comparison, Look, Marks, Pair, Picture, PictureChange, Run } from "./proof";
 
 /** One picture of a run, by the check that took it. */
 export type Shown = {
@@ -255,10 +255,20 @@ export function plainSummary(picture: Picture): string {
     case "changed":
       if (bw !== aw || bh !== ah) return `The size changed from ${bw}×${bh} to ${aw}×${ah}.`;
       if (c.still) return `${picture.summary}.`;
-      return `Changes at ${c.moments.map((m) => `${m.after[0].toFixed(2)} s`).join(", ")}.`;
+      if (!c.moments.length) return "The steps it marked changed.";
+      return `Changes at ${c.moments.map((m) => `${m.after[0].toFixed(2)} s`).join(", ")}${c.marks_changed ? ", and the steps it marked changed" : ""}.`;
   }
 }
 
 /** A film's moment as the page shows and keeps it: to the hundredth of a second, rounded once,
  * so the clock a person reads and the moment a note keeps are the same. */
 export const hundredths = (t: number) => Math.round(t * 100) / 100;
+
+/** The step of a film at `t` seconds, by what its check said happened in it: the newest shown
+ * mark at or before `t`, or the span `t` is in when that started later. */
+export function stepAt(marks: Marks | null | undefined, t: number): string | undefined {
+  let step: { name: string; at: number } | undefined;
+  for (const m of marks?.marks ?? []) if (!m.hidden && m.at <= t && (!step || m.at >= step.at)) step = { name: m.name, at: m.at };
+  for (const s of marks?.spans ?? []) if (s.start <= t && t < s.end && (!step || s.start >= step.at)) step = { name: s.name, at: s.start };
+  return step?.name;
+}

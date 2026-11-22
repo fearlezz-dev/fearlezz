@@ -5,15 +5,18 @@
 // yuv420p equals, each frame copied straight into the wasm memory. A film is decoded once: the
 // wasm side keeps the frames that start its states for the comparison's second read.
 //
-// Answers are kept per pair of files by their SHA-256, so the same pair is compared once
-// however its URLs change (a grant's folder lasts an hour).
+// Answers are kept per pair of files by their SHA-256 and their marks, so the same pair is
+// compared once however its URLs change (a grant's folder lasts an hour).
 
 import wasmUrl from "fearlezz-page-compare.wasm?url";
 import { codecOf, demux } from "./demux";
 
+/** One side of an ask: the file's URL and, for a film, the JSON of what its check said happened
+ * in it, which the comparison times it from. */
+export type Side = { url: string; marks: string | null };
 /** What the page asks: compare the file at `before` with the one at `after`, for the picture
  * shown or, `ahead`, for one a person likely shows next. */
-export type Ask = { id: number; before: string; after: string; film: boolean; ahead?: boolean };
+export type Ask = { id: number; before: Side; after: Side; film: boolean; ahead?: boolean };
 /** The page now shows the picture of an ask it made ahead. */
 export type Promote = { promote: number };
 /** What the worker answers: the comparison as the CLI's JSON, or why there is none. */
@@ -25,6 +28,7 @@ type Compare = {
   input(len: number): number;
   film(w: number, h: number, frames: number, yuv: number): number;
   frame(id: number, start: number, dur: number): number;
+  marks(id: number): number;
   compared(before: number, after: number): number;
   forget(id: number): void;
   output(): number;
@@ -145,15 +149,28 @@ async function fetched(url: string): Promise<ArrayBuffer> {
 const known = new Map<string, string>();
 
 async function compare(ask: Ask): Promise<string> {
-  const [w, before, after] = await Promise.all([load(), fetched(ask.before), fetched(ask.after)]);
-  const key = `${await sha256(before)}:${await sha256(after)}`;
+  const [w, before, after] = await Promise.all([load(), fetched(ask.before.url), fetched(ask.after.url)]);
+  const key = JSON.stringify([await sha256(before), await sha256(after), ask.before.marks, ask.after.marks]);
   const kept = known.get(key);
   if (kept) return kept;
-  const feed = (bytes: ArrayBuffer) => (ask.film ? feedFilm(w, bytes) : feedStill(w, bytes));
-  const b = await feed(before);
+  const feed = async (bytes: ArrayBuffer, side: Side) => {
+    const id = await (ask.film ? feedFilm(w, bytes) : feedStill(w, bytes));
+    if (side.marks) {
+      const json = new TextEncoder().encode(side.marks);
+      room(w, json.length).set(json);
+      try {
+        check(w, w.marks(id));
+      } catch (e) {
+        w.forget(id);
+        throw e;
+      }
+    }
+    return id;
+  };
+  const b = await feed(before, ask.before);
   let a: number;
   try {
-    a = await feed(after);
+    a = await feed(after, ask.after);
   } catch (e) {
     w.forget(b);
     throw e;

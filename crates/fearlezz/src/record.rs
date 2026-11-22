@@ -792,6 +792,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
         let deadline = spec.seconds().and_then(|s| recording.checked_add(s));
         let frame = spec.frame();
         let mut proofs = Vec::new();
+        let mut started = None;
         let mut recorded = true;
         if let Some(name) = &spec.still {
             let file = format!("{name}.png");
@@ -825,6 +826,11 @@ impl<'a, S: Screen> Recorder<'a, S> {
                     return Err(e);
                 }
             };
+            // The wall clock at its first frame, so the check can mark moments of it by the
+            // clock it knows (`wall` in milliseconds) rather than seconds into the film.
+            let at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
             while child.try_wait()?.is_none()
                 && !film.ended()
                 && deadline.is_none_or(|d| Instant::now() < d)
@@ -835,6 +841,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
             let error = match film.stop() {
                 Ok(()) if path.exists() => {
                     writeln!(log, "record: film {file} of {secs:.1} s")?;
+                    started = Some((file.clone(), at));
                     proofs.push(("film", file, name));
                     None
                 }
@@ -855,7 +862,7 @@ impl<'a, S: Screen> Recorder<'a, S> {
                 error,
             });
         }
-        append_proofs(out, &proofs)?;
+        append_proofs(out, &proofs, started)?;
         let ended = self.finish(child, root, window.id, deadline, log)?;
         Ok(Recorded { ended, recorded })
     }
@@ -1140,7 +1147,13 @@ impl<'a, S: Screen> Recorder<'a, S> {
     }
 }
 
-fn append_proofs(out: &Path, proofs: &[(&str, String, &String)]) -> Result<()> {
+/// Lists what was recorded in `out/proof.jsonl`, and when the film `started` (its file and the
+/// wall clock in milliseconds at its first frame).
+fn append_proofs(
+    out: &Path,
+    proofs: &[(&str, String, &String)],
+    started: Option<(String, f64)>,
+) -> Result<()> {
     if proofs.is_empty() {
         return Ok(());
     }
@@ -1150,6 +1163,10 @@ fn append_proofs(out: &Path, proofs: &[(&str, String, &String)]) -> Result<()> {
         .open(out.join("proof.jsonl"))?;
     for (kind, path, id) in proofs {
         let line = serde_json::json!({ "kind": kind, "file": path, "id": id });
+        writeln!(file, "{line}")?;
+    }
+    if let Some((film, wall)) = started {
+        let line = serde_json::json!({ "kind": "start", "film": film, "wall": wall });
         writeln!(file, "{line}")?;
     }
     Ok(())
@@ -2007,11 +2024,24 @@ mod tests {
         assert!(run.recorded.passed(), "{:?}\n{}", run.recorded, run.log);
         assert!(run.out.path().join("home.png").exists());
         assert!(run.out.path().join("home.mp4").exists());
-        let proofs: Vec<serde_json::Value> = run
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+            * 1000.0;
+        let mut proofs: Vec<serde_json::Value> = run
             .proofs()
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
+        // The film's first frame on the wall clock, for a check that marks it by that clock.
+        let start = proofs.pop().unwrap();
+        assert_eq!(
+            (&start["kind"], &start["film"]),
+            (&"start".into(), &"home.mp4".into())
+        );
+        let wall = start["wall"].as_f64().unwrap();
+        assert!(wall <= before && wall > before - 10_000.0, "{start}");
         assert_eq!(
             proofs,
             [
@@ -2117,7 +2147,7 @@ mod tests {
             "{}",
             run.log
         );
-        assert_eq!(run.proofs().lines().count(), 1);
+        assert_eq!(run.proofs().lines().count(), 2, "the film and its start");
     }
 
     #[test]
