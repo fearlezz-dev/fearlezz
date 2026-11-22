@@ -455,12 +455,13 @@ impl Frames {
 
 /// The marks cut both films into sections, and a state is only matched with one of the other
 /// film's in the same section: the box shown before the press never answers for the box shown
-/// after it, however alike they look.
+/// after it, however alike they look, once it ended longer before the press than a said moment
+/// may be off by.
 #[test]
 fn a_state_is_matched_only_within_its_marked_section() {
     let c = marked(
         (
-            &Frames::runs(64, 48, &[(5, None), (5, Some(10)), (10, None)]),
+            &Frames::runs(64, 48, &[(3, None), (5, Some(10)), (12, None)]),
             marks(&[("pressed", 1.0)]),
         ),
         (
@@ -538,4 +539,104 @@ fn without_marks_the_timeline_starts_both_films_together() {
         (0.0, 2.5, 0.0),
         "{t:?}"
     );
+}
+
+/// A white film of 20 frames that fades through the greys `fade` from frame 5, then shows a
+/// black box at `x` from frame 10.
+fn faded(fade: [u8; 5], x: usize) -> Frames {
+    let (w, h) = (64, 48);
+    let each = (0..20)
+        .map(|i| {
+            let grey = if (5..10).contains(&i) {
+                fade[i - 5]
+            } else {
+                255
+            };
+            let mut px = vec![grey; w * h * 3];
+            if i >= 10 {
+                fill(&mut px, w, (x, x + 20), (10, 30), [0, 0, 0]);
+            }
+            px
+        })
+        .collect();
+    Frames {
+        format: Format::Rgb,
+        w,
+        h,
+        each,
+    }
+}
+
+/// Free spans named `moving` over each stretch in `over`.
+fn moving(over: &[(f64, f64)]) -> Marks {
+    Marks {
+        marks: Vec::new(),
+        spans: over
+            .iter()
+            .map(|&(start, end)| Span {
+                name: "moving".into(),
+                start,
+                end,
+                timing: Timing::Free,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn a_fade_inside_a_free_span_caught_differently_is_the_same() {
+    let c = marked(
+        (&faded([230, 180, 120, 60, 20], 10), moving(&[(0.5, 1.0)])),
+        (&faded([200, 140, 90, 40, 250], 10), moving(&[(0.5, 1.0)])),
+    );
+    assert_eq!(c.verdict, Verdict::Same, "{c:?}");
+}
+
+#[test]
+fn the_state_a_free_span_ends_on_is_still_compared() {
+    let c = marked(
+        (&faded([230, 180, 120, 60, 20], 10), moving(&[(0.5, 1.0)])),
+        (&faded([230, 180, 120, 60, 20], 34), moving(&[(0.5, 1.0)])),
+    );
+    assert_eq!(c.verdict, Verdict::Changed, "{c:?}");
+}
+
+#[test]
+fn films_with_more_or_fewer_free_spans_still_have_the_same_marks() {
+    let c = marked(
+        (&faded([230, 180, 120, 60, 20], 10), moving(&[(0.5, 1.0)])),
+        (
+            &faded([230, 180, 120, 60, 20], 10),
+            moving(&[(0.2, 0.3), (0.5, 1.0)]),
+        ),
+    );
+    assert!(!c.marks_changed, "{c:?}");
+    assert_eq!(c.verdict, Verdict::Same, "{c:?}");
+}
+
+#[test]
+fn a_film_ending_inside_a_free_span_still_compares_its_last_state() {
+    // A spinner ran to the end of both films: the picture they end on still counts.
+    let c = marked(
+        (&faded([230, 180, 120, 60, 20], 10), moving(&[(0.5, 2.0)])),
+        (&faded([230, 180, 120, 60, 20], 34), moving(&[(0.5, 2.0)])),
+    );
+    assert_eq!(c.verdict, Verdict::Changed, "{c:?}");
+}
+
+#[test]
+fn a_change_shown_just_before_its_mark_is_matched_across_it() {
+    // The recorder's first frame came a little after the check's clock started, so each mark
+    // reads up to a tenth of a second later than the frame it shows on.
+    let c = marked(
+        (
+            &Frames::boxed(64, 48, 20, 10, 10),
+            marks(&[("pressed", 1.08)]),
+        ),
+        (
+            &Frames::boxed(64, 48, 25, 10, 15),
+            marks(&[("pressed", 1.5)]),
+        ),
+    );
+    assert_eq!(c.verdict, Verdict::Same, "{c:?}");
 }

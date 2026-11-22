@@ -228,18 +228,24 @@ export const timelineEnd = (timeline: Timeline): number => {
   return last ? last.at + last.length : 0;
 };
 
-/** Where one film is at moment `tau` of the films' timeline: its own time, and whether it holds
- * there with no footage, before its stretch of a section starts or after it ends. Without a
- * timeline both films play from their start. */
-export function filmAt(timeline: Timeline, side: "before" | "after", tau: number): { t: number; held: boolean } {
-  if (!timeline?.length) return { t: tau, held: false };
+/** A stretch with no footage shorter than this holds its frame quietly: shown, it would only
+ * flicker. */
+export const QUIET_GAP = 0.5;
+
+/** Where one film is at moment `tau` of the films' timeline: its own time, whether it holds
+ * there with no footage, before its stretch of a section starts or after it ends, and whether
+ * that stretch is long enough to show (`QUIET_GAP`). Without a timeline both films play from
+ * their start. */
+export function filmAt(timeline: Timeline, side: "before" | "after", tau: number): { t: number; held: boolean; shown: boolean } {
+  if (!timeline?.length) return { t: tau, held: false, shown: false };
   let section = timeline[0]!;
   for (const s of timeline) if (s.at <= tau) section = s;
   const f = footage(section, side);
   const into = tau - section.at - f.delay;
-  if (into < -1e-6) return { t: f.from, held: true };
-  if (into > f.to - f.from + 1e-6) return { t: f.to, held: true };
-  return { t: f.from + Math.max(0, into), held: false };
+  const plays = f.to - f.from;
+  if (into < -1e-6) return { t: f.from, held: true, shown: f.delay >= QUIET_GAP };
+  if (into > plays + 1e-6) return { t: f.to, held: true, shown: section.length - f.delay - plays >= QUIET_GAP };
+  return { t: f.from + Math.max(0, into), held: false, shown: false };
 }
 
 /** The moment of the films' timeline where one film plays its time `t`. */
@@ -250,14 +256,15 @@ export function timelineAt(timeline: Timeline, side: "before" | "after", t: numb
   return section.at + f.delay + Math.max(0, Math.min(t, f.to) - f.from);
 }
 
-/** The stretches of the films' timeline where one film has no footage and holds a frame. */
+/** The stretches of the films' timeline where one film has no footage long enough to show
+ * (`QUIET_GAP`); a shorter one holds its frame quietly. */
 export function gaps(timeline: Timeline, side: "before" | "after"): { start: number; stop: number }[] {
   const out: { start: number; stop: number }[] = [];
   for (const s of timeline ?? []) {
     const f = footage(s, side);
     const plays = s.at + f.delay + (f.to - f.from);
-    if (f.delay > 1e-6) out.push({ start: s.at, stop: s.at + f.delay });
-    if (s.at + s.length - plays > 1e-6) out.push({ start: plays, stop: s.at + s.length });
+    if (f.delay >= QUIET_GAP) out.push({ start: s.at, stop: s.at + f.delay });
+    if (s.at + s.length - plays >= QUIET_GAP) out.push({ start: plays, stop: s.at + s.length });
   }
   return out;
 }
@@ -310,10 +317,15 @@ export function plainSummary(picture: Picture): string {
 export const hundredths = (t: number) => Math.round(t * 100) / 100;
 
 /** The step of a film at `t` seconds, by what its check said happened in it: the newest shown
- * mark at or before `t`, or the span `t` is in when that started later. */
+ * mark at or before `t`, or the span `t` is in when that started later. A free span after a
+ * shown mark, such as the page settling after a press, is what the press did, so no step. */
 export function stepAt(marks: Marks | null | undefined, t: number): string | undefined {
   let step: { name: string; at: number } | undefined;
-  for (const m of marks?.marks ?? []) if (!m.hidden && m.at <= t && (!step || m.at >= step.at)) step = { name: m.name, at: m.at };
-  for (const s of marks?.spans ?? []) if (s.start <= t && t < s.end && (!step || s.start >= step.at)) step = { name: s.name, at: s.start };
+  const shown = (marks?.marks ?? []).filter((m) => !m.hidden);
+  for (const m of shown) if (m.at <= t && (!step || m.at >= step.at)) step = { name: m.name, at: m.at };
+  for (const s of marks?.spans ?? []) {
+    if (s.timing === "free" && shown.some((m) => m.at <= s.start)) continue;
+    if (s.start <= t && t < s.end && (!step || s.start >= step.at)) step = { name: s.name, at: s.start };
+  }
   return step?.name;
 }

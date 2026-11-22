@@ -15,6 +15,9 @@ use fearlezz_proof::media::{Footage, Section};
 
 /// Seconds of timing difference that still count as the same timing.
 const TIMING_TOL: f64 = 0.10;
+/// Seconds a moment a check said may read later than the frame it shows on: the recorder's
+/// first frame comes a little after the check's clock starts, and only that well known.
+const SAID_TOL: f64 = 0.10;
 /// A state held at least this long is a moment worth checking for timing.
 const STABLE_MIN: f64 = 0.15;
 
@@ -124,12 +127,16 @@ where
     let (ko, kn) = (&before.states, &after.states);
     let thumbs = |s: &[State]| s.iter().map(|k| k.thumb.clone()).collect::<Vec<_>>();
     // States are matched only within the same section between two anchors: a state that runs
-    // across an anchor is in both sections it touches.
+    // across an anchor, or ends just before one by what a said moment may read late, is in both
+    // sections it touches.
     let sections = |states: &[State], at: &dyn Fn(&(f64, f64)) -> f64| {
         let of = |t: f64| clock.anchors.iter().filter(|x| at(x) <= t).count();
         states
             .iter()
-            .map(|k| (of(k.start), of((k.start + k.dur - 1e-6).max(k.start))))
+            .map(|k| {
+                let end = (k.start + k.dur - 1e-6).max(k.start);
+                (of(k.start), of(end + SAID_TOL))
+            })
             .collect::<Vec<_>>()
     };
     let (so, sn) = (sections(ko, &|x| x.0), sections(kn, &|x| x.1));
@@ -140,7 +147,16 @@ where
         Window::new(before, before_again),
         Window::new(after, after_again),
     );
-    out.pairs = pairs(&mut windows, &path, still, &allowed)?;
+    // A state within a free span of its film, or starting just before it by what a said moment
+    // may read late, looks different each time; only the state the span ends on is compared, and a film's last state is what it ends on, even while a span
+    // such as a spinner runs on to its end.
+    let free = |i: usize, j: usize| {
+        let within = |m: &fearlezz_proof::media::Marks, s: &[State], i: usize| {
+            i + 1 < s.len() && m.free_over(s[i].start, s[i].start + s[i].dur, SAID_TOL)
+        };
+        within(&before.marks, ko, i) || within(&after.marks, kn, j)
+    };
+    out.pairs = pairs(&mut windows, &path, still, &allowed, &free)?;
     let max_shift = max_shift(ko, kn, &path, &cost, &clock);
     out.max_shift = round3(max_shift.0);
     out.max_shift_at = max_shift.1.map(round3);
@@ -166,6 +182,7 @@ fn pairs<B, A>(
     path: &[(usize, usize)],
     still: bool,
     allowed: &dyn Fn(usize, usize) -> bool,
+    free: &dyn Fn(usize, usize) -> bool,
 ) -> Result<Vec<Pair>, B::Error>
 where
     B: Reread,
@@ -193,7 +210,11 @@ where
             cache.insert((i, j), d.clone());
             Ok(d)
         };
-        let (mut px, mut boxes) = pd(i, j)?;
+        let (mut px, mut boxes) = if free(i, j) {
+            (0, Vec::new())
+        } else {
+            pd(i, j)?
+        };
         // A still has one state, so nothing it could have been caught between.
         if px > 0 && !still {
             // When the films caught a transition at different moments, each side of the pair
@@ -238,8 +259,9 @@ where
 }
 
 /// How the two films are timed against each other: from the moments their checks marked,
-/// matched in order, each state's start measured from the anchor before it; a film without
-/// marks is timed from its start. Inside a span whose timing is free nothing is timed.
+/// matched in order, each state's start measured from the anchor before it or the end of a free
+/// span after that, whichever is later; a film without marks is timed from its start. Inside a
+/// span whose timing is free nothing is timed.
 #[derive(Default)]
 struct Clock {
     /// Each matched anchor's moment in the before film and the after film, in order.
@@ -253,49 +275,59 @@ impl Clock {
     /// in it, such as one taken before its check marked anything, so both are timed from their
     /// start.
     fn of(before: &Film, after: &Film) -> Option<Clock> {
-        if before.marks.is_empty() || after.marks.is_empty() {
-            return Some(Clock::default());
-        }
+        let free = (before.marks.clone(), after.marks.clone());
         let (b, a) = (before.marks.anchors(), after.marks.anchors());
+        if b.is_empty() || a.is_empty() {
+            return Some(Clock {
+                anchors: Vec::new(),
+                free,
+            });
+        }
         let names = |v: &[(String, f64)]| v.iter().map(|x| x.0.clone()).collect::<Vec<_>>();
         if names(&b) != names(&a) {
             return None;
         }
         Some(Clock {
             anchors: b.iter().zip(&a).map(|(b, a)| (b.1, a.1)).collect(),
-            free: (before.marks.clone(), after.marks.clone()),
+            free,
         })
     }
 
-    /// The anchor before moment `t` of the before film: its moment in each film, (0, 0) for the
-    /// films' start.
-    fn from(&self, t: f64) -> (f64, f64) {
-        self.anchors
+    /// What moment `b` of the before film and moment `a` of the after film are each timed
+    /// from: the anchor before `b` (or just after it, by what a said moment may read late), or a
+    /// later end of a free span in that film.
+    fn from(&self, b: f64, a: f64) -> (f64, f64) {
+        let (fb, fa) = self
+            .anchors
             .iter()
             .rev()
-            .find(|(b, _)| *b <= t)
+            .find(|(x, _)| *x <= b + SAID_TOL)
             .copied()
-            .unwrap_or((0.0, 0.0))
+            .unwrap_or((0.0, 0.0));
+        let later = |m: &fearlezz_proof::media::Marks, t: f64, f: f64| {
+            m.freed_by(t).map_or(f, |e| e.max(f))
+        };
+        (later(&self.free.0, b, fb), later(&self.free.1, a, fa))
     }
 
     /// How much later a state that starts at `b` in the before film starts at `a` in the after
-    /// film, each from its anchor; None inside a free span of either film.
+    /// film, each from what it is timed from; None inside a free span of either film.
     fn shift(&self, b: f64, a: f64) -> Option<f64> {
         if self.free.0.free_at(b) || self.free.1.free_at(a) {
             return None;
         }
-        let (fb, fa) = self.from(b);
+        let (fb, fa) = self.from(b, a);
         Some((a - fa) - (b - fb))
     }
 
-    /// How much longer the after film runs after its last anchor than the before film, 0 when
-    /// it ends inside a free span.
+    /// How much longer the after film runs after what its end is timed from than the before
+    /// film, 0 when it ends inside a free span.
     fn tail(&self, before: f64, after: f64) -> f64 {
         let end = |m: &fearlezz_proof::media::Marks, t: f64| m.free_at((t - 1e-6).max(0.0));
         if end(&self.free.0, before) || end(&self.free.1, after) {
             return 0.0;
         }
-        let (fb, fa) = self.anchors.last().copied().unwrap_or((0.0, 0.0));
+        let (fb, fa) = self.from(before, after);
         (after - fa) - (before - fb)
     }
 }
