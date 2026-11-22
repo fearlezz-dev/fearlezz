@@ -59,6 +59,7 @@ fn film(changed: &[usize]) -> Item {
             max_shift: 0.0,
             max_shift_at: None,
             marks_changed: false,
+            timeline: Vec::new(),
             states_before: 3,
             states_after: 3,
             moments: Vec::new(),

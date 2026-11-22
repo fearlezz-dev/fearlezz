@@ -4,7 +4,7 @@
 
 import { type Page, expect, test } from "@playwright/test";
 import { serve, settled, show } from "./host";
-import { LONG_STRIP, STRIP, WORK, WORK_PATH, answerOf } from "./states";
+import { ALIGNED, LONG_STRIP, STRIP, WORK, WORK_PATH, answerOf } from "./states";
 
 const dots = (page: Page) => page.locator("[data-strip] [data-dot]");
 const dot = (page: Page, key: string) => page.locator(`[data-strip] [data-dot="${key}"] button`);
@@ -84,6 +84,38 @@ test("a film's timeline draws what its check said happened: its steps, and a loa
   const box = (await timeline.boundingBox())!;
   await timeline.click({ position: { x: box.width * 0.45, y: 4 } });
   await expect(page.locator("[data-stage] [data-step]")).toHaveText("paid");
+});
+
+test("two films play on one timeline aligned at their marks, each holding dimmed where it has no footage", async ({ page }) => {
+  await show(page, WORK_PATH, ALIGNED);
+  await page.locator(`[data-picture="${STRIP.film}"]`).click();
+  await dot(page, "base").click();
+  await expect(stage(page)).not.toHaveAttribute("data-against");
+  const lane = (side: string) => page.locator(`[data-stage] [data-lane="${side}"]`);
+  // The step each film reached is drawn at one place on the timeline.
+  const paid = async (side: string) => (await lane(side).locator('[data-mark="paid"]').boundingBox())!.x;
+  expect(Math.abs((await paid("before")) - (await paid("after")))).toBeLessThan(1.5);
+  // The before film has no footage before it, the after film none at the end.
+  await expect(lane("before").locator("[data-gap]")).toHaveCount(1);
+  await expect(lane("after").locator("[data-gap]")).toHaveCount(1);
+
+  const timeline = page.locator("[data-stage] .timeline");
+  const box = (await timeline.boundingBox())!;
+  const film = (side: string) => page.locator(`[data-stage] video[data-side="${side}"]`).first();
+  const at = (side: string) => film(side).evaluate((v: HTMLVideoElement) => v.currentTime);
+  // 10% along, 0.26 s: the after film plays, the before film holds its first frame, dimmed.
+  await timeline.click({ position: { x: box.width * 0.1, y: 4 } });
+  await expect(film("before")).toHaveAttribute("data-held", "");
+  await expect(page.locator('[data-stage] [data-no-footage="before"]').first()).toBeVisible();
+  await expect(film("after")).not.toHaveAttribute("data-held");
+  await expect(page.locator("[data-stage] .mark")).toHaveCount(0);
+  await expect.poll(() => at("before")).toBeLessThan(0.05);
+  await expect.poll(() => at("after")).toBeCloseTo(0.26, 1);
+  // 60% along, 1.56 s: both play, each at its own time past the mark.
+  await timeline.click({ position: { x: box.width * 0.6, y: 4 } });
+  await expect(film("before")).not.toHaveAttribute("data-held");
+  await expect.poll(() => at("before")).toBeCloseTo(0.96, 1);
+  await expect.poll(() => at("after")).toBeCloseTo(1.56, 1);
 });
 
 test("in full screen, two films play once both can play through and the page has compared them", async ({ page }) => {

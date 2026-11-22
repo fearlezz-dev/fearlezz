@@ -794,7 +794,13 @@ pairs: Array<Pair>,
 /**
  * The films' marks differ: one has a mark or span the other does not, or in another order.
  */
-marks_changed?: boolean, };
+marks_changed?: boolean, 
+/**
+ * The films' one timeline, aligned at their marks: a section from each anchor to the next,
+ * in order. States are only matched within one section, and a page plays the films on it,
+ * so what plays side by side is what was compared. Empty for stills.
+ */
+timeline?: Array<Section>, };
 
 export type Likeness = "same" | "timing" | "changed";
 
@@ -893,6 +899,38 @@ px: number,
  * Where they differ.
  */
 boxes: Array<[number, number, number, number]>, };
+
+export type Section = { 
+/**
+ * Where it starts on the timeline, in seconds.
+ */
+at: number, 
+/**
+ * How long it lasts, in seconds.
+ */
+length: number, 
+/**
+ * What the before film shows in it.
+ */
+before: Footage, 
+/**
+ * What the after film shows in it.
+ */
+after: Footage, };
+
+export type Footage = { 
+/**
+ * Where it starts in the film, in seconds.
+ */
+from: number, 
+/**
+ * Where it ends in the film, in seconds.
+ */
+to: number, 
+/**
+ * How long into the section it starts, in seconds.
+ */
+delay: number, };
 
 export type Check = { 
 /**

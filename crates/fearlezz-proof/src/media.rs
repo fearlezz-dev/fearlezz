@@ -86,6 +86,41 @@ pub struct Comparison {
     /// The films' marks differ: one has a mark or span the other does not, or in another order.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub marks_changed: bool,
+    /// The films' one timeline, aligned at their marks: a section from each anchor to the next,
+    /// in order. States are only matched within one section, and a page plays the films on it,
+    /// so what plays side by side is what was compared. Empty for stills.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timeline: Vec<Section>,
+}
+
+/// One section of two films' timeline, between two anchors their checks marked (or a film's
+/// start or end): where it starts on the timeline, how long it lasts, and what each film shows
+/// in it. Its length is the longer film's stretch; the shorter one has no footage for the rest.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Section {
+    /// Where it starts on the timeline, in seconds.
+    pub at: f64,
+    /// How long it lasts, in seconds.
+    pub length: f64,
+    /// What the before film shows in it.
+    pub before: Footage,
+    /// What the after film shows in it.
+    pub after: Footage,
+}
+
+/// The stretch of one film a section shows: from `from` to `to` in the film's own seconds,
+/// starting `delay` seconds into the section. Before it starts the film holds its frame at
+/// `from`, and once it ends its frame at `to`: it has no footage there.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Footage {
+    /// Where it starts in the film, in seconds.
+    pub from: f64,
+    /// Where it ends in the film, in seconds.
+    pub to: f64,
+    /// How long into the section it starts, in seconds.
+    pub delay: f64,
 }
 
 /// What a check said happened in a film, as it recorded it: marks at moments, and spans of time

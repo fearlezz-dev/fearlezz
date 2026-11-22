@@ -1078,3 +1078,10 @@ html, * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--quiet
 /* A key shown on a button, as the list under ? names it; a touch screen has no keys. */
 .btn > kbd { margin-left: 6px; font-size: 0.68rem; }
 @media (hover: none) and (pointer: coarse) { .btn > kbd { display: none; } }
+
+/* A film with no footage on the timeline holds a frame, dimmed and named, until its next mark. */
+.frame video[data-held] { opacity: 0.35; filter: grayscale(1); transition: opacity 0.2s var(--out), filter 0.2s var(--out); }
+.no-footage { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 2px 8px; border-radius: 999px; background: var(--ink); color: var(--raised); font-size: 0.75rem; font-weight: 700; pointer-events: none; }
+.over .no-footage { left: auto; right: 8px; }
+.lane .gap { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--ink) 10%, transparent) 0 3px, transparent 3px 7px), var(--sunk); }
+@media (prefers-reduced-motion: reduce) { .frame video[data-held] { transition: none; } }

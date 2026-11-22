@@ -233,8 +233,13 @@ impl<'f, R: Reread> Window<'f, R> {
     }
 
     /// State `c` and its neighbours.
-    pub(crate) fn near(&self, c: usize) -> Result<Vec<&Image>, Unfit> {
+    pub(crate) fn near(
+        &self,
+        c: usize,
+        keep: impl Fn(usize) -> bool,
+    ) -> Result<Vec<&Image>, Unfit> {
         (c.saturating_sub(1)..(c + 2).min(self.film.states.len()))
+            .filter(|&x| x == c || keep(x))
             .map(|x| self.image(x))
             .collect()
     }

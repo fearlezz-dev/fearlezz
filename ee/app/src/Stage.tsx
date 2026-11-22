@@ -8,8 +8,8 @@ import { DiffLines } from "./DiffLines";
 import { Icon } from "./icons";
 import { fileUrl } from "./grant";
 import { type Draft, type Shown as Noted, meant, onSide, regionBetween } from "./notes";
-import { type Box, type Shown, WORDS, hundredths, isFilm, isText, lanes, marksAt, plainSummary, stepAt, stillMarks, title } from "./pictures";
-import type { Comparison, Marks } from "./proof";
+import { type Box, type Shown, WORDS, filmAt, gaps, hundredths, isFilm, isText, lanes, marksAt, plainSummary, stepAt, stillMarks, timelineAt, timelineEnd, title } from "./pictures";
+import type { Comparison, Marks, Section } from "./proof";
 import { ready } from "./preload";
 import { short } from "./short";
 import { FIT, type View, panned, stepped, transform, zoomedAt } from "./zoom";
@@ -170,45 +170,58 @@ export function stepSpeed(by: -1 | 1) {
   setSpeed(SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, at + by))]!);
 }
 
-/** The films' one clock: where both are, whether they play, and the videos it moves. Its length
- * grows to the longest film it moves, for a film alone that no comparison measured. */
+/** The films' one clock: where both are, whether they play, and the videos it moves. It runs on
+ * the films' timeline, which the comparison aligned at their marks, and places each film at its
+ * own time on it; a film with no footage there holds a frame. Its length grows to the longest
+ * film it moves, for a film alone that no comparison measured. */
 type Clock = {
+  /** The moment of the timeline. */
   t: () => number;
+  /** Where one film is now, in its own time. */
+  film: (side: Side) => number;
+  /** Whether one film has no footage now and holds a frame. */
+  held: (side: Side) => boolean;
   playing: () => boolean;
   total: () => number;
   /** Whether every film it moves can play through. */
   ready: () => boolean;
-  add: (video: HTMLVideoElement) => void;
+  add: (video: HTMLVideoElement, side: Side) => void;
   seek: (t: number) => void;
   toggle: () => void;
 };
 
-/** A clock for films at least `length` seconds long, which plays once, on its own, as soon as
- * every film it moves can play through while `autoplay` holds, so both sides start together. */
-function createClock(length: () => number, autoplay: () => boolean = () => false): Clock {
+/** A clock for films at least `length` seconds long, on the films' `timeline` when the
+ * comparison gave one, which plays once, on its own, as soon as every film it moves can play
+ * through while `autoplay` holds, so both sides start together. */
+function createClock(
+  length: () => number,
+  autoplay: () => boolean = () => false,
+  timeline: () => Section[] | null | undefined = () => undefined,
+): Clock {
   let starts = true;
   const [loaded, setLoaded] = createSignal(new Set<HTMLVideoElement>());
   const [longest, setLongest] = createSignal(0);
-  const total = () => Math.max(length(), longest(), 0.01);
+  const total = () => (timeline()?.length ? timelineEnd(timeline()) : Math.max(length(), longest(), 0.01));
   const [t, setT] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
-  const videos = new Set<HTMLVideoElement>();
+  const videos = new Map<HTMLVideoElement, Side>();
   let frame = 0;
   // A film shorter than the clock rests on its last frame.
   const end = (v: HTMLVideoElement) => (Number.isFinite(v.duration) ? v.duration : total()) - 0.01;
+  const own = (v: HTMLVideoElement, at: number) => filmAt(timeline(), videos.get(v) ?? "after", at);
   const place = (v: HTMLVideoElement, at: number) => {
-    v.currentTime = Math.max(0, Math.min(at, end(v)));
+    v.currentTime = Math.max(0, Math.min(own(v, at).t, end(v)));
   };
   const stop = () => {
     setPlaying(false);
     cancelAnimationFrame(frame);
-    for (const v of videos) v.pause();
+    for (const v of videos.keys()) v.pause();
   };
   const seek = (at: number) => {
     stop();
     const clamped = Math.max(0, Math.min(total(), at));
     setT(clamped);
-    for (const v of videos) place(v, clamped);
+    for (const v of videos.keys()) place(v, clamped);
   };
   const play = () => {
     if (t() >= total() - 0.05) seek(0);
@@ -230,13 +243,18 @@ function createClock(length: () => number, autoplay: () => boolean = () => false
         return;
       }
       setT(at);
-      for (const v of videos) {
-        if (at < end(v)) {
+      for (const v of videos.keys()) {
+        const f = own(v, at);
+        if (!f.held && f.t < end(v)) {
           if (v.playbackRate !== rate) v.playbackRate = rate;
           if (v.paused) void v.play().catch(() => {});
           // Films drift apart as they play; one that falls behind the clock is put back.
-          if (Math.abs(v.currentTime - at) > 0.15 * Math.max(1, rate)) v.currentTime = at;
-        } else if (!v.paused) v.pause();
+          if (Math.abs(v.currentTime - f.t) > 0.15 * Math.max(1, rate)) v.currentTime = f.t;
+        } else {
+          // With no footage here it holds the frame its stretch starts or ends on.
+          if (!v.paused) v.pause();
+          if (Math.abs(v.currentTime - Math.min(f.t, end(v))) > 0.05) place(v, at);
+        }
       }
       frame = requestAnimationFrame(tick);
     };
@@ -253,11 +271,13 @@ function createClock(length: () => number, autoplay: () => boolean = () => false
   onCleanup(stop);
   return {
     t,
+    film: (side) => filmAt(timeline(), side, t()).t,
+    held: (side) => filmAt(timeline(), side, t()).held,
     playing,
     total,
     ready,
-    add: (video) => {
-      videos.add(video);
+    add: (video, side) => {
+      videos.set(video, side);
       setCount(videos.size);
       video.addEventListener("loadedmetadata", () => {
         if (Number.isFinite(video.duration)) setLongest((was) => Math.max(was, video.duration));
@@ -293,20 +313,29 @@ function Still(props: { src: string; side: Side; label: string }) {
   return <img src={shown()} alt={props.label} data-side={props.side} draggable={false} decoding="async" />;
 }
 
-/** One side of a picture: an image, or a video its clock moves. */
+/** One side of a picture: an image, or a video its clock moves, dimmed and named while it has
+ * no footage on the timeline. */
 function Media(props: { src: string; side: Side; clock: Clock | undefined; label: string }) {
   return (
     <Show when={props.clock} fallback={<Still src={props.src} side={props.side} label={props.label} />}>
       {(clock) => (
-        <video
-          ref={(v) => clock().add(v)}
-          src={props.src}
-          data-side={props.side}
-          aria-label={props.label}
-          muted
-          playsinline
-          preload="auto"
-        />
+        <>
+          <video
+            ref={(v) => clock().add(v, props.side)}
+            src={props.src}
+            data-side={props.side}
+            data-held={clock().held(props.side) ? "" : undefined}
+            aria-label={props.label}
+            muted
+            playsinline
+            preload="auto"
+          />
+          <Show when={clock().held(props.side)}>
+            <span class="no-footage" data-no-footage={props.side}>
+              No footage
+            </span>
+          </Show>
+        </>
       )}
     </Show>
   );
@@ -649,6 +678,8 @@ function Timeline(props: {
 }) {
   const total = () => props.clock.total();
   const words = () => props.words ?? ["Before", "After"];
+  // The film the clock reads out: the after of a pair, where a note's moment is kept.
+  const read = (): Side => (props.film || props.pair ? "after" : (props.side ?? "after"));
   let lane: HTMLDivElement | undefined;
   const at = (e: PointerEvent) => {
     const r = lane!.getBoundingClientRect();
@@ -667,8 +698,12 @@ function Timeline(props: {
             ["after", words()[1], 0],
           ]
         : [[props.side ?? "after", props.side === "before" ? words()[0] : words()[1], 0]];
+  // Each film's own times placed on the films' timeline, so their marks line up.
+  const on = (side: Side, t: number) => timelineAt(props.film?.timeline, side, t);
   const segments = (side: Side, end: number) =>
-    props.film ? lanes(props.film.pairs, side, end) : [{ start: 0, stop: Number.POSITIVE_INFINITY, differs: false }];
+    props.film
+      ? lanes(props.film.pairs, side, end).map((s) => ({ ...s, start: on(side, s.start), stop: on(side, s.stop) }))
+      : [{ start: 0, stop: Number.POSITIVE_INFINITY, differs: false }];
   // Each lane as drawn, kept while what it draws is the same: a live event that redraws the run,
   // or a film whose length becomes known, never draws the lanes again, which would play their
   // growing in again.
@@ -680,8 +715,9 @@ function Timeline(props: {
           side,
           label,
           segments: segments(side, end),
-          ticks: (marks?.marks ?? []).filter((m) => !m.hidden),
-          spans: marks?.spans ?? [],
+          ticks: (marks?.marks ?? []).filter((m) => !m.hidden).map((m) => ({ ...m, at: on(side, m.at) })),
+          spans: (marks?.spans ?? []).map((s) => ({ ...s, start: on(side, s.start), end: on(side, s.end) })),
+          gaps: gaps(props.film?.timeline, side),
         };
       }),
     undefined,
@@ -694,9 +730,9 @@ function Timeline(props: {
           {props.clock.playing() ? "Pause" : props.film || props.pair ? "Play both" : "Play"}
         </button>
         <span class="t" data-clock>
-          {hundredths(props.clock.t()).toFixed(2)} s
+          {hundredths(props.clock.film(read())).toFixed(2)} s
         </span>
-        <Show when={stepAt(props.marks[props.film || props.pair ? "after" : (props.side ?? "after")], props.clock.t())}>
+        <Show when={stepAt(props.marks[read()], props.clock.film(read()))}>
           {(step) => (
             <span class="step" data-step>
               {step()}
@@ -715,7 +751,7 @@ function Timeline(props: {
         <div class="moments">
           <For each={props.film?.moments ?? []}>
             {(m) => (
-              <button type="button" class="chip jump" data-seek={m.after[0]} onClick={() => props.clock.seek(m.after[0])}>
+              <button type="button" class="chip jump" data-seek={m.after[0]} onClick={() => props.clock.seek(on("after", m.after[0]))}>
                 {m.after[0].toFixed(2)} s
               </button>
             )}
@@ -746,7 +782,7 @@ function Timeline(props: {
         }}
       >
         <For each={drawn()}>
-          {({ side, label, segments, ticks, spans }) => (
+          {({ side, label, segments, ticks, spans, gaps }) => (
             <div class="lane" data-lane={side}>
               <For each={segments}>
                 {(s) => (
@@ -766,6 +802,9 @@ function Timeline(props: {
                     style={{ left: pct(s.start), width: pct(Math.max(0, s.end - s.start)) }}
                   />
                 )}
+              </For>
+              <For each={gaps}>
+                {(g) => <span class="gap" data-gap title="No footage: this film holds a frame until its next mark" style={{ left: pct(g.start), width: pct(g.stop - g.start) }} />}
               </For>
               <For each={ticks}>{(m) => <span class="tick" data-mark={m.name} title={m.name} style={{ left: pct(m.at) }} />}</For>
               <em>{label}</em>
@@ -974,7 +1013,7 @@ export function Stage(props: {
                       // In full screen, a film stepped to plays at once.
                       const full = untrack(() => props.full);
                       const clock = createClock(() => 0.01, () => full);
-                      createEffect(() => props.onTime(clock.t()));
+                      createEffect(() => props.onTime(clock.film(side())));
                       onCleanup(() => props.onTime(undefined));
                       return (
                         <>
@@ -1018,17 +1057,25 @@ export function Stage(props: {
             {(_) => {
               const measured = () => comparison() ?? undefined;
               const full = untrack(() => props.full);
-              const clock = createClock(() => {
-                const m = measured();
-                return m ? Math.max(m.total_before, m.total_after) : 0;
-              }, () => full && !comparing());
+              const clock = createClock(
+                () => {
+                  const m = measured();
+                  return m ? Math.max(m.total_before, m.total_after) : 0;
+                },
+                () => full && !comparing(),
+                () => measured()?.timeline,
+              );
               const sameSize = () => {
                 const m = measured();
                 return !!m && m.size_before[0] === m.size_after[0] && m.size_before[1] === m.size_after[1];
               };
               const busy = () => (!clock.ready() ? "Loading both films…" : comparing() ? `Comparing with ${props.against!.word.toLowerCase()}…` : undefined);
-              createEffect(() => props.onTime(clock.t()));
+              createEffect(() => props.onTime(clock.film("after")));
               onCleanup(() => props.onTime(undefined));
+              // Outlines belong to the states both films show now; where one has no footage
+              // there is nothing to compare.
+              const boxes = () =>
+                sameSize() && !clock.held("before") && !clock.held("after") ? marksAt(measured()!, clock.film("after")) : [];
               return (
                 <>
                   <div class="busy-wrap" data-busy={busy() ? "" : undefined}>
@@ -1037,7 +1084,7 @@ export function Stage(props: {
                       before={beforeUrl()}
                       after={url(picture().after)}
                       size={size()}
-                      boxes={sameSize() ? marksAt(measured()!, clock.t()) : []}
+                      boxes={boxes()}
                       clock={clock}
                       beforeLabel={beforeLabel()}
                       afterLabel={afterLabel()}
