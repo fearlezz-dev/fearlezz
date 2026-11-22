@@ -811,15 +811,18 @@ kbd {
 .slide .handle::before { width: calc(2px / var(--z)); left: calc(-1px / var(--z)); }
 
 /* Full screen: the stage and its review fill the window, the picture as large as fits. */
+/* It never scrolls: the pictures take the height the rest leaves (`--fit`, kept by fit.ts), and a
+   long review scrolls within itself, its buttons kept in sight. */
 .table[data-full] {
-  position: fixed; inset: 0; z-index: 40; overflow: auto; overscroll-behavior: contain;
+  position: fixed; inset: 0; z-index: 40; overflow: hidden; overscroll-behavior: contain;
   background: var(--page); padding: 14px clamp(14px, 3vw, 32px) 18px;
 }
 .table[data-full] .stage { margin: 0; padding: 0; border-top: 0; }
 .table[data-full] .stage-hold { min-height: 0 !important; }
-.table[data-full] .frame img, .table[data-full] .frame video { max-height: calc(100vh - 210px); }
-.table[data-full] .frame.sized { width: min(100%, calc((100vh - 210px) * var(--w) / var(--h))); margin-inline: auto; }
-.table[data-full] .verdict { margin: 12px 0 0; padding-inline: 0; }
+.table[data-full] .frame img, .table[data-full] .frame video { max-height: var(--fit, calc(100vh - 210px)); }
+.table[data-full] .frame.sized { width: min(100%, calc(var(--fit, calc(100vh - 210px)) * var(--w) / var(--h))); margin-inline: auto; }
+.table[data-full] .verdict { margin: 12px 0 0; padding-inline: 0; max-height: 38dvh; overflow: auto; overscroll-behavior: contain; }
+.table[data-full] .verdict .decide { position: sticky; top: 0; z-index: 2; background: var(--page); }
 @media (prefers-reduced-motion: no-preference) {
   .table[data-full] { animation: fade 0.2s var(--ease) both; }
   .zoom-layer { transition: transform 0.12s var(--out); }
@@ -828,8 +831,8 @@ kbd {
 @media (max-width: 700px) {
   .full-screen span { display: none; }
   .full-screen { padding: 6px 9px; }
-  .table[data-full] .frame img, .table[data-full] .frame video { max-height: calc(100vh - 260px); }
-  .table[data-full] .frame.sized { width: min(100%, calc((100vh - 260px) * var(--w) / var(--h))); }
+  .table[data-full] .frame img, .table[data-full] .frame video { max-height: var(--fit, calc(100vh - 260px)); }
+  .table[data-full] .frame.sized { width: min(100%, calc(var(--fit, calc(100vh - 260px)) * var(--w) / var(--h))); }
 }
 
 /* A phone gives each part of the pictures room: the picture's name, then its tools, the sheet's
@@ -951,6 +954,8 @@ html, * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--quiet
 .strip button:hover .pip { box-shadow: inset 0 0 0 2px var(--ink); }
 .strip button[aria-pressed="true"] { color: var(--ink); }
 .strip button[aria-pressed="true"] .pip { --dot: var(--ink); background: var(--ink); box-shadow: 0 0 0 3px var(--raised), 0 0 0 5px var(--ink); }
+/* A picked dot's ring reaches 5px past it: room for it, so neither its line nor its name touches it. */
+.strip button[aria-pressed="true"] .pip { margin-inline: 5px; }
 .strip li[data-look] { --dot: var(--again); }
 .strip li[data-look] button { color: var(--again); }
 .strip li[data-look] button[aria-pressed="true"] .pip { background: var(--again); box-shadow: 0 0 0 3px var(--raised), 0 0 0 5px var(--again); }
@@ -969,7 +974,10 @@ html, * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--quiet
 }
 
 /* What comparing the picked run with now came to. */
-.pair-says { margin: -4px 0 10px; font-size: 0.87rem; color: var(--quiet); }
+.against { display: flex; flex-wrap: wrap-reverse; align-items: center; gap: 4px 24px; margin: 0 0 10px; }
+.against:empty { display: none; }
+.against .strip { flex: 1 1 auto; min-width: 0; margin: 0; }
+.pair-says { flex: 1 0 auto; max-width: 100%; margin: 0; font-size: 0.87rem; color: var(--quiet); }
 .pair-says[data-pair-says="changed"] { color: var(--ink); }
 .pair-says[data-pair-says="error"] { color: var(--bad); }
 .stage[data-against="look"] .pair-says { color: var(--again); }

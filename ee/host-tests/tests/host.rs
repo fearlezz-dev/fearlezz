@@ -460,6 +460,10 @@ fn main() {
             notes::looks_right_resolves_the_pictures_open_notes,
         ),
         (
+            "a_note_takes_back_the_looks_right_on_its_picture",
+            notes::a_note_takes_back_the_looks_right_on_its_picture,
+        ),
+        (
             "a_cli_token_reads_but_never_writes",
             notes::a_cli_token_reads_but_never_writes,
         ),

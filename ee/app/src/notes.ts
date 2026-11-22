@@ -97,25 +97,28 @@ export type Elsewhere = { note: Note; where: string; place: boolean; side: NoteS
 const sizeOf = (p: Picture) => p.picture.comparison?.size_after ?? p.picture.comparison?.size_before;
 
 /** The open notes on the other variants of `here`'s screen, `variants`, but those already on
- * `here` in the same words. */
+ * `here` in the same words. Notes in the same words on several variants are one, naming each
+ * variant, and copied from one whose region means the same place here when there is one. */
 export function elsewhere(state: Snapshot, here: Picture, variants: Picture[]): Elsewhere[] {
   const open = (p: Picture) =>
     (state.notes ?? []).filter((n) => n.state === "open" && n.check === p.check && n.picture === p.picture.name).sort((a, b) => a.at - b.at);
   const said = new Set(open(here).map((n) => n.words));
   const size = sizeOf(here);
   const both = here.picture.before != null && here.picture.after != null;
-  return variants
-    .filter((p) => p.key !== here.key)
-    .flatMap((p) => {
-      const other = sizeOf(p);
-      const place = size && other ? size[0] === other[0] && size[1] === other[1] : p.parts.viewport === here.parts.viewport;
-      return open(p)
-        .filter((n) => !said.has(n.words))
-        .map((note) => ({
-          note,
-          where: title({ screen: "", viewport: p.parts.viewport, theme: p.parts.theme }) || p.picture.name,
-          place,
-          side: both ? note.side : here.picture.after != null ? "after" : "before",
-        }));
-    });
+  const byWords = new Map<string, Elsewhere>();
+  for (const p of variants.filter((v) => v.key !== here.key)) {
+    const other = sizeOf(p);
+    const place = size && other ? size[0] === other[0] && size[1] === other[1] : p.parts.viewport === here.parts.viewport;
+    const where = title({ screen: "", viewport: p.parts.viewport, theme: p.parts.theme }) || p.picture.name;
+    for (const note of open(p).filter((n) => !said.has(n.words))) {
+      const side: NoteSide = both ? note.side : here.picture.after != null ? "after" : "before";
+      const known = byWords.get(note.words);
+      if (!known) byWords.set(note.words, { note, where, place, side });
+      else {
+        known.where = `${known.where}, ${where}`;
+        if (place && !known.place) Object.assign(known, { note, place, side });
+      }
+    }
+  }
+  return [...byWords.values()];
 }

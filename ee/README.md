@@ -234,9 +234,9 @@ ends with the newest review, and a GitHub that hangs or fails never fails or hol
   screen's viewport, theme or every variant.
   Saying a picture looks right resolves its open notes in the same write, by the same
   person (the `verdict` event carries them as `resolved`).
-- **A picture needs change while an open note is on it**, whatever verdict its content has;
-  that is derived, never stored. Resolving its last note brings it back to looks right when a
-  verdict holds for its current content, and to not looked at yet otherwise. Each picture of
+- **A picture needs change while an open note is on it**; that is derived, never stored.
+  Making a note takes back the looks right on its picture in the same write, so resolving its
+  last note brings it back to not looked at yet. Each picture of
   the review says where it stands (`standing`: `waits`, `needs_change` or `looks_right`).
 - **A picture that changed since a person looked says so** (`changed_since`): the newest
   looks right verdict on its earlier content, when none is on what it shows now, and its open

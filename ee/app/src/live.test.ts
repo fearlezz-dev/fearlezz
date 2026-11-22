@@ -106,6 +106,15 @@ describe("review", () => {
     expect(next.notes?.map((n) => n.id)).toEqual(["n2"]);
   });
 
+  test("a note takes back the looks right on its picture, only that picture's", () => {
+    const other = { ...verdict("writer"), picture: "other.png" };
+    const one = applyWork(applyWork(snapshot, 4, { kind: "verdict", verdict: verdict("writer") }), 5, { kind: "verdict", verdict: other });
+    const note = { id: "n1", check: "screens", picture: "card.png", run: "r1", head: "abc1234", side: "after" as const, region: { x: 0, y: 0, w: 1, h: 1 }, words: "tight", by: "w", at: 1, state: "open" as const };
+    const next = applyWork(one, 6, { kind: "note", note });
+    expect(next.verdicts).toEqual([other]);
+    expect(next.notes?.map((n) => n.id)).toEqual(["n1"]);
+  });
+
   test("edited notes take their new words", () => {
     const note = { id: "n1", check: "screens", picture: "card.png", run: "r1", head: "abc1234", side: "after" as const, region: { x: 0, y: 0, w: 1, h: 1 }, words: "tight", by: "w", at: 1, state: "open" as const };
     const noted = { ...snapshot, notes: [note, { ...note, id: "n2", words: "dark" }] };

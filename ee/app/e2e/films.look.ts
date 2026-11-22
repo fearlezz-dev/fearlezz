@@ -32,11 +32,11 @@ async function keep(page: Page, info: TestInfo, name: string) {
   write(page, out, film);
 }
 
-/** Scrolls the picture under review to the top of the screen, as a person would before looking
- * at it, so the film shows what it is about rather than the page above it. */
-async function toStage(page: Page) {
-  await page.locator("[data-stage]").evaluate((el) => scrollTo({ top: el.getBoundingClientRect().top + scrollY - 16, behavior: "smooth" }));
-  await pause(page, 900);
+/** Shows the stage in full screen, as a person reviewing does: the pictures as large as the
+ * film allows, with their review, so a film about pictures shows them rather than the page. */
+async function full(page: Page) {
+  await page.keyboard.press("f");
+  await pause(page, 700);
 }
 
 /** Answers verdicts and notes as the host does: taken, then streamed to the page. */
@@ -106,7 +106,7 @@ async function waiting(page: Page) {
   await settled(page, true);
   loaded(page);
   await pause(page, 600);
-  await toStage(page);
+  await full(page);
 }
 
 // Each film stays short, so its script and the recording fit one test's time.
@@ -192,41 +192,37 @@ test("film: full screen, zoomed in on the change", async ({ page, isMobile }, in
   await open(page, WORK["waits-for-you"]!.world);
   await page.keyboard.press("f");
   await pause(page, 700);
+  const after = (await page.locator('[data-stage] [data-side="after"]').boundingBox())!;
+  const at = (x: number, y: number): [number, number] => [after.x + after.width * x, after.y + after.height * y];
   if (isMobile) {
     for (const _ of [1, 2, 3]) {
       await page.keyboard.press("+");
       await pause(page, 500);
     }
-    // Then moved with Space held up to the banner, and along it to read it.
-    const after = (await page.locator('[data-stage] [data-side="after"]').boundingBox())!;
-    const [x, y] = [after.x + after.width * 0.5, after.y + after.height * 0.5];
-    await page.mouse.move(x, y, { steps: 10 });
-    await page.keyboard.down(" ");
-    await page.mouse.down();
-    await page.mouse.move(x + after.width * 0.25, y + after.height * 0.2, { steps: 25 });
-    await pause(page, 400);
-    await page.mouse.move(x + after.width * 0.05, y + after.height * 0.2, { steps: 25 });
-    await pause(page, 600);
-    await page.mouse.up();
-    await page.keyboard.up(" ");
   } else {
-    // Pinched in on the banner, then moved along it with Space held.
-    const after = (await page.locator('[data-stage] [data-side="after"]').boundingBox())!;
-    await page.mouse.move(after.x + after.width * 0.3, after.y + after.height * 0.16);
+    // Pinched in on the banner.
+    await page.mouse.move(...at(0.3, 0.16));
     await page.keyboard.down("Control");
     for (const _ of [1, 2, 3, 4]) {
       await page.mouse.wheel(0, -80);
       await pause(page, 250);
     }
     await page.keyboard.up("Control");
-    await pause(page, 500);
-    await page.keyboard.down(" ");
-    await page.mouse.down();
-    await page.mouse.move(after.x + after.width * 0.1, after.y + after.height * 0.16, { steps: 20 });
-    await page.mouse.up();
-    await page.keyboard.up(" ");
   }
-  await pause(page, 800);
+  await pause(page, 500);
+  // Then moved with Space held: along the banner to read it, and down over the card it pushes.
+  await page.mouse.move(...at(0.5, 0.5), { steps: 10 });
+  await page.keyboard.down(" ");
+  await page.mouse.down();
+  await page.mouse.move(...at(0.15, 0.5), { steps: 40 });
+  await pause(page, 500);
+  await page.mouse.move(...at(0.15, 0.2), { steps: 40 });
+  await pause(page, 500);
+  await page.mouse.move(...at(0.55, 0.3), { steps: 40 });
+  await pause(page, 600);
+  await page.mouse.up();
+  await page.keyboard.up(" ");
+  await pause(page, 600);
   await page.keyboard.press("0");
   await pause(page, 600);
   await page.keyboard.press("Escape");
@@ -242,7 +238,7 @@ test("film: a picture that changed since its look, looked at again", async ({ pa
   await settled(page, true);
   loaded(page);
   await pause(page, 600);
-  await toStage(page);
+  await full(page);
   await page.keyboard.press("t");
   await pause(page, 1200);
   await page.keyboard.press("y");
@@ -259,6 +255,7 @@ test("film: a note edited on every note linked with it", async ({ page }, info) 
   // The page opens on what waits for a look; the note is on the light theme.
   await press(page, page.locator('[data-picture="ee-page-look/profile/desktop/light.png"]'));
   await pause(page, 600);
+  await full(page);
   await press(page, page.locator('[data-notes] [data-note="n1"] [data-edit]'));
   await pause(page, 400);
   await page.locator("textarea[data-edit-words]").fill("");
@@ -298,7 +295,7 @@ test("film: what the change weakens, opened", async ({ page }, info) => {
 
 test("film: comparing by slider and onion skin", async ({ page }, info) => {
   await open(page, WORK["waits-for-you"]!.world);
-  await toStage(page);
+  await full(page);
   await page.keyboard.press("2");
   await pause(page, 500);
   const frame = (await page.locator("[data-stage] .slide").boundingBox())!;
@@ -323,7 +320,7 @@ test("film: a new film plays at a click, and a drag notes its frame", async ({ p
   await press(page, page.locator('[data-picture="ee-page-look/checkout/desktop.webm"]'));
   const layer = page.locator('[data-stage] [data-draw="after"]');
   await pause(page, 600);
-  await toStage(page);
+  await full(page);
   await layer.click();
   await pause(page, 1200);
   // Dragged while it plays: it pauses on that frame, and the note marks it.
@@ -353,8 +350,8 @@ test("film: comparing with earlier runs on the strip", async ({ page }, info) =>
   const said = page.locator("[data-pair-says]");
   const dot = (key: string) => page.locator(`[data-strip] [data-dot="${key}"] button`);
   // It opens on the still compared with your look, in the Look again colour.
-  await toStage(page);
-  await pause(page, 900);
+  await full(page);
+  await pause(page, 200);
   await press(page, dot("base"));
   await pause(page, 1200);
   await press(page, dot("r1"));
@@ -363,9 +360,8 @@ test("film: comparing with earlier runs on the strip", async ({ page }, info) =>
   await press(page, page.locator("[data-compare-look]"));
   await pause(page, 1200);
   // The film opens on your look too; both films play on one clock.
-  await press(page, page.locator(`[data-picture="${STRIP.film}"]`));
+  await page.keyboard.press("j");
   await pause(page, 500);
-  await toStage(page);
   await test.expect(said).toHaveAttribute("data-pair-says", "changed");
   await press(page, page.locator("[data-stage] [data-play]"));
   await pause(page, 2600);

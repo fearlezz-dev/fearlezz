@@ -163,14 +163,14 @@ pub fn an_open_note_makes_its_picture_need_change_and_fails_the_check_run() {
     assert!(summary.contains("card/light.png"), "{summary}");
     assert!(summary.contains("The button text is cut off"), "{summary}");
 
-    // Resolving the last note: the looks right verdict on its content holds again.
+    // Resolving the last note: the note took the looks right back, so the picture waits again.
     let answer = resolve(&id, Some(&writer), &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
     let review = published(121);
-    assert_eq!(review["state"], "approved", "{review:#}");
+    assert_eq!(review["state"], "waits", "{review:#}");
     assert!(review["notes"].as_array().is_none_or(Vec::is_empty));
     let check = check_run(&head);
-    assert_eq!(check.state(), "success", "{:?}", check.writes);
+    assert_ne!(check.state(), "failure", "{:?}", check.writes);
     let summary = check.field("output")["summary"].clone();
     assert!(
         !summary.as_str().unwrap().contains("cut off"),
@@ -688,6 +688,50 @@ pub(crate) fn looks_right_resolves_the_pictures_open_notes() {
         resolved.pointer("/resolved/0/resolved_by"),
         Some(&json!("writer")),
         "{resolved:#}"
+    );
+}
+
+pub(crate) fn a_note_takes_back_the_looks_right_on_its_picture() {
+    // A note says the picture is not right now, so the looks right on it goes: it does not
+    // stand beside the note, nor come back when the note is resolved.
+    let job = Job::pull("owner/review", 146, "notes/takes-back").at(&commit("a146"), 1146);
+    let (look, files) = one_still(b"taken back before", b"taken back after");
+    let run = proven(&job, &look, &files, &json!({}));
+    let writer = sign_in("writer-code", "/");
+    let answer = say(
+        &run,
+        "verdicts",
+        Some(&writer),
+        &[],
+        &looks_right("card/light.png"),
+    );
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    assert_eq!(
+        review_of(146).pointer("/state"),
+        Some(&json!("approved")),
+        "the looks right approves"
+    );
+
+    let id = noted(&run, "On second look, too tight");
+    let snapshot = live("/owner/review/pull/146", &[]).json();
+    let verdicts = snapshot
+        .pointer("/verdicts")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    assert_eq!(verdicts, 0, "the looks right is gone: {snapshot:#}");
+    assert_eq!(
+        review_of(146).pointer("/state"),
+        Some(&json!("needs_change")),
+        "the note needs a change"
+    );
+
+    let answer = resolve(&id, Some(&writer), &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let review = review_of(146);
+    assert_eq!(
+        review.pointer("/state"),
+        Some(&json!("waits")),
+        "it waits for a look again: {review:#}"
     );
 }
 

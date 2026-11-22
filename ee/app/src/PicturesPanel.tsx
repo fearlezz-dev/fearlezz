@@ -3,6 +3,7 @@
 // and k step between pictures, 1 to 5 pick the way to compare.
 
 import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { fitting } from "./fit";
 import { fileUrl, grantOf, granted } from "./grant";
 import {
   GROUP_WORDS,
@@ -176,6 +177,11 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
     if (on && document.fullscreenEnabled && !document.fullscreenElement) table?.requestFullscreen().catch(() => {});
     if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
   };
+  // In full screen the pictures take what the window has left, so it never scrolls.
+  createEffect(() => {
+    if (!full() || !table) return;
+    onCleanup(fitting(table));
+  });
   const notes = createMemo<Noted[]>(() => {
     const p = current();
     return p ? notesOn(props.state, p.check, p.picture.name, props.run) : [];
@@ -219,12 +225,17 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
     setHold(stageBox?.offsetHeight || undefined);
     clearTimeout(release);
     release = setTimeout(() => setHold(undefined), 2000);
+    // A text loads nothing: once its stage is drawn, there is nothing to wait for.
+    requestAnimationFrame(() => {
+      if (stageBox && !stageBox.querySelector("img, video")) loaded();
+    });
   };
   const loaded = () => {
     clearTimeout(release);
     release = setTimeout(() => setHold(undefined), 50);
   };
   onCleanup(() => clearTimeout(release));
+
   const step = (by: number) => {
     const list = order();
     const at = list.findIndex((p) => p.key === current()?.key);

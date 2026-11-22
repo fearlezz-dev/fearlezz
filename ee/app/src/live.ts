@@ -65,7 +65,10 @@ export function applyWork(state: Snapshot, seq: number, change: WorkChange): Sna
     case "note": {
       const n = change.note;
       const others = (state.notes ?? []).filter((o) => o.id !== n.id);
-      return { ...next, notes: n.state === "open" ? [...others, n] : others };
+      if (n.state !== "open") return { ...next, notes: others };
+      // A note takes back the looks right on its picture, as the host did.
+      const verdicts = (state.verdicts ?? []).filter((v) => v.check !== n.check || v.picture !== n.picture);
+      return { ...next, notes: [...others, n], verdicts };
     }
     case "edited": {
       const now = new Map(change.notes.map((n) => [n.id, n]));
