@@ -163,6 +163,8 @@ async function pointer(page: Page) {
       addEventListener("pointermove", (e: PointerEvent) => (dot.style.translate = `${e.clientX}px ${e.clientY}px`), true);
       addEventListener("pointerdown", () => (dot.style.scale = "0.7"), true);
       addEventListener("pointerup", () => (dot.style.scale = "1"), true);
+      // The browser's full screen shows only its element, so the pointer goes along into it.
+      document.addEventListener("fullscreenchange", () => (document.fullscreenElement ?? document.body).append(dot));
     });
   });
 }

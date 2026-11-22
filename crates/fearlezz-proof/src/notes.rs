@@ -155,6 +155,16 @@ pub struct Edit {
     pub linked: bool,
 }
 
+/// What a person sends to resolve a note: that note alone, or with `linked` every open note
+/// linked with it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "NoteResolve"))]
+pub struct Resolve {
+    /// Whether the notes linked with it are resolved too.
+    #[serde(default)]
+    pub linked: bool,
+}
+
 /// The longest words a note takes.
 pub const WORDS_MAX: usize = 2000;
 

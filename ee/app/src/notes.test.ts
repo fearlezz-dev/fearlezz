@@ -89,9 +89,15 @@ describe("applyWork with notes", () => {
     const s = state([note("a")]);
     const added = applyWork(s, 2, { kind: "note", note: note("b", { at: 20 }) });
     expect(added.notes?.map((n) => n.id)).toEqual(["a", "b"]);
-    const resolved = applyWork(added, 3, { kind: "note", note: note("a", { state: "resolved", resolved_by: "writer" }) });
+    const resolved = applyWork(added, 3, { kind: "resolved", notes: [note("a", { state: "resolved", resolved_by: "writer" })] });
     expect(resolved.notes?.map((n) => n.id)).toEqual(["b"]);
     expect(applyWork(resolved, 3, { kind: "note", note: note("c") })).toBe(resolved);
+  });
+
+  test("notes resolved together, as a linked group is, all leave", () => {
+    const s = state([note("a"), note("b", { link: "a" }), note("c")]);
+    const gone = applyWork(s, 2, { kind: "resolved", notes: [note("a", { state: "resolved" }), note("b", { link: "a", state: "resolved" })] });
+    expect(gone.notes?.map((n) => n.id)).toEqual(["c"]);
   });
 });
 

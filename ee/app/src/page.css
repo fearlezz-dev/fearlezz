@@ -744,7 +744,9 @@ kbd {
    that settles pops, a run fills, a picture fades in, a panel opens from where it was asked. */
 @media (prefers-reduced-motion: no-preference) {
   :root { interpolate-size: allow-keywords; }
-  .hero, .cols > .main, .cols > .runs, .works, .empty, .placeholder { animation: rise 0.55s var(--out) both; }
+  /* Backwards, not both: a transform kept after it ends makes the column the box that the
+     fixed board and full screen are placed in, instead of the window. */
+  .hero, .cols > .main, .cols > .runs, .works, .empty, .placeholder { animation: rise 0.55s var(--out) backwards; }
   .cols > .main { animation-delay: 70ms; }
   .cols > .runs { animation-delay: 140ms; }
   .standing-icon { animation: pop 0.5s var(--out) 0.15s both; }
@@ -814,14 +816,19 @@ kbd {
 /* It never scrolls: the pictures take the height the rest leaves (`--fit`, kept by fit.ts), and a
    long review scrolls within itself, its buttons kept in sight. */
 .table[data-full] {
-  position: fixed; inset: 0; z-index: 40; overflow: hidden; overscroll-behavior: contain;
+  position: fixed; inset: 0; z-index: 40; overflow: clip; overscroll-behavior: contain;
   background: var(--page); padding: 14px clamp(14px, 3vw, 32px) 18px;
+  display: flex; flex-direction: column;
 }
-.table[data-full] .stage { margin: 0; padding: 0; border-top: 0; }
+/* The review stays at the bottom and the stage's head at the top; the pictures are centred in
+   between, so stepping from screen to screen moves as little as it can. */
+.table[data-full] .stage-hold { flex: 1 0 auto; display: flex; flex-direction: column; }
+.table[data-full] .stage { flex: 1 0 auto; display: flex; flex-direction: column; margin: 0; padding: 0; border-top: 0; }
+.table[data-full] .stage > :last-child { margin-block: auto; }
 .table[data-full] .stage-hold { min-height: 0 !important; }
 .table[data-full] .frame img, .table[data-full] .frame video { max-height: var(--fit, calc(100vh - 210px)); }
 .table[data-full] .frame.sized { width: min(100%, calc(var(--fit, calc(100vh - 210px)) * var(--w) / var(--h))); margin-inline: auto; }
-.table[data-full] .verdict { margin: 12px 0 0; padding-inline: 0; max-height: 38dvh; overflow: auto; overscroll-behavior: contain; }
+.table[data-full] .verdict { flex: none; margin: 12px 0 0; padding-inline: 0; max-height: 38dvh; overflow: auto; overscroll-behavior: contain; }
 .table[data-full] .verdict .decide { position: sticky; top: 0; z-index: 2; background: var(--page); }
 @media (prefers-reduced-motion: no-preference) {
   .table[data-full] { animation: fade 0.2s var(--ease) both; }
@@ -910,7 +917,7 @@ kbd {
 
 /* The board: a row per viewport, a tile per picture; what is picked is lit, what already looks
    right carries its check, what has a note its red mark, which turns to a check once picked. */
-.reach-body { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-start; }
+.reach-body { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: stretch; }
 .reach-board { display: grid; gap: 8px; user-select: none; -webkit-user-select: none; touch-action: none; }
 .reach-row { display: flex; align-items: center; gap: 6px; }
 .reach-row .vp { width: 52px; flex: none; font-size: 0.72rem; color: var(--faint); }
@@ -941,7 +948,7 @@ kbd {
 .reach-tile[aria-pressed="true"][data-reach-standing="right"] { box-shadow: inset 0 0 0 1.5px var(--line-strong); outline: 1.5px dashed var(--ok); outline-offset: 1px; }
 .reach-tile[aria-pressed="true"][data-reach-standing="right"][data-cursor] { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-.reach-side { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.reach-side { flex: 1 1 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0; }
 .reach-shapes { display: flex; gap: 6px; flex-wrap: wrap; }
 .reach-shape {
   all: unset; box-sizing: border-box; display: grid; justify-items: center; gap: 4px; padding: 6px 7px 4px; border-radius: 9px; cursor: pointer;
@@ -965,7 +972,8 @@ kbd {
 .reach-tally .reach-marks { background: color-mix(in srgb, var(--ok) 18%, var(--sunk)); color: var(--ok); font-weight: 650; }
 .reach-tally .reach-notes { background: color-mix(in srgb, var(--bad) 14%, var(--sunk)); color: var(--bad); font-weight: 650; }
 .reach-tally .reach-none { color: var(--quiet); }
-.reach-side .btn { justify-self: start; }
+/* Looks right at the bottom right, where the eye ends on the board. */
+.reach-side .btn { align-self: flex-end; margin-top: auto; }
 .reach-side .btn kbd { margin-left: 4px; color: inherit; border-color: color-mix(in srgb, var(--on-accent) 40%, transparent); background: none; }
 .reach-keys { margin: 0; font-size: 0.72rem; color: var(--faint); }
 .reach-keys kbd { font-size: 0.66rem; }
@@ -1046,9 +1054,27 @@ html, * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--quiet
   .strip .pip { transition: background-color 0.2s var(--ease), box-shadow 0.2s var(--ease); }
   .strip li.fold button { transition: box-shadow 0.2s var(--ease), color 0.2s var(--ease), background-color 0.2s var(--ease); }
 }
+/* A touch screen has no keys to learn: tiles are pressed and swept, and Looks right sits at the
+   right, under the thumb. */
+@media (hover: none) and (pointer: coarse) {
+  .reach-keys, .reach-shape kbd, .reach-side .btn kbd, .say-head .esc { display: none; }
+  .reach-shape { padding-bottom: 6px; }
+}
+/* A phone: the board is a sheet from the bottom edge, however it was opened. */
+@media (max-width: 700px) {
+  .say-menu, .say-menu[data-float] {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto; translate: none; z-index: 60; width: auto; max-width: none;
+    max-height: 85dvh; overflow: auto; overscroll-behavior: contain; border-radius: 18px 18px 0 0;
+    padding: 12px 16px calc(16px + env(safe-area-inset-bottom)); transform-origin: bottom center;
+  }
+  .reach-side { flex-basis: 100%; }
+}
 /* A phone: each viewport's name above its row, so four tiles fit across. */
 @media (max-width: 560px) {
   .reach-row { flex-wrap: wrap; }
   .reach-row .vp { width: 100%; }
   .reach-tile { width: 66px; }
 }
+/* A key shown on a button, as the list under ? names it; a touch screen has no keys. */
+.btn > kbd { margin-left: 6px; font-size: 0.68rem; }
+@media (hover: none) and (pointer: coarse) { .btn > kbd { display: none; } }

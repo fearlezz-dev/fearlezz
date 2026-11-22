@@ -343,10 +343,15 @@ pub enum WorkChange {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         review: Option<Review>,
     },
-    /// Someone made a note or resolved one; a resolved note leaves the page.
+    /// Someone made a note.
     Note {
         /// The note as it is now.
         note: Note,
+    },
+    /// Someone resolved notes: one, or a group linked by `link`. A resolved note leaves the page.
+    Resolved {
+        /// The notes as they are now.
+        notes: Vec<Note>,
     },
     /// The CI jobs that wait for a runner now.
     Waiting {

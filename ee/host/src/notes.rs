@@ -7,7 +7,7 @@
 
 use fearlezz_proof::events::WorkChange;
 use fearlezz_proof::look::Look;
-use fearlezz_proof::notes::{Ask, Edit, Note, NoteState, Side, WORDS_MAX};
+use fearlezz_proof::notes::{Ask, Edit, Note, NoteState, Resolve, Side, WORDS_MAX};
 use serde_json::json;
 use worker::{Env, Request, Response};
 
@@ -151,22 +151,48 @@ pub async fn make(mut req: Request, env: &Env, config: &Config, id: &str) -> Ans
     Ok(Response::from_json(&json!({ "note": note }))?.with_status(201))
 }
 
-/// `POST /api/v2/notes/<id>/resolve`: a person with write access resolves a note, which then
-/// leaves the pages and the agent's reading. `200 {"note"}`. Once a picture's last note is
-/// resolved it no longer needs change: it looks right when a verdict holds for its content, and
-/// waits for a look otherwise.
-pub async fn resolve(req: Request, env: &Env, config: &Config, id: &str) -> Answer {
+/// `POST /api/v2/notes/<id>/resolve`: a person with write access resolves a note, alone or with
+/// `"linked": true` every open note linked with it, which then leave the pages and the agent's
+/// reading. `200 {"note", "notes"}`: the note, and every note resolved. Once a picture's last note
+/// is resolved it no longer needs change: it waits for a look again.
+pub(crate) async fn resolve(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
     let (person, row) = settler(&req, env, config, id, "resolve a note").await?;
+    let ask: Resolve = req.json().await.unwrap_or_default();
     let work_id = row.work.clone();
-    let mut note = row.note();
-    note.state = NoteState::Resolved;
-    note.resolved_by = Some(person.login);
-    let update = Statement::new(
-        "UPDATE notes SET state = 'resolved', resolved_by = ?2 WHERE id = ?1",
-        [id.into(), note.resolved_by.clone().into()],
-    );
-    changed(env, &work_id, vec![update], &note).await?;
-    Ok(Response::from_json(&json!({ "note": note }))?)
+    let note = row.note();
+    let mut notes = if ask.linked {
+        linked(env, &work_id, &note).await?
+    } else {
+        vec![note.clone()]
+    };
+    // The note asked for is resolved even when it no longer is open.
+    if !notes.iter().any(|n| n.id == note.id) {
+        notes.insert(0, note);
+    }
+    for n in &mut notes {
+        n.state = NoteState::Resolved;
+        n.resolved_by = Some(person.login.clone());
+    }
+    let write = Write {
+        statements: notes
+            .iter()
+            .map(|n| {
+                Statement::new(
+                    "UPDATE notes SET state = 'resolved', resolved_by = ?2 WHERE id = ?1",
+                    [n.id.as_str().into(), person.login.as_str().into()],
+                )
+            })
+            .collect(),
+        event: Some(Event::work(WorkChange::Resolved {
+            notes: notes.clone(),
+        })),
+        derive: Derive::Review,
+    };
+    room::write(env, &work_id, &write).await?;
+    let first = notes.iter().find(|n| n.id == id).cloned();
+    Ok(Response::from_json(
+        &json!({ "note": first, "notes": notes }),
+    )?)
 }
 
 /// `PATCH /api/v2/notes/<id>`: a person with write access changes an open note's words, on
@@ -184,18 +210,8 @@ pub(crate) async fn edit(mut req: Request, env: &Env, config: &Config, id: &str)
     if note.state != NoteState::Open {
         return Err(Refusal::new(409, "this note is resolved"));
     }
-    let group = note.link.clone().unwrap_or_else(|| note.id.clone());
     let mut notes = if ask.linked {
-        let db = env.d1("DB")?;
-        let rows: Vec<NoteRow> = db
-            .prepare(format!(
-                "SELECT {NOTE_COLUMNS} FROM notes WHERE work = ?1 AND state = 'open' AND (id = ?2 OR link = ?2) ORDER BY at, rowid"
-            ))
-            .bind(&[work_id.as_str().into(), group.as_str().into()])?
-            .all()
-            .await?
-            .results()?;
-        rows.into_iter().map(NoteRow::note).collect::<Vec<Note>>()
+        linked(env, &work_id, &note).await?
     } else {
         vec![note]
     };
@@ -219,6 +235,21 @@ pub(crate) async fn edit(mut req: Request, env: &Env, config: &Config, id: &str)
     };
     room::write(env, &work_id, &write).await?;
     Ok(Response::from_json(&json!({ "notes": notes }))?)
+}
+
+/// The open notes of work `work` linked with `note`: its group, made from the same first note.
+async fn linked(env: &Env, work: &str, note: &Note) -> Result<Vec<Note>, Refusal> {
+    let group = note.link.clone().unwrap_or_else(|| note.id.clone());
+    let db = env.d1("DB")?;
+    let rows: Vec<NoteRow> = db
+        .prepare(format!(
+            "SELECT {NOTE_COLUMNS} FROM notes WHERE work = ?1 AND state = 'open' AND (id = ?2 OR link = ?2) ORDER BY at, rowid"
+        ))
+        .bind(&[work.into(), group.as_str().into()])?
+        .all()
+        .await?
+        .results()?;
+    Ok(rows.into_iter().map(NoteRow::note).collect())
 }
 
 /// The words a person gave a note, trimmed: refused when empty or too long.

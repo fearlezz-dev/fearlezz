@@ -85,9 +85,12 @@ export function linkedWith(state: Snapshot, note: Note): Note[] {
   return (state.notes ?? []).filter((n) => n.id !== note.id && n.state === "open" && (n.id === group || n.link === group));
 }
 
-/** Resolves note `note` as `by`, shown at once. The error the host gave, if it refused. */
-export const resolveNote = (note: Note, by: string) =>
-  hoping({ kind: "note", note: resolvedBy(note, by) }, () => post(`/api/v2/notes/${encodeURIComponent(note.id)}/resolve`, {}));
+/** Resolves note `note` as `by`, with every open note linked with it (the same note made again
+ * on other variants), shown at once. The error the host gave, if it refused. */
+export const resolveNote = (state: Snapshot, note: Note, by: string) =>
+  hoping({ kind: "resolved", notes: [note, ...linkedWith(state, note)].map((n) => resolvedBy(n, by)) }, () =>
+    post(`/api/v2/notes/${encodeURIComponent(note.id)}/resolve`, { linked: true }),
+  );
 
 /** An open note on another variant of a screen, as a person may make it here too: where it is,
  * whether its region means the same place here (`place`: the pictures are the same size), and

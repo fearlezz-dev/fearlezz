@@ -23,8 +23,13 @@ fn noted(run: &str, words: &str) -> String {
     answer.json()["note"]["id"].as_str().unwrap().to_owned()
 }
 
-/// Resolves note `id` as the page does, with the session `cookie` and `headers` besides.
+/// Resolves note `id` alone, with the session `cookie` and `headers` besides.
 fn resolve(id: &str, cookie: Option<&str>, headers: &[(&str, &str)]) -> Answer {
+    resolving(id, cookie, headers, &json!({}))
+}
+
+/// Resolves note `id` with `body` (`{"linked"?}`), with the session `cookie` and `headers`.
+fn resolving(id: &str, cookie: Option<&str>, headers: &[(&str, &str)], body: &Value) -> Answer {
     let origin = world().worker.url.clone();
     let mut all: Vec<(&str, &str)> =
         vec![("Origin", &origin), ("Content-Type", "application/json")];
@@ -33,7 +38,7 @@ fn resolve(id: &str, cookie: Option<&str>, headers: &[(&str, &str)]) -> Answer {
         all.push(("Cookie", cookie));
     }
     let path = format!("/api/v2/notes/{id}/resolve");
-    request("POST", &path, &all, Some(b"{}".to_vec()))
+    request("POST", &path, &all, Some(body.to_string().into_bytes()))
 }
 
 /// The CLI's sign in as `login`: the device flow through the host, approved on the fake
@@ -836,4 +841,39 @@ pub(crate) fn a_note_is_edited_alone_or_with_the_notes_made_from_it() {
 
     let answer = edit(&first, Some(&writer), &json!({"words": "  "}));
     assert_eq!(answer.status, 400, "no words: {}", answer.text());
+}
+
+/// Resolving with `linked` resolves every open note linked with it, as the page's Resolve does:
+/// a note made again on another variant is settled with the one it was made from.
+pub(crate) fn resolving_a_note_with_linked_resolves_the_notes_made_from_it() {
+    let job = Job::pull("owner/review", 148, "notes/resolve-linked").at(&commit("a148"), 1148);
+    let (look, files) = one_still(b"resolve before", b"resolve after");
+    let run = proven(&job, &look, &files, &json!({}));
+    let first = noted(&run, "Too tight");
+    let writer = sign_in("writer-code", "/");
+    let mut body = ask("card/light.png", "both", [0.1, 0.6, 0.3, 0.2], "Too tight");
+    body["link"] = json!(first);
+    let answer = say(&run, "notes", Some(&writer), &[], &body);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+    let lone = noted(&run, "Something else");
+
+    let answer = resolving(&first, Some(&writer), &[], &json!({"linked": true}));
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let resolved = answer
+        .json()
+        .pointer("/notes")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    assert_eq!(
+        resolved,
+        2,
+        "the note and the one made from it: {}",
+        answer.text()
+    );
+    let words = words_of(148);
+    assert_eq!(
+        words.keys().collect::<Vec<_>>(),
+        vec![&lone],
+        "only the unlinked note stays open: {words:?}"
+    );
 }

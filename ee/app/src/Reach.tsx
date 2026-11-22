@@ -22,6 +22,8 @@ export function Reach(props: {
   files: string;
   menu: Menu;
   onMenu: (open: Menu) => void;
+  /** A tile the cursor or a press lands on, to show behind the board. */
+  onFocus: (key: string) => void;
   onSay: (list: Shown[]) => void;
 }) {
   const standing = (q: Shown): Standing => standingFrom(q, standingOf(props.state, props.run, q));
@@ -29,14 +31,20 @@ export function Reach(props: {
   const byKey = (key: string) => props.variants.find((q) => q.key === key);
   const [picked, setPicked] = createSignal<ReadonlySet<string>>(new Set());
   const [cursor, setCursor] = createSignal("");
-  // Each time it opens it starts on what a plain Y says: this picture (a film with its still).
+  // Each time it opens, and for another screen, it starts on what a plain Y says: this picture
+  // (a film with its still). Moving to another picture of the screen keeps what is picked.
+  const screen = () => props.variants.map((q) => q.key).join(" ");
   createEffect(
-    on([() => props.menu, () => props.shown.key], ([open]) => {
-      if (!open) return;
+    on([() => !!props.menu, screen], ([open, now], was) => {
+      if (!open || (was?.[0] && was[1] === now)) return;
       setPicked(shape(props.shown, props.variants, "this"));
-      setCursor(props.shown.key);
     }),
   );
+  createEffect(() => setCursor(props.shown.key));
+  const focus = (key: string) => {
+    setCursor(key);
+    props.onFocus(key);
+  };
   const rows = () => props.viewports.map((v) => v.variants);
   const told = createMemo(() => tally(picked(), props.variants, standing, notes));
   const now = createMemo(() => shapeOf(picked(), props.shown, props.variants, standing));
@@ -65,12 +73,12 @@ export function Reach(props: {
   let painting: boolean | undefined;
   const down = (key: string) => {
     painting = !picked().has(key);
-    setCursor(key);
+    focus(key);
     flip(key);
   };
   const over = (key: string) => {
     if (painting === undefined || picked().has(key) === painting) return;
-    setCursor(key);
+    focus(key);
     flip(key);
   };
   const say = () => {
@@ -85,7 +93,7 @@ export function Reach(props: {
       const target = e.target as HTMLElement | null;
       if (e.metaKey || e.ctrlKey || e.altKey || target?.closest("input, textarea, select, [contenteditable]")) return;
       if (/^[1-4]$/.test(e.key)) pick(SCOPES[Number(e.key) - 1]!);
-      else if (e.key.startsWith("Arrow")) setCursor(moved(rows(), cursor(), e.key));
+      else if (e.key.startsWith("Arrow")) focus(moved(rows(), cursor(), e.key));
       else if (e.key === " ") flip(cursor());
       // A Y still held from opening the board repeats; only a new press says it.
       else if (e.key === "Enter" || e.key.toLowerCase() === "y") {

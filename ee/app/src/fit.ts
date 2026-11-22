@@ -22,7 +22,10 @@ export function fitOf(table: HTMLElement): number | undefined {
   const top = table.getBoundingClientRect().top - table.scrollTop;
   const bottom = Math.max(...[...table.children].map((c) => c.getBoundingClientRect().bottom));
   const used = bottom - top + Number.parseFloat(style.paddingBottom);
-  const rest = used - pictures;
+  // The space the pictures are centred in is theirs to take, not the rest's.
+  const centred = table.querySelector<HTMLElement>(".stage > :last-child");
+  const room = centred ? Number.parseFloat(getComputedStyle(centred).marginTop) + Number.parseFloat(getComputedStyle(centred).marginBottom) : 0;
+  const rest = used - room - pictures;
   return Math.max(LEAST, Math.floor((table.clientHeight - rest) / rows.size));
 }
 
