@@ -55,7 +55,11 @@ test("every swatch sits centred on its viewport's line", async ({ page }) => {
 test("work page: every kind of swatch", async ({ page }) => {
   await show(page, WORK_PATH, WORK["no-before"]!.world);
   await page.locator('.variant[data-picture="ee-page-look/profile/desktop/light.webm"]').click();
-  await page.keyboard.press("Alt+KeyY");
+  await page.keyboard.down("y");
+  await expect(page.locator("[data-say-menu]")).toBeVisible();
+  await page.keyboard.up("y");
+  await page.keyboard.press("2");
+  await page.keyboard.press("y");
   await page.locator('.variant[data-picture="ee-page-look/profile/mobile/dark.png"]').click();
   await settled(page, true);
   const tile = page.locator('[data-screen="ee-page-look/profile"]');

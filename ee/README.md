@@ -231,7 +231,7 @@ ends with the newest review, and a GitHub that hangs or fails never fails or hol
   A verdict only says a picture looks right: what should change is a note.
   The page says it of several pictures of a screen at once (each its own verdict): a film's
   looks right reaches the still of its viewport and theme, and a person can reach the
-  screen's viewport, theme or every variant.
+  screen's viewport, theme or every variant, or any of its variants picked one by one on its board.
   Saying a picture looks right resolves its open notes in the same write, by the same
   person (the `verdict` event carries them as `resolved`).
 - **A picture needs change while an open note is on it**; that is derived, never stored.
