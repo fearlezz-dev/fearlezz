@@ -176,10 +176,11 @@ type Clock = {
   toggle: () => void;
 };
 
-/** A clock for films of `length` seconds, which starts playing once its first film is loaded
- * when `autoplay`. */
+/** A clock for films of `length` seconds, which starts playing when `autoplay` once every film
+ * it moves can play through, so both sides start together. */
 function createClock(length: number, autoplay = false): Clock {
   let starts = autoplay;
+  const ready = new Set<HTMLVideoElement>();
   const [total, setTotal] = createSignal(length);
   const [t, setT] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
@@ -243,12 +244,18 @@ function createClock(length: number, autoplay = false): Clock {
       video.addEventListener("loadedmetadata", () => {
         if (Number.isFinite(video.duration)) setTotal((was) => Math.max(was, video.duration));
         place(video, t());
-        if (starts) {
+      });
+      video.addEventListener("canplaythrough", () => {
+        ready.add(video);
+        if (starts && [...videos].every((v) => ready.has(v))) {
           starts = false;
           play();
         }
       });
-      onCleanup(() => videos.delete(video));
+      onCleanup(() => {
+        videos.delete(video);
+        ready.delete(video);
+      });
     },
     seek,
     toggle: () => (playing() ? stop() : play()),
@@ -752,6 +759,8 @@ export function Stage(props: {
   const text = () => isText(picture());
   // An earlier run's picture is compared in the page; until it is, there is no comparison.
   const comparison = () => (props.against ? (props.against.comparison ?? null) : picture().comparison);
+  /** Whether the page still compares the picture with an earlier run. */
+  const comparing = () => !!props.against && !props.against.comparison && !props.against.error;
   const size = createMemo((): [number, number] | undefined => {
     const c = comparison();
     if (!c) return undefined;
@@ -925,10 +934,12 @@ export function Stage(props: {
           }
         >
           {/* Both films on one clock; with a comparison, lanes of where they differ. */}
-          <Show when={comparison() ?? "unmeasured"} keyed>
+          <Show when={comparison() ?? (comparing() ? "comparing" : "unmeasured")} keyed>
             {(c) => {
               const measured = typeof c === "string" ? undefined : c;
-              const clock = createClock(measured ? Math.max(measured.total_before, measured.total_after, 0.01) : 0.01, untrack(() => props.full));
+              // In full screen both films play at once, but not while the page still compares
+              // them with an earlier run: its answer gives the films a clock of their own.
+              const clock = createClock(measured ? Math.max(measured.total_before, measured.total_after, 0.01) : 0.01, untrack(() => props.full) && c !== "comparing");
               const sameSize = !!measured && measured.size_before[0] === measured.size_after[0] && measured.size_before[1] === measured.size_after[1];
               createEffect(() => props.onTime(clock.t()));
               onCleanup(() => props.onTime(undefined));
