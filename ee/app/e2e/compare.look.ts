@@ -93,6 +93,7 @@ test("in full screen, two films play once both can play through and the page has
   await expect(stage(page)).toHaveAttribute("data-key", STRIP.film);
   let at = await started();
   expect(at.ready, "both films could play through").toEqual([4, 4]);
+  await expect(page.locator("[data-busy-says]")).toHaveCount(0);
   expect(at.says, "compared with your look first").not.toBe("comparing");
 
   // Another run: the page compares it before the films play.
@@ -102,6 +103,17 @@ test("in full screen, two films play once both can play through and the page has
   at = await started();
   expect(at.ready).toEqual([4, 4]);
   expect(at.says).toBe("changed");
+});
+
+test("the film to look at next is compared with your look ahead, so it opens compared", async ({ page }) => {
+  await show(page, WORK_PATH, STRIP.world);
+  await expect(stage(page)).toHaveAttribute("data-key", STRIP.still);
+  await compared(page);
+  // Time for the film and its comparison to be made ahead.
+  await page.waitForTimeout(3000);
+  await page.locator(`[data-picture="${STRIP.film}"]`).click();
+  const at = await page.evaluate(() => document.querySelector("[data-pair-says]")?.getAttribute("data-pair-says"));
+  expect(at, "compared before it was shown").not.toBe("comparing");
 });
 
 // The strip as shown, a fold as + and the runs it holds.

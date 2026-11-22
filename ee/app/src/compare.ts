@@ -1,13 +1,13 @@
 // Comparing a picture of one run with the same picture of another, in the page: the worker
 // runs the CLI's comparison on both files, and each pair of URLs is asked once.
 
-import type { Answer, Ask } from "./compare.worker";
+import type { Answer, Ask, Promote } from "./compare.worker";
 import type { Comparison } from "./proof";
 
 let worker: Worker | undefined;
 let next = 0;
 const waiting = new Map<number, { done: (c: Comparison) => void; fail: (e: Error) => void }>();
-const asked = new Map<string, Promise<Comparison>>();
+const asked = new Map<string, { asking: Promise<Comparison>; id: number; ahead: boolean }>();
 
 function started(): Worker {
   if (worker) return worker;
@@ -29,17 +29,24 @@ function started(): Worker {
 }
 
 /** The comparison of the still or film at `before` with the one at `after`, as the CLI would
- * write it. A pair that failed is asked again next time. */
-export function compared(before: string, after: string, film: boolean): Promise<Comparison> {
+ * write it, for the picture shown, or `ahead` for one a person likely shows next, compared
+ * while the worker has nothing shown to compare. A pair that failed is asked again next time. */
+export function compared(before: string, after: string, film: boolean, ahead = false): Promise<Comparison> {
   const key = `${film ? "film" : "still"} ${before} ${after}`;
   const known = asked.get(key);
-  if (known) return known;
+  if (known) {
+    if (known.ahead && !ahead) {
+      known.ahead = false;
+      started().postMessage({ promote: known.id } satisfies Promote);
+    }
+    return known.asking;
+  }
+  const id = ++next;
   const asking = new Promise<Comparison>((done, fail) => {
-    const id = ++next;
     waiting.set(id, { done, fail });
-    started().postMessage({ id, before, after, film } satisfies Ask);
+    started().postMessage({ id, before, after, film, ahead } satisfies Ask);
   });
-  asked.set(key, asking);
+  asked.set(key, { asking, id, ahead });
   asking.catch(() => asked.delete(key));
   return asking;
 }
