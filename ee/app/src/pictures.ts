@@ -2,7 +2,7 @@
 // order that directs attention (what changed first, what stayed the same folded last), grouped
 // by the parts of their names, and what a film's lanes and outlines show at a time.
 
-import type { Comparison, Look, Marks, Pair, Picture, PictureChange, Run } from "./proof";
+import type { Comparison, Footage, Look, Marks, Pair, Picture, PictureChange, Run, Section } from "./proof";
 
 /** One picture of a run, by the check that took it. */
 export type Shown = {
@@ -215,6 +215,51 @@ export function marksAt(film: Comparison, t: number): Box[] {
     if (p.after_at <= t + 0.001) boxes = p.boxes;
   }
   return boxes;
+}
+
+/** The films' timeline, as the comparison aligned it at their marks; empty for an older proof. */
+type Timeline = Section[] | null | undefined;
+
+const footage = (s: Section, side: "before" | "after"): Footage => (side === "before" ? s.before : s.after);
+
+/** Where the films' timeline ends. */
+export const timelineEnd = (timeline: Timeline): number => {
+  const last = timeline?.[timeline.length - 1];
+  return last ? last.at + last.length : 0;
+};
+
+/** Where one film is at moment `tau` of the films' timeline: its own time, and whether it holds
+ * there with no footage, before its stretch of a section starts or after it ends. Without a
+ * timeline both films play from their start. */
+export function filmAt(timeline: Timeline, side: "before" | "after", tau: number): { t: number; held: boolean } {
+  if (!timeline?.length) return { t: tau, held: false };
+  let section = timeline[0]!;
+  for (const s of timeline) if (s.at <= tau) section = s;
+  const f = footage(section, side);
+  const into = tau - section.at - f.delay;
+  if (into < -1e-6) return { t: f.from, held: true };
+  if (into > f.to - f.from + 1e-6) return { t: f.to, held: true };
+  return { t: f.from + Math.max(0, into), held: false };
+}
+
+/** The moment of the films' timeline where one film plays its time `t`. */
+export function timelineAt(timeline: Timeline, side: "before" | "after", t: number): number {
+  if (!timeline?.length) return t;
+  const section = timeline.find((s) => t < footage(s, side).to) ?? timeline[timeline.length - 1]!;
+  const f = footage(section, side);
+  return section.at + f.delay + Math.max(0, Math.min(t, f.to) - f.from);
+}
+
+/** The stretches of the films' timeline where one film has no footage and holds a frame. */
+export function gaps(timeline: Timeline, side: "before" | "after"): { start: number; stop: number }[] {
+  const out: { start: number; stop: number }[] = [];
+  for (const s of timeline ?? []) {
+    const f = footage(s, side);
+    const plays = s.at + f.delay + (f.to - f.from);
+    if (f.delay > 1e-6) out.push({ start: s.at, stop: s.at + f.delay });
+    if (s.at + s.length - plays > 1e-6) out.push({ start: plays, stop: s.at + s.length });
+  }
+  return out;
 }
 
 /** Where a still differs, when both sides have one size to draw it on. */

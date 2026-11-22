@@ -11,20 +11,34 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::diff::{diff, outside_range, still_diff};
 use crate::film::Window;
 use crate::{Box4, Comparison, Film, Moment, Pair, Reread, State, Verdict};
+use fearlezz_proof::media::{Footage, Section};
 
 /// Seconds of timing difference that still count as the same timing.
 const TIMING_TOL: f64 = 0.10;
 /// A state held at least this long is a moment worth checking for timing.
 const STABLE_MIN: f64 = 0.15;
 
-/// Matches states of two films; returns the path of (before, after) pairs and the costs.
-fn warp(a: &[Vec<f32>], b: &[Vec<f32>]) -> (Vec<(usize, usize)>, Vec<Vec<f32>>) {
+/// Matches states of two films, only where `allowed` says a pair may be; returns the path of
+/// (before, after) pairs and the costs.
+fn warp(
+    a: &[Vec<f32>],
+    b: &[Vec<f32>],
+    allowed: impl Fn(usize, usize) -> bool,
+) -> (Vec<(usize, usize)>, Vec<Vec<f32>>) {
     let (n, m) = (a.len(), b.len());
     let cost: Vec<Vec<f32>> = a
         .iter()
-        .map(|x| {
+        .enumerate()
+        .map(|(i, x)| {
             b.iter()
-                .map(|y| x.iter().zip(y).map(|(p, q)| (p - q).abs()).sum::<f32>() / x.len() as f32)
+                .enumerate()
+                .map(|(j, y)| {
+                    if allowed(i, j) {
+                        x.iter().zip(y).map(|(p, q)| (p - q).abs()).sum::<f32>() / x.len() as f32
+                    } else {
+                        f32::INFINITY
+                    }
+                })
                 .collect()
         })
         .collect();
@@ -89,7 +103,14 @@ where
         moments: Vec::new(),
         pairs: Vec::new(),
         marks_changed: false,
+        timeline: Vec::new(),
     };
+    let clock = Clock::of(before, after);
+    out.marks_changed = clock.is_none();
+    let clock = clock.unwrap_or_default();
+    if !still {
+        out.timeline = timeline(&clock.anchors, before.total, after.total);
+    }
     if before.w != after.w || before.h != after.h {
         out.verdict = Verdict::Changed;
         out.moments.push(Moment {
@@ -102,16 +123,24 @@ where
     }
     let (ko, kn) = (&before.states, &after.states);
     let thumbs = |s: &[State]| s.iter().map(|k| k.thumb.clone()).collect::<Vec<_>>();
-    let (path, cost) = warp(&thumbs(ko), &thumbs(kn));
+    // States are matched only within the same section between two anchors: a state that runs
+    // across an anchor is in both sections it touches.
+    let sections = |states: &[State], at: &dyn Fn(&(f64, f64)) -> f64| {
+        let of = |t: f64| clock.anchors.iter().filter(|x| at(x) <= t).count();
+        states
+            .iter()
+            .map(|k| (of(k.start), of((k.start + k.dur - 1e-6).max(k.start))))
+            .collect::<Vec<_>>()
+    };
+    let (so, sn) = (sections(ko, &|x| x.0), sections(kn, &|x| x.1));
+    let allowed = |i: usize, j: usize| so[i].0 <= sn[j].1 && sn[j].0 <= so[i].1;
+    let (path, cost) = warp(&thumbs(ko), &thumbs(kn), allowed);
 
     let mut windows = (
         Window::new(before, before_again),
         Window::new(after, after_again),
     );
-    out.pairs = pairs(&mut windows, &path, still)?;
-    let clock = Clock::of(before, after);
-    out.marks_changed = clock.is_none();
-    let clock = clock.unwrap_or_default();
+    out.pairs = pairs(&mut windows, &path, still, &allowed)?;
     let max_shift = max_shift(ko, kn, &path, &cost, &clock);
     out.max_shift = round3(max_shift.0);
     out.max_shift_at = max_shift.1.map(round3);
@@ -136,6 +165,7 @@ fn pairs<B, A>(
     (wo, wn): &mut (Window<'_, B>, Window<'_, A>),
     path: &[(usize, usize)],
     still: bool,
+    allowed: &dyn Fn(usize, usize) -> bool,
 ) -> Result<Vec<Pair>, B::Error>
 where
     B: Reread,
@@ -169,7 +199,8 @@ where
             // When the films caught a transition at different moments, each side of the pair
             // has its true counterpart next to the other: a neighbour the path also visits
             // that matches it fully, or the other film's neighbours, whose range it sits in.
-            // Both sides must have one; a state only one film shows is a change.
+            // Both sides must have one; a state only one film shows is a change. A counterpart
+            // across a mark is never one, since the marks say those moments differ.
             let mut before_found = false;
             for jj in [j.wrapping_sub(1), j + 1] {
                 if jj < kn.len() && visited.contains(&(i, jj)) && pd(i, jj)?.0 == 0 {
@@ -182,8 +213,10 @@ where
                     after_found = true;
                 }
             }
-            before_found = before_found || outside_range(wo.image(i)?, &wn.near(j)?) == 0;
-            after_found = after_found || outside_range(wn.image(j)?, &wo.near(i)?) == 0;
+            before_found =
+                before_found || outside_range(wo.image(i)?, &wn.near(j, |jj| allowed(i, jj))?) == 0;
+            after_found =
+                after_found || outside_range(wn.image(j)?, &wo.near(i, |ii| allowed(ii, j))?) == 0;
             if before_found && after_found {
                 px = 0;
                 boxes.clear();
@@ -342,6 +375,44 @@ fn moments(pairs: &[Pair], ko: &[State], kn: &[State]) -> Vec<Moment> {
             m
         })
         .collect()
+}
+
+/// The films' timeline from their matched `anchors` (each one's moment in the before and the
+/// after film) and their lengths: a section from each anchor to the next, as long as the longer
+/// film's stretch. Before the first anchor the shorter film starts later, so both reach it
+/// together; elsewhere both start the section together. Without anchors, one section from both
+/// films' start.
+fn timeline(anchors: &[(f64, f64)], total_before: f64, total_after: f64) -> Vec<Section> {
+    let bounds = |pick: fn(&(f64, f64)) -> f64, total: f64| {
+        let mut b = vec![0.0];
+        b.extend(anchors.iter().map(pick));
+        b.push(total.max(b.last().copied().unwrap_or(0.0)));
+        b
+    };
+    let (bb, ba) = (bounds(|x| x.0, total_before), bounds(|x| x.1, total_after));
+    let mut at = 0.0;
+    let mut out = Vec::new();
+    for k in 0..bb.len() - 1 {
+        let (lb, la) = (bb[k + 1] - bb[k], ba[k + 1] - ba[k]);
+        let length = lb.max(la);
+        if length < 1e-6 {
+            continue;
+        }
+        let lead = k == 0 && !anchors.is_empty();
+        let footage = |from: f64, to: f64, own: f64| Footage {
+            from: round3(from),
+            to: round3(to),
+            delay: if lead { round3(length - own) } else { 0.0 },
+        };
+        out.push(Section {
+            at: round3(at),
+            length: round3(length),
+            before: footage(bb[k], bb[k + 1], lb),
+            after: footage(ba[k], ba[k + 1], la),
+        });
+        at += length;
+    }
+    out
 }
 
 fn round3(v: f64) -> f64 {

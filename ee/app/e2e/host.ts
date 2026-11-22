@@ -63,7 +63,20 @@ export async function serve(page: Page, world: World): Promise<Socket> {
     const path = decodeURIComponent(new URL(route.request().url()).pathname.slice("/files/".length));
     const [run, ...rest] = path.split("/");
     const file = world.runFiles?.[run!]?.[rest.join("/")] ?? world.files?.[path];
-    return file ? route.fulfill({ contentType: file.type, body: file.body }) : route.fulfill({ status: 404 });
+    if (!file) return route.fulfill({ status: 404 });
+    // A range, as the files origin answers it (ee/host/src/files.rs): a browser seeks a film
+    // only in one whose origin does.
+    const body = typeof file.body === "string" ? Buffer.from(file.body) : file.body;
+    const range = /^bytes=(\d+)-(\d*)$/.exec(route.request().headers()["range"] ?? "");
+    if (!range) return route.fulfill({ contentType: file.type, body, headers: { "Accept-Ranges": "bytes" } });
+    const from = Number(range[1]);
+    const to = Math.min(range[2] ? Number(range[2]) : body.length - 1, body.length - 1);
+    return route.fulfill({
+      status: 206,
+      contentType: file.type,
+      body: body.subarray(from, to + 1),
+      headers: { "Accept-Ranges": "bytes", "Content-Range": `bytes ${from}-${to}/${body.length}` },
+    });
   });
   return {
     send: (message) => {

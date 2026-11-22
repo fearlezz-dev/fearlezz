@@ -687,3 +687,35 @@ export const LONG_STRIP: World = {
   runFiles: { ...STRIP.world.runFiles, ...Object.fromEntries(LONG_RUNS.filter((r) => /^[xy]/.test(r.id)).map((r) => [r.id, stripFiles(r.id.startsWith("x") ? "base" : "look")])) },
   live: live({ ...stripLive, runs: [stripNow!, ...LONG_RUNS] }),
 };
+
+// The strip's newest film, its step reached later than before: the before film pays at 0.6 s
+// and the after film at 1.2 s, so the comparison aligned them there. Before the mark the before
+// film has no footage for 0.6 s, after it the after film for 0.6 s.
+const ALIGNED_TIMELINE = [
+  { at: 0, length: 1.2, before: { from: 0, to: 0.6, delay: 0.6 }, after: { from: 0, to: 1.2, delay: 0 } },
+  { at: 1.2, length: 1.4, before: { from: 0.6, to: 2, delay: 0 }, after: { from: 1.2, to: 2, delay: 0 } },
+];
+const alignedRun = (r: Run): Run => ({
+  ...r,
+  checks: r.checks.map((c) =>
+    c.look
+      ? {
+          ...c,
+          look: {
+            ...c.look,
+            items: c.look.items.map((p) =>
+              p.name === STRIP_FILM
+                ? {
+                    ...p,
+                    before_marks: { marks: [{ name: "paid", at: 0.6 }] },
+                    marks: { marks: [{ name: "paid", at: 1.2 }] },
+                    comparison: { ...p.comparison!, timeline: ALIGNED_TIMELINE },
+                  }
+                : p,
+            ),
+          },
+        }
+      : c,
+  ),
+});
+export const ALIGNED: World = { ...STRIP.world, live: live({ ...stripLive, runs: [alignedRun(stripNow!), ...stripEarlier] }) };

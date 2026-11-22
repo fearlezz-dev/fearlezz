@@ -426,3 +426,116 @@ fn a_mark_one_film_has_and_the_other_not_is_a_change() {
     assert_eq!(c.verdict, Verdict::Changed, "{c:?}");
     assert!(c.marks_changed, "{c:?}");
 }
+
+impl Frames {
+    /// A white RGB film of runs of frames, each run blank or with a black box at its `x`.
+    fn runs(w: usize, h: usize, runs: &[(usize, Option<usize>)]) -> Frames {
+        let mut each = Vec::new();
+        for &(n, x) in runs {
+            for _ in 0..n {
+                let mut px = vec![255u8; w * h * 3];
+                if let Some(x) = x {
+                    for y in 10..30 {
+                        for xx in x..x + 20 {
+                            px[(y * w + xx) * 3..][..3].fill(0);
+                        }
+                    }
+                }
+                each.push(px);
+            }
+        }
+        Frames {
+            format: Format::Rgb,
+            w,
+            h,
+            each,
+        }
+    }
+}
+
+/// The marks cut both films into sections, and a state is only matched with one of the other
+/// film's in the same section: the box shown before the press never answers for the box shown
+/// after it, however alike they look.
+#[test]
+fn a_state_is_matched_only_within_its_marked_section() {
+    let c = marked(
+        (
+            &Frames::runs(64, 48, &[(5, None), (5, Some(10)), (10, None)]),
+            marks(&[("pressed", 1.0)]),
+        ),
+        (
+            &Frames::runs(64, 48, &[(15, None), (5, Some(10))]),
+            marks(&[("pressed", 1.5)]),
+        ),
+    );
+    assert!(
+        !c.pairs.iter().any(|p| p.before == 1 && p.after == 1),
+        "the box before the press is not matched with the box after it: {:?}",
+        c.pairs
+    );
+    assert_eq!(c.verdict, Verdict::Changed, "{c:?}");
+}
+
+/// The films play on one timeline aligned at their marks: before the first mark the shorter
+/// film starts later, so both reach the mark together, and after it each plays its own stretch,
+/// the shorter holding its last frame for the rest.
+#[test]
+fn the_timeline_aligns_the_films_at_their_marks() {
+    let c = marked(
+        (
+            &Frames::boxed(64, 48, 20, 10, 10),
+            marks(&[("pressed", 0.9)]),
+        ),
+        (
+            &Frames::boxed(64, 48, 26, 10, 15),
+            marks(&[("pressed", 1.4)]),
+        ),
+    );
+    let t = &c.timeline;
+    assert_eq!(t.len(), 2, "{t:?}");
+    let (lead, rest) = (&t[0], &t[1]);
+    assert_eq!((lead.at, lead.length), (0.0, 1.4), "{t:?}");
+    assert_eq!(
+        (lead.before.from, lead.before.to, lead.before.delay),
+        (0.0, 0.9, 0.5),
+        "{t:?}"
+    );
+    assert_eq!(
+        (lead.after.from, lead.after.to, lead.after.delay),
+        (0.0, 1.4, 0.0),
+        "{t:?}"
+    );
+    assert_eq!((rest.at, rest.length), (1.4, 1.2), "{t:?}");
+    assert_eq!(
+        (rest.before.from, rest.before.to, rest.before.delay),
+        (0.9, 2.0, 0.0),
+        "{t:?}"
+    );
+    assert_eq!(
+        (rest.after.from, rest.after.to, rest.after.delay),
+        (1.4, 2.6, 0.0),
+        "{t:?}"
+    );
+}
+
+/// Without marks the timeline is one section from both films' start, as they always played.
+#[test]
+fn without_marks_the_timeline_starts_both_films_together() {
+    let c = compared(
+        &Frames::boxed(64, 48, 20, 10, 10),
+        &Frames::boxed(64, 48, 25, 10, 10),
+    );
+    let t = &c.timeline;
+    assert_eq!(t.len(), 1, "{t:?}");
+    assert_eq!((t[0].at, t[0].length), (0.0, 2.5), "{t:?}");
+    assert_eq!(
+        (t[0].before.from, t[0].before.to, t[0].before.delay),
+        (0.0, 2.0, 0.0),
+        "{t:?}"
+    );
+    assert_eq!(
+        (t[0].after.from, t[0].after.to, t[0].after.delay),
+        (0.0, 2.5, 0.0),
+        "{t:?}"
+    );
+}

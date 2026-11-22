@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { apply } from "./live";
-import { counts, grouped, groupings, hundredths, lanes, marksAt, parts, picturesOf, screensOf, stepAt, stillMarks } from "./pictures";
+import { counts, filmAt, gaps, grouped, groupings, hundredths, lanes, marksAt, parts, picturesOf, screensOf, stepAt, stillMarks, timelineAt, timelineEnd } from "./pictures";
 import type { Check, Comparison, Look, Pair, Picture, PictureChange, Run, Snapshot } from "./proof";
 
 const picture = (name: string, change: PictureChange, extra: Partial<Picture> = {}): Picture => ({
@@ -267,5 +267,52 @@ describe("stepAt", () => {
     expect(stepAt(marks, 1.7)).toBe("opened");
     expect(stepAt(marks, 2.5)).toBe("pressed y");
     expect(stepAt(null, 2)).toBeUndefined();
+  });
+});
+
+describe("the films' timeline", () => {
+  // The before film reaches its mark at 0.9 s, the after film at 1.4 s, and each plays 1.1 s
+  // and 1.2 s after it: the comparison's answer for those films.
+  const timeline = [
+    { at: 0, length: 1.4, before: { from: 0, to: 0.9, delay: 0.5 }, after: { from: 0, to: 1.4, delay: 0 } },
+    { at: 1.4, length: 1.2, before: { from: 0.9, to: 2, delay: 0 }, after: { from: 1.4, to: 2.6, delay: 0 } },
+  ];
+
+  test("both films reach their mark at the same moment, the shorter one holding first", () => {
+    expect(filmAt(timeline, "before", 0.2)).toEqual({ t: 0, held: true });
+    expect(filmAt(timeline, "after", 0.2)).toEqual({ t: 0.2, held: false });
+    expect(filmAt(timeline, "before", 1.4)).toEqual({ t: 0.9, held: false });
+    expect(filmAt(timeline, "after", 1.4)).toEqual({ t: 1.4, held: false });
+  });
+
+  test("a film whose stretch ends first holds its last frame until the next mark", () => {
+    const at = filmAt(timeline, "before", 2.55);
+    expect(at.held).toBe(true);
+    expect(at.t).toBeCloseTo(2);
+    expect(filmAt(timeline, "after", 2.6)).toEqual({ t: 2.6, held: false });
+    expect(timelineEnd(timeline)).toBeCloseTo(2.6);
+  });
+
+  test("a moment of a film is placed where the timeline plays it", () => {
+    expect(timelineAt(timeline, "before", 0)).toBeCloseTo(0.5);
+    expect(timelineAt(timeline, "before", 0.9)).toBeCloseTo(1.4);
+    expect(timelineAt(timeline, "before", 1.5)).toBeCloseTo(2);
+    expect(timelineAt(timeline, "after", 1.5)).toBeCloseTo(1.5);
+  });
+
+  test("the stretches a film has no footage are its gaps", () => {
+    const before = gaps(timeline, "before");
+    expect(before).toHaveLength(2);
+    expect(before[0]).toEqual({ start: 0, stop: 0.5 });
+    expect(before[1]!.start).toBeCloseTo(2.5);
+    expect(before[1]!.stop).toBeCloseTo(2.6);
+    expect(gaps(timeline, "after")).toEqual([]);
+  });
+
+  test("without a timeline both films play from their start", () => {
+    expect(filmAt(undefined, "before", 1.2)).toEqual({ t: 1.2, held: false });
+    expect(timelineAt([], "after", 1.2)).toBe(1.2);
+    expect(gaps(undefined, "before")).toEqual([]);
+    expect(timelineEnd(undefined)).toBe(0);
   });
 });

@@ -8,10 +8,12 @@ import { LONG_STRIP, REPOSITORY_PATH, REPOSITORY_STATES, STRIP, WORK, WORK_PATH 
 
 const THEMES = ["light", "dark"] as const;
 
-/** Takes a still of the whole page in each theme, as `<screen>/<theme>`. */
 /** Stills of `screen` in each theme: the whole page, or only the window (`fullPage` false) for
- * what covers the window, such as full screen. */
+ * what covers the window, such as full screen. The whole page is shown from its top: a click
+ * may have scrolled it, and a page captured scrolled draws its sticky header where the scroll
+ * left it, which the capture's own resizing moves, so it never holds still. */
 async function stills(page: Page, screen: string, fullPage = true) {
+  if (fullPage) await page.evaluate(() => window.scrollTo(0, 0));
   for (const theme of THEMES) {
     await page.emulateMedia({ colorScheme: theme });
     await expect(page).toHaveScreenshot([...screen.split("/"), `${theme}.png`], { fullPage });
