@@ -11,8 +11,11 @@
 import wasmUrl from "fearlezz-page-compare.wasm?url";
 import { codecOf, demux } from "./demux";
 
-/** What the page asks: compare the file at `before` with the one at `after`. */
-export type Ask = { id: number; before: string; after: string; film: boolean };
+/** What the page asks: compare the file at `before` with the one at `after`, for the picture
+ * shown or, `ahead`, for one a person likely shows next. */
+export type Ask = { id: number; before: string; after: string; film: boolean; ahead?: boolean };
+/** The page now shows the picture of an ask it made ahead. */
+export type Promote = { promote: number };
 /** What the worker answers: the comparison as the CLI's JSON, or why there is none. */
 export type Answer = { id: number; json: string } | { id: number; error: string };
 
@@ -162,22 +165,34 @@ async function compare(ask: Ask): Promise<string> {
 }
 
 // One comparison at a time: the wasm side has one frame of room and one answer. The page shows
-// one picture, so a newer ask takes the place of one that has not started yet.
-const scope = self as unknown as { onmessage: ((e: MessageEvent<Ask>) => void) | null; postMessage: (answer: Answer) => void };
+// one picture, so a newer ask takes the place of one that has not started yet. Asks made ahead
+// wait behind it, the oldest dropped past `AHEAD`, and one the page comes to show moves up.
+const scope = self as unknown as { onmessage: ((e: MessageEvent<Ask | Promote>) => void) | null; postMessage: (answer: Answer) => void };
+const AHEAD = 6;
 let running = false;
 let next: Ask | undefined;
-scope.onmessage = (e) => {
+const ahead: Ask[] = [];
+const shown = (ask: Ask) => {
   if (next) scope.postMessage({ id: next.id, error: "a newer comparison took its place" });
-  next = e.data;
+  next = ask;
+};
+scope.onmessage = (e) => {
+  const m = e.data;
+  if ("promote" in m) {
+    const at = ahead.findIndex((a) => a.id === m.promote);
+    if (at >= 0) shown(ahead.splice(at, 1)[0]!);
+  } else if (m.ahead) {
+    ahead.push(m);
+    while (ahead.length > AHEAD) scope.postMessage({ id: ahead.shift()!.id, error: "no longer ahead" });
+  } else shown(m);
   void drain();
 };
 
 async function drain() {
   if (running) return;
   running = true;
-  while (next) {
-    const ask = next;
-    next = undefined;
+  for (let ask = next ?? ahead.shift(); ask; ask = next ?? ahead.shift()) {
+    if (ask === next) next = undefined;
     try {
       scope.postMessage({ id: ask.id, json: await compare(ask) });
     } catch (error) {

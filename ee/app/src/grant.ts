@@ -24,6 +24,32 @@ export function grantPath(run: string, share: string | undefined): string {
   return share ? `${path}?share=${encodeURIComponent(share)}` : path;
 }
 
+// Grants by run, shared by every part of the page that loads a run's files, until shortly
+// before each ends.
+const grants = new Map<string, { asking: Promise<Granted>; until: number }>();
+
+/** A grant to the files of run `run`, asked once and again shortly before it ends. */
+export function granted(run: string): Promise<Granted> {
+  const kept = grants.get(run);
+  if (kept && kept.until > Date.now() / 1000) return kept.asking;
+  const entry = {
+    asking: (async () => {
+      const answer = await fetch(grantPath(run, sharedBy(location.pathname)), { credentials: "same-origin" });
+      if (!answer.ok) throw new Error(`the host answered ${answer.status}`);
+      return (await answer.json()) as Granted;
+    })(),
+    until: Number.POSITIVE_INFINITY,
+  };
+  grants.set(run, entry);
+  entry.asking.then(
+    (g) => {
+      entry.until = g.expires - EARLY_SECONDS;
+    },
+    () => grants.delete(run),
+  );
+  return entry.asking;
+}
+
 /** The folder of the files of run `run()` on the files origin, once granted; empty until then
  * and when the host refuses (the page then shows the pictures as not loaded). A grant is only
  * ever given out for the run it was asked for, also while the run changes. */
@@ -35,12 +61,10 @@ export function grantOf(run: Accessor<string>): Accessor<string> {
     let stopped = false;
     const ask = async (wait: number) => {
       try {
-        const answer = await fetch(grantPath(id, sharedBy(location.pathname)), { credentials: "same-origin" });
-        if (!answer.ok) throw new Error(`the host answered ${answer.status}`);
-        const granted = (await answer.json()) as Granted;
+        const grant = await granted(id);
         if (stopped) return;
-        setHeld({ run: id, files: granted.files });
-        const left = granted.expires - Date.now() / 1000 - EARLY_SECONDS;
+        setHeld({ run: id, files: grant.files });
+        const left = grant.expires - Date.now() / 1000 - EARLY_SECONDS;
         timer = setTimeout(() => ask(1000), Math.max(left, 30) * 1000);
       } catch {
         // A host that cannot answer now is asked again, less often each time.

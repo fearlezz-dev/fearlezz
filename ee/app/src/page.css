@@ -529,7 +529,17 @@ details.group > .sheet { margin-top: 10px; }
 .chip { border: 1.5px solid var(--line); background: none; border-radius: 8px; padding: 4px 12px; font-size: 0.9rem; transition: border-color 0.15s; }
 .chip:hover { border-color: var(--quiet); }
 .chip.play { font-weight: 700; }
-.chip.jump { border-color: var(--changed); color: var(--changed); font-weight: 700; }
+.chip.jump { border-color: var(--changed); color: var(--changed); font-weight: 700; flex: none; }
+/* The moments a film pair differs keep one row, so they never push the page down. */
+.clock .moments { display: flex; gap: 8px; flex: 1 1 0; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+/* A film pair still loading or being compared: dimmed at its first frame, saying what it does. */
+.busy-wrap { position: relative; }
+.busy-wrap video { transition: opacity 0.25s var(--out); }
+.busy-wrap[data-busy] video { opacity: 0.4; }
+.busy-says { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 3; margin: 0; display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: var(--raised); color: var(--ink); font-weight: 700; font-size: 0.875rem; box-shadow: 0 4px 16px rgb(0 0 0 / 0.25); pointer-events: none; white-space: nowrap; }
+.busy-says i { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .busy-says i { animation: none; border-top-color: var(--line); } .busy-wrap video { transition: none; } }
 .timeline { position: relative; height: 52px; margin: 10px 0 0; user-select: none; touch-action: none; cursor: pointer; border-radius: 6px; }
 .lane { position: absolute; left: 0; right: 0; height: 20px; border-radius: 5px; background: var(--sunk); overflow: hidden; }
 .lane[data-lane="before"] { top: 3px; }

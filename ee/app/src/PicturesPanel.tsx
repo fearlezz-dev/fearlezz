@@ -3,7 +3,7 @@
 // and k step between pictures, 1 to 5 pick the way to compare.
 
 import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
-import { fileUrl, grantOf } from "./grant";
+import { fileUrl, grantOf, granted } from "./grant";
 import {
   GROUP_WORDS,
   type Group,
@@ -267,6 +267,30 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
     const urls = (p: Shown) => [p.picture.before, p.picture.after].filter((path): path is string => !!path).map((path) => fileUrl(grant, path));
     preload(next.filter((p) => !isFilm(p.picture)).flatMap(urls));
     prefetch(next.filter((p) => isFilm(p.picture)).flatMap(urls));
+    // And what each opens compared with when that is an earlier run, such as your look: its
+    // file fetched and the page's comparison made ahead, so stepping to it shows it at once.
+    const state = props.state;
+    const run = props.run;
+    let stale = false;
+    onCleanup(() => {
+      stale = true;
+    });
+    for (const p of next) {
+      const after = p.picture.after;
+      const dots = after ? stripOf(state, run, p) : [];
+      const d = dots.find((x) => x.key === opensOn(state, run, p, dots));
+      if (!after || d?.kind !== "run" || !d.path) continue;
+      const path = d.path;
+      void granted(d.runs[0]!.id).then(
+        (g) => {
+          if (stale) return;
+          const before = fileUrl(g.files, path);
+          (isFilm(p.picture) ? prefetch : preload)([before]);
+          compared(before, fileUrl(grant, after), isFilm(p.picture), true).catch(() => {});
+        },
+        () => {},
+      );
+    }
   });
 
   onMount(() => {

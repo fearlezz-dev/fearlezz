@@ -171,17 +171,20 @@ type Clock = {
   t: () => number;
   playing: () => boolean;
   total: () => number;
+  /** Whether every film it moves can play through. */
+  ready: () => boolean;
   add: (video: HTMLVideoElement) => void;
   seek: (t: number) => void;
   toggle: () => void;
 };
 
-/** A clock for films of `length` seconds, which starts playing when `autoplay` once every film
- * it moves can play through, so both sides start together. */
-function createClock(length: number, autoplay = false): Clock {
-  let starts = autoplay;
-  const ready = new Set<HTMLVideoElement>();
-  const [total, setTotal] = createSignal(length);
+/** A clock for films at least `length` seconds long, which plays once, on its own, as soon as
+ * every film it moves can play through while `autoplay` holds, so both sides start together. */
+function createClock(length: () => number, autoplay: () => boolean = () => false): Clock {
+  let starts = true;
+  const [loaded, setLoaded] = createSignal(new Set<HTMLVideoElement>());
+  const [longest, setLongest] = createSignal(0);
+  const total = () => Math.max(length(), longest(), 0.01);
   const [t, setT] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
   const videos = new Set<HTMLVideoElement>();
@@ -234,27 +237,36 @@ function createClock(length: number, autoplay = false): Clock {
     };
     frame = requestAnimationFrame(tick);
   };
+  const [count, setCount] = createSignal(0);
+  const ready = () => count() > 0 && loaded().size >= count();
+  createEffect(() => {
+    if (starts && ready() && autoplay()) {
+      starts = false;
+      untrack(play);
+    }
+  });
   onCleanup(stop);
   return {
     t,
     playing,
     total,
+    ready,
     add: (video) => {
       videos.add(video);
+      setCount(videos.size);
       video.addEventListener("loadedmetadata", () => {
-        if (Number.isFinite(video.duration)) setTotal((was) => Math.max(was, video.duration));
+        if (Number.isFinite(video.duration)) setLongest((was) => Math.max(was, video.duration));
         place(video, t());
       });
-      video.addEventListener("canplaythrough", () => {
-        ready.add(video);
-        if (starts && [...videos].every((v) => ready.has(v))) {
-          starts = false;
-          play();
-        }
-      });
+      video.addEventListener("canplaythrough", () => setLoaded((was) => new Set(was).add(video)));
       onCleanup(() => {
         videos.delete(video);
-        ready.delete(video);
+        setCount(videos.size);
+        setLoaded((was) => {
+          const now = new Set(was);
+          now.delete(video);
+          return now;
+        });
       });
     },
     seek,
@@ -620,7 +632,7 @@ function Blink(props: Layered) {
 /** Both films' lanes on one clock: grey where the pictures match, the change colour where
  * they differ, a playhead, and a jump to each moment they differ. A film alone (no `film`
  * comparison) has its one lane, on its `side`. */
-function Timeline(props: { film?: Comparison | undefined; side?: Side; clock: Clock; words?: [string, string] }) {
+function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?: Side; clock: Clock; words?: [string, string] }) {
   const total = () => props.clock.total();
   const words = () => props.words ?? ["Before", "After"];
   let lane: HTMLDivElement | undefined;
@@ -635,14 +647,19 @@ function Timeline(props: { film?: Comparison | undefined; side?: Side; clock: Cl
           ["before", words()[0], props.film.total_before],
           ["after", words()[1], props.film.total_after],
         ]
-      : [[props.side ?? "after", props.side === "before" ? words()[0] : words()[1], total()]];
+      : props.pair
+        ? [
+            ["before", words()[0], total()],
+            ["after", words()[1], total()],
+          ]
+        : [[props.side ?? "after", props.side === "before" ? words()[0] : words()[1], total()]];
   const segments = (side: Side, end: number) =>
     props.film ? lanes(props.film.pairs, side, end) : [{ start: 0, stop: end, differs: false }];
   return (
     <div class="film">
       <div class="clock">
         <button type="button" class="chip play" data-play title="Play or pause (Space)" onClick={() => props.clock.toggle()}>
-          {props.clock.playing() ? "Pause" : props.film ? "Play both" : "Play"}
+          {props.clock.playing() ? "Pause" : props.film || props.pair ? "Play both" : "Play"}
         </button>
         <span class="t" data-clock>
           {props.clock.t().toFixed(2)} s
@@ -656,13 +673,15 @@ function Timeline(props: { film?: Comparison | undefined; side?: Side; clock: Cl
             )}
           </For>
         </div>
-        <For each={props.film?.moments ?? []}>
-          {(m) => (
-            <button type="button" class="chip jump" data-seek={m.after[0]} onClick={() => props.clock.seek(m.after[0])}>
-              {m.after[0].toFixed(2)} s
-            </button>
-          )}
-        </For>
+        <div class="moments">
+          <For each={props.film?.moments ?? []}>
+            {(m) => (
+              <button type="button" class="chip jump" data-seek={m.after[0]} onClick={() => props.clock.seek(m.after[0])}>
+                {m.after[0].toFixed(2)} s
+              </button>
+            )}
+          </For>
+        </div>
       </div>
       <div
         class="timeline"
@@ -895,7 +914,8 @@ export function Stage(props: {
                   >
                     {(alone) => {
                       // In full screen, a film stepped to plays at once.
-                      const clock = createClock(0.01, untrack(() => props.full));
+                      const full = untrack(() => props.full);
+                      const clock = createClock(() => 0.01, () => full);
                       createEffect(() => props.onTime(clock.t()));
                       onCleanup(() => props.onTime(undefined));
                       return (
@@ -933,32 +953,50 @@ export function Stage(props: {
             />
           }
         >
-          {/* Both films on one clock; with a comparison, lanes of where they differ. */}
-          <Show when={comparison() ?? (comparing() ? "comparing" : "unmeasured")} keyed>
-            {(c) => {
-              const measured = typeof c === "string" ? undefined : c;
-              // In full screen both films play at once, but not while the page still compares
-              // them with an earlier run: its answer gives the films a clock of their own.
-              const clock = createClock(measured ? Math.max(measured.total_before, measured.total_after, 0.01) : 0.01, untrack(() => props.full) && c !== "comparing");
-              const sameSize = !!measured && measured.size_before[0] === measured.size_after[0] && measured.size_before[1] === measured.size_after[1];
+          {/* Both films on one clock, made once per pair, so the comparison arriving only adds
+              lanes and outlines. Until both films can play through and are compared they show
+              dimmed at their first frame, with what the page is doing. */}
+          <Show when={`${beforeUrl()}\n${url(picture().after)}`} keyed>
+            {(_) => {
+              const measured = () => comparison() ?? undefined;
+              const full = untrack(() => props.full);
+              const clock = createClock(() => {
+                const m = measured();
+                return m ? Math.max(m.total_before, m.total_after) : 0;
+              }, () => full && !comparing());
+              const sameSize = () => {
+                const m = measured();
+                return !!m && m.size_before[0] === m.size_after[0] && m.size_before[1] === m.size_after[1];
+              };
+              const busy = () => (!clock.ready() ? "Loading both films…" : comparing() ? `Comparing with ${props.against!.word.toLowerCase()}…` : undefined);
               createEffect(() => props.onTime(clock.t()));
               onCleanup(() => props.onTime(undefined));
               return (
                 <>
-                  <Compare
-                    mode={props.mode}
-                    before={beforeUrl()}
-                    after={url(picture().after)}
-                    size={size()}
-                    boxes={sameSize ? marksAt(measured!, clock.t()) : []}
-                    clock={clock}
-                    beforeLabel={beforeLabel()}
-                    afterLabel={afterLabel()}
-                    beforeWord={beforeWord()}
-                    afterWord={afterWord()}
-                    noting={props.noting}
-                  />
-                  <Timeline film={measured} side="after" clock={clock} words={[beforeWord(), afterWord()]} />
+                  <div class="busy-wrap" data-busy={busy() ? "" : undefined}>
+                    <Compare
+                      mode={props.mode}
+                      before={beforeUrl()}
+                      after={url(picture().after)}
+                      size={size()}
+                      boxes={sameSize() ? marksAt(measured()!, clock.t()) : []}
+                      clock={clock}
+                      beforeLabel={beforeLabel()}
+                      afterLabel={afterLabel()}
+                      beforeWord={beforeWord()}
+                      afterWord={afterWord()}
+                      noting={props.noting}
+                    />
+                    <Show when={busy()}>
+                      {(says) => (
+                        <p class="busy-says" data-busy-says role="status">
+                          <i aria-hidden="true" />
+                          {says()}
+                        </p>
+                      )}
+                    </Show>
+                  </div>
+                  <Timeline film={measured()} pair side="after" clock={clock} words={[beforeWord(), afterWord()]} />
                 </>
               );
             }}
