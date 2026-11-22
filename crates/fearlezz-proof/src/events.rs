@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::floor::Weakening;
 use crate::look::Look;
 use crate::notes::Note;
-use crate::review::{Accept, Job, Review, Verdict};
+use crate::review::{Accept, Job, Review, Since, Verdict};
 use crate::{Check, Proof, Pull};
 
 /// The content keys of a look's pictures (`review::key`), by picture name.
@@ -119,6 +119,10 @@ pub enum Step {
         /// paths are among `files`. `done` carries every look again, as the final word.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         look: Option<Box<Look>>,
+        /// What comparing its pictures with those a person said something about (the run's
+        /// [`Approved`](crate::review::Approved)) found.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        since: Since,
     },
 }
 
@@ -205,6 +209,10 @@ pub struct RunCheck {
     /// What each picture of its look shows, by name, as a verdict follows it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub keys: Keys,
+    /// What its run's CLI found comparing its pictures with those a person said something
+    /// about.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub since: Since,
 }
 
 /// One run of the work, as a page shows it.
@@ -281,6 +289,10 @@ pub enum Change {
         /// What each picture of the look shows, as a verdict follows it.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         keys: Keys,
+        /// What the run's CLI found comparing its pictures with those a person said something
+        /// about.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        since: Since,
     },
     /// The run closed, with each check's final entry (red before green and instability are
     /// known only at the end) and every look.

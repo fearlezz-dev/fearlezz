@@ -86,7 +86,8 @@ function changeRun(run: Run, change: Change): Run {
       return { ...run, checks: upsert(run.checks, change.check, { started: change.at }) };
     case "finished": {
       const checks = withEntry(run.checks, change.check);
-      return { ...run, checks: change.look ? withLook(checks, change.look, change.keys ?? {}) : checks };
+      const looked = change.look ? withLook(checks, change.look, change.keys ?? {}) : checks;
+      return { ...run, checks: change.since ? upsert(looked, change.check.id, { since: change.since }) : looked };
     }
     case "done": {
       const keys = change.keys ?? {};

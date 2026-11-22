@@ -258,3 +258,65 @@ fn a_large_film_is_compared_at_720p_and_answers_in_its_own_pixels() {
     );
     assert!(area[1] <= 200 && (400..=900).contains(&area[3]), "{area:?}");
 }
+
+/// A still: one frame of `w` by `h` RGB pixels of colour `bg`, with `f` drawing on it.
+fn still(w: usize, h: usize, bg: [u8; 3], f: impl Fn(&mut [u8], usize)) -> Frames {
+    let mut px = bg.repeat(w * h);
+    f(&mut px, w);
+    Frames {
+        format: Format::Rgb,
+        w,
+        h,
+        each: vec![px],
+    }
+}
+
+/// Fills the `x0..x1` by `y0..y1` rectangle of `px`, `w` wide, with colour `c`.
+fn fill(px: &mut [u8], w: usize, (x0, x1): (usize, usize), (y0, y1): (usize, usize), c: [u8; 3]) {
+    for y in y0..y1 {
+        for x in x0..x1 {
+            px[(y * w + x) * 3..][..3].copy_from_slice(&c);
+        }
+    }
+}
+
+#[test]
+fn a_faint_block_moved_in_a_still_is_a_change() {
+    let at = |y: usize| {
+        still(200, 120, [13, 14, 17], move |px, w| {
+            fill(px, w, (20, 180), (y, y + 40), [30, 32, 39]);
+        })
+    };
+    let c = compared(&at(20), &at(32));
+    assert_eq!(c.verdict, Verdict::Changed, "{c:?}");
+}
+
+#[test]
+fn an_antialiased_edge_drawn_differently_in_a_still_is_the_same() {
+    // A black block on white whose right edge is one column of grey, a shade apart.
+    let edge = |grey: u8| {
+        still(120, 80, [255; 3], move |px, w| {
+            fill(px, w, (20, 60), (20, 60), [0; 3]);
+            fill(px, w, (60, 61), (20, 60), [grey; 3]);
+        })
+    };
+    let c = compared(&edge(120), &edge(170));
+    assert_eq!(c.verdict, Verdict::Same, "{c:?}");
+}
+
+#[test]
+fn a_change_of_fewer_than_30_pixels_in_a_still_is_the_same() {
+    let dot = |side: usize| {
+        still(100, 100, [255; 3], move |px, w| {
+            fill(px, w, (40, 40 + side), (40, 40 + side), [200, 0, 0]);
+        })
+    };
+    let blank = still(100, 100, [255; 3], |_, _| {});
+    assert_eq!(
+        compared(&blank, &dot(5)).verdict,
+        Verdict::Same,
+        "25 pixels"
+    );
+    let c = compared(&blank, &dot(6));
+    assert_eq!(c.verdict, Verdict::Changed, "36 pixels: {c:?}");
+}

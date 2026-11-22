@@ -7,6 +7,9 @@
 //! pixel diff matched states after a light blur, ignoring blobs too small to matter. Pixels
 //! are compared per color channel, so a change of hue alone is found. A pair of states caught
 //! mid transition counts as unchanged when each sits inside the other film's neighbours.
+//! Stills are lossless, so they get no codec noise allowance: every pixel more than about 2
+//! levels apart counts, however faint, unless it is antialiasing, and a change of fewer than
+//! 30 pixels is render jitter, no change a person sees.
 //!
 //! One algorithm, exact everywhere: a film arrives as its decoder's own YUV 4:2:0 planes, which
 //! ffmpeg and the browser's WebCodecs give byte for byte alike, and [`Picture::rgb`] is the one

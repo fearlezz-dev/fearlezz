@@ -157,7 +157,12 @@ look?: Look | null,
 /**
  * What each picture of the look shows, as a verdict follows it.
  */
-keys?: { [key in string]: string }, } | { "kind": "done", 
+keys?: { [key in string]: string }, 
+/**
+ * What the run's CLI found comparing its pictures with those a person said something
+ * about.
+ */
+since?: { [key in string]: { [key in string]: boolean } }, } | { "kind": "done", 
 /**
  * Every check's entry.
  */
@@ -621,7 +626,12 @@ look?: Look | null,
 /**
  * What each picture of its look shows, by name, as a verdict follows it.
  */
-keys?: { [key in string]: string }, };
+keys?: { [key in string]: string }, 
+/**
+ * What its run's CLI found comparing its pictures with those a person said something
+ * about.
+ */
+since?: { [key in string]: { [key in string]: boolean } }, };
 
 export type Look = { 
 /**

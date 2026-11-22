@@ -79,6 +79,12 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         }
         ("POST", ["api", "v2", "runs", run, "done"]) => api::done(req, env, config, run).await,
         ("PUT", ["api", "v2", "blobs", sha256]) => api::blob(req, env, config, sha256).await,
+        ("GET", ["api", "v2", "runs", run, "approved"]) => {
+            api::approved(&req, env, config, run).await
+        }
+        ("GET", ["api", "v2", "runs", run, "blobs", sha256]) => {
+            api::approved_blob(&req, env, config, run, sha256).await
+        }
         ("GET", ["api", "v2", "runs", run, "grant"]) => pages::grant(&req, env, config, run).await,
         ("POST", ["api", "v2", "runs", run, "verdicts"]) => {
             say::verdict(req, env, config, run).await

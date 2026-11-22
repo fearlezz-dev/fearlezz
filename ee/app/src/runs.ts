@@ -12,7 +12,8 @@ export type Dot = {
   key: string;
   kind: "base" | "run" | "now";
   /** The runs it stands for, newest first: runs that showed the same picture fold into one
-   * dot, and those that showed what now shows into now. None for the base. */
+   * dot, and those that showed what now shows, or a picture now's run found the same, into
+   * now. None for the base. */
   runs: Run[];
   /** The commit it shows: the base commit, or its newest run's head. */
   head: string;
@@ -28,9 +29,11 @@ const pictureIn = (run: Run, p: Shown) => run.checks.find((c) => c.id === p.chec
 
 /** The strip for picture `p` of `run` in `state`: the base (when the picture has a before),
  * every run opened before `run` that showed the picture, oldest first, folded by what each
- * showed, then now. */
+ * showed, then now, which also stands for the runs whose picture it found the same. */
 export function stripOf(state: Snapshot, run: Run, p: Shown): Dot[] {
   const nowKey = keyOf(run, p);
+  // What this run found comparing its picture with those a person said something about.
+  const same = run.checks.find((c) => c.id === p.check)?.since?.[p.picture.name] ?? {};
   const now: Dot = { key: "now", kind: "now", runs: [run], head: run.head, path: p.picture.after, look: false };
   // Runs are newest first; those after the one shown came before it.
   const at = state.runs.findIndex((r) => r.id === run.id);
@@ -40,7 +43,7 @@ export function stripOf(state: Snapshot, run: Run, p: Shown): Dot[] {
     const path = pictureIn(r, p)?.after;
     if (!path) continue;
     const key = keyOf(r, p);
-    if (key !== undefined && key === nowKey) {
+    if (key !== undefined && (key === nowKey || same[key])) {
       now.runs.push(r);
       continue;
     }

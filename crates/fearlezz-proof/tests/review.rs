@@ -121,6 +121,7 @@ fn run(id: &str, head: &str, state: RunState, items: &[Item]) -> (Run, Option<Pr
         started: Some(1.0),
         entry: Some(entry("screens", Ran::Passed)),
         keys: keys(items, id),
+        since: BTreeMap::new(),
         look: Some(look.clone()),
     };
     let run = Run {
@@ -296,26 +297,11 @@ fn a_verdict_follows_the_pictures_content_across_heads() {
 }
 
 #[test]
-fn a_still_is_keyed_by_its_before_and_after_bytes() {
-    let item = still("card.png", Change::Changed);
-    let hash = |path: &str| Some(if path.contains("before") { "b1" } else { "a1" }.to_owned());
-    assert_eq!(review::key(&item, hash).unwrap(), "still:b1:a1");
-    let new = still("new.png", Change::New);
+fn a_file_whose_bytes_are_not_known_yet_has_no_key() {
     assert_eq!(
-        review::key(&new, |_| Some("a2".into())).unwrap(),
-        "still:-:a2"
+        review::key(&still("card.png", Change::Changed), |_| None),
+        None
     );
-    // A file whose bytes are not known yet has no key.
-    assert_eq!(review::key(&item, |_| None), None);
-}
-
-#[test]
-fn a_film_is_keyed_by_which_states_changed_not_by_its_bytes() {
-    let a = review::key(&film(&[1, 2]), |_| Some("x".into())).unwrap();
-    let b = review::key(&film(&[1, 2]), |_| Some("y".into())).unwrap();
-    let c = review::key(&film(&[1]), |_| Some("x".into())).unwrap();
-    assert_eq!(a, b, "another recording of the same change");
-    assert_ne!(a, c, "another change");
 }
 
 #[test]
@@ -860,5 +846,184 @@ fn a_note_whose_run_is_not_known_says_nothing_about_change() {
     assert_eq!(
         review.pictures[0].changed_since, None,
         "nothing known to compare with"
+    );
+}
+
+/// Run `r` with its check's comparison of picture `name` now with the picture of key `then`.
+fn found(mut r: (Run, Option<Proof>), name: &str, then: &str, same: bool) -> (Run, Option<Proof>) {
+    r.0.checks[0]
+        .since
+        .entry(name.into())
+        .or_default()
+        .insert(then.into(), same);
+    r
+}
+
+#[test]
+fn a_pictures_key_is_its_own_file_so_another_base_keeps_it() {
+    let mut other_base = still("card.png", Change::Changed);
+    other_base.before = Some("looks/s/before/other.png".into());
+    let sha = |path: &str| Some(format!("sha of {path}"));
+    assert_eq!(
+        review::key(&still("card.png", Change::Changed), sha),
+        review::key(&other_base, sha)
+    );
+    assert_eq!(
+        review::key(&still("card.png", Change::Changed), sha).as_deref(),
+        Some("sha of looks/s/after/card.png")
+    );
+    assert_eq!(
+        review::key(&still("card.png", Change::Gone), sha).as_deref(),
+        Some("gone:sha of looks/s/before/card.png"),
+        "a gone picture is the one it was"
+    );
+}
+
+#[test]
+fn a_picture_its_run_found_the_same_as_the_one_that_looked_right_keeps_its_verdict() {
+    let before = run(
+        "r0",
+        "aaa",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let then = before.0.checks[0].keys["card.png"].clone();
+    let given = verdict("card.png", &then, "aaa");
+    let now = found(
+        run(
+            "r1",
+            "bbb",
+            RunState::Done,
+            &[still("card.png", Change::Changed)],
+        ),
+        "card.png",
+        &then,
+        true,
+    );
+    let review = review::review(
+        "bbb",
+        &[now, before],
+        &BTreeMap::new(),
+        std::slice::from_ref(&given),
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Approved, "{:?}", review.pictures);
+    assert_eq!(review.pictures[0].verdict.as_ref(), Some(&given));
+    assert_eq!(review.pictures[0].changed_since, None);
+}
+
+#[test]
+fn a_picture_its_run_found_changed_since_it_looked_right_waits() {
+    let before = run(
+        "r0",
+        "aaa",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let then = before.0.checks[0].keys["card.png"].clone();
+    let given = verdict("card.png", &then, "aaa");
+    let now = found(
+        run(
+            "r1",
+            "bbb",
+            RunState::Done,
+            &[still("card.png", Change::Changed)],
+        ),
+        "card.png",
+        &then,
+        false,
+    );
+    let review = review::review(
+        "bbb",
+        &[now, before],
+        &BTreeMap::new(),
+        std::slice::from_ref(&given),
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Waits);
+    assert_eq!(
+        review.pictures[0]
+            .changed_since
+            .as_ref()
+            .and_then(|c| c.verdict.as_ref()),
+        Some(&given)
+    );
+}
+
+#[test]
+fn an_open_note_on_a_picture_its_run_found_the_same_is_no_change_since() {
+    let before = run(
+        "r0",
+        "aaa",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let then = before.0.checks[0].keys["card.png"].clone();
+    let now = found(
+        run(
+            "r1",
+            "bbb",
+            RunState::Done,
+            &[still("card.png", Change::Changed)],
+        ),
+        "card.png",
+        &then,
+        true,
+    );
+    let review = review::review(
+        "bbb",
+        &[now, before],
+        &BTreeMap::new(),
+        &[],
+        &[note("card.png", "made on r0", NoteState::Open)],
+        None,
+    );
+    assert_eq!(review.state, State::NeedsChange);
+    assert_eq!(review.pictures[0].changed_since, None);
+}
+
+#[test]
+fn a_run_compares_each_picture_with_the_ones_a_person_said_something_about() {
+    let r0 = run(
+        "r0",
+        "aaa",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let r1 = run(
+        "r1",
+        "bbb",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let (k0, k1) = (
+        r0.0.checks[0].keys["card.png"].clone(),
+        r1.0.checks[0].keys["card.png"].clone(),
+    );
+    let older = Verdict {
+        at: 1.0,
+        ..verdict("card.png", "an older look", "aaa")
+    };
+    let newest = Verdict {
+        at: 9.0,
+        ..verdict("card.png", &k1, "bbb")
+    };
+    let open = note("card.png", "made on r0", NoteState::Open);
+    let resolved = Note {
+        run: "r1".into(),
+        ..note("card.png", "resolved", NoteState::Resolved)
+    };
+    let approved = review::approved(&[r1, r0], &[older, newest], &[open, resolved]);
+    let card: Vec<&str> = approved["screens"]["card.png"]
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mut want = vec![k0.as_str(), k1.as_str()];
+    want.sort_unstable();
+    assert_eq!(
+        card, want,
+        "the newest looks right and the open note's picture, not older looks or resolved notes"
     );
 }

@@ -4,7 +4,9 @@
 //! then streams its run: it opens the run before any check runs, says when each check starts
 //! and ends (its entry with the files it made, each sent by content when the host lacks it),
 //! asks, on CI, whether an admin accepted what the change weakens at this head, and closes the
-//! run with `proof.json`. A local run is the agent's word: the host shows it
+//! run with `proof.json`. Each check that takes pictures first compares them with the pictures
+//! a person said something about (fetched from the host), so the host follows a looks right by
+//! what a person sees, not by bytes. A local run is the agent's word: the host shows it
 //! unproven and never reviews it. Talks through curl, which every runner has.
 
 use std::fs;
@@ -15,7 +17,7 @@ use std::process::Command;
 use anyhow::{Context as _, Result, anyhow, bail};
 use fearlezz_proof::events::{self, Accepted, Done, Files, Missing, Open, Opened, Step, Weakened};
 use fearlezz_proof::floor::Weakening;
-use fearlezz_proof::review::Accept;
+use fearlezz_proof::review::{Accept, Approved, Since};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -77,6 +79,9 @@ pub(crate) struct Stream {
     run: String,
     /// The host's page of the work, where the run shows live.
     pub url: String,
+    /// The pictures a person said something about, asked once; none when the host could not
+    /// say, and then nothing is compared.
+    approved: std::sync::OnceLock<Option<Approved>>,
 }
 
 impl Host {
@@ -169,6 +174,7 @@ impl Host {
             host: self,
             run: opened.run,
             url: opened.url,
+            approved: std::sync::OnceLock::new(),
         }))
     }
 
@@ -179,6 +185,7 @@ impl Host {
             host: self,
             run: run.to_owned(),
             url: String::new(),
+            approved: std::sync::OnceLock::new(),
         }
     }
 
@@ -227,12 +234,14 @@ impl Stream {
             entry.output = Some(path.clone());
             local.push(Local::of(path, log.clone())?);
         }
+        let mut since = Since::new();
         let look = match look {
             Some(look) => {
                 let (in_bundle, files) = crate::proof::bundled(look);
                 for (path, on_disk) in files {
                     local.push(Local::of(path, on_disk)?);
                 }
+                since = self.since(&in_bundle, &local);
                 Some(Box::new(in_bundle))
             }
             None => None,
@@ -241,8 +250,78 @@ impl Stream {
             check: Box::new(entry),
             files: manifest(&local),
             look,
+            since,
         };
         self.step(&step, &local)
+    }
+
+    /// The pictures a person said something about in the run's work, asked once.
+    fn approved(&self) -> Option<&Approved> {
+        self.approved
+            .get_or_init(|| {
+                let path = format!("/api/v2/runs/{}/approved", self.run);
+                match self.host.call("GET", &path, Body::None) {
+                    Ok((200, answer)) => serde_json::from_value(answer).ok(),
+                    _ => None,
+                }
+            })
+            .as_ref()
+    }
+
+    /// What comparing each picture of `look` (its files among `local`, by their path in the
+    /// bundle) with the pictures a person said something about found: whether it looks the
+    /// same as each, by the comparison the page also runs. A film that only changed its
+    /// timing does not. A picture that could not be fetched or compared has no answer, which
+    /// the host takes as changed.
+    fn since(&self, look: &Look, local: &[Local]) -> Since {
+        let mut since = Since::new();
+        let Some(said) = self.approved().and_then(|a| a.get(&look.check)) else {
+            return since;
+        };
+        let Ok(dir) = tempfile::tempdir() else {
+            return since;
+        };
+        for item in &look.items {
+            let (Some(keys), Some(after)) = (said.get(&item.name), &item.after) else {
+                continue;
+            };
+            let Some(now) = local.iter().find(|f| &f.path == after) else {
+                continue;
+            };
+            for key in keys {
+                if key == &now.file.sha256 || key.starts_with("gone:") {
+                    continue;
+                }
+                if let Ok(same) = self.alike(key, now, item.kind == crate::look::TEXT, dir.path()) {
+                    since
+                        .entry(item.name.clone())
+                        .or_default()
+                        .insert(key.clone(), same);
+                }
+            }
+        }
+        since
+    }
+
+    /// Whether the run's file `now` looks the same as the repository's file of SHA-256 `key`,
+    /// fetched into `dir`: a text only when it is the same file.
+    fn alike(&self, key: &str, now: &Local, text: bool, dir: &Path) -> Result<bool> {
+        if text {
+            return Ok(false);
+        }
+        let extension = now.path.rsplit_once('.').map_or("png", |(_, e)| e);
+        let then = dir.join(format!("{key}.{extension}"));
+        let url = format!(
+            "{}/api/v2/runs/{}/blobs/{key}",
+            self.host.url,
+            segment(&self.run)
+        );
+        let status = download(&url, &self.host.token()?, &then)?;
+        if status != 200 {
+            bail!("the proof host answered {status}");
+        }
+        let (a, b) = crate::media::decode_both(&then, &now.on_disk)?;
+        Ok(crate::media::compare(&a, &b)?.verdict == fearlezz_compare::Verdict::Same)
     }
 
     fn step(&self, step: &Step, local: &[Local]) -> Result<()> {

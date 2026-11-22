@@ -143,6 +143,22 @@ describe("changed since", () => {
     expect(changedSince(s, other, shown(other))).toEqual({ verdict: undefined, notes: ["n1"] });
   });
 
+  test("a picture its run found the same as the one that looked right keeps the verdict", () => {
+    const found = (same: boolean): Run => ({ ...other, checks: [{ ...other.checks[0]!, since: { "card.png": { k1: same } } }] });
+    const same = found(true);
+    expect(verdictOf(state([same, first]), same, shown(same))?.run).toBe("r1");
+    expect(changedSince(state([same, first]), same, shown(same))).toBeUndefined();
+    const changed = found(false);
+    expect(verdictOf(state([changed, first]), changed, shown(changed))).toBeUndefined();
+    expect(changedSince(state([changed, first]), changed, shown(changed))?.verdict?.run).toBe("r1");
+  });
+
+  test("an open note on a picture its run found the same is no change since", () => {
+    const same: Run = { ...other, checks: [{ ...other.checks[0]!, since: { "card.png": { k1: true } } }] };
+    const s = { ...state([same, first]), verdicts: [], notes: [note("n1", "card.png")] };
+    expect(changedSince(s, same, shown(same))).toBeUndefined();
+  });
+
   test("a note whose run the page does not hold says nothing", () => {
     const s = { ...state([other]), verdicts: [], notes: [note("n1", "card.png")] };
     expect(changedSince(s, other, shown(other))).toBeUndefined();

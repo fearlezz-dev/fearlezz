@@ -13,6 +13,44 @@ pieces:
     status: built
     open: none
     tries: []
+  - id: one-same
+    status: done
+    tries:
+      - id: current-blur
+        what: today's comparison, blurred pixel diff over a fixed brightness gap
+        taught: misses a real 12px move of the faint loading skeleton (connecting, max 22 of 255, 72k pixels) and calls it same
+        state: dropped
+        why: too loose for faint changes
+        evidence: [scratchpad proto-compare/out.tsv over CI runs 44899471800, 44902937976, 44947970672, 44955200512]
+      - id: pixelmatch-default
+        what: pixelmatch, antialiasing ignored, threshold 0.1
+        taught: also calls the faint skeleton move same
+        state: dropped
+        why: same blind spot
+      - id: pixelmatch-low
+        what: pixelmatch, antialiasing ignored, threshold 0.01 (about 2 levels)
+        taught: every desktop flicker is 0 (they differ by 2 levels at most); phone flicker leaves at most 22 pixels; every real change on #59 is 650 or more; the skeleton move is 71k
+        state: picked
+        why: built in fearlezz-compare as stills' own diff (diff.rs still_diff), films keep their codec allowance; agrees with the prototype on all 137 real pairs (36 changed, 101 same)
+        evidence: [crates/fearlezz-compare/tests/compare.rs, crates/fearlezz/tests/media.rs a_faint_move_in_a_still_is_a_change, render_jitter_in_a_still_is_the_same, scratchpad proto-compare/out-new.tsv]
+      - id: neighbourhood
+        what: a pixel changes only when nothing within 1 pixel in the other picture matches it
+        taught: no better than pixelmatch-low on the phone flicker (45 left)
+        state: dropped
+        why: no gain
+  - id: look-again-by-comparison
+    status: built
+    tries: []
+  - id: render-noise
+    status: dropped
+    open: the floor makes it no change a person sees
+    tries:
+      - id: pixel-ratio
+        what: render the phone at pixel ratio 1, 3, or without the shrink (scale device)
+        taught: 29, 33 and 34 of 58 phone stills still differ across three local runs, so the pixel ratio is not the cause; the differences sit on pictures scaled inside the page (stage, thumbnails, up to 51 of 255) and the Live dot
+        state: dropped
+        why: not the cause
+        evidence: [scratchpad jitter/]
 
 decided:
   - id: strip
@@ -27,12 +65,30 @@ decided:
     what: "Yes, exact everywhere": the CLI reads raw yuv420p planes from ffmpeg, one shared Rust function converts to colour and scales, for the CLI, CI and the browser
   - id: look-again-default
     what: a Look again picture opens compared with "Your look"; other pictures open compared with the base
+  - id: one-same-model
+    what: "Yes, prove it first": one antialias aware comparison is the only meaning of same, and Look again is CI comparing now with the picture the person approved
+  - id: floor
+    what: "Ignore under ~30 px": a change of fewer than about 30 pixels (antialiasing already ignored) counts as the same
+  - id: timing-is-look-again
+    what: "Timing is Look again": a film that only changed its timing since the look asks for a new look
   - id: in-59
     what: part of #59, the same work on the review page (was a separate PR)
 
 open: []
 
 slices:
+  - id: compare-stills
+    tests: [fearlezz-compare tests/compare.rs still tests, fearlezz tests/media.rs a_faint_move_in_a_still_is_a_change, render_jitter_in_a_still_is_the_same]
+    status: done
+  - id: approved-model-host
+    tests: [fearlezz-proof tests/review.rs, ee/host-tests host.rs a_verdict_follows_what_the_run_found_comparing_with_the_approved_picture]
+    status: done
+  - id: approved-cli
+    tests: [crates/fearlezz/tests/host.rs a_finished_check_says_whether_each_picture_looks_like_the_approved_ones]
+    status: done
+  - id: approved-page
+    tests: [ee/app src/review.test.ts, src/runs.test.ts]
+    status: done
   - id: shared-crate
     tests: [cargo test -p fearlezz-compare (18), cargo test -p fearlezz --test media, compare-wasm check]
     status: done # f8d9a8e on feat/compare-in-page, fearlezz run --stage merge ready to merge

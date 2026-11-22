@@ -420,3 +420,155 @@ pub(crate) fn outside_range(x: &Image, near: &[&Image]) -> usize {
     mask.drop_specks();
     mask.count()
 }
+
+// ----- stills ------------------------------------------------------------------------------
+
+/// The smallest change of a still a person sees, in pixels; fewer is render jitter (proven on
+/// the proof host's own pages: an icon drawn a fraction of a pixel apart leaves up to 22).
+const STILL_MIN: usize = 30;
+/// The largest squared YIQ distance two colours of a still may be apart and still be the same
+/// colour: pixelmatch's threshold 0.01 of the largest distance, 35215, about 2 levels of 255.
+const STILL_DELTA: f64 = 35215.0 * 0.01 * 0.01;
+
+/// Pixels that differ between two stills, and boxes around them. Stills are lossless, so
+/// unlike film frames they get no codec noise allowance: every pixel more than about 2
+/// levels apart counts, however faint, unless it is antialiasing, and fewer than
+/// [`STILL_MIN`] count as none. The colour distance and the antialiasing rule are
+/// pixelmatch's (ISC licence, Mapbox), on RGB without alpha.
+pub(crate) fn still_diff(a: &Image, b: &Image) -> Diff {
+    if a.w != b.w || a.h != b.h {
+        return Diff {
+            px: a.w * a.h,
+            boxes: vec![[0, 0, a.w as u32, a.h as u32]],
+        };
+    }
+    let (w, h) = (a.w, a.h);
+    let mut mask = Mask {
+        w,
+        h,
+        on: vec![false; w * h],
+    };
+    for y in 0..h {
+        for x in 0..w {
+            if delta(a, b, y * w + x, y * w + x, false).abs() > STILL_DELTA
+                && !antialiased(a, b, x, y)
+                && !antialiased(b, a, x, y)
+            {
+                mask.on[y * w + x] = true;
+            }
+        }
+    }
+    let px = mask.count();
+    if px < STILL_MIN {
+        return Diff {
+            px: 0,
+            boxes: Vec::new(),
+        };
+    }
+    Diff {
+        px,
+        boxes: mask.boxes(BOX_GROW),
+    }
+}
+
+/// Pixel `p` of `a` against pixel `q` of `b`: the squared YIQ distance, negative when `b`'s
+/// is darker, or with `y_only` only the brightness difference.
+fn delta(a: &Image, b: &Image, p: usize, q: usize, y_only: bool) -> f64 {
+    let rgb = |img: &Image, i: usize| {
+        img.px[i * 3..]
+            .first_chunk::<3>()
+            .copied()
+            .unwrap_or_default()
+    };
+    let (pa, pb) = (rgb(a, p), rgb(b, q));
+    if pa == pb {
+        return 0.0;
+    }
+    let [r1, g1, b1] = pa.map(f64::from);
+    let [r2, g2, b2] = pb.map(f64::from);
+    let y1 = r1 * 0.298_895_31 + g1 * 0.586_622_47 + b1 * 0.114_482_23;
+    let y2 = r2 * 0.298_895_31 + g2 * 0.586_622_47 + b2 * 0.114_482_23;
+    let y = y1 - y2;
+    if y_only {
+        return y;
+    }
+    let i = (r1 * 0.595_977_99 - g1 * 0.274_176_10 - b1 * 0.321_801_89)
+        - (r2 * 0.595_977_99 - g2 * 0.274_176_10 - b2 * 0.321_801_89);
+    let q = (r1 * 0.211_470_17 - g1 * 0.522_617_11 + b1 * 0.311_146_94)
+        - (r2 * 0.211_470_17 - g2 * 0.522_617_11 + b2 * 0.311_146_94);
+    let d = 0.5053 * y * y + 0.299 * i * i + 0.1957 * q * q;
+    if y1 > y2 { -d } else { d }
+}
+
+/// The 3 by 3 block around `(x, y)` clipped to the image, and whether it is clipped.
+fn around(
+    img: &Image,
+    x: usize,
+    y: usize,
+) -> (
+    std::ops::RangeInclusive<usize>,
+    std::ops::RangeInclusive<usize>,
+    bool,
+) {
+    let (x0, y0) = (x.saturating_sub(1), y.saturating_sub(1));
+    let (x2, y2) = ((x + 1).min(img.w - 1), (y + 1).min(img.h - 1));
+    (x0..=x2, y0..=y2, x == x0 || x == x2 || y == y0 || y == y2)
+}
+
+/// Whether pixel `(x, y)` of `img` is likely antialiasing: among its neighbours it has both a
+/// darker and a brighter one, at most two of its own colour, and the darkest or the brightest
+/// has three or more of its own colour around it in both images (Vysniauskas, 2009).
+fn antialiased(img: &Image, other: &Image, x: usize, y: usize) -> bool {
+    let (xs, ys, edge) = around(img, x, y);
+    let p = y * img.w + x;
+    let mut zeroes = usize::from(edge);
+    let (mut min, mut max) = (0.0, 0.0);
+    let (mut darkest, mut brightest) = ((0, 0), (0, 0));
+    for nx in xs {
+        for ny in ys.clone() {
+            if nx == x && ny == y {
+                continue;
+            }
+            let d = delta(img, img, p, ny * img.w + nx, true);
+            if d == 0.0 {
+                zeroes += 1;
+                if zeroes > 2 {
+                    return false;
+                }
+            } else if d < min {
+                min = d;
+                darkest = (nx, ny);
+            } else if d > max {
+                max = d;
+                brightest = (nx, ny);
+            }
+        }
+    }
+    if min == 0.0 || max == 0.0 {
+        return false;
+    }
+    let settled = |(x, y): (usize, usize)| many_siblings(img, x, y) && many_siblings(other, x, y);
+    settled(darkest) || settled(brightest)
+}
+
+/// Whether pixel `(x, y)` of `img` has three or more neighbours of its exact colour.
+fn many_siblings(img: &Image, x: usize, y: usize) -> bool {
+    let (xs, ys, edge) = around(img, x, y);
+    let p = (y * img.w + x) * 3;
+    let mut zeroes = usize::from(edge);
+    for nx in xs {
+        for ny in ys.clone() {
+            if nx == x && ny == y {
+                continue;
+            }
+            let q = (ny * img.w + nx) * 3;
+            if img.px[p..p + 3] == img.px[q..q + 3] {
+                zeroes += 1;
+            }
+            if zeroes > 2 {
+                return true;
+            }
+        }
+    }
+    false
+}
