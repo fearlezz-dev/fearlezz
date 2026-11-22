@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { apply } from "./live";
-import { counts, grouped, groupings, lanes, marksAt, parts, picturesOf, screensOf, stillMarks } from "./pictures";
+import { counts, grouped, groupings, hundredths, lanes, marksAt, parts, picturesOf, screensOf, stillMarks } from "./pictures";
 import type { Check, Comparison, Look, Pair, Picture, PictureChange, Run, Snapshot } from "./proof";
 
 const picture = (name: string, change: PictureChange, extra: Partial<Picture> = {}): Picture => ({
@@ -239,5 +239,13 @@ describe("screensOf", () => {
   test("the same screen in two checks is two screens", () => {
     const two = run([look("a", [picture("home/light.png", "changed")]), look("b", [picture("home/light.png", "changed")])]);
     expect(screensOf(picturesOf(two)).map((s) => s.key)).toEqual(["a/home", "b/home"]);
+  });
+});
+
+describe("hundredths", () => {
+  test("the clock shows the moment a note keeps, also halfway between two hundredths", () => {
+    // 0.045 shown with toFixed alone reads 0.04, while the note kept 0.05.
+    for (const t of [0.045, 0.125, 1.005, 2.675, 0.04]) expect(Number.parseFloat(hundredths(t).toFixed(2))).toBe(hundredths(t));
+    expect(hundredths(0.045)).toBe(0.05);
   });
 });

@@ -216,7 +216,8 @@ pub struct Review {
     /// The accept of exactly those weakenings, once an admin gave it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept: Option<Accept>,
-    /// The work's open notes, oldest first: they follow the work, not the head.
+    /// The work's open notes on pictures the head asks a person to look at, oldest first: they
+    /// follow the work, not the head, and one whose picture the head does not show lapses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
     /// Where the preview deploy of the head lives, as its proof names it.
@@ -465,6 +466,16 @@ pub fn review(
 
     let open: Vec<&Note> = notes.iter().filter(|n| n.is_open()).collect();
     let pictures = looked_at(&live, runs, verdicts, &open);
+    // An open note holds review only on a picture the head asks a person to look at: one on a
+    // picture renamed, removed or no longer changed lapses, since nothing shows it.
+    let open: Vec<&Note> = open
+        .into_iter()
+        .filter(|n| {
+            pictures
+                .iter()
+                .any(|p| p.check == n.check && p.name == n.picture)
+        })
+        .collect();
     let mut weakened: Vec<Weakening> = Vec::new();
     for proof in live.iter().filter_map(|(_, proof)| proof.as_ref()) {
         for w in &proof.weakened {

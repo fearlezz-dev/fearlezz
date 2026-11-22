@@ -294,6 +294,11 @@ pub async fn feedback(
             note,
         });
     }
+    // A note on a picture the head does not show lapses, as in the review.
+    let review = row.review.as_deref().map(read::<Review>).transpose()?;
+    if let Some(review) = &review {
+        notes.retain(|n| review.notes.iter().any(|open| open.id == n.note.id));
+    }
     let work = stored.work();
     let answer = Feedback {
         url: work::page_url(
@@ -303,7 +308,7 @@ pub async fn feedback(
             work.pull.as_ref().map(|p| p.number),
         ),
         work,
-        review: row.review.as_deref().map(read::<Review>).transpose()?,
+        review,
         notes,
     };
     let headers = Headers::new();

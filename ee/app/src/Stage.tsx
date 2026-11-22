@@ -8,7 +8,7 @@ import { DiffLines } from "./DiffLines";
 import { Icon } from "./icons";
 import { fileUrl } from "./grant";
 import { type Draft, type Shown as Noted, meant, onSide, regionBetween } from "./notes";
-import { type Box, type Shown, WORDS, isFilm, isText, lanes, marksAt, plainSummary, stillMarks, title } from "./pictures";
+import { type Box, type Shown, WORDS, hundredths, isFilm, isText, lanes, marksAt, plainSummary, stillMarks, title } from "./pictures";
 import type { Comparison } from "./proof";
 import { ready } from "./preload";
 import { short } from "./short";
@@ -670,7 +670,7 @@ function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?:
           {props.clock.playing() ? "Pause" : props.film || props.pair ? "Play both" : "Play"}
         </button>
         <span class="t" data-clock>
-          {props.clock.t().toFixed(2)} s
+          {hundredths(props.clock.t()).toFixed(2)} s
         </span>
         <div class="speeds seg" role="group" aria-label="Speed">
           <For each={SPEEDS}>
@@ -700,7 +700,7 @@ function Timeline(props: { film?: Comparison | undefined; pair?: boolean; side?:
         aria-label={props.film ? "Time in both films" : "Time in the film"}
         aria-valuemin="0"
         aria-valuemax={total().toFixed(2)}
-        aria-valuenow={props.clock.t().toFixed(2)}
+        aria-valuenow={hundredths(props.clock.t()).toFixed(2)}
         onPointerDown={(e) => {
           lane!.setPointerCapture(e.pointerId);
           at(e);
