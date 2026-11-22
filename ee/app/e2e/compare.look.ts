@@ -67,6 +67,43 @@ test("a dot shows its run's picture beside now, and the Look again line goes bac
   await expect(page.locator("[data-compare-look]")).toHaveCount(0);
 });
 
+test("in full screen, two films play once both can play through and the page has compared them", async ({ page }) => {
+  await show(page, WORK_PATH, STRIP.world);
+  await page.locator(`[data-picture="${STRIP.film}"]`).click();
+  // Notes what stood the moment the films began to play.
+  const watch = () =>
+    page.evaluate(() => {
+      const w = window as unknown as { started?: { ready: number[]; says: string | null } };
+      delete w.started;
+      const play = () => document.querySelector("[data-stage] [data-play]");
+      const seen = new MutationObserver(() => {
+        if (play()?.textContent !== "Pause" || w.started) return;
+        const films = [...document.querySelectorAll<HTMLVideoElement>("[data-stage] video")];
+        w.started = { ready: films.map((v) => v.readyState), says: document.querySelector("[data-pair-says]")?.getAttribute("data-pair-says") ?? null };
+      });
+      seen.observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+  const started = () => page.waitForFunction(() => (window as unknown as { started?: unknown }).started).then((h) => h.jsonValue() as Promise<{ ready: number[]; says: string | null }>);
+
+  // A film stepped to in full screen plays at once.
+  await page.keyboard.press("k");
+  await page.keyboard.press("f");
+  await watch();
+  await page.keyboard.press("j");
+  await expect(stage(page)).toHaveAttribute("data-key", STRIP.film);
+  let at = await started();
+  expect(at.ready, "both films could play through").toEqual([4, 4]);
+  expect(at.says, "compared with your look first").not.toBe("comparing");
+
+  // Another run: the page compares it before the films play.
+  await page.keyboard.press(" ");
+  await watch();
+  await dot(page, "r1").click();
+  at = await started();
+  expect(at.ready).toEqual([4, 4]);
+  expect(at.says).toBe("changed");
+});
+
 // The strip as shown, a fold as + and the runs it holds.
 const stops = (page: Page) =>
   page.locator("[data-strip] li").evaluateAll((all) => all.map((li) => li.getAttribute("data-dot") ?? `+${li.getAttribute("data-fold")}:${li.textContent}`));
