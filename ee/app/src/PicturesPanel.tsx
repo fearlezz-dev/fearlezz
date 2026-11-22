@@ -173,7 +173,13 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
   const toggleFull = () => {
     const on = !full();
     setFull(on);
-    if (on && document.fullscreenEnabled && !document.fullscreenElement) table?.requestFullscreen().catch(() => {});
+    // The browser's full screen takes Esc for itself; locked, a press reaches the page (which
+    // closes what is open first) and holding it still leaves, where the browser can lock keys.
+    if (on && document.fullscreenEnabled && !document.fullscreenElement)
+      table
+        ?.requestFullscreen()
+        .then(() => (navigator as Navigator & { keyboard?: { lock?: (keys: string[]) => Promise<void> } }).keyboard?.lock?.(["Escape"]))
+        .catch(() => {});
     if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
   };
   // In full screen the pictures take what the window has left, so it never scrolls.
@@ -332,6 +338,8 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
       else if (/^[1-5]$/.test(e.key)) setMode(MODES[Number(e.key) - 1]![0]);
       else if (e.key === "u") press("[data-withdraw]:not(:disabled)");
       else if (e.key === "n") press("[data-whole]");
+      // The first note offered from another variant, added here; pressed again, the next.
+      else if (e.key === "a") press("[data-copy-note]");
       else if (e.key === "t") swap("theme");
       else if (e.key === "v") swap("viewport");
       else if (e.key === "?") setKeysShown((v) => !v);
@@ -547,6 +555,7 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
             files={files()}
             menu={menu()}
             onMenu={setMenu}
+            onFocus={pick}
             onDraft={(d) => {
               setDraft(d);
               setComposing(!!d);
@@ -580,6 +589,7 @@ const KEYS: [string[], string][] = [
   [["Hold Y"], "The board of this screen's variants: 1 to 4 pick a shape, arrows and Space a tile, Y says it"],
   [["U"], "Take back looks right"],
   [["N"], "Note the whole picture; drag on it to mark a region"],
+  [["A"], "Add a note of another variant here, in its place"],
   [["T"], "The other theme of this screen"],
   [["V"], "The other viewport of this screen"],
   [["1", "5"], "Side by side, slider, onion skin, difference, blink"],
@@ -740,6 +750,8 @@ function ReviewBar(props: {
    * on the screen for a held Y. */
   menu: Menu;
   onMenu: (open: Menu) => void;
+  /** A tile focused on the board: its picture is shown behind it. */
+  onFocus: (key: string) => void;
 }) {
   const [error, setError] = createSignal("");
   const [words, setWords] = createSignal("");
@@ -783,7 +795,9 @@ function ReviewBar(props: {
   };
   // A press outside the choice closes it.
   onMount(() => {
-    const away = (e: PointerEvent) => props.menu && !(e.target as HTMLElement | null)?.closest("[data-say-more], [data-say-menu]") && props.onMenu(false);
+    // Moving to another picture keeps it open, its picks kept, for marking quickly.
+    const away = (e: PointerEvent) =>
+      props.menu && !(e.target as HTMLElement | null)?.closest("[data-say-more], [data-say-menu], [data-picture], [data-step]") && props.onMenu(false);
     document.addEventListener("pointerdown", away);
     onCleanup(() => document.removeEventListener("pointerdown", away));
   });
@@ -869,7 +883,7 @@ function ReviewBar(props: {
   };
   const resolve = async (note: Note) => {
     setError("");
-    setError((await resolveNote(note, by())) ?? "");
+    setError((await resolveNote(props.state, note, by())) ?? "");
   };
   const noteHint = () =>
     isText(props.shown.picture)
@@ -928,6 +942,7 @@ function ReviewBar(props: {
                 files={props.files}
                 menu={props.menu}
                 onMenu={props.onMenu}
+                onFocus={props.onFocus}
                 onSay={(list: Shown[]) => void send(list)}
               />
             </span>
@@ -998,7 +1013,7 @@ function ReviewBar(props: {
           )}
         </Show>
         <span class="step">
-          <button type="button" class="ghost" aria-label="Previous picture" title="Previous (k)" onClick={() => props.onStep(-1)} disabled={props.position <= 1}>
+          <button type="button" class="ghost" aria-label="Previous picture" title="Previous (k)" data-step onClick={() => props.onStep(-1)} disabled={props.position <= 1}>
             ‹
           </button>
           <span class="num">
@@ -1009,7 +1024,7 @@ function ReviewBar(props: {
           <button type="button" class="ghost keys-toggle" title="Keys (?)" aria-label="Show the keys" onClick={() => props.onKeys()}>
             <kbd>?</kbd>
           </button>
-          <button type="button" class="ghost" aria-label="Next picture" title="Next (j)" onClick={() => props.onStep(1)} disabled={props.position >= props.of}>
+          <button type="button" class="ghost" aria-label="Next picture" title="Next (j)" data-step onClick={() => props.onStep(1)} disabled={props.position >= props.of}>
             ›
           </button>
         </span>
@@ -1102,7 +1117,7 @@ function ReviewBar(props: {
           <p class="label">On other variants</p>
           <ul>
             <For each={props.elsewhere}>
-              {(from) => (
+              {(from, k) => (
                 <li data-from={from.note.id}>
                   <p class="words">
                     {from.note.words}
@@ -1114,10 +1129,13 @@ function ReviewBar(props: {
                         type="button"
                         class="btn"
                         data-copy-note
-                        title="The same words on the same place of this picture"
+                        title="The same words on the same place of this picture (a)"
                         onClick={() => void copy(from)}
                       >
                         Add here
+                        <Show when={k() === props.elsewhere.findIndex((o) => o.place)}>
+                          <kbd>A</kbd>
+                        </Show>
                       </button>
                     </Show>
                     <button type="button" class="plain" data-use-words title="These words in a note on this picture; drag to mark where" onClick={() => useWords(from)}>

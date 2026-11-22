@@ -96,6 +96,26 @@ test("a held Y opens the board: a shape picks, a tile is taken out, and Y says i
   await expect(swatch(page, "mobile/light.png")).toHaveAttribute("data-verdict", "none");
 });
 
+test("the board stays open with its picks while the picture behind it follows the focused tile", async ({ page }) => {
+  await show(page, WORK_PATH, WORK["no-before"]!.world);
+  await swatch(page, "desktop/dark.png").click();
+  await board(page);
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.locator("[data-stage]")).toHaveAttribute("data-key", "ee-page-look/profile/desktop/light.png");
+  await expect(page.locator("[data-say-menu]")).toBeVisible();
+  await page.keyboard.press(" ");
+  await expect(tile(page, "desktop/light.png")).toHaveAttribute("aria-pressed", "true");
+  await expect(tile(page, "desktop/dark.png")).toHaveAttribute("aria-pressed", "true");
+  // Another picture of the screen picked in the sheet keeps the board and its picks.
+  await swatch(page, "mobile/light.png").click();
+  await expect(page.locator("[data-stage]")).toHaveAttribute("data-key", "ee-page-look/profile/mobile/light.png");
+  await expect(page.locator("[data-say-menu]")).toBeVisible();
+  await expect(tile(page, "mobile/light.png")).toHaveAttribute("data-cursor", "");
+  await expect(page.locator("[data-reach-tally]")).toContainText("Marks 2");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-say-menu]")).toBeHidden();
+});
+
 test("the board shows what already looks right and the note a looks right resolves", async ({ page }) => {
   await show(page, WORK_PATH, WORK["no-before"]!.world);
   await swatch(page, "desktop/dark.png").click();
@@ -262,7 +282,8 @@ test("a note of another variant is made here in its place and words, or lends it
   await show(page, WORK_PATH, WORK["needs-change"]!.world);
   await page.locator('[data-picture="ee-page-look/profile/desktop/dark.png"]').click();
   const made = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/notes"));
-  await page.locator("[data-copy-note]").click();
+  // A adds it here, as Add here does.
+  await page.keyboard.press("a");
   const ask = (await made).postDataJSON();
   expect(ask).toMatchObject({ picture: "profile/desktop/dark.png", side: "after", region: { x: 0.25, y: 0.13, w: 0.5, h: 0.07 } });
   expect(ask.words).toContain("The banner pushes the card down");

@@ -464,6 +464,10 @@ fn main() {
             notes::a_note_takes_back_the_looks_right_on_its_picture,
         ),
         (
+            "resolving_a_note_with_linked_resolves_the_notes_made_from_it",
+            notes::resolving_a_note_with_linked_resolves_the_notes_made_from_it,
+        ),
+        (
             "a_cli_token_reads_but_never_writes",
             notes::a_cli_token_reads_but_never_writes,
         ),

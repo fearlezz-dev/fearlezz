@@ -208,7 +208,11 @@ review?: Review | null, } | { "kind": "note",
 /**
  * The note as it is now.
  */
-note: Note, } | { "kind": "waiting", 
+note: Note, } | { "kind": "resolved", 
+/**
+ * The notes as they are now.
+ */
+notes: Array<Note>, } | { "kind": "waiting", 
 /**
  * Every one.
  */

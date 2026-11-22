@@ -252,7 +252,8 @@ ends with the newest review, and a GitHub that hangs or fails never fails or hol
   (renamed, removed or unchanged): then it lapses, holding neither the review nor the agent,
   since nothing shows it. A note made again from another (on another variant of the screen)
   keeps a `link` to the first of its group, so editing one offers to edit every open note of
-  the group in the same write (the `edited` event carries them).
+  the group in the same write (the `edited` event carries them), and the page's Resolve
+  resolves every open note of the group in the same write (the `resolved` event carries them).
 - **The page shows what a person says at once**: a verdict, its undo, a note, an edit or a
   resolve shows as the event the host will send (`ee/app/src/hopes.ts`), until the host's own
   event comes; a refusal takes it back and says why. The Worker runs beside D1 (`placement` in
@@ -273,7 +274,7 @@ ends with the newest review, and a GitHub that hangs or fails never fails or hol
 | `DELETE /api/v2/runs/<run>/verdicts` | Body `{"check", "picture"}`: take back the verdict on that picture's content, which waits for a look again. `200 {}`, also when it had none. `403` without write access; `409` as for a verdict. |
 | `POST /api/v2/runs/<run>/notes` | On a CI or a local run. Body `{"check", "picture", "side": "before" \| "after" \| "both", "region": {"x", "y", "w", "h"}, "time"?, "words", "link"?}` (`link`: the note it was made again from). `201 {"note"}`. `400` for empty words (at most 2000 characters), a region outside the picture, a side the picture lacks, or a time on a still; `403` without write access; `409` for a picture the run does not have. |
 | `PATCH /api/v2/notes/<id>` | Body `{"words", "linked"?}`: new words for that open note, or with `linked` for every open note of its group. `200 {"notes"}`. `400` for empty words; `403` without write access; `409` for a resolved note. |
-| `POST /api/v2/notes/<id>/resolve` | Body `{}`. `200 {"note"}`. `403` without write access. |
+| `POST /api/v2/notes/<id>/resolve` | Body `{"linked"?}`: that note, or with `linked` every open note of its group too. `200 {"note", "notes"}` (every note resolved). `403` without write access. |
 | `POST /api/v2/runs/<run>/accept` | Body `{}`. `201 {"accept"}`, once GitHub runs the failed proof job again. `403` unless admin, `409` unless the run is done with weakenings; `502` when the accept is kept but GitHub did not run the job again (run it again on GitHub). |
 | `GET /api/v2/viewer/<owner>/<repo>` | `{"login", "role": "admin" \| "write" \| "read"}`, or `{"login": null}` signed out. |
 

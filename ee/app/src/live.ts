@@ -70,6 +70,10 @@ export function applyWork(state: Snapshot, seq: number, change: WorkChange): Sna
       const verdicts = (state.verdicts ?? []).filter((v) => v.check !== n.check || v.picture !== n.picture);
       return { ...next, notes: [...others, n], verdicts };
     }
+    case "resolved": {
+      const gone = new Set(change.notes.map((n) => n.id));
+      return { ...next, notes: (state.notes ?? []).filter((n) => !gone.has(n.id)) };
+    }
     case "edited": {
       const now = new Map(change.notes.map((n) => [n.id, n]));
       return { ...next, notes: (state.notes ?? []).map((n) => now.get(n.id) ?? n) };
