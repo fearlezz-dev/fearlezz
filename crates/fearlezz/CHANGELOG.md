@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.5.2](https://github.com/fearlezz-dev/fearlezz/compare/v0.5.1...v0.5.2) (2026-11-23)
+
+
+### Features
+
+* a film is timed from what its check said happened in it ([33db68e](https://github.com/fearlezz-dev/fearlezz/commit/33db68efe4e5e4100ccb728923860fb2581b2198))
+* a looks right follows a picture that looks the same as the one approved ([a54d74f](https://github.com/fearlezz-dev/fearlezz/commit/a54d74f1fd4d79f0de05e054d365971c9343490a))
+* a minimum Fearlezz version, setup init writes the proof workflow, and opportunities to prove more ([#62](https://github.com/fearlezz-dev/fearlezz/issues/62)) ([4640289](https://github.com/fearlezz-dev/fearlezz/commit/46402894fc9f6610ff1b6d3764a827c3909214c6))
+* a setup guide agents follow ([#68](https://github.com/fearlezz-dev/fearlezz/issues/68)) ([0c226c1](https://github.com/fearlezz-dev/fearlezz/commit/0c226c1961453870754a829d979b7f42c6c80792))
+* compare pictures in one Rust crate that also builds for wasm ([8c08078](https://github.com/fearlezz-dev/fearlezz/commit/8c08078811d4049d3f9e5360dba893560a8ced43))
+* **ee:** compare a picture with any earlier run on a strip of runs ([24e3fdd](https://github.com/fearlezz-dev/fearlezz/commit/24e3fdd9cf4c392e45bcce6d3e7a43cd07b876ad))
+* films play aligned at their marks, matched only between the same marks ([7442fdc](https://github.com/fearlezz-dev/fearlezz/commit/7442fdc22af442b97fa00e40f72d17d6d6a106a8))
+* setup names an older Fearlezz on PATH, says why no proof page was sent, and hints steps over && ([#61](https://github.com/fearlezz-dev/fearlezz/issues/61)) ([7a691b0](https://github.com/fearlezz-dev/fearlezz/commit/7a691b0ad6811aaa59859a53e6edd455d3a21efa))
+* showcase films play as animated WebP ([#70](https://github.com/fearlezz-dev/fearlezz/issues/70)) ([c6a3c4a](https://github.com/fearlezz-dev/fearlezz/commit/c6a3c4a206dbf92eb365bf9845022fb46e1c1bb3))
+* showcase pictures from the proof host at /showcase/, for any repository with the app, and setup showcase markup ([#66](https://github.com/fearlezz-dev/fearlezz/issues/66)) ([48073f1](https://github.com/fearlezz-dev/fearlezz/commit/48073f12c480c347a3aea234b94fbc12a17949c9))
+* the proof host's review page: notes and looks answer at once, films play and take notes, pictures load ahead, and stills of every state ([2bfb644](https://github.com/fearlezz-dev/fearlezz/commit/2bfb6440933b5ea88d0e8fdbb445f7387f6057ce))
+
+
+### Bug Fixes
+
+* a film's name keeps its extension, so a still and a film of one screen never share verdicts or notes, and two pictures of one name fail the check ([65a2a8c](https://github.com/fearlezz-dev/fearlezz/commit/65a2a8c6c178ce9ac6868864bfbbfcbaa0ffede1))
+* adding a tool with its settings no longer weakens the proof ([#63](https://github.com/fearlezz-dev/fearlezz/issues/63)) ([70aba19](https://github.com/fearlezz-dev/fearlezz/commit/70aba196256b93478d83adfab981601c153be743))
+* **ee:** the page's comparison keeps a large film's frames scaled and capped, recovers from a trap, runs only the newest ask and refuses hostile films; notes stay on now's side, and the page needs no wasm-unsafe-eval ([01bb4c0](https://github.com/fearlezz-dev/fearlezz/commit/01bb4c0d7667450de3f296d7f7e62b19082525c8))
+* Fearlezz runs the ffmpeg of the project's shell for pictures ([#64](https://github.com/fearlezz-dev/fearlezz/issues/64)) ([d0de8a3](https://github.com/fearlezz-dev/fearlezz/commit/d0de8a3f0b65657d879335d046903f2eaa5417a9))
+* key the built in checks on what the binary ships, not its version ([#67](https://github.com/fearlezz-dev/fearlezz/issues/67)) ([e8b2be9](https://github.com/fearlezz-dev/fearlezz/commit/e8b2be9b3d4f3243cc488d4a2f0333baa05108be))
+* the pull request title decides red before green and the commits check locally as in CI ([#65](https://github.com/fearlezz-dev/fearlezz/issues/65)) ([db9ac80](https://github.com/fearlezz-dev/fearlezz/commit/db9ac808ae6d99ff63ac9739709ffa39b5ffbf1a))
+
 ## [0.5.1](https://github.com/fearlezz-dev/fearlezz/compare/v0.5.0...v0.5.1) (2026-11-19)
 
 
