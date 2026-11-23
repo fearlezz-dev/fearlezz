@@ -55,6 +55,10 @@ export function Strip(props: { dots: Dot[]; picked: string; onPick: (key: string
       // Where a phone scrolls it sideways, it opens at its end, on now and the runs before it.
       ref={(el) => queueMicrotask(() => (el.scrollLeft = el.scrollWidth))}
     >
+      <span class="strip-keys" data-strip-keys aria-hidden="true" title="[ and ] step to the older and newer run, B to the base">
+        <kbd>[</kbd>
+        <kbd>]</kbd>
+      </span>
       <ol>
         <For each={stops()}>
           {(stop) =>
