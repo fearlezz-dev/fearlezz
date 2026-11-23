@@ -263,7 +263,9 @@ function createClock(
   const [count, setCount] = createSignal(0);
   const ready = () => count() > 0 && loaded().size >= count();
   createEffect(() => {
-    if (starts && ready() && autoplay()) {
+    // Both start together only when each can play through now: one loaded before may since have
+    // sought, or stalled, back to what it had loaded.
+    if (starts && ready() && autoplay() && [...videos.keys()].every((v) => v.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA)) {
       starts = false;
       untrack(play);
     }
@@ -283,6 +285,7 @@ function createClock(
         if (Number.isFinite(video.duration)) setLongest((was) => Math.max(was, video.duration));
         place(video, t());
       });
+      // Each canplaythrough, also after a seek, sets a new set, so autoplay asks again.
       video.addEventListener("canplaythrough", () => setLoaded((was) => new Set(was).add(video)));
       onCleanup(() => {
         videos.delete(video);
