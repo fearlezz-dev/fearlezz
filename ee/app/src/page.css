@@ -710,6 +710,7 @@ kbd {
   .modes button { padding: 5px 4px; }
   .modes .long { display: none; }
   .modes .brief { display: inline; }
+  .modes button kbd { display: none; }
   .group-by { margin-left: 0; }
   .frame img, .frame video { max-height: 60vh; }
   .frame.sized { width: min(100%, calc(60vh * var(--w) / var(--h))); }
@@ -992,7 +993,11 @@ html, * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--quiet
 /* Right aligned under the compare tools; an auto margin, unlike flex-end, keeps an overflowing
    strip's start reachable by scrolling. */
 .strip { display: flex; margin: 0 0 12px; overflow-x: auto; scrollbar-width: thin; overscroll-behavior-x: contain; }
-.strip ol { display: flex; margin: 0 0 0 auto; padding: 2px 2px 4px; list-style: none; min-width: max-content; }
+.strip-keys { display: flex; align-items: center; gap: 2px; margin-left: auto; padding-right: 12px; }
+.strip-keys kbd { font-size: 0.66rem; }
+.modes button kbd { margin-left: 6px; font-size: 0.66rem; }
+@media (hover: none) and (pointer: coarse) { .strip-keys, .modes button kbd { display: none; } .strip ol { margin-left: auto; } }
+.strip ol { display: flex; margin: 0; padding: 2px 2px 4px; list-style: none; min-width: max-content; }
 .strip li { position: relative; display: flex; --dot: var(--line-strong); --into: var(--line-strong); }
 .strip li + li { padding-left: 40px; }
 /* The line into a dot, from the one before it. */

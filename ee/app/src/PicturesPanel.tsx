@@ -109,6 +109,13 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
     const p = current();
     if (p) setPickedDots((was) => ({ ...was, [p.key]: key }));
   };
+  /** Steps the strip's pick `by` dots, older below zero, newer above, never onto now. */
+  const stepDot = (by: number) => {
+    const list = dots().filter((d) => d.kind !== "now");
+    const at = list.findIndex((d) => d.key === dotKey());
+    const to = list[Math.max(0, Math.min(list.length - 1, (at < 0 ? list.length : at) + by))];
+    if (to && worthShowing(dots())) pickDot(to.key);
+  };
   // An earlier run's files come under that run's own grant.
   const leftFiles = grantOf(() => {
     const d = dot();
@@ -336,6 +343,12 @@ export function PicturesPanel(props: { run: Run; state: Snapshot; viewer: Looker
       } else if (e.key === "j") step(1);
       else if (e.key === "k") step(-1);
       else if (/^[1-5]$/.test(e.key)) setMode(MODES[Number(e.key) - 1]![0]);
+      else if (e.key === "[") stepDot(-1);
+      else if (e.key === "]") stepDot(1);
+      else if (e.key === "b") {
+        const base = dots().find((d) => d.kind === "base");
+        if (base && worthShowing(dots())) pickDot(base.key);
+      }
       else if (e.key === "u") press("[data-withdraw]:not(:disabled)");
       else if (e.key === "n") press("[data-whole]");
       // The first note offered from another variant, added here; pressed again, the next.
@@ -593,6 +606,8 @@ const KEYS: [string[], string][] = [
   [["T"], "The other theme of this screen"],
   [["V"], "The other viewport of this screen"],
   [["1", "5"], "Side by side, slider, onion skin, difference, blink"],
+  [["[", "]"], "Compare now with the older or newer run on the strip"],
+  [["B"], "Compare now with the base"],
   [["F"], "Full screen, and back"],
   [["<", ">"], "Play films slower and faster"],
   [["+", "−", "0"], "Zoom in, out, and the whole picture; pinch zooms where the pointer is"],

@@ -48,6 +48,24 @@ test("a picture to look again opens compared with your look, in the Look again c
   await expect(page.locator('[data-strip] [data-dot="now"]')).toHaveAttribute("data-since-look", "");
 });
 
+test("[ and ] step the strip to the older and newer run, and B goes back to the base", async ({ page }) => {
+  await show(page, WORK_PATH, STRIP.world);
+  const picked = () => page.locator('[data-strip] [data-dot] button[aria-pressed="true"]:not(:disabled)');
+  await expect(picked()).toHaveCount(1);
+  await expect(page.locator('[data-strip] [data-dot="l2"] button')).toHaveAttribute("aria-pressed", "true");
+  for (const [key, to] of [["[", "r1"], ["[", "base"], ["[", "base"], ["]", "r1"], ["]", "l2"], ["]", "l2"], ["b", "base"]] as const) {
+    await page.keyboard.press(key);
+    await expect(dot(page, to), `${key} reaches ${to}`).toHaveAttribute("aria-pressed", "true");
+  }
+  await expect(stage(page)).not.toHaveAttribute("data-against");
+  // With a keyboard, each way to compare says its key on its button, and the strip says its
+  // own; a touch screen shows no keys.
+  const keys = test.info().project.name !== "mobile";
+  await expect(page.locator('[data-mode="slider"] kbd')).toBeVisible({ visible: keys });
+  await expect(page.locator('[data-mode="slider"] kbd')).toHaveText("2");
+  await expect(page.locator("[data-strip-keys]")).toBeVisible({ visible: keys });
+});
+
 test("a dot shows its run's picture beside now, and the Look again line goes back to your look", async ({ page }) => {
   await show(page, WORK_PATH, STRIP.world);
   await dot(page, "base").click();

@@ -951,6 +951,7 @@ export function Stage(props: {
                   <span class="brief" aria-hidden="true">
                     {brief}
                   </span>
+                  <kbd aria-hidden="true">{k() + 1}</kbd>
                 </button>
               )}
             </For>
