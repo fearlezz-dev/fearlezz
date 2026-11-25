@@ -468,10 +468,10 @@ holds no grant, and a grant always holds a dot, so `showcase` never names one.
   branch started (and no other run, so a pull request pays nothing), the CLI makes each film's
   animated WebP copy: 720 pixels wide at most and never upscaled, 12 frames a second, looping
   forever, its last frame held 1.5 s, starting at its first frame that is not one flat colour,
-  quality 75. A film longer than 30 s from there gets none, and the CLI says so; without ffmpeg
-  it says so and sends none, and the proof never fails over it. The copy is a file of the run
-  beside the film's after, its extension swapped for `.anim.webp`, and the look item's `webp`
-  names it, so it travels with the check's other files.
+  quality 75, however long the film runs. Without ffmpeg the CLI says so and sends none, and
+  the proof never fails over it. The copy is a file of the run beside the film's after, its
+  extension swapped for `.anim.webp`, and the look item's `webp` names it, so it travels with
+  the check's other files.
   A picture name that no item of the look has names the copy of the film whose name, with
   `.webp` in place of an extension of four characters or fewer (or added when it has none), is
   that name: `home.webp` is the copy of `home.webm`, `home.mp4` or `home`. One rule

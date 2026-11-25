@@ -432,10 +432,6 @@ pub(crate) fn noted(
     bail!("ffmpeg took no frame from {}", source.display())
 }
 
-/// The longest film that gets an animated WebP copy, in seconds: the copy holds every frame
-/// whole, so a longer one would weigh more than a page should load.
-pub(crate) const WEBP_LONGEST: f64 = 30.0;
-
 /// How far apart, in 8 bit levels, the darkest and lightest sample of each channel of a frame
 /// may be for it to count as one flat colour: compression leaves a little noise on a blank
 /// frame, and a frame with anything drawn on it spans far more.
@@ -445,9 +441,6 @@ const FLAT: u32 = 12;
 pub(crate) enum WebpCopy {
     /// Written.
     Made,
-    /// Not made: from its first frame with content, the film runs this many seconds, longer
-    /// than [`WEBP_LONGEST`].
-    TooLong(f64),
     /// Not made: Fearlezz found no ffmpeg to make it with, for this reason.
     NoFfmpeg(crate::ffmpeg::Missing),
 }
@@ -470,10 +463,6 @@ pub(crate) fn webp_copy(film: &Path, to: &Path) -> Result<WebpCopy> {
         return Ok(WebpCopy::NoFfmpeg(missing));
     }
     let scan = scan(film).with_context(|| format!("ffmpeg could not read {}", film.display()))?;
-    let seconds = scan.end - scan.content;
-    if seconds > WEBP_LONGEST {
-        return Ok(WebpCopy::TooLong(seconds));
-    }
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
@@ -505,18 +494,16 @@ pub(crate) fn webp_copy(film: &Path, to: &Path) -> Result<WebpCopy> {
     Ok(WebpCopy::Made)
 }
 
-/// When a film's frames start and end, and when its first frame with content starts, in
-/// seconds on its own clock.
+/// When a film's frames start, and when its first frame with content starts, in seconds on
+/// its own clock.
 struct Scan {
     start: f64,
     content: f64,
-    end: f64,
 }
 
 /// Reads every frame of the film at `path` once, small, for its time and the range of each
-/// channel (`signalstats`), and finds where it starts, where it ends (a recorded WebM often
-/// names no duration of its own) and its first frame that is not one flat colour (the start
-/// when every frame is).
+/// channel (`signalstats`), and finds where it starts and its first frame that is not one flat
+/// colour (the start when every frame is).
 fn scan(path: &Path) -> Result<Scan> {
     let out = crate::process::read(
         crate::ffmpeg::ffmpeg()?
@@ -579,15 +566,5 @@ fn scan(path: &Path) -> Result<Scan> {
     }
     let start = frames.first().map_or(0.0, |f| f.0);
     let content = frames.iter().find(|f| !f.1).map_or(start, |f| f.0);
-    // The last frame lasts as long as the one before it.
-    let end = match frames.as_slice() {
-        [.., (before, _), (last, _)] => last + (last - before),
-        [(only, _)] => *only,
-        [] => 0.0,
-    };
-    Ok(Scan {
-        start,
-        content,
-        end,
-    })
+    Ok(Scan { start, content })
 }
