@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/fearlezz-dev/fearlezz/compare/v0.5.2...v0.5.3) (2026-11-25)
+
+
+### Bug Fixes
+
+* every film gets an animated WebP copy, however long ([#74](https://github.com/fearlezz-dev/fearlezz/issues/74)) ([ea2bbbf](https://github.com/fearlezz-dev/fearlezz/commit/ea2bbbf8afcccd17a339b793551f8bf70712bbee))
+
 ## [0.5.2](https://github.com/fearlezz-dev/fearlezz/compare/v0.5.1...v0.5.2) (2026-11-23)
 
 
