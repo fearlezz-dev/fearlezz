@@ -1025,20 +1025,18 @@ fn a_pull_request_sends_no_webp_copy() {
 }
 
 #[test]
-fn a_film_longer_than_thirty_seconds_gets_no_webp_copy() {
+fn a_film_longer_than_thirty_seconds_gets_a_webp_copy_too() {
+    // A film's length says little about what its copy weighs, so no length goes without one.
     let host = FakeHost::start();
     let repo = filmed(&host, 0, 31, None);
     let out = ci_on(&repo, &host, "push", "refs/heads/main");
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
-    let (film, _) = film_sent(&host);
-    assert!(film.get("webp").is_none(), "{film:#}");
-    assert!(
-        out.stdout.contains(
-            "look screens: home.webm gets no WebP copy: it runs 31 s, longer than the 30 s a WebP copy may"
-        ),
-        "{}",
-        out.stdout
-    );
+    let (film, files) = film_sent(&host);
+    let (_, bytes) = copy_of(&host, &film, &files);
+    // Thirty one seconds of film, then its last frame held 1.5 s.
+    let ms = plays_ms(&bytes);
+    assert!((32300..=32700).contains(&ms), "plays {ms} ms");
+    assert!(!out.stdout.contains("gets no WebP copy"), "{}", out.stdout);
 }
 
 #[test]

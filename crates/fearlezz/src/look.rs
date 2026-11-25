@@ -77,10 +77,6 @@ pub(crate) fn webp_copies(look: &mut Look) -> bool {
                 item.webp = Some(rel);
                 continue;
             }
-            Ok(media::WebpCopy::TooLong(seconds)) => format!(
-                "it runs {seconds:.0} s, longer than the {:.0} s a WebP copy may",
-                media::WEBP_LONGEST
-            ),
             Ok(media::WebpCopy::NoFfmpeg(missing)) => {
                 println!("no WebP copies of films: {missing}");
                 return false;
