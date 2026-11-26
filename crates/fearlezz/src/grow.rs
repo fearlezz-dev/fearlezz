@@ -45,6 +45,8 @@ pub(crate) struct Opportunity {
     touches: fn(&str) -> bool,
     /// The folders such a file must be in to count; none means anywhere.
     within: Vec<String>,
+    /// The folders such a file must not be in to count.
+    outside: Vec<String>,
 }
 
 impl Opportunity {
@@ -54,6 +56,7 @@ impl Opportunity {
             offer,
             touches,
             within: Vec::new(),
+            outside: Vec::new(),
         }
     }
 
@@ -61,6 +64,7 @@ impl Opportunity {
     fn touched_by(&self, path: &str) -> bool {
         (self.touches)(path)
             && (self.within.is_empty() || self.within.iter().any(|d| inside(path, d)))
+            && !self.outside.iter().any(|d| inside(path, d))
     }
 }
 
@@ -157,21 +161,17 @@ impl Have {
                         "**/*.css",
                         "**/*.scss",
                         "**/*.html",
-                        "lib/**/*.dart",
+                        "**/lib/**/*.dart",
                         "**/*.swift",
                         "**/project.pbxproj",
                         "package.json",
-                        "pubspec.yaml",
+                        "**/pubspec.yaml",
                     ]
                     .map(String::from),
                 ),
                 Kind::Texts => {
                     for dir in self.rendered_dirs() {
-                        let at = if dir.is_empty() {
-                            String::new()
-                        } else {
-                            format!("{dir}/")
-                        };
+                        let at = slashed(&dir);
                         for ext in RENDERED {
                             globs.push(format!("{at}**/*.{ext}"));
                         }
@@ -193,8 +193,9 @@ fn web_file(path: &str) -> bool {
     )
 }
 
+/// A Dart file in a `lib` folder, where a Flutter app's widgets are.
 fn dart_file(path: &str) -> bool {
-    path.starts_with("lib/") && has_extension(path, &["dart"])
+    (path.starts_with("lib/") || path.contains("/lib/")) && has_extension(path, &["dart"])
 }
 
 fn swift_file(path: &str) -> bool {
@@ -294,32 +295,67 @@ fn uis(root: &Path, files: &[String]) -> Vec<Opportunity> {
             web_file,
         ));
     }
-    if crate::init::flutter_app(root) {
-        found.push(pictures(
-            "a Flutter app (pubspec.yaml), and no check takes stills or films of it: offer \
-             use = [\"flutter-look\"], stills of its widgets, and flutter-film to film its flows"
-                .into(),
-            dart_file,
-        ));
+    // Each Flutter app's folder, the root as `""`.
+    let apps: Vec<String> = crate::init::flutter_apps(root, files)
+        .into_iter()
+        .map(|f| if f == "." { String::new() } else { f })
+        .collect();
+    if !apps.is_empty() {
+        let pubspecs: Vec<String> = apps
+            .iter()
+            .map(|d| format!("{}pubspec.yaml", slashed(d)))
+            .collect();
+        found.push(Opportunity {
+            within: apps.clone(),
+            ..pictures(
+                format!(
+                    "a Flutter app ({}), and no check takes stills or films of it: offer \
+                     use = [\"flutter-look\"], stills of its widgets, and flutter-film to film \
+                     its flows",
+                    pubspecs.join(", ")
+                ),
+                dart_file,
+            )
+        });
     }
+    // Flutter generates an Xcode project in each Apple platform folder of its app; those are
+    // the Flutter app's, not an Apple app of their own.
+    let generated: Vec<String> = apps
+        .iter()
+        .flat_map(|d| ["macos", "ios"].map(|p| format!("{}{p}", slashed(d))))
+        .collect();
+    let own = |f: &&String| !generated.iter().any(|d| inside(f, d));
     let xcode = files
         .iter()
+        .filter(own)
         .any(|f| f.ends_with(".xcodeproj/project.pbxproj"));
     let swiftui = || {
-        files.iter().filter(|f| swift_file(f)).any(|f| {
+        files.iter().filter(own).filter(|f| swift_file(f)).any(|f| {
             std::fs::read_to_string(root.join(f)).is_ok_and(|t| t.contains("import SwiftUI"))
         })
     };
     if xcode || swiftui() {
-        found.push(pictures(
-            "an Apple app (Xcode or SwiftUI), and no check takes stills or films of it: offer a \
-             check with record = { still = \"home\", film = \"home\" } on its macOS window, or \
-             needs = [\"ios\"] with record for the simulator"
-                .into(),
-            swift_file,
-        ));
+        found.push(Opportunity {
+            outside: generated.clone(),
+            ..pictures(
+                "an Apple app (Xcode or SwiftUI), and no check takes stills or films of it: offer \
+                 a check with record = { still = \"home\", film = \"home\" } on its macOS \
+                 window, or needs = [\"ios\"] with record for the simulator"
+                    .into(),
+                swift_file,
+            )
+        });
     }
     found
+}
+
+/// The folder `dir` as a path prefix: `""` for the root, `"<dir>/"` otherwise.
+fn slashed(dir: &str) -> String {
+    if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{dir}/")
+    }
 }
 
 /// A hint for each opportunity the change makes timely, touching `changed` files of its kind;

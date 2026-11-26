@@ -1,4 +1,6 @@
 # A Dart package: formatting, the analyzer, and the tests. The flutter piece builds on it.
+# Each check runs in every Dart package of the repository (`each`): the root's keeps its name,
+# one in a folder is `<check>/<folder>`.
 #
 # `dart test` runs test/ on the platforms dart_test.yaml names (the VM by default); a package
 # that runs in the browser names them there, with their compilers:
@@ -7,22 +9,25 @@
 #   compilers: [dart2js, dart2wasm]
 
 [check.dart-format]
+each = "pubspec.yaml"
 run = "dart format --output=none --set-exit-if-changed ."
 stage = "working"
 
 # Lint findings get the level [lints.dart] gives them; other analyzer issues block. Only lines
 # the change touched count; compile errors block wherever they are.
 [check.dart-analyze]
+each = "pubspec.yaml"
 run = "dart analyze --format=machine"
 stage = "working"
 findings = { read = "dart", lints = ["dart"] }
 
 # The last line says "+12: All tests passed!" or "+10 -2: Some tests failed.".
 [check.dart-test]
+each = "pubspec.yaml"
 run = "dart test"
 stage = "working"
 tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
-test_files = ["test/**"]
+test_files = ["**/test/**"]
 
 [settings.dart-analysis.analyzer]
 exclude = ["**/*.freezed.dart", "**/*.g.dart", "build/**"]

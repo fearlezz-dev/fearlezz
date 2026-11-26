@@ -1,5 +1,5 @@
 //! `fearlezz setup init`: the starter `fearlezz.toml` for a repository that has none, from the
-//! languages the files at its root show (Rust also from Cargo projects in folders), the
+//! languages the files at its root show (Rust and Dart also from projects in folders), the
 //! frameworks its package.json depends on, and the infrastructure tools its files show.
 
 use std::fmt::Write as _;
@@ -113,25 +113,37 @@ fn runner(root: &Path) -> Option<&'static str> {
     }
 }
 
-/// The piece a marker's language takes in `root`: svelte (svelte-check in place of tsc) for a
-/// SvelteKit project, dart for a pubspec.yaml without Flutter.
-fn refine(root: &Path, piece: &'static str) -> &'static str {
+/// The piece a marker's language takes in `root`, shown by `file`: svelte (svelte-check in
+/// place of tsc) for a SvelteKit project, dart for a pubspec.yaml without Flutter.
+fn refine(root: &Path, piece: &'static str, file: &str) -> &'static str {
     match piece {
         // The piece runs `svelte-kit sync` first; a Svelte app without SvelteKit keeps tsc.
         "typescript" if depends(root)("@sveltejs/kit") => "svelte",
-        "flutter" if flutter_app(root) => "flutter",
+        "flutter" if flutter_app(root.join(file).parent().unwrap_or(root)) => "flutter",
         "flutter" => "dart",
         _ => piece,
     }
 }
 
-/// Whether pubspec.yaml in `root` is a Flutter app's: it depends on the Flutter SDK.
-pub(crate) fn flutter_app(root: &Path) -> bool {
-    std::fs::read_to_string(root.join("pubspec.yaml")).is_ok_and(|pubspec| {
+/// The file that marks a Dart package or Flutter app.
+const PUBSPEC: &str = "pubspec.yaml";
+
+/// Whether pubspec.yaml in the folder `dir` is a Flutter app's: it depends on the Flutter SDK.
+fn flutter_app(dir: &Path) -> bool {
+    std::fs::read_to_string(dir.join(PUBSPEC)).is_ok_and(|pubspec| {
         pubspec
             .lines()
             .any(|line| line.trim().replace(' ', "") == "sdk:flutter")
     })
+}
+
+/// The folders of the Flutter apps in `root`, with `files` (every file git lists): each
+/// project folder whose pubspec.yaml depends on the Flutter SDK, `.` for the root.
+pub(crate) fn flutter_apps(root: &Path, files: &[String]) -> Vec<String> {
+    crate::config::projects(root, files, PUBSPEC, &crate::config::Globs::none())
+        .into_iter()
+        .filter(|folder| flutter_app(&root.join(folder)))
+        .collect()
 }
 
 /// Whether go.mod in `root` requires `module`.
@@ -211,20 +223,26 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
             root.display()
         );
     }
-    // The rust piece's checks run in every Cargo project (`each`), so one below the root
-    // shows Rust too, as an app with a native shell and a sandbox in their own folders has.
+    // The rust, dart and flutter pieces' checks run in every project folder (`each`), so one
+    // below the root shows its language too, as an app with a native shell and a sandbox in
+    // their own folders has, or a Flutter app in its own folder.
     let files = crate::git::Git::discover(root)
         .and_then(|git| git.files())
         .unwrap_or_default();
     let below = |piece: &str| -> Option<String> {
-        if piece != "rust" {
-            return None;
-        }
+        let marker = match piece {
+            "rust" => "Cargo.toml",
+            "flutter" => PUBSPEC,
+            _ => return None,
+        };
         let none = crate::config::Globs::none();
-        let folder = crate::config::projects(root, &files, "Cargo.toml", &none)
-            .into_iter()
-            .next()?;
-        Some(format!("{folder}/Cargo.toml"))
+        let folders = crate::config::projects(root, &files, marker, &none);
+        // A Flutter app in any folder makes the piece flutter, so its pubspec shows it.
+        let folder = folders
+            .iter()
+            .find(|f| marker == PUBSPEC && flutter_app(&root.join(f)))
+            .or(folders.first())?;
+        Some(format!("{folder}/{marker}"))
     };
     let found: Vec<Found> = MARKERS
         .iter()
@@ -247,7 +265,7 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
             } else {
                 Vec::new()
             };
-            let piece = refine(root, piece);
+            let piece = refine(root, piece, &file);
             std::iter::once(piece).chain(more).map(move |piece| Found {
                 piece,
                 file: Some(file.clone()),

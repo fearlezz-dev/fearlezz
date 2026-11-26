@@ -949,6 +949,33 @@ fn a_change_to_a_ui_no_check_takes_pictures_of_hints_at_them() {
 }
 
 #[test]
+fn a_change_to_a_flutter_app_in_a_folder_hints_at_its_pictures_not_an_apple_apps() {
+    let files = [
+        (
+            "app/pubspec.yaml",
+            "name: app\ndependencies:\n  flutter:\n    sdk: flutter\n",
+        ),
+        ("app/macos/Runner.xcodeproj/project.pbxproj", "// !$*UTF8*$!\n"),
+    ];
+    let out = grown("", &files, &[("app/lib/main.dart", "void main() {}\n")]);
+    assert!(
+        out.stdout.contains(
+            "hint app/lib/main.dart:1  pictures  this change could prove more: a Flutter app (app/pubspec.yaml)"
+        ),
+        "{}",
+        out.stdout
+    );
+
+    // Its generated Swift is Flutter's, so it hints at no Apple app.
+    let out = grown(
+        "",
+        &files,
+        &[("app/macos/Runner/AppDelegate.swift", "import Cocoa\n")],
+    );
+    assert!(!out.stdout.contains("an Apple app"), "{}", out.stdout);
+}
+
+#[test]
 fn a_change_to_rendered_output_no_check_keeps_hints_at_texts() {
     let config = "[check.kustomize]\nrun = \"true\"\nstage = \"working\"\n";
     let out = grown(

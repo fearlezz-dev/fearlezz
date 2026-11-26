@@ -336,6 +336,75 @@ fn init_finds_cargo_projects_below_the_root_and_the_rust_checks_run_in_each() {
     }
 }
 
+/// A Flutter app in `app/`, with the Xcode projects Flutter generates for macOS and iOS.
+const FLUTTER_IN_A_FOLDER: &[(&str, &str)] = &[
+    (
+        "app/pubspec.yaml",
+        "name: app\ndependencies:\n  flutter:\n    sdk: flutter\n",
+    ),
+    ("app/lib/main.dart", "void main() {}\n"),
+    ("app/test/home_test.dart", "void main() {}\n"),
+    ("app/macos/Runner.xcodeproj/project.pbxproj", "// !$*UTF8*$!\n"),
+    (
+        "app/macos/Runner/AppDelegate.swift",
+        "import Cocoa\nimport FlutterMacOS\n",
+    ),
+    ("app/ios/Runner.xcodeproj/project.pbxproj", "// !$*UTF8*$!\n"),
+    (
+        "app/ios/Runner/AppDelegate.swift",
+        "import Flutter\nimport UIKit\n",
+    ),
+];
+
+#[test]
+fn init_finds_a_flutter_app_below_the_root_and_its_checks_run_there() {
+    let repo = project(FLUTTER_IN_A_FOLDER);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(config.contains(r#"use = ["flutter", "safety"]"#), "{config}");
+    assert!(
+        out.stdout.contains("flutter (app/pubspec.yaml)"),
+        "{}",
+        out.stdout
+    );
+
+    repo.commit("starter");
+    repo.branch("feat/x");
+    repo.write("app/lib/main.dart", "void main() => print('hi');\n");
+    let plan = repo.fz(&["--plan"]);
+    for check in ["dart-format/app", "dart-analyze/app", "flutter-test/app"] {
+        assert!(plan.stdout.contains(check), "{check}: {}", plan.stdout);
+    }
+}
+
+#[test]
+fn init_offers_flutter_pictures_for_a_flutter_app_not_an_apple_app() {
+    let repo = project(FLUTTER_IN_A_FOLDER);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    // Flutter's generated macos/ and ios/ Xcode projects are the Flutter app's, not an
+    // Apple app of their own.
+    assert!(!out.stdout.contains("an Apple app"), "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("could prove: a Flutter app (app/pubspec.yaml)"),
+        "{}",
+        out.stdout
+    );
+
+    // A native Apple app beside it is still one.
+    let mut files = FLUTTER_IN_A_FOLDER.to_vec();
+    files.push(("mac/Mac.xcodeproj/project.pbxproj", "// !$*UTF8*$!\n"));
+    let repo = project(&files);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(
+        out.stdout.contains("could prove: an Apple app"),
+        "{}",
+        out.stdout
+    );
+}
+
 #[test]
 fn init_without_a_known_language_writes_a_check_to_fill_in() {
     let repo = project(&[("Makefile", "test:\n\ttrue\n")]);
