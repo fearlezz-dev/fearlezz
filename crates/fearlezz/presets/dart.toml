@@ -1,6 +1,6 @@
 # A Dart package: formatting, the analyzer, and the tests. The flutter piece builds on it.
-# Each check runs in every Dart package of the repository (`each`): the root's keeps its name,
-# one in a folder is `<check>/<folder>`.
+# Each check runs in every Dart package no other package folder holds (`each`): the root's
+# keeps its name, one in a folder is `<check>/<folder>`.
 #
 # `dart test` runs test/ on the platforms dart_test.yaml names (the VM by default); a package
 # that runs in the browser names them there, with their compilers:

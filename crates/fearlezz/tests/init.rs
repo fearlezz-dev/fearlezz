@@ -406,6 +406,43 @@ fn init_offers_flutter_pictures_for_a_flutter_app_not_an_apple_app() {
 }
 
 #[test]
+fn init_sees_a_flutter_app_inside_another_dart_project() {
+    let flutter = "name: app\ndependencies:\n  flutter:\n    sdk: flutter\n";
+    let xcode = "// !$*UTF8*$!\n";
+    // A pub workspace whose root is plain Dart, with the app as a member.
+    let repo = project(&[
+        (
+            "pubspec.yaml",
+            "name: root\nworkspace:\n  - apps/mobile\n",
+        ),
+        ("apps/mobile/pubspec.yaml", flutter),
+        ("apps/mobile/ios/Runner.xcodeproj/project.pbxproj", xcode),
+    ]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
+    assert!(config.contains(r#"use = ["flutter", "safety"]"#), "{config}");
+    assert!(!out.stdout.contains("an Apple app"), "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("could prove: a Flutter app (apps/mobile/pubspec.yaml)"),
+        "{}",
+        out.stdout
+    );
+
+    // A plugin with its example app: the example's Xcode projects are Flutter's too.
+    let repo = project(&[
+        ("pubspec.yaml", flutter),
+        ("example/pubspec.yaml", flutter),
+        ("example/ios/Runner.xcodeproj/project.pbxproj", xcode),
+        ("example/macos/Runner.xcodeproj/project.pbxproj", xcode),
+    ]);
+    let out = repo.fz(&["setup", "init"]);
+    assert!(out.ok, "{}{}", out.stdout, out.stderr);
+    assert!(!out.stdout.contains("an Apple app"), "{}", out.stdout);
+}
+
+#[test]
 fn init_without_a_known_language_writes_a_check_to_fill_in() {
     let repo = project(&[("Makefile", "test:\n\ttrue\n")]);
     let out = repo.fz(&["setup", "init"]);

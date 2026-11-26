@@ -295,23 +295,39 @@ fn uis(root: &Path, files: &[String]) -> Vec<Opportunity> {
             web_file,
         ));
     }
-    // Each Flutter app's folder, the root as `""`.
+    // Each Flutter app's folder, the root as `""`, and those no other app holds.
     let apps: Vec<String> = crate::init::flutter_apps(root, files)
         .into_iter()
         .map(|f| if f == "." { String::new() } else { f })
         .collect();
-    if !apps.is_empty() {
-        let pubspecs: Vec<String> = apps
+    let outer: Vec<String> = apps
+        .iter()
+        .filter(|d| !apps.iter().any(|o| o != *d && inside(d, o)))
+        .cloned()
+        .collect();
+    if !outer.is_empty() {
+        let pubspecs: Vec<String> = outer
             .iter()
             .map(|d| format!("{}pubspec.yaml", slashed(d)))
             .collect();
+        // The flutter-look checks and helpers are the root's alone for now.
+        let folder = outer
+            .iter()
+            .find(|d| !d.is_empty())
+            .map(|d| {
+                format!(
+                    " (its checks run at the root, so an app in a folder needs dir = \"{d}\" \
+                     on them and the look_test helpers in {d})"
+                )
+            })
+            .unwrap_or_default();
         found.push(Opportunity {
-            within: apps.clone(),
+            within: outer.clone(),
             ..pictures(
                 format!(
                     "a Flutter app ({}), and no check takes stills or films of it: offer \
-                     use = [\"flutter-look\"], stills of its widgets, and flutter-film to film \
-                     its flows",
+                     use = [\"flutter-look\"]{folder}, stills of its widgets, and flutter-film \
+                     to film its flows",
                     pubspecs.join(", ")
                 ),
                 dart_file,

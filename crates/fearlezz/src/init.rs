@@ -137,13 +137,45 @@ fn flutter_app(dir: &Path) -> bool {
     })
 }
 
-/// The folders of the Flutter apps in `root`, with `files` (every file git lists): each
-/// project folder whose pubspec.yaml depends on the Flutter SDK, `.` for the root.
+/// The folders of the Flutter apps in `root`, with `files` (every file git lists), `.` for
+/// the root first: each folder whose pubspec.yaml depends on the Flutter SDK, also one inside
+/// another Dart project, as a workspace member or a plugin's example app is.
 pub(crate) fn flutter_apps(root: &Path, files: &[String]) -> Vec<String> {
-    crate::config::projects(root, files, PUBSPEC, &crate::config::Globs::none())
-        .into_iter()
+    let suffix = format!("/{PUBSPEC}");
+    let mut apps: Vec<String> = files
+        .iter()
+        .filter_map(|f| {
+            if f == PUBSPEC {
+                Some(".".to_string())
+            } else {
+                f.strip_suffix(&suffix).map(String::from)
+            }
+        })
         .filter(|folder| flutter_app(&root.join(folder)))
-        .collect()
+        .collect();
+    apps.sort();
+    apps.dedup();
+    apps
+}
+
+/// The pubspec.yaml that shows Dart or Flutter in `root`: a Flutter app's wherever it is,
+/// since one makes the piece flutter; else the root's; else the first project folder's.
+fn pubspec(root: &Path, files: &[String]) -> Option<String> {
+    let none = crate::config::Globs::none();
+    let folder = flutter_apps(root, files)
+        .into_iter()
+        .next()
+        .or_else(|| root.join(PUBSPEC).exists().then(|| ".".to_string()))
+        .or_else(|| {
+            crate::config::projects(root, files, PUBSPEC, &none)
+                .into_iter()
+                .next()
+        })?;
+    Some(if folder == "." {
+        PUBSPEC.to_string()
+    } else {
+        format!("{folder}/{PUBSPEC}")
+    })
 }
 
 /// Whether go.mod in `root` requires `module`.
@@ -230,28 +262,27 @@ pub(crate) fn init(root: &Path) -> Result<Vec<Found>> {
         .and_then(|git| git.files())
         .unwrap_or_default();
     let below = |piece: &str| -> Option<String> {
-        let marker = match piece {
-            "rust" => "Cargo.toml",
-            "flutter" => PUBSPEC,
-            _ => return None,
-        };
+        if piece != "rust" {
+            return None;
+        }
         let none = crate::config::Globs::none();
-        let folders = crate::config::projects(root, &files, marker, &none);
-        // A Flutter app in any folder makes the piece flutter, so its pubspec shows it.
-        let folder = folders
-            .iter()
-            .find(|f| marker == PUBSPEC && flutter_app(&root.join(f)))
-            .or(folders.first())?;
-        Some(format!("{folder}/{marker}"))
+        let folder = crate::config::projects(root, &files, "Cargo.toml", &none)
+            .into_iter()
+            .next()?;
+        Some(format!("{folder}/Cargo.toml"))
     };
     let found: Vec<Found> = MARKERS
         .iter()
-        .filter_map(|(piece, files)| {
-            let file = files
-                .iter()
-                .find(|f| root.join(f).exists())
-                .map(|f| (*f).to_string())
-                .or_else(|| below(piece))?;
+        .filter_map(|(piece, markers)| {
+            let file = if *piece == "flutter" {
+                pubspec(root, &files)?
+            } else {
+                markers
+                    .iter()
+                    .find(|f| root.join(f).exists())
+                    .map(|f| (*f).to_string())
+                    .or_else(|| below(piece))?
+            };
             Some((*piece, file))
         })
         .flat_map(|(piece, file)| {
