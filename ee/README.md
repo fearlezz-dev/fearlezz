@@ -75,9 +75,10 @@ for a run that is done, or a blob no run of the repository names, and `426` when
 
 Every call of the CLI names its version in its `User-Agent` (`fearlezz/0.5.4`); one that names
 none, as every CLI before 0.5.4, counts as `0.0.0`. `CLI_MINIMUM` (`wrangler.toml`, `0.0.0`
-until a maintainer raises it) is raised when the protocol changes in a way older CLIs cannot
-follow: the host then refuses to open their runs, and the CLI prints `proof page not sent:
-<why>` with a `fix:` line to update, while its checks still run. Before that, the CLI asks `GET
+until a maintainer raises it) is raised when a run's protocol changes in a way older CLIs cannot
+follow, while the path keeps `/api/v2`: the host then refuses to open their runs (the other
+calls are not gated), and the CLI prints `proof page not sent: the proof host takes no runs
+from Fearlezz <version>` with a `fix:` line to update, while its checks still run. Before that, the CLI asks `GET
 /api/v2/cli` at most once a day (kept in the user cache folder, within a second or two; never
 on CI, with `[host] off = true` or with `FEARLEZZ_NO_UPDATE_CHECK` set), and `fearlezz` and an
 agent's session start say when a newer release is out or the host no longer takes this one, so

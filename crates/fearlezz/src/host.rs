@@ -85,8 +85,8 @@ pub(crate) enum Opening {
     Opened(Stream),
     /// The repository has not installed the app; where to install it.
     NotInstalled(String),
-    /// The host takes no runs from a Fearlezz this old; its words.
-    TooOld(String),
+    /// The host takes no runs from a Fearlezz this old.
+    TooOld,
 }
 
 /// A run the host opened, to stream the rest of it to.
@@ -181,13 +181,9 @@ impl Host {
             return Ok(Opening::NotInstalled(install));
         }
         let (status, answer) = self.call("POST", "/api/v2/runs", json(open)?)?;
+        // Said in the CLI's own words: a repository may name any host.
         if status == 426 {
-            let words = answer.get("error").and_then(Value::as_str);
-            return Ok(Opening::TooOld(
-                words
-                    .unwrap_or("this Fearlezz is older than the host takes")
-                    .to_owned(),
-            ));
+            return Ok(Opening::TooOld);
         }
         if status != 201 {
             bail!("the host refused the run ({status}){}", said(&answer));

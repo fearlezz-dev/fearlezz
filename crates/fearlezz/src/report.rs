@@ -342,16 +342,17 @@ fn open_on(host: host::Host, open: &Open) -> Option<host::Stream> {
             );
             None
         }
-        Ok(host::Opening::TooOld(why)) if local => {
-            println!("proof page not sent: {why}");
+        Ok(host::Opening::TooOld) if local => {
+            println!("proof page not sent: {}", too_old());
             println!("fix: update Fearlezz {}", crate::version::UPDATE);
             None
         }
-        Ok(host::Opening::TooOld(why)) => {
-            println!("proof page not sent: {why}");
+        Ok(host::Opening::TooOld) => {
+            println!("proof page not sent: {}", too_old());
             println!(
-                "fix: raise the Fearlezz the workflow installs: the fearlezz action's tag, or \
-                 the pin fearlezz = \"<version>\" in fearlezz.toml, which it installs when newer"
+                "fix: raise the Fearlezz the workflow installs: the fearlezz action's tag or its \
+                 version input, or the pin fearlezz = \"<version>\" in fearlezz.toml, which it \
+                 installs when newer"
             );
             None
         }
@@ -360,6 +361,14 @@ fn open_on(host: host::Host, open: &Open) -> Option<host::Stream> {
             None
         }
     }
+}
+
+/// Why a host that answered `426` got no run.
+fn too_old() -> String {
+    format!(
+        "the proof host takes no runs from Fearlezz {}",
+        crate::version::OURS
+    )
 }
 
 /// Sends one step of the run to the host; a host that fails is said once and sent nothing

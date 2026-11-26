@@ -226,7 +226,7 @@ fn a_run_the_host_refuses_as_too_old_says_the_fix_and_still_proves() {
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
         out.stdout.contains(&format!(
-            "proof page not sent: Fearlezz {OURS} is older than this proof host takes"
+            "proof page not sent: the proof host takes no runs from Fearlezz {OURS}"
         )),
         "{}",
         out.stdout
@@ -295,7 +295,9 @@ fn a_ci_run_the_host_refuses_as_too_old_says_to_raise_the_workflows_version() {
     let out = repo.fz_env(&["run", "--ci"], &env);
     assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
     assert!(
-        out.stdout.contains("proof page not sent: Fearlezz"),
+        out.stdout.contains(&format!(
+            "proof page not sent: the proof host takes no runs from Fearlezz {OURS}"
+        )),
         "{}",
         out.stdout
     );

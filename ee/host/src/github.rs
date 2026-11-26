@@ -104,11 +104,13 @@ pub async fn installation(config: &Config, repo: &str) -> Result<Option<u64>> {
     }
 }
 
-/// The tag of the newest release of the public repository `repo`, asked without a token;
+/// The tag of the newest release of the public repository `repo`, asked as the app where it is
+/// installed there (GitHub limits calls without a token by address, which Workers share);
 /// None when it has none.
 pub(crate) async fn latest_release(config: &Config, repo: &str) -> Result<Option<String>> {
+    let token = installation_token(config, repo).await?;
     let url = format!("{}/repos/{repo}/releases/latest", config.github_api);
-    let reply = call(Method::Get, &url, None, None).await?;
+    let reply = call(Method::Get, &url, token.as_deref(), None).await?;
     match reply.status {
         200 => Ok(reply
             .body
