@@ -194,12 +194,16 @@ test("a film pair's lanes grow in once, and are not drawn again as its films loa
   });
   await page.goto(WORK_PATH);
   await settled(page, true);
-  // Every lane that grows in, kept to see whether it is still the one shown.
+  // Every lane of the pair against the run that grows in, kept to see whether it is still the
+  // one shown. The film opens against your look first, whose comparison was made ahead, so its
+  // lanes may grow in before the run is picked; picking the run draws a new pair, which rightly
+  // drops them, so they do not count.
   await page.evaluate(() => {
     const w = window as unknown as { grown: Element[] };
     w.grown = [];
     document.addEventListener("animationstart", (e) => {
-      if (e.animationName === "grow") w.grown.push(e.target as Element);
+      const lane = e.target as Element;
+      if (e.animationName === "grow" && lane.closest("[data-stage]")?.getAttribute("data-against") === "run") w.grown.push(lane);
     });
   });
   await page.locator(`[data-picture="${STRIP.film}"]`).click();
