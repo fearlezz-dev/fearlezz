@@ -31,4 +31,4 @@ When `which -a` lists more than one, the first one runs, and agents and hooks ru
 fearlezz setup guide
 ```
 
-It prints the full setup guide for the installed version. Follow it from step 1.
+It prints the full setup guide for the installed version. Follow it from step 1 to the end, every step: its rules (ask before loosening any lint, keep the tools Fearlezz's pieces add) hold throughout, and step 9 puts every opportunity Fearlezz names to the developer as a question.

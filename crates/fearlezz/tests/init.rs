@@ -817,6 +817,8 @@ fn setup_guide_prints_the_whole_guide_and_ends_with_next() {
         "fearlezz setup login",
         "id-token: write",
         "fearlezz run",
+        "Grow (ask, never skip)",
+        "Never turn off or loosen a lint",
     ] {
         assert!(out.stdout.contains(step), "{step}: {}", out.stdout);
     }

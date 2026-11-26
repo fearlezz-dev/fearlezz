@@ -8,8 +8,11 @@ Each step says what it is: **look** (read the repository), **ask** (the develope
 
 - Look before asking. Ask only what the repository cannot answer.
 - Ask about one topic at a time, and always give your recommendation with the question.
-- Never invent checks the project does not already run. Ask before adding a tool it does not use yet.
+- Never invent checks the project does not already run.
+- The tools a Fearlezz piece adds (for example zizmor from `actions`, gitleaks from `safety`) are Fearlezz's defaults: keep them, install them the way the project installs its tools, and fix what they find. Ask before adding any tool beyond those.
 - Never weaken a check to get green. Say what fails and why.
+- Never turn off or loosen a lint, a rule or a check's level without asking first. Show the developer the finding, its cause and the options (fix the code, change the config, keep it as it is), and say when it looks like a bug in Fearlezz, so they can report it.
+- Never drop an opportunity Fearlezz names (a `could prove:` line, a hint of the `settings` check). Each one becomes a question to the developer (step 9).
 - Work on a branch, never on the default branch.
 
 ## 1. Learn the project (look)
@@ -44,6 +47,8 @@ The proof host takes proof from GitHub Actions only (through the Fearlezz GitHub
 
 ## 4. Take over (ask)
 
+Ask this only after the developer has answered step 3, as its own question: one topic per question, so never fold the setup kind and the take over into one.
+
 List everything step 2 found, and for each say which Fearlezz check would take its place. Ask once whether to move each into Fearlezz and then remove the old one, so nothing runs twice. Recommend the full switch; name anything you would keep outside (a deploy, a release, a job that proves nothing) and why.
 
 ## 5. Init (do)
@@ -51,7 +56,7 @@ List everything step 2 found, and for each say which Fearlezz check would take i
 Run `fearlezz setup init` with the flag from step 3. It writes a starter `fearlezz.toml` from the languages it finds, with `could prove:` lines for step 9. Then shape each check to the commands the project really runs, from step 2:
 
 - See what a piece sets with `fearlezz setup show <piece>` (such as `rust` or `devenv`), and a check as it resolves with `fearlezz setup show <check>`; never read Fearlezz's source for it.
-- Turn a piece's check off with `off = true` when the project does not run it, and add the checks it does run that no piece brings.
+- Keep the checks the pieces bring, also those whose tool the project does not use yet (see the rules). Turn one off with `off = true` only when it cannot apply here (zizmor in a repository without workflows) or the developer agrees. Add the checks the project does run that no piece brings.
 - A check that needs two commands lists them as steps, `run = ["first", "second"]`, never `first && second`.
 - Keep a check's `run` a plain tool command; Fearlezz reads the tool's own output, so no shell glue.
 - When the project's tools come from a shell (devenv, nix develop, a container), set `[env] shell` so every check runs inside it.
@@ -63,21 +68,22 @@ Remove the systems the developer agreed to replace in step 4, in the same change
 
 Run `fearlezz setup sync`. It writes the agent hooks, this project's copy of the Fearlezz skill and the tool settings files. Commit what it wrote.
 
-## 7. Host (click, only with the proof host)
+## 7. Host (do, then click; only with the proof host)
 
-The developer does these; give them the links and wait:
-
-- Run `fearlezz setup login`; it signs the CLI in through GitHub and says whether the Fearlezz GitHub App is installed on the repository, naming where to install it when it is not.
-- Install the app there when it is not yet.
-- The proof job needs the permission `id-token: write`. The workflow `--ci host` writes has it; add it when the job is your own.
+- **Sign in (do).** Run `fearlezz setup login` yourself; do not hand it to the developer. It uses GitHub's device flow: it prints a link and a code, so give the developer both, they enter the code, and the command finishes on its own. The sign in is per user, not per checkout, so when they are already signed in it is done.
+- **Install the app (click).** Read what the login says about the Fearlezz GitHub App. When it is not installed on the repository, give the developer only its install link to click, and wait.
+- **Permission (do).** The proof job needs `id-token: write`. The workflow `--ci host` writes has it; add it when the job is your own.
+- **Required check (ask).** Recommend making `proof` a required check in the default branch's protection, so no pull request merges without it. Change branch protection only with the developer's OK; otherwise name it as theirs to do in the hand off.
 
 ## 8. First proof (do)
 
+The first full run can take a long time: nothing is cached yet, so every check builds and runs from scratch. Give the command a generous time budget, or run checks one by one by name (`fearlezz run <check>`), so no tool timeout kills it halfway.
+
 Run `fearlezz run` and follow its `next:` lines until it says `all proof is in: ready to merge`. When a check fails, read its tail and log, fix the cause (a wrong command, a missing tool, a real failure in the code) and run again. Never weaken a check to pass; when a check cannot pass, tell the developer what fails and why.
 
-## 9. Grow (ask)
+## 9. Grow (ask, never skip)
 
-Offer what this project could prove next, one at a time, each as "We can now also do X. Want me to set that up?" Start from the `could prove:` lines `fearlezz setup init` printed (the `settings` check gives the same ones later). Pick only what fits:
+This step is required. Put every opportunity Fearlezz named in front of the developer: each `could prove:` line `fearlezz setup init` printed, and each hint the `settings` check gave since. Ask about them one at a time, each as "We can now also do X. Want me to set that up?", with your recommendation. Never drop one silently; when there were none, say so in the hand off. Beyond those lines, offer only what fits:
 
 - **Pictures**: stills of each screen of a UI, from its existing screenshot tests or new ones.
 - **Films**: a recorded flow through the app.
@@ -87,4 +93,4 @@ Offer what this project could prove next, one at a time, each as "We can now als
 
 ## 10. Hand off (do)
 
-Open a pull request from your branch and let CI prove it. Then summarise for the developer: what Fearlezz now runs, what it replaced, what you chose not to move and why, what they still have to do (the clicks of step 7, required checks in branch protection), and what they could grow next.
+Open a pull request from your branch and let CI prove it. Then summarise for the developer: what Fearlezz now runs, the tools its pieces added, what it replaced, what you chose not to move and why, what they still have to do (the clicks of step 7, `proof` as a required check when they did not OK it), each opportunity of step 9 with the developer's answer (or that there were none), and any lint or rule they agreed to loosen and why.
