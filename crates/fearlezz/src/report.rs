@@ -342,6 +342,19 @@ fn open_on(host: host::Host, open: &Open) -> Option<host::Stream> {
             );
             None
         }
+        Ok(host::Opening::TooOld(why)) if local => {
+            println!("proof page not sent: {why}");
+            println!("fix: update Fearlezz {}", crate::version::UPDATE);
+            None
+        }
+        Ok(host::Opening::TooOld(why)) => {
+            println!("proof page not sent: {why}");
+            println!(
+                "fix: raise the Fearlezz the workflow installs: the fearlezz action's tag, or \
+                 the pin fearlezz = \"<version>\" in fearlezz.toml, which it installs when newer"
+            );
+            None
+        }
         Err(e) => {
             println!("proof page not sent: {e:#}");
             None

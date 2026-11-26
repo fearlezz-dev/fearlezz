@@ -52,6 +52,11 @@ pub(crate) struct State {
     pub approved: Option<Value>,
     /// The approved pictures CI reads at `/api/v2/runs/r1/blobs/<sha256>`, by that SHA-256.
     pub approved_files: BTreeMap<String, Vec<u8>>,
+    /// What `GET /api/v2/cli` answers anyone: the newest release and the lowest version the
+    /// host takes; none is 404, as a host from before it answered.
+    pub cli: Option<Value>,
+    /// Refuses to open a run, as a host refuses a CLI older than it takes, with these words.
+    pub too_old: Option<String>,
     /// Its own address, which the pages it names start with.
     base: String,
 }
@@ -139,6 +144,7 @@ fn serve(request: Request, state: &Arc<Mutex<State>>) -> Answer {
         path,
         auth,
         body,
+        ..
     } = request;
     if s.hangs && path.starts_with("/api/") {
         // Read until the caller hangs up, so the wait it gave the host is known.
@@ -211,6 +217,15 @@ fn answer(
             };
         }
         ("DELETE", "/api/v2/login") => return (204, json!({})),
+        ("GET", "/api/v2/cli") => {
+            return match &s.cli {
+                Some(cli) => (200, cli.clone()),
+                None => (404, json!({"error": "not found"})),
+            };
+        }
+        ("POST", "/api/v2/runs") if s.too_old.is_some() => {
+            return (426, json!({ "error": s.too_old }));
+        }
         ("GET", work) if work.starts_with("/api/v2/work/") => {
             return match (&s.feedback, cli) {
                 (_, false) => (

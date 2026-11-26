@@ -14,6 +14,7 @@
 use fearlezz_proof::look::Look;
 use fearlezz_proof::notes::{Feedback, Noted};
 use fearlezz_proof::review::Review;
+use fearlezz_proof::version::{self, Cli, Version};
 use serde::Deserialize;
 use serde_json::json;
 use wasm_bindgen::JsValue;
@@ -22,13 +23,23 @@ use worker::{Env, Headers, Request, Response};
 use crate::access::{self, Action, Person, Via, Viewer};
 use crate::github::{self, Device, UserToken};
 use crate::work::{self, NOTE_COLUMNS, NoteRow, Place, RunRow, WorkRow, read};
-use crate::{Answer, Config, Refusal, crypto, files, not_found, now, pages, repo_key};
+use crate::{Answer, Config, Refusal, cache, crypto, files, not_found, now, pages, repo_key};
 
 /// What every CLI token starts with, so a reader tells it from CI's OIDC token at a glance.
 const PREFIX: &str = "fzh_";
 
 /// What the CLI is told when it has no token that holds.
 pub(crate) const SIGN_IN: &str = "sign in to the proof host: fearlezz setup login";
+
+/// The repository whose releases are Fearlezz's.
+const RELEASES: &str = "fearlezz-dev/fearlezz";
+
+/// How long the newest release is kept before GitHub is asked again.
+const LATEST_SECONDS: i64 = 3600;
+
+/// How long GitHub not saying is kept, so a GitHub that limits the host's calls is not asked
+/// on every call.
+const UNKNOWN_SECONDS: i64 = 600;
 
 /// How long a CLI token lives after its last use.
 const IDLE_SECONDS: i64 = 30 * 86400;
@@ -334,4 +345,61 @@ pub async fn file(req: &Request, env: &Env, config: &Config, run: &str, path: &[
     headers.set("Content-Disposition", "attachment")?;
     headers.set("Cache-Control", "no-store")?;
     Ok(Response::from_body(body)?.with_headers(headers))
+}
+
+/// `GET /api/v2/cli`: the newest release of Fearlezz and the lowest version whose runs the host
+/// takes, for anyone. A CLI asks it at most once a day, signed in or not, to tell its agent to
+/// update. A newest release GitHub could not give is left out, and the CLI then says nothing.
+pub(crate) async fn versions(env: &Env, config: &Config) -> Answer {
+    let latest = latest(env, config).await.unwrap_or_else(|error| {
+        worker::console_error!("the newest release of Fearlezz is unknown: {error}");
+        None
+    });
+    let cli = Cli {
+        latest,
+        minimum: config.cli_minimum.clone(),
+    };
+    Ok(Response::from_json(&cli)?)
+}
+
+/// The newest release of Fearlezz, without its `v`, kept for an hour; GitHub not saying (an
+/// error or no release) is kept, as an empty answer, for ten minutes.
+async fn latest(env: &Env, config: &Config) -> worker::Result<Option<String>> {
+    const KEY: &str = "cli-latest";
+    if let Some(kept) = cache::get(env, KEY).await? {
+        return Ok(Some(kept).filter(|kept| !kept.is_empty()));
+    }
+    let asked = github::latest_release(config, RELEASES).await;
+    let latest = match &asked {
+        Ok(Some(tag)) => tag.trim_start_matches('v').to_owned(),
+        Ok(None) | Err(_) => String::new(),
+    };
+    let seconds = if latest.is_empty() {
+        UNKNOWN_SECONDS
+    } else {
+        LATEST_SECONDS
+    };
+    cache::put(env, KEY, &latest, seconds).await?;
+    asked?;
+    Ok(Some(latest).filter(|latest| !latest.is_empty()))
+}
+
+/// Refuses a caller older than the host takes (`CLI_MINIMUM`), by the version its
+/// `User-Agent` names; one that names none counts as the oldest, as every CLI before 0.5.4.
+pub(crate) fn takes(req: &Request, config: &Config) -> Result<(), Refusal> {
+    let agent = req.headers().get("User-Agent")?.unwrap_or_default();
+    if Version::of_agent(&agent) >= Version::parse(&config.cli_minimum) {
+        return Ok(());
+    }
+    let who = match version::named(&agent) {
+        Some(named) => format!("Fearlezz {named}"),
+        None => "a Fearlezz that names no version".to_owned(),
+    };
+    Err(Refusal::new(
+        426,
+        format!(
+            "{who} is older than this proof host takes ({} or newer)",
+            config.cli_minimum
+        ),
+    ))
 }

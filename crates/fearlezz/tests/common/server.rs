@@ -14,6 +14,7 @@ pub(crate) struct Request {
     pub method: String,
     pub path: String,
     pub auth: Option<String>,
+    pub user_agent: Option<String>,
     pub body: Vec<u8>,
 }
 
@@ -65,6 +66,7 @@ fn serve(stream: TcpStream, answer: &dyn Fn(Request) -> Answer) {
     let path = parts.next().unwrap_or_default().to_string();
     let mut length = 0;
     let mut auth = None;
+    let mut user_agent = None;
     loop {
         let mut header = String::new();
         if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
@@ -75,6 +77,7 @@ fn serve(stream: TcpStream, answer: &dyn Fn(Request) -> Answer) {
         match name.to_ascii_lowercase().as_str() {
             "content-length" => length = value.parse().unwrap_or(0),
             "authorization" => auth = Some(value),
+            "user-agent" => user_agent = Some(value),
             _ => {}
         }
     }
@@ -86,6 +89,7 @@ fn serve(stream: TcpStream, answer: &dyn Fn(Request) -> Answer) {
         method,
         path,
         auth,
+        user_agent,
         body,
     };
     match answer(request) {

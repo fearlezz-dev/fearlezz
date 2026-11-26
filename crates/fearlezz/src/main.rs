@@ -714,6 +714,10 @@ fn hook_answer(event: hooks::Event, input: &hooks::Input) -> Result<hooks::Answe
         needs_proof: wt.changed.iter().any(|p| ctx.config.needs_proof(p)),
         now: view.now.clone(),
         next: view.next.to_string(),
+        behind: matches!(event, hooks::Event::SessionStart)
+            .then(|| version::behind(&ctx.config))
+            .flatten()
+            .map(|b| b.to_string()),
         // Asked of the host only where it can hold the agent: a stop it has not held yet.
         open_notes: if matches!(event, hooks::Event::Stop) && !input.again {
             feedback::open_notes(&ctx.git, &host_url(Some(&ctx.config)))
@@ -1197,6 +1201,9 @@ fn print_status(ctx: &Ctx, v: &View, host: (Vec<String>, usize)) {
     }
     if let Some((at, text)) = &v.last_note {
         println!("note ({}): {text}", ago(ctx.now, *at));
+    }
+    if let Some(behind) = version::behind(&ctx.config) {
+        println!("update: {behind}");
     }
     let (lines, open) = host;
     for line in lines {

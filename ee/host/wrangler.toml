@@ -57,6 +57,10 @@ GITHUB_WEB = "https://github.com"
 # The Fearlezz GitHub App's client id: its OAuth client, and the issuer of its JWTs.
 GITHUB_CLIENT_ID = "Iv23liJRwzB5ys23d4Z9"
 INSTALL_URL = "https://github.com/apps/fearlezz-dev/installations/new"
+# The lowest CLI version whose runs the host takes (`GET /api/v2/cli` names it). Raise it when
+# the protocol changes in a way older CLIs cannot follow; a CLI that names no version counts as
+# 0.0.0.
+CLI_MINIMUM = "0.0.0"
 
 [[r2_buckets]]
 binding = "BLOBS"

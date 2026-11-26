@@ -104,6 +104,24 @@ pub async fn installation(config: &Config, repo: &str) -> Result<Option<u64>> {
     }
 }
 
+/// The tag of the newest release of the public repository `repo`, asked without a token;
+/// None when it has none.
+pub(crate) async fn latest_release(config: &Config, repo: &str) -> Result<Option<String>> {
+    let url = format!("{}/repos/{repo}/releases/latest", config.github_api);
+    let reply = call(Method::Get, &url, None, None).await?;
+    match reply.status {
+        200 => Ok(reply
+            .body
+            .get("tag_name")
+            .and_then(Value::as_str)
+            .map(str::to_owned)),
+        404 => Ok(None),
+        status => Err(worker::Error::RustError(format!(
+            "GitHub answered {status} for the newest release of {repo}"
+        ))),
+    }
+}
+
 /// Whether anyone may read a repository. Only the app can tell for someone without a session;
 /// a repository it is not installed on counts as private.
 pub async fn public(config: &Config, repo: &str) -> Result<bool> {
