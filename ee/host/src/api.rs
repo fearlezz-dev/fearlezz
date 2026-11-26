@@ -89,6 +89,7 @@ pub async fn installed(req: &Request, env: &Env, config: &Config) -> Answer {
 }
 
 pub async fn open(mut req: Request, env: &Env, config: &Config) -> Answer {
+    cli::takes(&req, config)?;
     let writer = Writer::of(&req, env, config).await?;
     let mut open: Open = req
         .json()

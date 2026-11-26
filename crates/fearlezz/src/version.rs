@@ -1,8 +1,12 @@
 //! Which Fearlezz this is: its version and where it runs from, and the lowest version a config
 //! needs (`fearlezz = "0.5.1"` at the top of `fearlezz.toml` or a piece). An older Fearlezz
 //! first on PATH is a common reason a word or a config field is unknown, so errors name both.
+//! And whether it is behind: the proof host says which release is newest and the lowest
+//! version it takes, asked at most once a day.
 
 use anyhow::{Result, bail};
+use fearlezz_proof::version::Cli;
+pub(crate) use fearlezz_proof::version::Version;
 
 /// This binary's version.
 pub(crate) const OURS: &str = env!("CARGO_PKG_VERSION");
@@ -12,34 +16,6 @@ pub(crate) fn this() -> String {
     let path = std::env::current_exe()
         .map_or_else(|_| "an unknown path".into(), |p| p.display().to_string());
     format!("Fearlezz {OURS} at {path}")
-}
-
-/// A version as it compares: three numbers, a missing one counting as 0 (`0.6` is `0.6.0`),
-/// and a prerelease (`0.6.0-rc.1`) before its release. Build metadata (`+…`) counts for
-/// nothing, and a part that is no number counts as 0.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Version {
-    numbers: [u64; 3],
-    released: bool,
-}
-
-impl Version {
-    pub(crate) fn parse(text: &str) -> Version {
-        let text = text.trim().trim_start_matches('v');
-        let text = text.split('+').next().unwrap_or_default();
-        let (release, pre) = match text.split_once('-') {
-            Some((release, _)) => (release, true),
-            None => (text, false),
-        };
-        let mut numbers = [0; 3];
-        for (slot, part) in numbers.iter_mut().zip(release.split('.')) {
-            *slot = part.parse().unwrap_or(0);
-        }
-        Version {
-            numbers,
-            released: !pre,
-        }
-    }
 }
 
 /// This binary's release, its version without a prerelease or build part: the pin `setup
@@ -79,23 +55,112 @@ pub(crate) fn meets(needs: &toml::Value, who: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// How to update Fearlezz, after "update it" or "update Fearlezz": the agent knows how this
+/// machine installed it, and the developer should know it moved.
+pub(crate) const UPDATE: &str = "the way it was installed (devenv update, nix, brew upgrade or \
+                                 the install script), and tell the developer";
 
-    #[test]
-    fn fewer_parts_are_zeros() {
-        assert_eq!(Version::parse("1.0"), Version::parse("1.0.0"));
-        assert_eq!(Version::parse("1"), Version::parse("1.0.0"));
-        assert!(Version::parse("1.0") < Version::parse("1.0.1"));
-        assert!(Version::parse("0.10.0") > Version::parse("0.9.9"));
-    }
+/// How long the proof host's answer is kept before it is asked again.
+const DAY: u64 = 24 * 60 * 60;
 
-    #[test]
-    fn a_prerelease_comes_before_its_release() {
-        assert!(Version::parse("0.6.0-rc.1") < Version::parse("0.6.0"));
-        assert!(Version::parse("0.6.0-rc.1") > Version::parse("0.5.9"));
-        assert_eq!(Version::parse("0.6.0+build"), Version::parse("0.6.0"));
-        assert_eq!(Version::parse("v0.6.0"), Version::parse("0.6.0"));
+/// How this Fearlezz is behind what its proof host says.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Behind {
+    /// A newer release is out.
+    Newer(String),
+    /// The host takes runs only from this version or newer, so it sends none there.
+    TooOld(String),
+}
+
+impl std::fmt::Display for Behind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Behind::Newer(latest) => {
+                write!(
+                    f,
+                    "Fearlezz {latest} is out and this is {OURS}; update it {UPDATE}"
+                )
+            }
+            Behind::TooOld(minimum) => write!(
+                f,
+                "Fearlezz {OURS} is older than the proof host takes ({minimum} or newer), so it \
+                 sends no runs there; update it {UPDATE}"
+            ),
+        }
     }
+}
+
+/// What the proof host said, kept in the user's cache folder: which host, when, and its answer
+/// (none when it could not say, so a host that is down is not asked again that day either).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Kept {
+    host: String,
+    asked: u64,
+    cli: Option<Cli>,
+}
+
+/// How this Fearlezz is behind the proof host of `config`: below the lowest version it takes,
+/// or older than the newest release. The host is asked at most once a day, within a second or
+/// two. Never on CI, where the action picks the version, never with the host off, where
+/// nothing goes to it, and never with `FEARLEZZ_NO_UPDATE_CHECK` set.
+pub(crate) fn behind(config: &crate::config::Config) -> Option<Behind> {
+    let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    if config.host_off || set("CI") || set("FEARLEZZ_NO_UPDATE_CHECK") {
+        return None;
+    }
+    let cli = said(&crate::host_url(Some(config)))?;
+    let ours = Version::parse(OURS);
+    if plain(&cli.minimum) && ours < Version::parse(&cli.minimum) {
+        return Some(Behind::TooOld(cli.minimum));
+    }
+    cli.latest
+        .filter(|latest| plain(latest) && Version::parse(latest) > ours)
+        .map(Behind::Newer)
+}
+
+/// Whether the host's `text` is a plain version (`0.5.4`, `1.0.0-rc.1`), the only words of a
+/// host an agent is shown: a repository may name any host.
+fn plain(text: &str) -> bool {
+    let release = text.split(['-', '+']).next().unwrap_or_default();
+    let parts: Vec<&str> = release.split('.').collect();
+    text.len() <= 32
+        && parts.len() <= 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'))
+}
+
+/// What the host at `host` says of the CLI: kept from less than a day ago, or asked now and
+/// kept.
+fn said(host: &str) -> Option<Cli> {
+    let file = crate::files::UserDir::Cache
+        .path()
+        .ok()?
+        .join("latest.json");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let kept = crate::files::read_if_exists(&file)
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str::<Kept>(&text).ok())
+        // A clock that was set ahead and back makes a kept answer old, not fresh for longer.
+        .filter(|kept| kept.host == host && now.abs_diff(kept.asked) < DAY);
+    if let Some(kept) = kept {
+        return kept.cli;
+    }
+    let cli = crate::host::cli(host).ok();
+    let kept = Kept {
+        host: host.to_owned(),
+        asked: now,
+        cli,
+    };
+    // Not kept only costs asking again next time.
+    if let Ok(text) = serde_json::to_string(&kept) {
+        drop(crate::files::write_atomic(&file, text));
+    }
+    kept.cli
 }

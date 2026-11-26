@@ -167,7 +167,12 @@ impl Repo {
 
     /// Runs `fearlezz` with `input` on stdin, as an agent runs a hook.
     pub(crate) fn fz_input(&self, args: &[&str], input: &str) -> Output {
-        run(fearlezz(&self.root, Some(&self.cache), args, &[]).write_stdin(input))
+        self.fz_input_env(args, input, &[])
+    }
+
+    /// Runs `fearlezz` with `input` on stdin and `env` besides.
+    pub(crate) fn fz_input_env(&self, args: &[&str], input: &str, env: &[(&str, &str)]) -> Output {
+        run(fearlezz(&self.root, Some(&self.cache), args, env).write_stdin(input))
     }
 }
 
@@ -258,6 +263,8 @@ fn fearlezz(dir: &Path, cache: Option<&Path>, args: &[&str], env: &[(&str, &str)
     }
     // Never the developer's own sign in to a proof host: a test that wants one gives its own.
     cmd.env("XDG_CONFIG_HOME", no_config());
+    // Never the real proof host's newest release: a test of the update check empties this.
+    cmd.env("FEARLEZZ_NO_UPDATE_CHECK", "1");
     // Never the developer's own `gh`: a test that wants one puts a fake first with `fake_gh`.
     let path = format!(
         "{}:{}",
