@@ -438,6 +438,9 @@ fn cargo(text: &str, levels: Levels, in_tests: &InTests) -> Read {
         if test_crate && in_tests.contains(code) {
             continue;
         }
+        if code == "dead_code_pub_in_binary" && library(&v["target"]) {
+            continue;
+        }
         let hard = code.is_empty()
             || (code.len() == 5
                 && code.starts_with('E')
@@ -495,6 +498,18 @@ fn cargo(text: &str, levels: Levels, in_tests: &InTests) -> Read {
         ));
     }
     (found, errors)
+}
+
+/// Whether cargo's target is a library. A library's own build never reports
+/// `dead_code_pub_in_binary`; its unit tests build as a binary, where every public item only
+/// other crates use looks unused, and cargo names that build by the library's target.
+fn library(target: &Value) -> bool {
+    const LIBRARY: [&str; 6] = ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"];
+    target["kind"].as_array().is_some_and(|kinds| {
+        kinds
+            .iter()
+            .any(|k| k.as_str().is_some_and(|k| LIBRARY.contains(&k)))
+    })
 }
 
 /// `SEVERITY|TYPE|CODE|FILE|LINE|COLUMN|LENGTH|MESSAGE` lines among the analyzer's other
