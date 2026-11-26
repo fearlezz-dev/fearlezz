@@ -219,8 +219,7 @@ impl Frames {
         cmd.args(["-v", "error", "-i"]).arg(path);
         if let Some(pick) = &pick {
             // The filter still decodes every frame, but sends only these.
-            let select: Vec<String> = pick.iter().map(|n| format!("eq(n\\,{n})")).collect();
-            cmd.args(["-vf", &format!("select='{}'", select.join("+"))]);
+            cmd.args(["-vf", &format!("select='{}'", any_frame(pick))]);
         }
         let pix_fmt = match format {
             Format::Yuv420 => "yuv420p",
@@ -324,6 +323,21 @@ impl Drop for Frames {
         if !self.done {
             drop(self.child.kill());
             drop(self.child.wait());
+        }
+    }
+}
+
+/// The ffmpeg expression true at the frames numbered `pick`: their `eq(n,i)` terms summed as a
+/// balanced tree. ffmpeg refuses an expression nested deeper than 100 levels, and each `+` of
+/// a flat sum nests one level, so a flat sum fails for a film with more than 100 states; a
+/// balanced one nests only about log2 of their number deep.
+fn any_frame(pick: &[usize]) -> String {
+    match pick {
+        [] => "0".into(),
+        [n] => format!("eq(n\\,{n})"),
+        _ => {
+            let (left, right) = pick.split_at(pick.len() / 2);
+            format!("({}+{})", any_frame(left), any_frame(right))
         }
     }
 }

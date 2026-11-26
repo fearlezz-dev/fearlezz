@@ -313,6 +313,23 @@ fn a_large_film_has_its_change_at_the_right_moment_and_place() {
     );
 }
 
+/// Found on the proof host's own page looks: a film with more than a hundred states, each held a
+/// few frames, could not be read again for its pixel diffs, because the frames to send were one
+/// long `eq(n,a)+eq(n,b)+...` expression and ffmpeg refuses one nested deeper than 100.
+#[test]
+fn a_film_with_hundreds_of_states_is_compared() {
+    let dir = tempfile::tempdir().unwrap();
+    let film = |name: &str| {
+        // A box that jumps every 0.3 s for 45 s: 150 states of 3 frames each.
+        let source = "color=c=white:s=160x90:r=10:d=45[w];color=c=blue:s=30x30:r=10[b];\
+                      [w][b]overlay=x='mod(floor(t/0.3)*7,130)':y=30:shortest=1";
+        let args = ["-f", "lavfi", "-i", source, "-pix_fmt", "yuv420p"];
+        ffmpeg(&dir.path().join(name), &args)
+    };
+    let c = compare(&film("a.mp4"), &film("b.mp4"));
+    assert_eq!(c["verdict"], "same", "{c}");
+}
+
 #[test]
 fn a_file_ffmpeg_cannot_read_says_so() {
     let dir = tempfile::tempdir().unwrap();
