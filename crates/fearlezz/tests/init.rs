@@ -344,12 +344,18 @@ const FLUTTER_IN_A_FOLDER: &[(&str, &str)] = &[
     ),
     ("app/lib/main.dart", "void main() {}\n"),
     ("app/test/home_test.dart", "void main() {}\n"),
-    ("app/macos/Runner.xcodeproj/project.pbxproj", "// !$*UTF8*$!\n"),
+    (
+        "app/macos/Runner.xcodeproj/project.pbxproj",
+        "// !$*UTF8*$!\n",
+    ),
     (
         "app/macos/Runner/AppDelegate.swift",
         "import Cocoa\nimport FlutterMacOS\n",
     ),
-    ("app/ios/Runner.xcodeproj/project.pbxproj", "// !$*UTF8*$!\n"),
+    (
+        "app/ios/Runner.xcodeproj/project.pbxproj",
+        "// !$*UTF8*$!\n",
+    ),
     (
         "app/ios/Runner/AppDelegate.swift",
         "import Flutter\nimport UIKit\n",
@@ -362,7 +368,10 @@ fn init_finds_a_flutter_app_below_the_root_and_its_checks_run_there() {
     let out = repo.fz(&["setup", "init"]);
     assert!(out.ok, "{}{}", out.stdout, out.stderr);
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
-    assert!(config.contains(r#"use = ["flutter", "safety"]"#), "{config}");
+    assert!(
+        config.contains(r#"use = ["flutter", "safety"]"#),
+        "{config}"
+    );
     assert!(
         out.stdout.contains("flutter (app/pubspec.yaml)"),
         "{}",
@@ -411,17 +420,17 @@ fn init_sees_a_flutter_app_inside_another_dart_project() {
     let xcode = "// !$*UTF8*$!\n";
     // A pub workspace whose root is plain Dart, with the app as a member.
     let repo = project(&[
-        (
-            "pubspec.yaml",
-            "name: root\nworkspace:\n  - apps/mobile\n",
-        ),
+        ("pubspec.yaml", "name: root\nworkspace:\n  - apps/mobile\n"),
         ("apps/mobile/pubspec.yaml", flutter),
         ("apps/mobile/ios/Runner.xcodeproj/project.pbxproj", xcode),
     ]);
     let out = repo.fz(&["setup", "init"]);
     assert!(out.ok, "{}{}", out.stdout, out.stderr);
     let config = std::fs::read_to_string(repo.path("fearlezz.toml")).unwrap();
-    assert!(config.contains(r#"use = ["flutter", "safety"]"#), "{config}");
+    assert!(
+        config.contains(r#"use = ["flutter", "safety"]"#),
+        "{config}"
+    );
     assert!(!out.stdout.contains("an Apple app"), "{}", out.stdout);
     assert!(
         out.stdout

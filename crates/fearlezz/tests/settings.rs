@@ -955,7 +955,10 @@ fn a_change_to_a_flutter_app_in_a_folder_hints_at_its_pictures_not_an_apple_apps
             "app/pubspec.yaml",
             "name: app\ndependencies:\n  flutter:\n    sdk: flutter\n",
         ),
-        ("app/macos/Runner.xcodeproj/project.pbxproj", "// !$*UTF8*$!\n"),
+        (
+            "app/macos/Runner.xcodeproj/project.pbxproj",
+            "// !$*UTF8*$!\n",
+        ),
     ];
     let out = grown("", &files, &[("app/lib/main.dart", "void main() {}\n")]);
     assert!(
