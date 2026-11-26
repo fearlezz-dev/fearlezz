@@ -88,11 +88,12 @@ pub(crate) const LOCK: &str = "fearlezz.lock";
 /// unused ones dropped. A tag that now points elsewhere is an error until `update` accepts it.
 /// On CI the lock is never written: one that does not match is an error, so CI reads exactly
 /// what was reviewed.
-pub(crate) fn resolve(root: &Path, common: &Path) -> Result<Table> {
+/// Also returns where each value came from, for `setup show`.
+pub(crate) fn resolve(root: &Path, common: &Path) -> Result<(Table, Origins)> {
     let (_, table) = read_config(root)?;
     let locked = read_lock(root)?;
-    let mut loader = Loader::new(common, locked.clone(), Mode::Check);
-    let table = loader.expand(table, &Origin::Dir(root.to_path_buf()))?;
+    let mut loader = Loader::new(root, common, locked.clone(), Mode::Check);
+    let table = loader.expand(table, &Origin::Dir(root.to_path_buf()), FILE)?;
     if loader.used != locked {
         if on_ci() {
             let missing: Vec<&str> = loader
@@ -121,7 +122,25 @@ pub(crate) fn resolve(root: &Path, common: &Path) -> Result<Table> {
         }
         write_lock(root, &loader.used)?;
     }
-    Ok(table)
+    Ok((table, loader.origins))
+}
+
+/// Where each value of a merged config came from, by its path of keys: the built in piece's
+/// name, a local piece's path from the root, a repository piece's id, or `fearlezz.toml`.
+/// Only values that are no table are named; the last piece to set one wins, as in the merge.
+pub(crate) type Origins = BTreeMap<Vec<String>, String>;
+
+/// Names `label` as the origin of every value in `table`, under the keys `path`.
+fn record(origins: &mut Origins, path: &mut Vec<String>, table: &Table, label: &str) {
+    for (key, value) in table {
+        path.push(key.clone());
+        if let Value::Table(inner) = value {
+            record(origins, path, inner, label);
+        } else {
+            origins.insert(path.clone(), label.to_string());
+        }
+        path.pop();
+    }
 }
 
 /// Whether this runs on CI, which sets `CI` (to `true` on the common services).
@@ -149,8 +168,8 @@ pub(crate) fn update(root: &Path, common: &Path, only: Option<&str>) -> Result<U
     let locked = read_lock(root)?;
     let origin = Origin::Dir(root.to_path_buf());
     // Only for listing the changes: an amended release can leave the old pin unreadable.
-    let before = Loader::new(common, locked.clone(), Mode::Trust)
-        .expand(table, &origin)
+    let before = Loader::new(root, common, locked.clone(), Mode::Trust)
+        .expand(table, &origin, FILE)
         .ok();
 
     let mut doc: toml_edit::DocumentMut = text.parse()?;
@@ -181,7 +200,7 @@ pub(crate) fn update(root: &Path, common: &Path, only: Option<&str>) -> Result<U
                 .unwrap_or_default()
         );
     }
-    let mut loader = Loader::new(common, locked.clone(), Mode::Refresh(urls));
+    let mut loader = Loader::new(root, common, locked.clone(), Mode::Refresh(urls));
     let (mut pieces, mut majors) = (Vec::new(), Vec::new());
     for (spec, url, rev, item) in picked {
         let dir = loader.repo(&url)?;
@@ -199,7 +218,7 @@ pub(crate) fn update(root: &Path, common: &Path, only: Option<&str>) -> Result<U
     }
     let new_text = doc.to_string();
     let table: Table = toml::from_str(&new_text)?;
-    let after = loader.expand(table, &origin)?;
+    let after = loader.expand(table, &origin, FILE)?;
     std::fs::write(root.join(FILE), new_text)?;
     write_lock(root, &loader.used)?;
     let moved = loader
@@ -397,6 +416,8 @@ enum Mode {
 }
 
 struct Loader {
+    /// The repository root, which a local piece's origin is named from.
+    root: PathBuf,
     cache: PathBuf,
     mode: Mode,
     locked: Lock,
@@ -406,21 +427,27 @@ struct Loader {
     fetched: BTreeSet<String>,
     /// The pieces being expanded, to refuse a piece that uses itself.
     stack: Vec<String>,
+    /// Where each value read so far came from.
+    origins: Origins,
 }
 
 impl Loader {
-    fn new(common: &Path, locked: Lock, mode: Mode) -> Loader {
+    fn new(root: &Path, common: &Path, locked: Lock, mode: Mode) -> Loader {
         Loader {
+            root: root.to_path_buf(),
             cache: common.join("fearlezz/presets"),
             mode,
             locked,
             used: Lock::new(),
             fetched: BTreeSet::new(),
             stack: Vec::new(),
+            origins: Origins::new(),
         }
     }
 
-    fn expand(&mut self, mut table: Table, origin: &Origin) -> Result<Table> {
+    /// `table` with every piece it uses merged in, its own values last; `label` names where
+    /// `table` itself came from.
+    fn expand(&mut self, mut table: Table, origin: &Origin, label: &str) -> Result<Table> {
         // First, so a config for a newer Fearlezz names the version, not a field or piece this
         // one does not know. It says which binary reads the config, no behaviour, so it leaves
         // the merged table and the floor never sees it. A piece's is met where it is used, which
@@ -460,12 +487,14 @@ impl Loader {
                 crate::version::meets(needs, &format!("the piece \"{spec}\""))?;
             }
             self.stack.push(id);
+            let label = source.label(&self.root);
             let piece = self
-                .expand(piece, &source.origin())
+                .expand(piece, &source.origin(), &label)
                 .with_context(|| format!("use \"{spec}\""))?;
             self.stack.pop();
             merge(&mut merged, piece);
         }
+        record(&mut self.origins, &mut Vec::new(), &table, label);
         merge(&mut merged, table);
         Ok(merged)
     }
@@ -698,6 +727,23 @@ impl Source {
                 .display()
                 .to_string(),
             Source::Git { url, rev, path } => format!("{url}//{path}@{rev}"),
+        }
+    }
+
+    /// How `setup show` names it: a built in piece by its name, a local one by its path from
+    /// the repository root, one from a repository by its id.
+    fn label(&self, root: &Path) -> String {
+        match self {
+            Source::Builtin(name, _) => (*name).to_string(),
+            Source::File(path) => path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .components()
+                .filter(|c| !matches!(c, std::path::Component::CurDir))
+                .collect::<PathBuf>()
+                .display()
+                .to_string(),
+            Source::Git { .. } => self.id(),
         }
     }
 

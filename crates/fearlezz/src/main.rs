@@ -38,6 +38,7 @@ mod report;
 mod rules;
 mod run;
 mod settings;
+mod show;
 mod showcase;
 mod sops;
 mod state;
@@ -197,6 +198,15 @@ enum Setup {
     Guide,
     /// Write the shared settings into each tool's own file (lint levels and more).
     Sync,
+    /// Print what a built in piece sets as shipped, what a check is once resolved, or with no
+    /// names the whole merged config, each value followed by the piece or file it came from.
+    Show {
+        /// Built in pieces (such as rust) or check ids.
+        names: Vec<String>,
+        /// Print every lint level instead of a count per level.
+        #[arg(long)]
+        lints: bool,
+    },
     /// Move pieces from a repository to their newest tag of the same major version (or only
     /// those whose spec contains PIECE), accept tags that moved, and list every setting that
     /// changes.
@@ -904,6 +914,7 @@ fn setup(what: Setup) -> Result<bool> {
             println!("\nnext: follow the guide from step 1, learning the project");
         }
         Setup::Sync => setup_sync()?,
+        Setup::Show { names, lints } => setup_show(&names, lints)?,
         Setup::Showcase => {
             let ctx = ctx()?;
             let journal = ctx.journal()?;
@@ -948,6 +959,59 @@ fn setup_update(piece: Option<&str>) -> Result<()> {
         }
     }
     println!("next: review the changes, then commit fearlezz.toml and fearlezz.lock");
+    Ok(())
+}
+
+/// `fearlezz setup show`: pieces as shipped, checks resolved, or the merged config.
+fn setup_show(names: &[String], lints: bool) -> Result<()> {
+    // A piece is shown without a fearlezz.toml, while setting one up.
+    let config = std::env::current_dir()
+        .map_err(anyhow::Error::from)
+        .and_then(|dir| Git::discover(&dir))
+        .and_then(|git| Config::load(&git.root, &git.common));
+    let next = format!(
+        "next: tune a piece in fearlezz.toml by writing only the fields that change under its \
+         table, or off = true to drop a check{}",
+        if lints {
+            ""
+        } else {
+            "; --lints prints every lint level"
+        }
+    );
+    if names.is_empty() {
+        print!("{}", show::config(&config?, lints)?);
+        println!("{next}");
+        return Ok(());
+    }
+    let mut shown = false;
+    for name in names {
+        let piece = show::piece(name, lints)?;
+        let check = match &config {
+            Ok(c) => show::check(c, name, lints)?,
+            Err(_) => None,
+        };
+        if piece.is_none() && check.is_none() {
+            let pieces = names::find(presets::BUILTIN, name)
+                .err()
+                .unwrap_or_default();
+            let unknown = format!("no piece or check \"{name}\"; pieces are {pieces}");
+            return Err(match &config {
+                Ok(c) => {
+                    let ids: Vec<&str> = c.checks.iter().map(|c| c.id.as_str()).collect();
+                    anyhow::anyhow!("{unknown}; checks are {}", ids.join(", "))
+                }
+                Err(e) => anyhow::anyhow!("{unknown}; checks are unknown: {e:#}"),
+            });
+        }
+        for text in piece.iter().chain(check.iter()) {
+            if shown {
+                println!();
+            }
+            print!("{text}");
+            shown = true;
+        }
+    }
+    println!("{next}");
     Ok(())
 }
 
