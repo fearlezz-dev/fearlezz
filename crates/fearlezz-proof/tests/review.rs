@@ -1,14 +1,14 @@
 //! Where review of a head stands: which pictures wait for a verdict, whether its weakenings
 //! wait for an admin's accept, and what a verdict follows from run to run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fearlezz_proof::events::{Run, RunCheck, RunState, Source};
 use fearlezz_proof::floor::{Part, Weakening};
 use fearlezz_proof::look::{Change, Item, Look};
 use fearlezz_proof::media::{Comparison, Mark, Marks, Pair, Verdict as Likeness};
 use fearlezz_proof::notes::{Note, NoteState, Region, Side};
-use fearlezz_proof::review::{self, Accept, State, Verdict};
+use fearlezz_proof::review::{self, Accept, Actions, State, Verdict};
 use fearlezz_proof::{Check, Proof, Ran};
 
 fn still(name: &str, change: Change) -> Item {
@@ -169,7 +169,7 @@ fn verdict(picture: &str, key: &str, head: &str) -> Verdict {
 
 #[test]
 fn a_head_without_a_run_waits_for_ci() {
-    let review = review::review("aaa", &[], &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa", &[], &Actions::default(), &[], &[], None);
     assert_eq!(review.state, State::Ci);
 }
 
@@ -180,11 +180,11 @@ fn a_running_run_of_the_head_is_running_and_another_heads_runs_do_not_count() {
         run("r1", "aaa", RunState::Done, &[]),
     ];
     assert_eq!(
-        review::review("bbb", &runs, &BTreeMap::new(), &[], &[], None).state,
+        review::review("bbb", &runs, &Actions::default(), &[], &[], None).state,
         State::Running
     );
     assert_eq!(
-        review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None).state,
+        review::review("aaa", &runs, &Actions::default(), &[], &[], None).state,
         State::Approved
     );
 }
@@ -194,7 +194,14 @@ fn a_failed_proof_fails_the_review() {
     let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
     let mut proof = proof.unwrap();
     proof.checks.push(entry("tests", Ran::Failed));
-    let review = review::review("aaa", &[(r, Some(proof))], &BTreeMap::new(), &[], &[], None);
+    let review = review::review(
+        "aaa",
+        &[(r, Some(proof))],
+        &Actions::default(),
+        &[],
+        &[],
+        None,
+    );
     assert_eq!(review.state, State::Failed);
 }
 
@@ -210,7 +217,7 @@ fn changed_new_and_gone_pictures_wait_and_flaky_and_unchanged_ones_do_not() {
         flaky,
     ];
     let runs = [run("r1", "aaa", RunState::Done, &items)];
-    let review = review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa", &runs, &Actions::default(), &[], &[], None);
     assert_eq!(review.state, State::Waits);
     let waiting: Vec<&str> = review.waiting().map(|p| p.name.as_str()).collect();
     assert_eq!(waiting, ["card.png", "new.png", "gone.png"]);
@@ -228,7 +235,7 @@ fn every_picture_looking_right_approves_the_head() {
     let review = review::review(
         "aaa",
         &runs,
-        &BTreeMap::new(),
+        &Actions::default(),
         &[verdict("card.png", &key, "aaa")],
         &[],
         None,
@@ -241,7 +248,7 @@ fn every_picture_looking_right_approves_the_head() {
 #[test]
 fn an_approved_head_with_nothing_to_review_says_so_and_a_stored_review_gets_its_title() {
     let runs = [run("r1", "aaa", RunState::Done, &[])];
-    let review = review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa", &runs, &Actions::default(), &[], &[], None);
     assert_eq!(review.state, State::Approved);
     assert_eq!(review.title.read, "Proven at aaa, with nothing to review");
     assert_eq!(review.title.admin, review.title.read);
@@ -284,7 +291,7 @@ fn a_verdict_follows_the_pictures_content_across_heads() {
     let review = review::review(
         "bbb",
         &[same],
-        &BTreeMap::new(),
+        &Actions::default(),
         std::slice::from_ref(&given),
         &[],
         None,
@@ -298,7 +305,7 @@ fn a_verdict_follows_the_pictures_content_across_heads() {
         RunState::Done,
         &[still("card.png", Change::Changed)],
     );
-    let review = review::review("ccc", &[other], &BTreeMap::new(), &[given], &[], None);
+    let review = review::review("ccc", &[other], &Actions::default(), &[given], &[], None);
     assert_eq!(review.state, State::Waits);
 }
 
@@ -357,7 +364,7 @@ fn a_weakening_fails_the_review_until_the_hosts_accept_covers_it() {
     let mut proof = proof.unwrap();
     proof.weakened = vec![gone("tests")];
     let runs = [(r.clone(), Some(proof.clone()))];
-    let review = review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa", &runs, &Actions::default(), &[], &[], None);
     assert_eq!(review.state, State::Failed);
     assert_eq!(
         review.title(),
@@ -379,14 +386,14 @@ fn a_weakening_fails_the_review_until_the_hosts_accept_covers_it() {
     // The rerun's proof names the accept; the host holds it to its own.
     proof.accepted = Some(accept("aaa", &proof.weakened));
     let rerun = [(r, Some(proof))];
-    let review = review::review("aaa", &rerun, &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa", &rerun, &Actions::default(), &[], &[], None);
     assert_eq!(
         review.state,
         State::Failed,
         "a proof's own word is not enough"
     );
     let given = accept("aaa", &[gone("tests")]);
-    let review = review::review("aaa", &rerun, &BTreeMap::new(), &[], &[], Some(&given));
+    let review = review::review("aaa", &rerun, &Actions::default(), &[], &[], Some(&given));
     assert_eq!(review.state, State::Approved);
     assert!(
         review.summary().contains("accepted by admin"),
@@ -395,12 +402,20 @@ fn a_weakening_fails_the_review_until_the_hosts_accept_covers_it() {
     );
     // An accept of other weakenings, or of another head, covers nothing here.
     let other = accept("aaa", &[gone("lint")]);
-    let review = review::review("aaa", &rerun, &BTreeMap::new(), &[], &[], Some(&other));
+    let review = review::review("aaa", &rerun, &Actions::default(), &[], &[], Some(&other));
     assert_eq!(review.state, State::Failed);
     assert!(review.accept.is_none());
     let elsewhere = accept("bbb", &[gone("tests")]);
     assert_eq!(
-        review::review("aaa", &rerun, &BTreeMap::new(), &[], &[], Some(&elsewhere)).state,
+        review::review(
+            "aaa",
+            &rerun,
+            &Actions::default(),
+            &[],
+            &[],
+            Some(&elsewhere)
+        )
+        .state,
         State::Failed
     );
 }
@@ -425,7 +440,14 @@ fn a_failed_check_fails_the_review_even_without_its_reason() {
     let mut failed = entry("tests", Ran::Passed);
     failed.outcome = Ran::Failed;
     proof.checks.push(failed);
-    let review = review::review("aaa", &[(r, Some(proof))], &BTreeMap::new(), &[], &[], None);
+    let review = review::review(
+        "aaa",
+        &[(r, Some(proof))],
+        &Actions::default(),
+        &[],
+        &[],
+        None,
+    );
     assert_eq!(review.state, State::Failed);
 }
 
@@ -435,14 +457,21 @@ fn a_cancelled_run_ends_the_review_without_a_proof_and_a_newer_run_counts() {
     let review = review::review(
         "aaa",
         std::slice::from_ref(&cancelled),
-        &BTreeMap::new(),
+        &Actions::default(),
         &[],
         &[],
         None,
     );
     assert_eq!(review.state, State::Cancelled);
     let again = run("r2", "aaa", RunState::Running, &[]);
-    let review = review::review("aaa", &[again, cancelled], &BTreeMap::new(), &[], &[], None);
+    let review = review::review(
+        "aaa",
+        &[again, cancelled],
+        &Actions::default(),
+        &[],
+        &[],
+        None,
+    );
     assert_eq!(review.state, State::Running);
 }
 
@@ -454,7 +483,7 @@ fn the_summary_lists_what_waits() {
         RunState::Done,
         &[still("card.png", Change::Changed)],
     )];
-    let review = review::review("aaa1234", &runs, &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa1234", &runs, &Actions::default(), &[], &[], None);
     assert_eq!(review.title(), "1 picture waits for a look at aaa1234");
     assert_eq!(review.title.read, "1 picture waits for a look at aaa1234");
     assert_eq!(
@@ -515,7 +544,7 @@ fn an_open_note_makes_its_picture_need_change_and_the_summary_lists_the_notes() 
         ),
         note("card.png", "an old one", NoteState::Resolved),
     ];
-    let review = review::review("aaa1234", &runs, &BTreeMap::new(), &[], &notes, None);
+    let review = review::review("aaa1234", &runs, &Actions::default(), &[], &notes, None);
     assert_eq!(review.state, State::NeedsChange);
     assert_eq!(review.title(), "1 picture needs change at aaa1234");
     assert_eq!(review.notes.len(), 1, "only open notes wait");
@@ -547,7 +576,7 @@ fn an_open_note_outweighs_looks_right_until_it_is_resolved() {
     let review = review::review(
         "aaa",
         &runs,
-        &BTreeMap::new(),
+        &Actions::default(),
         std::slice::from_ref(&right),
         &open,
         None,
@@ -556,17 +585,17 @@ fn an_open_note_outweighs_looks_right_until_it_is_resolved() {
 
     // Resolving the last note: the looks right verdict on its content holds again.
     let resolved = [note("card.png", "too tight", NoteState::Resolved)];
-    let review = review::review("aaa", &runs, &BTreeMap::new(), &[right], &resolved, None);
+    let review = review::review("aaa", &runs, &Actions::default(), &[right], &resolved, None);
     assert_eq!(review.state, State::Approved);
     // Without one, the picture is back to not looked at yet.
-    let review = review::review("aaa", &runs, &BTreeMap::new(), &[], &resolved, None);
+    let review = review::review("aaa", &runs, &Actions::default(), &[], &resolved, None);
     assert_eq!(review.state, State::Waits);
     assert_eq!(review.waiting().count(), 1);
 }
 
 /// Which leg each run is, as the webhook named its job: `a*` the linux leg, `b*` the macos one.
-fn two_legs() -> BTreeMap<String, String> {
-    [
+fn two_legs() -> Actions {
+    let legs = [
         ("a1", "proof (linux)"),
         ("a2", "proof (linux)"),
         ("b1", "proof (macos)"),
@@ -574,7 +603,11 @@ fn two_legs() -> BTreeMap<String, String> {
     ]
     .into_iter()
     .map(|(run, name)| (run.to_owned(), name.to_owned()))
-    .collect()
+    .collect();
+    Actions {
+        legs,
+        ended: BTreeSet::new(),
+    }
 }
 
 #[test]
@@ -638,7 +671,7 @@ fn a_split_proof_waits_for_every_planned_leg() {
     let plan = ["linux", "mac"];
     let one = [leg_run("r1", RunState::Done, "linux", &plan)];
     assert_eq!(
-        review::review("aaa", &one, &BTreeMap::new(), &[], &[], None).state,
+        review::review("aaa", &one, &Actions::default(), &[], &[], None).state,
         State::Running
     );
     let both = [
@@ -646,7 +679,55 @@ fn a_split_proof_waits_for_every_planned_leg() {
         leg_run("r1", RunState::Done, "linux", &plan),
     ];
     assert_eq!(
-        review::review("aaa", &both, &BTreeMap::new(), &[], &[], None).state,
+        review::review("aaa", &both, &Actions::default(), &[], &[], None).state,
+        State::Approved
+    );
+}
+
+/// A planned leg whose job never opened a run, once its workflow run attempt ended, is a leg
+/// without its proof: the review stops waiting for it.
+#[test]
+fn a_planned_leg_that_never_opened_ends_with_its_attempt() {
+    let plan = ["linux", "mac"];
+    let one = [leg_run("r1", RunState::Done, "linux", &plan)];
+    let ended = Actions {
+        ended: BTreeSet::from([(1, 1)]),
+        ..Actions::default()
+    };
+    assert_eq!(
+        review::review("aaa", &one, &ended, &[], &[], None).state,
+        State::Cancelled
+    );
+    // Another attempt ending leaves this one's legs to come.
+    let other = Actions {
+        ended: BTreeSet::from([(1, 2), (2, 1)]),
+        ..Actions::default()
+    };
+    assert_eq!(
+        review::review("aaa", &one, &other, &[], &[], None).state,
+        State::Running
+    );
+    // A leg that failed fails the review, whether or not the other came.
+    let (run, proof) = leg_run("r1", RunState::Done, "linux", &plan);
+    let mut proof = proof.unwrap();
+    proof.checks.push(entry("tests", Ran::Failed));
+    let failed = [(run, Some(proof))];
+    assert_eq!(
+        review::review("aaa", &failed, &ended, &[], &[], None).state,
+        State::Failed
+    );
+    // A run of the missing leg in the next attempt, as running the failed jobs again opens,
+    // proves it.
+    let (mut again, proof) = leg_run("r2", RunState::Done, "mac", &plan);
+    if let Source::Ci { run_attempt, .. } = &mut again.source {
+        *run_attempt = 2;
+    }
+    let both = [
+        (again, proof),
+        leg_run("r1", RunState::Done, "linux", &plan),
+    ];
+    assert_eq!(
+        review::review("aaa", &both, &ended, &[], &[], None).state,
         State::Approved
     );
 }
@@ -662,7 +743,7 @@ fn a_leg_the_run_names_replaces_its_older_run_without_a_job_name() {
         leg_run("r1", RunState::Done, "linux", &["linux"]),
     ];
     assert_eq!(
-        review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None).state,
+        review::review("aaa", &runs, &Actions::default(), &[], &[], None).state,
         State::Failed
     );
     let (newer, proof) = leg_run("r3", RunState::Done, "linux", &["linux"]);
@@ -674,7 +755,7 @@ fn a_leg_the_run_names_replaces_its_older_run_without_a_job_name() {
         .push(entry("tests", Ran::Failed));
     let runs = [(newer, proof), (older, failed)];
     assert_eq!(
-        review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None).state,
+        review::review("aaa", &runs, &Actions::default(), &[], &[], None).state,
         State::Approved
     );
 }
@@ -684,7 +765,14 @@ fn the_review_names_the_preview_its_proof_deployed() {
     let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
     let mut proof = proof.unwrap();
     proof.preview = Some("https://feat-site.example.dev/".into());
-    let review = review::review("aaa", &[(r, Some(proof))], &BTreeMap::new(), &[], &[], None);
+    let review = review::review(
+        "aaa",
+        &[(r, Some(proof))],
+        &Actions::default(),
+        &[],
+        &[],
+        None,
+    );
     assert_eq!(
         review.preview.as_deref(),
         Some("https://feat-site.example.dev/")
@@ -692,7 +780,7 @@ fn the_review_names_the_preview_its_proof_deployed() {
     let none = review::review(
         "aaa",
         &[run("r1", "aaa", RunState::Done, &[])],
-        &BTreeMap::new(),
+        &Actions::default(),
         &[],
         &[],
         None,
@@ -712,7 +800,14 @@ fn a_preview_that_is_no_plain_web_address_is_left_out() {
         let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
         let mut proof = proof.unwrap();
         proof.preview = Some(bad.into());
-        let review = review::review("aaa", &[(r, Some(proof))], &BTreeMap::new(), &[], &[], None);
+        let review = review::review(
+            "aaa",
+            &[(r, Some(proof))],
+            &Actions::default(),
+            &[],
+            &[],
+            None,
+        );
         assert_eq!(review.preview, None, "{bad}");
     }
 }
@@ -735,7 +830,7 @@ fn a_picture_that_changed_since_it_looked_right_waits_and_says_so() {
     let review = review::review(
         "bbb",
         &[now, before],
-        &BTreeMap::new(),
+        &Actions::default(),
         std::slice::from_ref(&given),
         &[],
         None,
@@ -774,7 +869,7 @@ fn a_picture_that_looks_right_now_has_not_changed_since() {
     );
     let old = verdict("card.png", "still:old:old", "aaa");
     let given = verdict("card.png", &now.0.checks[0].keys["card.png"], "bbb");
-    let review = review::review("bbb", &[now], &BTreeMap::new(), &[old, given], &[], None);
+    let review = review::review("bbb", &[now], &Actions::default(), &[old, given], &[], None);
     assert_eq!(review.state, State::Approved);
     assert_eq!(
         review.pictures[0].changed_since, None,
@@ -805,7 +900,7 @@ fn an_open_note_on_older_content_says_the_picture_changed_since() {
     let review = review::review(
         "bbb",
         &[now, before],
-        &BTreeMap::new(),
+        &Actions::default(),
         &[],
         &[older.clone(), current],
         None,
@@ -844,7 +939,7 @@ fn a_note_whose_run_is_not_known_says_nothing_about_change() {
     let review = review::review(
         "bbb",
         &[now],
-        &BTreeMap::new(),
+        &Actions::default(),
         &[],
         &[note("card.png", "made on r0", NoteState::Open)],
         None,
@@ -909,7 +1004,7 @@ fn a_picture_its_run_found_the_same_as_the_one_that_looked_right_keeps_its_verdi
     let review = review::review(
         "bbb",
         &[now, before],
-        &BTreeMap::new(),
+        &Actions::default(),
         std::slice::from_ref(&given),
         &[],
         None,
@@ -943,7 +1038,7 @@ fn a_picture_its_run_found_changed_since_it_looked_right_waits() {
     let review = review::review(
         "bbb",
         &[now, before],
-        &BTreeMap::new(),
+        &Actions::default(),
         std::slice::from_ref(&given),
         &[],
         None,
@@ -981,7 +1076,7 @@ fn an_open_note_on_a_picture_its_run_found_the_same_is_no_change_since() {
     let review = review::review(
         "bbb",
         &[now, before],
-        &BTreeMap::new(),
+        &Actions::default(),
         &[],
         &[note("card.png", "made on r0", NoteState::Open)],
         None,
@@ -1072,7 +1167,14 @@ fn an_open_note_on_a_picture_the_head_does_not_show_lapses() {
     let notes = [note("card.png", "the old name", NoteState::Open)];
     let key = runs[0].0.checks[0].keys["card/light.png"].clone();
     let verdicts = [verdict("card/light.png", &key, "aaa1234")];
-    let review = review::review("aaa1234", &runs, &BTreeMap::new(), &verdicts, &notes, None);
+    let review = review::review(
+        "aaa1234",
+        &runs,
+        &Actions::default(),
+        &verdicts,
+        &notes,
+        None,
+    );
     assert_eq!(review.state, State::Approved, "{review:#?}");
     assert!(review.notes.is_empty(), "{review:#?}");
 }

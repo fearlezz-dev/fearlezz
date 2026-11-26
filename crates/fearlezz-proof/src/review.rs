@@ -6,7 +6,7 @@
 //! A verdict follows the picture, not the run: it is kept by check, picture name and content, so
 //! a picture that did not change keeps its verdict across pushes and runs of the same work.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -436,17 +436,28 @@ fn looked_at(
     pictures
 }
 
+/// What GitHub Actions told the host of a head's CI, through its webhooks.
+#[derive(Clone, Debug, Default)]
+pub struct Actions {
+    /// The display name GitHub gives each run's job, by run id (see [`Leg`]).
+    pub legs: BTreeMap<String, String>,
+    /// The workflow run attempts that completed, as (`run_id`, `run_attempt`): a leg their
+    /// plan made that opened no run by then never will.
+    pub ended: BTreeSet<(u64, u32)>,
+}
+
 /// The review of `head` from the work's runs (newest first, each with its proof once done),
-/// the display names GitHub gives their jobs (`legs`, by run id, see [`Leg`]), its verdicts,
-/// its notes and the head's accept. Only CI runs of the head count, the newest of each leg that
-/// did not end without its proof: a workflow run again replaces the legs it ran, every other leg
-/// keeps its newest run, and a run again that is cancelled replaces nothing, so the older run's
-/// failure and pictures stay in review. A leg whose every run was cancelled has no proof, which
-/// keeps the review from approving.
+/// what GitHub Actions said of their jobs (`actions`), its verdicts, its notes and the head's
+/// accept. Only CI runs of the head count, the newest of each leg that did not end without its
+/// proof: a workflow run again replaces the legs it ran, every other leg keeps its newest run,
+/// and a run again that is cancelled replaces nothing, so the older run's failure and pictures
+/// stay in review. A leg whose every run was cancelled has no proof, which keeps the review
+/// from approving; so has a planned leg that opened no run before every attempt that planned
+/// it ended.
 pub fn review(
     head: &str,
     runs: &[(Run, Option<Proof>)],
-    legs: &BTreeMap<String, String>,
+    actions: &Actions,
     verdicts: &[Verdict],
     notes: &[Note],
     accept: Option<&Accept>,
@@ -454,7 +465,7 @@ pub fn review(
     // Each leg, with its newest run that did not end without its proof, if it has one.
     let mut seen: Vec<(Leg<'_>, Option<&ProvenRun>)> = Vec::new();
     for entry in runs {
-        let Some(leg) = Leg::of(&entry.0, head, legs) else {
+        let Some(leg) = Leg::of(&entry.0, head, &actions.legs) else {
             continue;
         };
         let counts = (entry.0.state != RunState::Cancelled).then_some(entry);
@@ -463,17 +474,32 @@ pub fn review(
             None => seen.push((leg, counts)),
         }
     }
-    // A leg the plan made that has not opened a run yet is still to come.
-    let to_come = runs
-        .iter()
-        .filter(|(run, _)| run.head == head)
-        .filter_map(|(run, _)| match &run.source {
-            Source::Ci { planned, .. } => Some(planned),
-            Source::Local { .. } => None,
-        })
-        .flatten()
-        .any(|leg| !seen.iter().any(|(l, _)| *l == Leg::Planned(leg)));
-    let unproven = seen.iter().any(|(_, chosen)| chosen.is_none());
+    // A leg the plan made that has not opened a run is still to come while an attempt that
+    // planned it runs, and has no proof once every such attempt ended.
+    let mut missing: Vec<(&str, bool)> = Vec::new();
+    for (run, _) in runs.iter().filter(|(run, _)| run.head == head) {
+        let Source::Ci {
+            planned,
+            run_id,
+            run_attempt,
+            ..
+        } = &run.source
+        else {
+            continue;
+        };
+        let ended = actions.ended.contains(&(*run_id, *run_attempt));
+        for leg in planned {
+            if seen.iter().any(|(l, _)| *l == Leg::Planned(leg)) {
+                continue;
+            }
+            match missing.iter_mut().find(|(l, _)| l == leg) {
+                Some((_, all_ended)) => *all_ended &= ended,
+                None => missing.push((leg, ended)),
+            }
+        }
+    }
+    let to_come = missing.iter().any(|(_, ended)| !ended);
+    let unproven = !missing.is_empty() || seen.iter().any(|(_, chosen)| chosen.is_none());
     let live: Vec<&ProvenRun> = seen.iter().filter_map(|(_, chosen)| *chosen).collect();
 
     let open: Vec<&Note> = notes.iter().filter(|n| n.is_open()).collect();

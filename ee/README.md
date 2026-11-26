@@ -25,9 +25,9 @@ is installed on the repository it runs in. The app needs these repository permis
 | **Metadata** read | who may read a repository, and who may write or administer it |
 | **Checks** write | the `Fearlezz review` check run |
 | **Pull requests** write | the one review comment on each pull request |
-| **Actions** write | the `workflow_job` webhook, and running a failed proof job again once an admin accepts what it weakens |
+| **Actions** write | the `workflow_job` and `workflow_run` webhooks, and running a failed proof job again once an admin accepts what it weakens |
 
-and subscribes to the webhook events **Pull request** and **Workflow job**, sent to
+and subscribes to the webhook events **Pull request**, **Workflow job** and **Workflow run**, sent to
 `<APP_ORIGIN>/api/github/webhook` with the webhook secret.
 
 ### Protocol, version 2
@@ -224,7 +224,7 @@ the job with the display name GitHub gives it, `proof (macos-latest)`, so every 
 counts, and a run again, whole or of failed jobs only, replaces just the legs it ran; until the
 `workflow_job` webhook names a run's job, the run is a leg of its own, so its pictures never drop
 out; a run that ended without done replaces nothing, so the leg's older run keeps its failure
-and pictures in review, and a leg with no run that said done keeps the review from approving), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
+and pictures in review, and a leg with no run that said done keeps the review from approving; so does a leg a split proof's plan made that opened no run before the `workflow_run` webhook said every attempt that planned it completed, while until then the review waits for it), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
 Every write that can move it (a run opening, a look arriving, done, a cancel, a verdict, an
 accept, a push to the pull request) derives it again in the work's room, after the writes
 before it; when it changed, open pages get it live. GitHub gets it as the check run and the
@@ -306,7 +306,7 @@ permission, cached 5 minutes per login and repository.
 | a CI run is running | `in_progress` | CI is proving `<head>` |
 | the proof failed | completed, `failure` | The proof of `<head>` failed (and, when it weakens what no admin accepted, that it waits for an admin's accept) |
 | an open note says a picture needs change | completed, `failure` | "1 picture needs change at `<head>`" |
-| a job whose every run ended without done (a run again that ends so replaces nothing) | completed, `cancelled` | A CI job of `<head>` ended without its proof: run it again |
+| a job whose every run ended without done (a run again that ends so replaces nothing), or a planned leg that opened no run before its attempt completed | completed, `cancelled` | A CI job of `<head>` ended without its proof: run it again |
 | a picture waits for a look | completed, `action_required` | for example "2 pictures wait for a look" |
 | everything looks right | completed, `success` | Everything looks right |
 
@@ -320,15 +320,17 @@ completed and goes back to running is created anew; otherwise it is edited, and 
 one is not sent again.
 
 **The comment.** One comment on the pull request, created on its first hosted run and edited
-afterwards: where review stands and a link to the page. Nothing more is written on a closed
-pull request.
+afterwards: where review stands and a link to the page. A closed pull request's comment is
+left as it was, but its head's check run is still finished, so one merged while CI proves it
+(a release pull request) is never left `in_progress`.
 
 **Webhooks** (`POST /api/github/webhook`), each checked against `X-Hub-Signature-256` with the
 webhook secret before anything in it is read (`401` when the signature does not hold):
 
 - `pull_request` opened, synchronize or reopened: the pull request's head becomes its work's
   head, so the check run says it waits for CI. A pull request from a fork is passed over: its
-  CI gets no OIDC token, so no hosted run comes.
+  CI gets no OIDC token, so no hosted run comes. Closed: the comment is no longer edited, and
+  no check run is created; the head's own check run is still finished.
 - A local run has no job: one that said nothing for an hour (no start, end, blob upload or
   done) is closed as cancelled by the host's schedule (a cron trigger every 10 minutes). A blob
   counts for each open run of its writer that names it, as its bytes start and once stored.
@@ -343,12 +345,17 @@ webhook secret before anything in it is read (`401` when the signature does not 
   it unclear no job is the run's.
   Once a runner took a job (in progress or completed), its name is the leg of that same run, and
   the review is derived again.
+- `workflow_run` completed: the attempt (`id`, `run_attempt`, `head_sha`) is kept in
+  `attempts`, and the review of its branch's work is derived again. A leg the plan of a split
+  proof made that opened no run by then (its job could not reach the host, or was cancelled
+  before it started) never will, so it counts as a leg without its proof.
 
 **Deploying review.** In the GitHub App's settings, add the permissions and events above, set
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared
 in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
-deploy applies the D1 migration `0004_hosted_review.sql` (the whole schema of protocol 2 and
-review, over the deployed `0001` to `0003`) and the schedule (`[triggers]` in `wrangler.toml`).
+deploy applies the D1 migrations from `0004_hosted_review.sql` (the whole schema of protocol 2
+and review, over the deployed `0001` to `0003`) on, `0009_ended_attempts.sql` among them, which
+keeps the attempts the **Workflow run** event says completed and the schedule (`[triggers]` in `wrangler.toml`).
 Existing installations
 must approve the new permissions (Actions write among them) before the host can write their
 check runs or run a proof job again. For

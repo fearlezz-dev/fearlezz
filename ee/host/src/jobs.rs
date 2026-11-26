@@ -13,8 +13,10 @@
 //!   without the run saying done.
 //! - A job's display name, once a runner took it, is the leg of its own run, and the review
 //!   counts the newest run of each leg (`fearlezz_proof::review::review`).
+//! - A workflow run attempt that completed (GitHub's `workflow_run` webhook) ends every leg its
+//!   plan made: one that opened no run by then never will.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fearlezz_proof::review::Job;
 use serde::Deserialize;
@@ -84,6 +86,34 @@ pub fn legs(result: &D1Result) -> worker::Result<BTreeMap<String, String>> {
             let name = own(names.iter().map(String::as_str), &job)?.to_owned();
             Some((run, name))
         })
+        .collect())
+}
+
+/// The statement that reads the workflow run attempts of work `work`'s repository at `head`
+/// that completed.
+pub(crate) fn ended_statement(
+    db: &D1Database,
+    work: &str,
+    head: &str,
+) -> worker::Result<D1PreparedStatement> {
+    db.prepare(
+        "SELECT a.workflow_run, a.run_attempt FROM attempts a JOIN works w ON w.repo = a.repo \
+         WHERE w.id = ?1 AND a.head = ?2",
+    )
+    .bind(&[work.into(), head.into()])
+}
+
+/// The attempts `ended_statement` read, as (`run_id`, `run_attempt`).
+pub(crate) fn ended(result: &D1Result) -> worker::Result<BTreeSet<(u64, u32)>> {
+    #[derive(Deserialize)]
+    struct AttemptRow {
+        workflow_run: f64,
+        run_attempt: f64,
+    }
+    Ok(result
+        .results::<AttemptRow>()?
+        .into_iter()
+        .map(|row| (row.workflow_run as u64, row.run_attempt as u32))
         .collect())
 }
 

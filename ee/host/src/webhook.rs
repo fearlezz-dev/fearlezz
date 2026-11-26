@@ -3,11 +3,14 @@
 //! in it is read.
 //!
 //! - `pull_request` (opened, synchronize, reopened): the pull request's head becomes its work's
-//!   head, so its check run says it waits for CI; closed: the app writes nothing more on it. A
+//!   head, so its check run says it waits for CI; closed: the app no longer comments on it. A
 //!   pull request from a fork is passed over: its CI gets no OIDC token, so no hosted run comes.
+//! - `pull_request` closed: only the head's check run is still finished (`review::publish`).
 //! - `workflow_job`: what `jobs.rs` says, a queued job waiting on the page and a completed one
 //!   closing the run that never said done. A local run has no job; `api::close_silent` closes
 //!   it once it said nothing for an hour.
+//! - `workflow_run` completed: the attempt is kept, which ends every leg its plan made that
+//!   opened no run, so the review stops waiting for it.
 
 use fearlezz_proof::events::Source;
 use serde::Deserialize;
@@ -65,6 +68,21 @@ struct WorkflowJob {
     html_url: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct RunEvent {
+    action: String,
+    workflow_run: WorkflowRun,
+    repository: Repository,
+}
+
+#[derive(Deserialize)]
+struct WorkflowRun {
+    id: u64,
+    run_attempt: u32,
+    head_sha: String,
+    head_branch: Option<String>,
+}
+
 pub async fn receive(mut req: Request, env: &Env, config: &Config) -> Answer {
     let body = req.bytes().await?;
     let signature = req
@@ -88,6 +106,7 @@ pub async fn receive(mut req: Request, env: &Env, config: &Config) -> Answer {
     match event.as_str() {
         "pull_request" => pull_request(env, serde_json::from_slice(&body).map_err(bad)?).await?,
         "workflow_job" => workflow_job(env, serde_json::from_slice(&body).map_err(bad)?).await?,
+        "workflow_run" => workflow_run(env, serde_json::from_slice(&body).map_err(bad)?).await?,
         _ => {}
     }
     Ok(Response::empty()?.with_status(202))
@@ -205,6 +224,47 @@ async fn workflow_job(env: &Env, event: JobEvent) -> worker::Result<()> {
         room::write(env, &work, &write).await?;
     }
     Ok(())
+}
+
+/// Keeps an attempt of a workflow run that completed, and derives the review of its branch's
+/// work again: a leg its plan made that opened no run never will.
+async fn workflow_run(env: &Env, event: RunEvent) -> worker::Result<()> {
+    if event.action != "completed" {
+        return Ok(());
+    }
+    let run = &event.workflow_run;
+    let repo = event.repository.full_name.to_lowercase();
+    let db = env.d1("DB")?;
+    db.prepare(
+        "INSERT OR IGNORE INTO attempts (repo, workflow_run, run_attempt, head) VALUES (?1, ?2, ?3, ?4)",
+    )
+    .bind(&[
+        repo.as_str().into(),
+        (run.id as f64).into(),
+        f64::from(run.run_attempt).into(),
+        run.head_sha.as_str().into(),
+    ])?
+    .run()
+    .await?;
+    let Some(branch) = &run.head_branch else {
+        return Ok(());
+    };
+    let work: Option<String> = db
+        .prepare("SELECT id FROM works WHERE repo = ?1 AND branch = ?2")
+        .bind(&[repo.as_str().into(), branch.as_str().into()])?
+        .first(Some("id"))
+        .await?;
+    match work {
+        Some(work) => {
+            let write = Write {
+                statements: Vec::new(),
+                event: None,
+                derive: Derive::Review,
+            };
+            room::write(env, &work, &write).await
+        }
+        None => Ok(()),
+    }
 }
 
 /// Closes, as cancelled, the run of `repo` still running that the completed `job` was.

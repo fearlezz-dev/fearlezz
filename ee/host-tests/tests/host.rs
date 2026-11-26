@@ -382,6 +382,14 @@ fn main() {
             a_matrix_leg_ending_leaves_its_siblings_running,
         ),
         (
+            "a_planned_leg_that_never_opens_ends_with_its_attempt",
+            a_planned_leg_that_never_opens_ends_with_its_attempt,
+        ),
+        (
+            "a_closed_pull_request_keeps_its_check_run_but_not_its_comment",
+            a_closed_pull_request_keeps_its_check_run_but_not_its_comment,
+        ),
+        (
             "every_leg_is_reviewed_and_a_new_attempt_replaces_them",
             every_leg_is_reviewed_and_a_new_attempt_replaces_them,
         ),
@@ -3184,6 +3192,116 @@ fn a_matrix_leg_ending_leaves_its_siblings_running() {
     );
     assert_eq!(state(&macos_run.id), "cancelled");
     assert_eq!(state(&linux_run.id), "done");
+}
+
+/// The `workflow_run` webhook of `action` for attempt `attempt` of workflow run `run`.
+fn workflow_run(action: &str, run: u64, attempt: u32, branch: &str, head: &str) -> Value {
+    json!({
+        "action": action,
+        "workflow_run": {
+            "id": run,
+            "run_attempt": attempt,
+            "name": "proof",
+            "head_sha": head,
+            "head_branch": branch,
+            "status": action,
+            "conclusion": if action == "completed" { json!("success") } else { Value::Null },
+            "html_url": format!("https://github.com/owner/review/actions/runs/{run}"),
+        },
+        "repository": {"full_name": "owner/review"},
+        "installation": {"id": 6},
+    })
+}
+
+/// A leg the plan made whose job never opened a run (the host answered `503` when it asked
+/// whether the app is installed) holds the review only until its workflow run attempt ends.
+fn a_planned_leg_that_never_opens_ends_with_its_attempt() {
+    let head = commit("a148");
+    webhook(
+        "pull_request",
+        &pull_request("opened", 148, "review/unopened", &head),
+    );
+    let linux = Job::pull("owner/review", 148, "review/unopened")
+        .at(&head, 1148)
+        .on("runner-linux")
+        .leg("linux", &["linux", "macos"]);
+    let run = linux.open(&["tests"]);
+    let answer = linux.done(&run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let review = published(148);
+    assert_eq!(
+        review.get("state"),
+        Some(&json!("running")),
+        "the macos leg is to come: {review:#}"
+    );
+
+    // Another attempt of the workflow run ending leaves it waiting.
+    let answer = webhook(
+        "workflow_run",
+        &workflow_run("completed", 1148, 2, "review/unopened", &head),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    let answer = webhook(
+        "workflow_run",
+        &workflow_run("in_progress", 1148, 1, "review/unopened", &head),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    let review = published(148);
+    assert_eq!(
+        review.get("state"),
+        Some(&json!("running")),
+        "another attempt ended: {review:#}"
+    );
+
+    let answer = webhook(
+        "workflow_run",
+        &workflow_run("completed", 1148, 1, "review/unopened", &head),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+    let review = published(148);
+    assert_eq!(review.get("state"), Some(&json!("cancelled")), "{review:#}");
+    assert_eq!(
+        check_run(&head).state(),
+        "cancelled",
+        "the check run completes"
+    );
+}
+
+/// A pull request merged while CI still proves it (a release pull request) gets its check run
+/// finished, but its comment is left as it was.
+fn a_closed_pull_request_keeps_its_check_run_but_not_its_comment() {
+    let head = commit("a149");
+    webhook(
+        "pull_request",
+        &pull_request("opened", 149, "review/merged", &head),
+    );
+    let job = Job::pull("owner/review", 149, "review/merged").at(&head, 1149);
+    let run = job.open(&["tests"]);
+    published(149);
+    let comments = world().github.comments("owner/review", 149);
+    assert_eq!(comments.len(), 1, "{comments:?}");
+    let answer = webhook(
+        "pull_request",
+        &pull_request("closed", 149, "review/merged", &head),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.text());
+
+    let answer = job.done(&run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let review = published(149);
+    assert_eq!(review.get("state"), Some(&json!("approved")), "{review:#}");
+    assert_eq!(
+        check_run(&head).state(),
+        "success",
+        "a closed pull request's check run is finished"
+    );
+    let after = world().github.comments("owner/review", 149);
+    let bodies = |c: &[github::Comment]| c.first().map(|c| c.bodies.clone());
+    assert_eq!(
+        bodies(&after),
+        bodies(&comments),
+        "a closed pull request's comment is not edited"
+    );
 }
 
 /// The content keys of a review's pictures, in its order.
