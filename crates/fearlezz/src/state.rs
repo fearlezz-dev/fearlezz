@@ -144,11 +144,28 @@ impl View {
             .filter(|l| l.to_look_at() > 0)
             .collect();
         let count: usize = looks.iter().map(|l| l.to_look_at()).sum();
+        // One that could not be compared is looked at too, but nothing says it changed.
+        let unreadable = looks
+            .iter()
+            .flat_map(|l| &l.items)
+            .filter(|i| i.to_look_at() && i.change == crate::look::Change::Unreadable)
+            .count();
+        let changed = count - unreadable;
         let checks: Vec<&str> = looks.iter().map(|l| l.check.as_str()).collect();
+        let what = match (changed, unreadable) {
+            (_, 0) => format!("{} changed", fearlezz_proof::plural(changed, "picture")),
+            (0, _) => format!(
+                "{} could not be compared",
+                fearlezz_proof::plural(unreadable, "picture")
+            ),
+            _ => format!(
+                "{} changed and {unreadable} could not be compared",
+                fearlezz_proof::plural(changed, "picture")
+            ),
+        };
         (count > 0).then(|| {
             format!(
-                "{} changed ({}): a person reviews them on the pull request",
-                fearlezz_proof::plural(count, "picture"),
+                "{what} ({}): a person reviews them on the pull request",
                 checks.join(", ")
             )
         })
