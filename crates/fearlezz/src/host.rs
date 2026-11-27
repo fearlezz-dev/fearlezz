@@ -198,17 +198,6 @@ impl Host {
         }))
     }
 
-    /// The run `run` the host opened for another job of the same workflow run, to ask it what
-    /// a run asks; it has no page of its own here.
-    pub(crate) fn resume(self, run: &str) -> Stream {
-        Stream {
-            host: self,
-            run: run.to_owned(),
-            url: String::new(),
-            approved: std::sync::OnceLock::new(),
-        }
-    }
-
     fn call(&self, method: &str, path: &str, body: Body<'_>) -> Result<(u16, Value)> {
         curl_within(
             method,
@@ -231,11 +220,6 @@ fn said(answer: &Value) -> String {
 }
 
 impl Stream {
-    /// The run's id on the host.
-    pub(crate) fn run(&self) -> &str {
-        &self.run
-    }
-
     /// Says the check `id` starts.
     pub(crate) fn started(&self, id: &str) -> Result<()> {
         let step = Step::Started {
