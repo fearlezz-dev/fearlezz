@@ -650,7 +650,12 @@ planned?: Array<string>,
  * The workflow file its workflow run came from (`.github/workflows/proof.yml`, from
  * `GITHUB_WORKFLOW_REF`): the host knows a repository's proof workflows by its runs.
  */
-workflow?: string | null, } | { "kind": "local", 
+workflow?: string | null, 
+/**
+ * Whether it is the gate of a split proof (`fearlezz run --ci --gate`): it runs no
+ * check, combines the legs' proofs, and names the plan of its attempt in `planned`.
+ */
+gate?: boolean, } | { "kind": "local", 
 /**
  * Who ran it: the login of the CLI's sign in, which the host sets from its token.
  */

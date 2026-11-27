@@ -85,6 +85,8 @@ struct WorkflowRun {
     head_branch: Option<String>,
     /// The workflow file (`.github/workflows/proof.yml`).
     path: String,
+    /// The repository its commit is from: a fork's for a pull request from one.
+    head_repository: Option<Repository>,
 }
 
 pub async fn receive(mut req: Request, env: &Env, config: &Config) -> Answer {
@@ -233,19 +235,25 @@ async fn workflow_job(env: &Env, event: JobEvent) -> worker::Result<()> {
 /// Keeps where an attempt of a proof workflow stands (requested, in progress or completed), and
 /// derives the review of its branch's work again. Only an attempt of a workflow a CI run of the
 /// repository came from, or of a workflow run such a run names, is kept: every other workflow
-/// of the repository never moves a review.
+/// of the repository never moves a review, nor does a fork's run, as with its pull requests.
 async fn workflow_run(env: &Env, event: RunEvent) -> worker::Result<()> {
     let run = &event.workflow_run;
-    let repo = event.repository.full_name.to_lowercase();
+    let repository = &event.repository.full_name;
+    let from = run.head_repository.as_ref().map(|r| r.full_name.as_str());
+    if !from.is_some_and(|f| f.eq_ignore_ascii_case(repository)) {
+        return Ok(());
+    }
+    let repo = repository.to_lowercase();
     let db = env.d1("DB")?;
     let kept: Option<String> = db
         .prepare(
             "INSERT INTO attempts (repo, workflow_run, run_attempt, head, path, status) \
              SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE EXISTS ( \
+               SELECT 1 FROM works w JOIN runs r ON r.work = w.id \
+               WHERE w.repo = ?1 AND json_extract(r.source, '$.workflow') = ?5) \
+             OR EXISTS ( \
                SELECT 1 FROM runs r JOIN works w ON w.id = r.work \
-               WHERE w.repo = ?1 AND json_extract(r.source, '$.kind') = 'ci' \
-                 AND (json_extract(r.source, '$.workflow') = ?5 \
-                   OR json_extract(r.source, '$.run_id') = ?2)) \
+               WHERE json_extract(r.source, '$.run_id') = ?2 AND w.repo = ?1) \
              ON CONFLICT (repo, workflow_run, run_attempt) DO UPDATE SET status = excluded.status \
                WHERE attempts.status != 'completed' \
              RETURNING status",

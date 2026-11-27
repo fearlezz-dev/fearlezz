@@ -834,7 +834,7 @@ fn a_leg_names_itself_and_its_plan_and_leaves_what_it_weakens_to_the_gate() {
 }
 
 /// The gate always reports: it opens a run of its own, from the workflow file its run came
-/// from, and closes it with its proof, also when the plan left no leg to run (a pull request
+/// from, naming itself the gate and its attempt's plan, and closes it with its proof, also when the plan left no leg to run (a pull request
 /// that reuses every pass, or a push whose plan is empty). So a head the host hears nothing of
 /// is one whose proof never reached it.
 #[test]
@@ -878,10 +878,12 @@ fn the_gate_opens_and_closes_a_run_of_its_own() {
         "{open:#}"
     );
     assert!(open["source"].get("leg").is_none(), "{open:#}");
-    assert!(
-        open["source"].get("planned").is_none(),
-        "no leg planned: {open:#}"
+    assert_eq!(
+        open["source"]["gate"], true,
+        "it says it is the gate: {open:#}"
     );
+    // A push reuses nothing, so its plan, which the gate names, is every leg.
+    assert_eq!(open["source"]["planned"], json!(["proof"]), "{open:#}");
     let done = host.sent("POST", "/api/v2/runs/r1/done");
     let ids: Vec<&str> = done["proof"]["checks"]
         .as_array()

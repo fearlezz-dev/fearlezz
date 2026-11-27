@@ -406,6 +406,14 @@ fn main() {
             a_gate_with_nothing_to_run_proves_the_head,
         ),
         (
+            "a_rerun_whose_gate_plans_nothing_proves_the_head",
+            a_rerun_whose_gate_plans_nothing_proves_the_head,
+        ),
+        (
+            "a_fork_workflow_run_never_moves_the_review",
+            a_fork_workflow_run_never_moves_the_review,
+        ),
+        (
             "another_workflow_ending_leaves_the_review_waiting",
             another_workflow_ending_leaves_the_review_waiting,
         ),
@@ -3266,6 +3274,7 @@ fn workflow_run_ending(
             "status": action,
             "conclusion": conclusion,
             "html_url": format!("https://github.com/owner/review/actions/runs/{run}"),
+            "head_repository": {"full_name": "owner/review"},
         },
         "repository": {"full_name": "owner/review"},
         "installation": {"id": 6},
@@ -3570,6 +3579,80 @@ fn a_gate_with_nothing_to_run_proves_the_head() {
         "success",
         "the gate proves the head"
     );
+}
+
+/// The gate's run, which the host keeps with every check of its proof once done, failing for a
+/// leg that never opened leaves that leg named. Running every job again plans anew: when the
+/// new attempt reuses every pass, only its gate runs, and its empty plan proves the head.
+fn a_rerun_whose_gate_plans_nothing_proves_the_head() {
+    let head = commit("a157");
+    let branch = "review/rerun-reuses";
+    webhook("pull_request", &pull_request("opened", 157, branch, &head));
+    let linux = Job::pull("owner/review", 157, branch)
+        .at(&head, 1157)
+        .on("runner-linux")
+        .leg("linux", &["linux", "macos"]);
+    linux.picked_up("leg linux");
+    linux.on("runner-macos").ended("leg macos");
+    let run = linux.open(&["tests"]);
+    let answer = linux.done(&run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let gate = linux.gate(&["linux", "macos"]);
+    gate.picked_up("proof");
+    let run = gate.open(&[]);
+    let unproven = [entry("tests", "passed"), entry("ui", "failed")];
+    let answer = gate.done(&run.id, &unproven, &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    send_run(&workflow_run("completed", 1157, 1, branch, &head));
+    let review = published(157);
+    assert_eq!(review.get("state"), Some(&json!("cancelled")), "{review:#}");
+    assert_eq!(
+        title_of(&review),
+        Some(&json!(format!(
+            "leg macos of {} never reached the host: re-run job \"leg macos\"",
+            head.get(..7).unwrap_or_default()
+        ))),
+        "{review:#}"
+    );
+
+    let again = gate.again().gate(&[]);
+    again.picked_up("proof");
+    let run = again.open(&[]);
+    let answer = again.done(
+        &run.id,
+        &[entry("tests", "passed"), entry("ui", "passed")],
+        &[],
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    send_run(&workflow_run("completed", 1157, 2, branch, &head));
+    let review = published(157);
+    assert_eq!(review.get("state"), Some(&json!("approved")), "{review:#}");
+}
+
+/// A fork's workflow run of the same commit and branch name never moves the review: only the
+/// repository's own runs prove its pull requests.
+fn a_fork_workflow_run_never_moves_the_review() {
+    let branch = "review/forked";
+    let proven = commit("a158");
+    webhook(
+        "pull_request",
+        &pull_request("opened", 158, branch, &proven),
+    );
+    let job = Job::pull("owner/review", 158, branch).at(&proven, 1158);
+    let run = job.open(&["tests"]);
+    let answer = job.done(&run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let next = commit("b158");
+    webhook(
+        "pull_request",
+        &pull_request("synchronize", 158, branch, &next),
+    );
+    let mut forked = workflow_run("completed", 2158, 1, branch, &next);
+    forked["workflow_run"]["head_repository"] = json!({"full_name": "someone/review"});
+    send_run(&forked);
+    std::thread::sleep(Duration::from_secs(1));
+    let review = published(158);
+    assert_eq!(review.get("state"), Some(&json!("ci")), "{review:#}");
 }
 
 /// Another workflow of a head ending never ends its wait for the proof.
@@ -4493,6 +4576,8 @@ struct Job {
     sha: Option<String>,
     /// The workflow file its workflow run came from.
     workflow: &'static str,
+    /// When it is the gate of a split proof, the plan of its attempt.
+    gate: Option<Vec<String>>,
 }
 
 /// The runner a job runs on unless a test names another.
@@ -4519,6 +4604,7 @@ impl Job {
             event: None,
             sha: None,
             workflow: PROOF_WORKFLOW,
+            gate: None,
         }
     }
 
@@ -4536,6 +4622,7 @@ impl Job {
             event: None,
             sha: None,
             workflow: PROOF_WORKFLOW,
+            gate: None,
         }
     }
 
@@ -4643,6 +4730,16 @@ impl Job {
         }
     }
 
+    /// The gate of the same workflow run, whose attempt planned the legs `planned`.
+    fn gate(&self, planned: &[&str]) -> Job {
+        Job {
+            leg: None,
+            gate: Some(planned.iter().map(|l| (*l).to_owned()).collect()),
+            runner: "runner-gate".to_owned(),
+            ..self.clone()
+        }
+    }
+
     /// Another leg of the same matrix job, which `runner` took.
     fn on(&self, runner: &str) -> Job {
         Job {
@@ -4709,6 +4806,10 @@ impl Job {
         }
         if let Some((leg, planned)) = &self.leg {
             body["source"]["leg"] = json!(leg);
+            body["source"]["planned"] = json!(planned);
+        }
+        if let Some(planned) = &self.gate {
+            body["source"]["gate"] = json!(true);
             body["source"]["planned"] = json!(planned);
         }
         if self.cli.is_some() {

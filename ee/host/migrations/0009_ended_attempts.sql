@@ -14,3 +14,8 @@ CREATE TABLE attempts (
   PRIMARY KEY (repo, workflow_run, run_attempt)
 );
 CREATE INDEX attempts_by_head ON attempts (repo, head);
+
+-- A run of a work by the workflow file it came from, so a `workflow_run` webhook finds whether a
+-- workflow is one of the repository's proof workflows among the runs of its works alone. The
+-- expression must match the query's own `json_extract(source, '$.workflow')` for D1 to use it.
+CREATE INDEX runs_by_workflow ON runs (work, json_extract(source, '$.workflow'));

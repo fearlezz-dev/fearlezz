@@ -145,6 +145,7 @@ fn run(id: &str, head: &str, state: RunState, items: &[Item]) -> (Run, Option<Pr
             leg: None,
             planned: Vec::new(),
             workflow: None,
+            gate: false,
         },
         state,
         opened: 1.0,
@@ -906,18 +907,37 @@ fn a_proof_workflow_that_ended_without_a_run_cancels_the_review() {
     assert!(review.missing.is_empty(), "{review:#?}");
 }
 
+/// The gate's run of attempt `attempt` of workflow run 1, done, as the host keeps it after done:
+/// every check of its proof is a check of the run. It names the plan of its attempt, and its
+/// proof fails when `passed` is false (the checks of a leg it never got are not proven).
+fn gate_run(id: &str, planned: &[&str], attempt: u32, passed: bool) -> (Run, Option<Proof>) {
+    let (mut run, _) = run(id, "aaa", RunState::Done, &[]);
+    if let Source::Ci {
+        run_attempt,
+        planned: p,
+        gate,
+        ..
+    } = &mut run.source
+    {
+        *run_attempt = attempt;
+        *p = planned.iter().map(|s| (*s).into()).collect();
+        *gate = true;
+    }
+    let outcome = if passed { Ran::Passed } else { Ran::Failed };
+    let proof = Proof {
+        checks: vec![entry("screens", outcome)],
+        ..Proof::new("aaa".into(), "aaa".into(), "main".into())
+    };
+    (run, Some(proof))
+}
+
 /// The gate of a split proof whose plan needed no leg reports a run of its own, with no
-/// checks of its own and no pictures: it proves the head.
+/// pictures: it proves the head.
 #[test]
 fn a_gate_with_nothing_to_run_proves_the_head() {
-    let (gate, proof) = run("g1", "aaa", RunState::Done, &[]);
-    let gate = Run {
-        checks: Vec::new(),
-        ..gate
-    };
     let review = review::review(
         "aaa",
-        &[(gate, proof)],
+        &[gate_run("g1", &[], 1, true)],
         &attempts(&[(1, 1)], &[]),
         &[],
         &[],
@@ -932,31 +952,64 @@ fn a_gate_with_nothing_to_run_proves_the_head() {
 /// every leg there fails the review.
 #[test]
 fn a_gate_failing_for_a_missing_leg_leaves_the_leg_named() {
-    let (gate, _) = run("g1", "aaa", RunState::Done, &[]);
-    let gate = Run {
-        checks: Vec::new(),
-        ..gate
-    };
-    let unproven = Proof {
-        checks: vec![entry("screens", Ran::Failed)],
-        ..Proof::new("aaa".into(), "aaa".into(), "main".into())
-    };
     let runs = [
-        (gate.clone(), Some(unproven.clone())),
+        gate_run("g1", &["linux", "mac"], 1, false),
         leg_run("r1", RunState::Done, "linux", &["linux", "mac"]),
     ];
     let review = review::review("aaa", &runs, &attempts(&[(1, 1)], &[]), &[], &[], None);
-    assert_eq!(review.state, State::Cancelled);
+    assert_eq!(review.state, State::Cancelled, "{review:#?}");
     assert_eq!(
         review.title(),
         "leg mac of aaa never reached the host: re-run its job"
     );
     let runs = [
-        (gate, Some(unproven)),
+        gate_run("g1", &["linux"], 1, false),
         leg_run("r1", RunState::Done, "linux", &["linux"]),
     ];
     let review = review::review("aaa", &runs, &attempts(&[(1, 1)], &[]), &[], &[], None);
     assert_eq!(review.state, State::Failed);
+}
+
+/// Running every job again plans anew: when the new attempt's plan reuses every pass, only its
+/// gate runs, and its empty plan replaces the plan that left a leg missing.
+#[test]
+fn a_rerun_whose_gate_plans_nothing_proves_the_head() {
+    let runs = [
+        gate_run("g2", &[], 2, true),
+        gate_run("g1", &["linux", "mac"], 1, false),
+        leg_run("r1", RunState::Done, "linux", &["linux", "mac"]),
+    ];
+    let review = review::review(
+        "aaa",
+        &runs,
+        &attempts(&[(1, 1), (1, 2)], &[]),
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Approved, "{review:#?}");
+    assert!(review.missing.is_empty(), "{review:#?}");
+}
+
+/// A project without platforms has one leg, `proof`, beside the gate job `proof`: the leg's
+/// job is `leg proof`, not the gate.
+#[test]
+fn the_leg_proof_is_matched_to_its_leg_job_not_the_gate() {
+    let runs = [gate_run("g1", &["proof"], 1, false)];
+    let actions = with_jobs(
+        attempts(&[(1, 1)], &[]),
+        &[
+            (10, 1, 1, "plan"),
+            (11, 1, 1, "leg proof"),
+            (12, 1, 1, "proof"),
+        ],
+    );
+    let review = review::review("aaa", &runs, &actions, &[], &[], None);
+    assert_eq!(review.missing, [unopened("proof", Some((11, "leg proof")))]);
+    assert_eq!(
+        review.title(),
+        "leg proof of aaa never reached the host: re-run job \"leg proof\""
+    );
 }
 
 /// The newest attempt of a workflow run plans its legs: running every job again plans anew,

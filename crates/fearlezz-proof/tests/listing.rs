@@ -30,6 +30,7 @@ fn listed(
                 leg: None,
                 planned: Vec::new(),
                 workflow: None,
+                gate: false,
             },
             state,
             failed,

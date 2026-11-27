@@ -572,9 +572,13 @@ impl Actions {
     /// The job of `leg` in attempt `attempt`.
     fn job_of(&self, leg: &Leg<'_>, attempt: (u64, u32)) -> Option<LegJob> {
         match leg {
-            Leg::Planned(id) => self.job(attempt, |name| names_leg(name, id)),
+            // A leg named alone may be the gate's job too (the leg `proof` of a project without
+            // platforms): a job that names it among other words is the leg's.
+            Leg::Planned(id) => self
+                .job(attempt, |name| name != *id && names_leg(name, id))
+                .or_else(|| self.job(attempt, |name| name == *id)),
             Leg::Named { name, .. } => self.job(attempt, |n| n == *name),
-            Leg::Unknown { .. } => None,
+            Leg::Gate | Leg::Unknown { .. } => None,
         }
     }
 
@@ -584,6 +588,11 @@ impl Actions {
             .iter()
             .any(|a| (a.run_id, a.run_attempt) == attempt && a.ended)
     }
+}
+
+/// Whether `run` is the gate of a split proof.
+fn is_gate(run: &Run) -> bool {
+    matches!(run.source, Source::Ci { gate: true, .. })
 }
 
 /// The workflow run and attempt of a CI run.
@@ -630,21 +639,22 @@ pub fn review(
         }
     }
     // The plans that count: the newest attempt of each workflow run of the head, since running
-    // it again plans anew and may leave out a leg whose pass it reuses. Only a leg's run names
-    // the plan; the gate's names none.
+    // it again plans anew and may leave out a leg whose pass it reuses. A leg's run and the
+    // gate's name the plan, the gate's also when it is empty.
     let mut plans: Vec<((u64, u32), &[String])> = Vec::new();
     for (run, _) in runs.iter().filter(|(run, _)| run.head == head) {
         let (
             Some(attempt),
             Source::Ci {
-                planned,
-                leg: Some(_),
-                ..
+                planned, leg, gate, ..
             },
         ) = (attempt_of(run), &run.source)
         else {
             continue;
         };
+        if leg.is_none() && !gate {
+            continue;
+        }
         match plans.iter_mut().find(|((id, _), _)| *id == attempt.0) {
             Some(plan) if plan.0.1 < attempt.1 => *plan = (attempt, planned),
             Some(_) => {}
@@ -680,7 +690,7 @@ pub fn review(
                 let job = attempt_of(newest).and_then(|a| actions.job_of(leg, a));
                 let leg = match leg {
                     Leg::Planned(id) => Some((*id).to_owned()),
-                    Leg::Named { .. } | Leg::Unknown { .. } => None,
+                    Leg::Gate | Leg::Named { .. } | Leg::Unknown { .. } => None,
                 };
                 missing.push(Missing::Ended { leg, job });
             }
@@ -734,11 +744,11 @@ pub fn review(
         .filter(|a| !weakened.is_empty() && a.covers(head, &weakened))
         .cloned();
 
-    // A run that ran no check is a gate: with a leg missing it fails for that leg's checks,
-    // which the missing leg already names.
+    // With a leg missing the gate fails for that leg's checks, which the missing leg already
+    // names.
     let failed = live.iter().any(|(run, proof)| {
         run.state == RunState::Done
-            && (!run.checks.is_empty() || missing.is_empty())
+            && (!is_gate(run) || missing.is_empty())
             && proof
                 .as_ref()
                 .is_none_or(|p| failed(p, head, accept.as_ref()))
@@ -809,6 +819,8 @@ type ProvenRun = (Run, Option<Proof>);
 enum Leg<'a> {
     /// A leg of a proof Fearlezz split over several jobs, as the run names it.
     Planned(&'a str),
+    /// The gate of a split proof: its newest run stands for every attempt.
+    Gate,
     Named {
         job: &'a str,
         name: &'a str,
@@ -821,7 +833,7 @@ enum Leg<'a> {
 impl<'a> Leg<'a> {
     /// The leg of `run` when it is a CI run of `head`.
     fn of(run: &'a Run, head: &str, legs: &'a BTreeMap<String, String>) -> Option<Leg<'a>> {
-        let Source::Ci { job, leg, .. } = &run.source else {
+        let Source::Ci { job, leg, gate, .. } = &run.source else {
             return None;
         };
         if run.head != head {
@@ -829,6 +841,7 @@ impl<'a> Leg<'a> {
         }
         Some(match (leg, legs.get(&run.id)) {
             (Some(leg), _) => Leg::Planned(leg),
+            (None, _) if *gate => Leg::Gate,
             (None, Some(name)) => Leg::Named { job, name },
             (None, None) => Leg::Unknown { run: &run.id },
         })

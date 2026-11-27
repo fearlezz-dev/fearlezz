@@ -463,9 +463,24 @@ fn ci_plan(reuse: Option<&Path>) -> Result<bool> {
     let ctx = ctx()?;
     let mut wt = ctx.worktree()?;
     let reuse = legs::Reuse::read(reuse, workflow.pull().is_some())?;
+    let planned = legs_planned(&ctx, &mut wt, reuse.as_ref())?;
+    let ids: Vec<String> = planned.iter().map(|l| l.id.clone()).collect();
+    let entries: Vec<serde_json::Value> = planned.iter().map(|l| legs::entry(l, &ids)).collect();
+    // Output for a program: the JSON alone, with no next: line.
+    println!("{}", serde_json::to_string(&entries)?);
+    Ok(true)
+}
+
+/// The legs of the plan: each leg with the checks whose pass `reuse` does not show for the same
+/// inputs on the same platform, and none left with nothing to run.
+fn legs_planned<'c>(
+    ctx: &'c Ctx,
+    wt: &mut Worktree,
+    reuse: Option<&legs::Reuse>,
+) -> Result<Vec<legs::Leg<'c>>> {
     let mut planned = Vec::new();
     for mut leg in legs::legs(&ctx.config) {
-        if let Some(reuse) = &reuse {
+        if let Some(reuse) = reuse {
             let platform = leg.platform_name();
             let mut keep = Vec::new();
             for check in leg.checks {
@@ -480,19 +495,15 @@ fn ci_plan(reuse: Option<&Path>) -> Result<bool> {
             planned.push(leg);
         }
     }
-    let ids: Vec<String> = planned.iter().map(|l| l.id.clone()).collect();
-    let entries: Vec<serde_json::Value> = planned.iter().map(|l| legs::entry(l, &ids)).collect();
-    // Output for a program: the JSON alone, with no next: line.
-    println!("{}", serde_json::to_string(&entries)?);
-    Ok(true)
+    Ok(planned)
 }
 
 /// Combines the bundles of every leg in `dir` into one proof of the commit: each check on each
 /// of its platforms from its leg, or reused from the base commit's CI proof by a pull request,
 /// and otherwise not proven. Judges what the change weakens, writes the bundle when asked and
 /// the job summary GitHub Actions names. It always reports to the proof host, with a run of
-/// its own that runs no check, also when the plan left no leg to run: a head the host hears
-/// nothing of is one whose proof never reached it.
+/// its own that runs no check and names the plan of its attempt, also when the plan left no
+/// leg to run: a head the host hears nothing of is one whose proof never reached it.
 fn ci_gate(dir: &Path, bundle: Option<&Path>, reuse: Option<&Path>) -> Result<bool> {
     let workflow = action::Workflow::read();
     let ctx = ctx()?;
@@ -506,7 +517,14 @@ fn ci_gate(dir: &Path, bundle: Option<&Path>, reuse: Option<&Path>) -> Result<bo
         found.len(),
         dir.display()
     );
-    let (mut stream, unsent) = report::ci_stream(&ctx, &workflow, &proof, Vec::new(), Vec::new());
+    let planned = report::Planned {
+        legs: legs_planned(&ctx, &mut wt, reuse.as_ref())?
+            .into_iter()
+            .map(|l| l.id)
+            .collect(),
+        gate: true,
+    };
+    let (mut stream, unsent) = report::ci_stream(&ctx, &workflow, &proof, Vec::new(), planned);
     let page = stream.as_ref().map(|s| s.url.clone());
     for leg in legs::legs(&ctx.config) {
         let platform = leg.platform_name();

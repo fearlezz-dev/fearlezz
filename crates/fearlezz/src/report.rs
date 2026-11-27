@@ -117,7 +117,10 @@ impl Report {
         );
         proof.leg = leg.map(|l| l.id.clone());
         let checks = targets.iter().map(|c| c.id.clone()).collect();
-        let planned = out.leg.map(|a| a.planned).unwrap_or_default();
+        let planned = Planned {
+            legs: out.leg.map(|a| a.planned).unwrap_or_default(),
+            gate: false,
+        };
         let (stream, unsent) = ci_stream(ctx, &out.workflow, &proof, checks, planned);
         Ok(Report {
             page: stream.as_ref().map(|s| s.url.clone()),
@@ -268,8 +271,16 @@ fn ci_line(check: &Check, result: &RunResult) -> String {
     format!("{word} {}  {secs:.1} s{tests}{coverage}  {run}", check.id)
 }
 
-/// Opens the run of a CI job on the proof host, when the job may: its `checks`, and the legs
-/// its plan made (`planned`). With the run, or why a job that could have had the host's page
+/// What a CI job's run says of the plan of its attempt.
+pub(crate) struct Planned {
+    /// Every leg of the plan.
+    pub legs: Vec<String>,
+    /// Whether the job is the plan's gate.
+    pub gate: bool,
+}
+
+/// Opens the run of a CI job on the proof host, when the job may: its `checks`, and the plan
+/// of its attempt (`planned`). With the run, or why a job that could have had the host's page
 /// sent nothing, for the job summary. A host that fails never fails the proof: CI proves the
 /// commit anyway.
 pub(crate) fn ci_stream(
@@ -277,7 +288,7 @@ pub(crate) fn ci_stream(
     workflow: &action::Workflow,
     proof: &Proof,
     checks: Vec<String>,
-    planned: Vec<String>,
+    planned: Planned,
 ) -> (Option<host::Stream>, Option<&'static str>) {
     let open = match (&workflow.repository, workflow.branch(), &workflow.ci_job) {
         (None, ..) | (_, None, _) => Err("the run names no repository and branch \
@@ -297,8 +308,9 @@ pub(crate) fn ci_stream(
                 run_attempt: ci_job.run_attempt,
                 runner_name: ci_job.runner_name.clone(),
                 leg: proof.leg.clone(),
-                planned,
+                planned: planned.legs,
                 workflow: workflow.file.clone(),
+                gate: planned.gate,
             },
             checks,
         }),
