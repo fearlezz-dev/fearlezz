@@ -651,8 +651,9 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
 /// proofs, what GitHub Actions said of their jobs, its verdicts and its open notes.
 pub struct OfHead {
     pub runs: Vec<(Run, Option<Proof>)>,
-    /// The leg of each CI run GitHub named (`jobs::legs`) and the attempts that ended
-    /// (`jobs::ended`).
+    /// The leg of each CI run GitHub named (`jobs::legs`), the attempts that ended and those
+    /// of a proof workflow (`jobs::ended`), and the names of each attempt's jobs
+    /// (`jobs::names`).
     pub actions: Actions,
     pub verdicts: Vec<Verdict>,
     pub notes: Vec<Note>,
@@ -664,6 +665,7 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         open_notes(db, work)?,
         jobs::legs_statement(db, work, head)?,
         jobs::ended_statement(db, work, head)?,
+        jobs::names_statement(db, work, head)?,
     ];
     // The head's runs, and the runs open notes were made on, to tell whether a picture changed
     // since its note.
@@ -673,7 +675,7 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         &[work.into(), head.into()],
     )?);
     let results = db.batch(statements).await?;
-    let [verdicts, notes, legs, ended, runs @ ..] = results.as_slice() else {
+    let [verdicts, notes, legs, ended, names, runs @ ..] = results.as_slice() else {
         return Err(worker::Error::RustError(
             "D1 answered another number of results".into(),
         ));
@@ -683,11 +685,14 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         .into_iter()
         .map(VerdictRow::verdict)
         .collect();
+    let (ended, proof_ended) = jobs::ended(ended)?;
     Ok(OfHead {
         runs: assemble(runs)?,
         actions: Actions {
             legs: jobs::legs(legs)?,
-            ended: jobs::ended(ended)?,
+            ended,
+            proof_ended,
+            jobs: jobs::names(names)?,
         },
         verdicts,
         notes: notes_of(notes)?,

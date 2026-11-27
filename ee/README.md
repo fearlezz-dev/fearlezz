@@ -306,7 +306,9 @@ permission, cached 5 minutes per login and repository.
 | a CI run is running | `in_progress` | CI is proving `<head>` |
 | the proof failed | completed, `failure` | The proof of `<head>` failed (and, when it weakens what no admin accepted, that it waits for an admin's accept) |
 | an open note says a picture needs change | completed, `failure` | "1 picture needs change at `<head>`" |
-| a job whose every run ended without done (a run again that ends so replaces nothing), or a planned leg that opened no run before its attempt completed | completed, `cancelled` | A CI job of `<head>` ended without its proof: run it again |
+| a job whose every run ended without done (a run again that ends so replaces nothing) | completed, `cancelled` | A CI job of `<head>` ended without its proof: run it again |
+| a planned leg that opened no run before its attempt completed (the host runs its job again once) | completed, `cancelled` | leg `<leg>` of `<head>` never reached the host: re-run job "`<job>`" (or "re-run its job" while no one job of the attempt names the leg) |
+| no run of the head reached the host before a run of the repository's proof workflow ended (the host runs the workflow again once) | completed, `cancelled` | The proof workflow of `<head>` ended without reaching the host: re-run it |
 | a picture waits for a look | completed, `action_required` | for example "2 pictures wait for a look" |
 | everything looks right | completed, `success` | Everything looks right |
 
@@ -345,17 +347,34 @@ webhook secret before anything in it is read (`401` when the signature does not 
   it unclear no job is the run's.
   Once a runner took a job (in progress or completed), its name is the leg of that same run, and
   the review is derived again.
-- `workflow_run` completed: the attempt (`id`, `run_attempt`, `head_sha`) is kept in
-  `attempts`, and the review of its branch's work is derived again. A leg the plan of a split
-  proof made that opened no run by then (its job could not reach the host, or was cancelled
-  before it started) never will, so it counts as a leg without its proof.
+- `workflow_run` completed: the attempt (`id`, `run_attempt`, `head_sha`, its workflow file
+  `path` and `conclusion`) is kept in `attempts`, and the review of its branch's work is derived
+  again. A leg the plan of a split proof made that opened no run by then (its job could not
+  reach the host, or was cancelled before it started) never will, so it counts as a leg without
+  its proof, named with its job: the one job of the attempt whose name is the leg or has it as
+  a word (`leg macos`, `leg (macos, macos-latest)`). When a CI run of that workflow run reached
+  the host, its `path` is kept in `proof_workflows` as a file the repository proves with; a run
+  of such a workflow ending for a head no run of reached the host (every job got a `503` on
+  opening, or the workflow failed to start) cancels the head's review, while any other
+  workflow ending never ends its wait. A repository's very first proof has no such file yet,
+  so it waits as before.
+
+**Running it again.** When the review is cancelled for what never reached the host, the work
+room's alarm, right after it publishes the review, runs it again on GitHub as the app (Actions
+write): a missing leg's job (`POST /repos/<repo>/actions/jobs/<id>/rerun`, found by name among
+the attempt's jobs, which runs the jobs that need it again too, the gate among them), or the
+proof workflow's run (its failed jobs when it failed, every job otherwise). Each at most once
+per head and leg (or workflow), kept in `reruns` before GitHub is asked, so a host that keeps
+failing never loops: a second miss stays cancelled with the title above. GitHub refusing is
+logged.
 
 **Deploying review.** In the GitHub App's settings, add the permissions and events above, set
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared
 in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
 deploy applies the D1 migrations from `0004_hosted_review.sql` (the whole schema of protocol 2
 and review, over the deployed `0001` to `0003`) on, `0009_ended_attempts.sql` among them, which
-keeps the attempts the **Workflow run** event says completed. The deploy also applies the
+keeps the attempts the **Workflow run** event says completed, the repository's proof workflow
+files and what the host ran again. The deploy also applies the
 schedule (`[triggers]` in `wrangler.toml`).
 Existing installations
 must approve the new permissions (Actions write among them) before the host can write their

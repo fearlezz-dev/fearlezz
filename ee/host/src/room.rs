@@ -433,6 +433,7 @@ impl DurableObject for WorkRoom {
             // Taken before it runs: a write meanwhile owes the next one, with its newer review.
             storage.delete(PUBLISH).await?;
             review::publish(&self.env, &publish.work, publish.first_run).await;
+            review::rerun(&self.env, &publish.work).await;
         }
         let pages = Pages::of(&self.state, &self.env);
         pages.admitted(Asking::GitHub).await;

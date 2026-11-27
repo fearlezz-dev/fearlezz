@@ -64,6 +64,17 @@ describe("headline", () => {
     });
   });
 
+  test("a leg that never reached the host stops the head, though the run that came passed", () => {
+    const missing: Review["missing"] = [{ kind: "leg", leg: "macos", job: "leg macos", run_id: 1, run_attempt: 1 }];
+    expect(headline(run([passed("lint")]), review("cancelled", { missing }), writer)).toEqual({
+      tone: "bad",
+      icon: "stop",
+      word: "Stopped",
+      detail: "macos never reached the host",
+      title: "write: cancelled",
+    });
+  });
+
   test("an approved head with nothing to review is proved", () => {
     expect(headline(run([passed("lint")]), review("approved"), writer)).toMatchObject({ tone: "ok", word: "Proved", detail: "Every check passed, nothing to review" });
   });

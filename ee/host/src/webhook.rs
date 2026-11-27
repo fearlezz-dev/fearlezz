@@ -10,7 +10,10 @@
 //!   closing the run that never said done. A local run has no job; `api::close_silent` closes
 //!   it once it said nothing for an hour.
 //! - `workflow_run` completed: the attempt is kept, which ends every leg its plan made that
-//!   opened no run, so the review stops waiting for it.
+//!   opened no run, so the review stops waiting for it. Its workflow file becomes one the
+//!   repository proves with once a run of it reached the host; such a workflow ending for a head
+//!   no run of reached the host cancels the head's review. The work room's alarm then runs
+//!   what never reached the host again, once per head (`review::rerun`).
 
 use fearlezz_proof::events::Source;
 use serde::Deserialize;
@@ -81,6 +84,9 @@ struct WorkflowRun {
     run_attempt: u32,
     head_sha: String,
     head_branch: Option<String>,
+    /// The workflow file (`.github/workflows/proof.yml`).
+    path: String,
+    conclusion: Option<String>,
 }
 
 pub async fn receive(mut req: Request, env: &Env, config: &Config) -> Answer {
@@ -226,8 +232,10 @@ async fn workflow_job(env: &Env, event: JobEvent) -> worker::Result<()> {
     Ok(())
 }
 
-/// Keeps an attempt of a workflow run that completed, and derives the review of its branch's
-/// work again: a leg its plan made that opened no run never will.
+/// Keeps an attempt of a workflow run that completed, its workflow file as one the repository
+/// proves with when a run of it reached the host, and derives the review of its branch's work
+/// again: a leg its plan made that opened no run never will, and a proof workflow that ended
+/// with no run of the head ended without its proof.
 async fn workflow_run(env: &Env, event: RunEvent) -> worker::Result<()> {
     if event.action != "completed" {
         return Ok(());
@@ -235,16 +243,34 @@ async fn workflow_run(env: &Env, event: RunEvent) -> worker::Result<()> {
     let run = &event.workflow_run;
     let repo = event.repository.full_name.to_lowercase();
     let db = env.d1("DB")?;
-    db.prepare(
-        "INSERT OR IGNORE INTO attempts (repo, workflow_run, run_attempt, head) VALUES (?1, ?2, ?3, ?4)",
-    )
-    .bind(&[
+    let binds = [
         repo.as_str().into(),
         (run.id as f64).into(),
         f64::from(run.run_attempt).into(),
         run.head_sha.as_str().into(),
-    ])?
-    .run()
+        run.path.as_str().into(),
+        run.conclusion
+            .as_deref()
+            .map_or(JsValue::NULL, JsValue::from),
+    ];
+    db.batch(vec![
+        db.prepare(
+            "INSERT OR IGNORE INTO attempts (repo, workflow_run, run_attempt, head, path, conclusion) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind(&binds)?,
+        db.prepare(
+            "INSERT OR IGNORE INTO proof_workflows (repo, path) SELECT ?1, ?3 WHERE EXISTS ( \
+               SELECT 1 FROM runs r JOIN works w ON w.id = r.work \
+               WHERE w.repo = ?1 AND json_extract(r.source, '$.kind') = 'ci' \
+                 AND json_extract(r.source, '$.run_id') = ?2)",
+        )
+        .bind(&[
+            repo.as_str().into(),
+            (run.id as f64).into(),
+            run.path.as_str().into(),
+        ])?,
+    ])
     .await?;
     let Some(branch) = &run.head_branch else {
         return Ok(());

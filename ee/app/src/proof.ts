@@ -250,6 +250,10 @@ notes?: Array<Note>,
  */
 preview?: string | null, 
 /**
+ * What never reached the host, when that is why the review is cancelled.
+ */
+missing?: Array<ReviewMissing>, 
+/**
  * Where it stands in one line, as [`Review::title_for`] says it to each role; empty in a
  * review stored before the host sent it, until [`Review::titled`].
  */
@@ -298,6 +302,32 @@ verdict?: PictureVerdict | null,
  * again; none when nothing was said about other content.
  */
 changed_since?: ChangedSince | null, };
+
+export type ReviewMissing = { "kind": "leg", 
+/**
+ * The leg's id, as the plan names it (`macos`).
+ */
+leg: string, 
+/**
+ * The display name of its job (`leg macos`), when one job of the attempt names it.
+ */
+job: string | null, 
+/**
+ * The workflow run (`GITHUB_RUN_ID`).
+ */
+run_id: number, 
+/**
+ * Its attempt that completed.
+ */
+run_attempt: number, } | { "kind": "workflow", 
+/**
+ * The workflow run (`GITHUB_RUN_ID`).
+ */
+run_id: number, 
+/**
+ * Its newest attempt that completed.
+ */
+run_attempt: number, };
 
 export type ChangedSince = { 
 /**
