@@ -36,6 +36,9 @@ pub(crate) struct Workflow {
     /// Which job this is exactly: its workflow run, the run's attempt and the runner that took
     /// it, which tell the legs of a matrix apart.
     pub ci_job: Option<CiJob>,
+    /// The workflow file the run came from, such as `.github/workflows/proof.yml`, from
+    /// `GITHUB_WORKFLOW_REF`.
+    pub file: Option<String>,
     /// The ref the run is for, such as `refs/heads/main` or `refs/pull/24/merge`.
     git_ref: Option<String>,
     /// The event that started the workflow, such as `push` or `pull_request`.
@@ -63,6 +66,16 @@ impl CiJob {
     }
 }
 
+/// The workflow file a `GITHUB_WORKFLOW_REF` names (`owner/repo/<file>@<ref>`) in `repository`.
+fn file_of(workflow_ref: &str, repository: &str) -> Option<String> {
+    let path = workflow_ref
+        .split_once('@')
+        .map_or(workflow_ref, |(p, _)| p);
+    path.strip_prefix(repository)?
+        .strip_prefix('/')
+        .map(str::to_string)
+}
+
 impl Workflow {
     /// The workflow GitHub's variables describe.
     pub(crate) fn read() -> Workflow {
@@ -78,8 +91,10 @@ impl Workflow {
             }
             _ => None,
         };
+        let file = var("GITHUB_WORKFLOW_REF").and_then(|r| file_of(&r, repository.as_deref()?));
         Workflow {
             actions: on_actions(),
+            file,
             repository,
             api_url: var("GITHUB_API_URL"),
             run_url,

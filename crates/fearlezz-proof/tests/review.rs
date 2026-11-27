@@ -8,7 +8,9 @@ use fearlezz_proof::floor::{Part, Weakening};
 use fearlezz_proof::look::{Change, Item, Look};
 use fearlezz_proof::media::{Comparison, Mark, Marks, Pair, Verdict as Likeness};
 use fearlezz_proof::notes::{Note, NoteState, Region, Side};
-use fearlezz_proof::review::{self, Accept, State, Verdict};
+use fearlezz_proof::review::{
+    self, Accept, Actions, ActionsJob, Attempt, LegJob, Missing, State, Verdict,
+};
 use fearlezz_proof::{Check, Proof, Ran};
 
 fn still(name: &str, change: Change) -> Item {
@@ -142,6 +144,8 @@ fn run(id: &str, head: &str, state: RunState, items: &[Item]) -> (Run, Option<Pr
             runner_name: "runner".into(),
             leg: None,
             planned: Vec::new(),
+            workflow: None,
+            gate: false,
         },
         state,
         opened: 1.0,
@@ -169,7 +173,7 @@ fn verdict(picture: &str, key: &str, head: &str) -> Verdict {
 
 #[test]
 fn a_head_without_a_run_waits_for_ci() {
-    let review = review::review("aaa", &[], &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa", &[], &Actions::default(), &[], &[], None);
     assert_eq!(review.state, State::Ci);
 }
 
@@ -180,11 +184,11 @@ fn a_running_run_of_the_head_is_running_and_another_heads_runs_do_not_count() {
         run("r1", "aaa", RunState::Done, &[]),
     ];
     assert_eq!(
-        review::review("bbb", &runs, &BTreeMap::new(), &[], &[], None).state,
+        review::review("bbb", &runs, &Actions::default(), &[], &[], None).state,
         State::Running
     );
     assert_eq!(
-        review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None).state,
+        review::review("aaa", &runs, &Actions::default(), &[], &[], None).state,
         State::Approved
     );
 }
@@ -194,7 +198,14 @@ fn a_failed_proof_fails_the_review() {
     let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
     let mut proof = proof.unwrap();
     proof.checks.push(entry("tests", Ran::Failed));
-    let review = review::review("aaa", &[(r, Some(proof))], &BTreeMap::new(), &[], &[], None);
+    let review = review::review(
+        "aaa",
+        &[(r, Some(proof))],
+        &Actions::default(),
+        &[],
+        &[],
+        None,
+    );
     assert_eq!(review.state, State::Failed);
 }
 
@@ -210,7 +221,7 @@ fn changed_new_and_gone_pictures_wait_and_flaky_and_unchanged_ones_do_not() {
         flaky,
     ];
     let runs = [run("r1", "aaa", RunState::Done, &items)];
-    let review = review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa", &runs, &Actions::default(), &[], &[], None);
     assert_eq!(review.state, State::Waits);
     let waiting: Vec<&str> = review.waiting().map(|p| p.name.as_str()).collect();
     assert_eq!(waiting, ["card.png", "new.png", "gone.png"]);
@@ -228,7 +239,7 @@ fn every_picture_looking_right_approves_the_head() {
     let review = review::review(
         "aaa",
         &runs,
-        &BTreeMap::new(),
+        &Actions::default(),
         &[verdict("card.png", &key, "aaa")],
         &[],
         None,
@@ -241,7 +252,7 @@ fn every_picture_looking_right_approves_the_head() {
 #[test]
 fn an_approved_head_with_nothing_to_review_says_so_and_a_stored_review_gets_its_title() {
     let runs = [run("r1", "aaa", RunState::Done, &[])];
-    let review = review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa", &runs, &Actions::default(), &[], &[], None);
     assert_eq!(review.state, State::Approved);
     assert_eq!(review.title.read, "Proven at aaa, with nothing to review");
     assert_eq!(review.title.admin, review.title.read);
@@ -284,7 +295,7 @@ fn a_verdict_follows_the_pictures_content_across_heads() {
     let review = review::review(
         "bbb",
         &[same],
-        &BTreeMap::new(),
+        &Actions::default(),
         std::slice::from_ref(&given),
         &[],
         None,
@@ -298,7 +309,7 @@ fn a_verdict_follows_the_pictures_content_across_heads() {
         RunState::Done,
         &[still("card.png", Change::Changed)],
     );
-    let review = review::review("ccc", &[other], &BTreeMap::new(), &[given], &[], None);
+    let review = review::review("ccc", &[other], &Actions::default(), &[given], &[], None);
     assert_eq!(review.state, State::Waits);
 }
 
@@ -357,7 +368,7 @@ fn a_weakening_fails_the_review_until_the_hosts_accept_covers_it() {
     let mut proof = proof.unwrap();
     proof.weakened = vec![gone("tests")];
     let runs = [(r.clone(), Some(proof.clone()))];
-    let review = review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa", &runs, &Actions::default(), &[], &[], None);
     assert_eq!(review.state, State::Failed);
     assert_eq!(
         review.title(),
@@ -379,14 +390,14 @@ fn a_weakening_fails_the_review_until_the_hosts_accept_covers_it() {
     // The rerun's proof names the accept; the host holds it to its own.
     proof.accepted = Some(accept("aaa", &proof.weakened));
     let rerun = [(r, Some(proof))];
-    let review = review::review("aaa", &rerun, &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa", &rerun, &Actions::default(), &[], &[], None);
     assert_eq!(
         review.state,
         State::Failed,
         "a proof's own word is not enough"
     );
     let given = accept("aaa", &[gone("tests")]);
-    let review = review::review("aaa", &rerun, &BTreeMap::new(), &[], &[], Some(&given));
+    let review = review::review("aaa", &rerun, &Actions::default(), &[], &[], Some(&given));
     assert_eq!(review.state, State::Approved);
     assert!(
         review.summary().contains("accepted by admin"),
@@ -395,12 +406,20 @@ fn a_weakening_fails_the_review_until_the_hosts_accept_covers_it() {
     );
     // An accept of other weakenings, or of another head, covers nothing here.
     let other = accept("aaa", &[gone("lint")]);
-    let review = review::review("aaa", &rerun, &BTreeMap::new(), &[], &[], Some(&other));
+    let review = review::review("aaa", &rerun, &Actions::default(), &[], &[], Some(&other));
     assert_eq!(review.state, State::Failed);
     assert!(review.accept.is_none());
     let elsewhere = accept("bbb", &[gone("tests")]);
     assert_eq!(
-        review::review("aaa", &rerun, &BTreeMap::new(), &[], &[], Some(&elsewhere)).state,
+        review::review(
+            "aaa",
+            &rerun,
+            &Actions::default(),
+            &[],
+            &[],
+            Some(&elsewhere)
+        )
+        .state,
         State::Failed
     );
 }
@@ -425,7 +444,14 @@ fn a_failed_check_fails_the_review_even_without_its_reason() {
     let mut failed = entry("tests", Ran::Passed);
     failed.outcome = Ran::Failed;
     proof.checks.push(failed);
-    let review = review::review("aaa", &[(r, Some(proof))], &BTreeMap::new(), &[], &[], None);
+    let review = review::review(
+        "aaa",
+        &[(r, Some(proof))],
+        &Actions::default(),
+        &[],
+        &[],
+        None,
+    );
     assert_eq!(review.state, State::Failed);
 }
 
@@ -435,14 +461,21 @@ fn a_cancelled_run_ends_the_review_without_a_proof_and_a_newer_run_counts() {
     let review = review::review(
         "aaa",
         std::slice::from_ref(&cancelled),
-        &BTreeMap::new(),
+        &Actions::default(),
         &[],
         &[],
         None,
     );
     assert_eq!(review.state, State::Cancelled);
     let again = run("r2", "aaa", RunState::Running, &[]);
-    let review = review::review("aaa", &[again, cancelled], &BTreeMap::new(), &[], &[], None);
+    let review = review::review(
+        "aaa",
+        &[again, cancelled],
+        &Actions::default(),
+        &[],
+        &[],
+        None,
+    );
     assert_eq!(review.state, State::Running);
 }
 
@@ -454,7 +487,7 @@ fn the_summary_lists_what_waits() {
         RunState::Done,
         &[still("card.png", Change::Changed)],
     )];
-    let review = review::review("aaa1234", &runs, &BTreeMap::new(), &[], &[], None);
+    let review = review::review("aaa1234", &runs, &Actions::default(), &[], &[], None);
     assert_eq!(review.title(), "1 picture waits for a look at aaa1234");
     assert_eq!(review.title.read, "1 picture waits for a look at aaa1234");
     assert_eq!(
@@ -515,7 +548,7 @@ fn an_open_note_makes_its_picture_need_change_and_the_summary_lists_the_notes() 
         ),
         note("card.png", "an old one", NoteState::Resolved),
     ];
-    let review = review::review("aaa1234", &runs, &BTreeMap::new(), &[], &notes, None);
+    let review = review::review("aaa1234", &runs, &Actions::default(), &[], &notes, None);
     assert_eq!(review.state, State::NeedsChange);
     assert_eq!(review.title(), "1 picture needs change at aaa1234");
     assert_eq!(review.notes.len(), 1, "only open notes wait");
@@ -547,7 +580,7 @@ fn an_open_note_outweighs_looks_right_until_it_is_resolved() {
     let review = review::review(
         "aaa",
         &runs,
-        &BTreeMap::new(),
+        &Actions::default(),
         std::slice::from_ref(&right),
         &open,
         None,
@@ -556,17 +589,17 @@ fn an_open_note_outweighs_looks_right_until_it_is_resolved() {
 
     // Resolving the last note: the looks right verdict on its content holds again.
     let resolved = [note("card.png", "too tight", NoteState::Resolved)];
-    let review = review::review("aaa", &runs, &BTreeMap::new(), &[right], &resolved, None);
+    let review = review::review("aaa", &runs, &Actions::default(), &[right], &resolved, None);
     assert_eq!(review.state, State::Approved);
     // Without one, the picture is back to not looked at yet.
-    let review = review::review("aaa", &runs, &BTreeMap::new(), &[], &resolved, None);
+    let review = review::review("aaa", &runs, &Actions::default(), &[], &resolved, None);
     assert_eq!(review.state, State::Waits);
     assert_eq!(review.waiting().count(), 1);
 }
 
 /// Which leg each run is, as the webhook named its job: `a*` the linux leg, `b*` the macos one.
-fn two_legs() -> BTreeMap<String, String> {
-    [
+fn two_legs() -> Actions {
+    let legs = [
         ("a1", "proof (linux)"),
         ("a2", "proof (linux)"),
         ("b1", "proof (macos)"),
@@ -574,7 +607,11 @@ fn two_legs() -> BTreeMap<String, String> {
     ]
     .into_iter()
     .map(|(run, name)| (run.to_owned(), name.to_owned()))
-    .collect()
+    .collect();
+    Actions {
+        legs,
+        ..Actions::default()
+    }
 }
 
 #[test]
@@ -638,7 +675,7 @@ fn a_split_proof_waits_for_every_planned_leg() {
     let plan = ["linux", "mac"];
     let one = [leg_run("r1", RunState::Done, "linux", &plan)];
     assert_eq!(
-        review::review("aaa", &one, &BTreeMap::new(), &[], &[], None).state,
+        review::review("aaa", &one, &Actions::default(), &[], &[], None).state,
         State::Running
     );
     let both = [
@@ -646,8 +683,382 @@ fn a_split_proof_waits_for_every_planned_leg() {
         leg_run("r1", RunState::Done, "linux", &plan),
     ];
     assert_eq!(
-        review::review("aaa", &both, &BTreeMap::new(), &[], &[], None).state,
+        review::review("aaa", &both, &Actions::default(), &[], &[], None).state,
         State::Approved
+    );
+}
+
+/// GitHub's word on the head's proof workflow attempts: `ended` completed, `going` not yet.
+fn attempts(ended: &[(u64, u32)], going: &[(u64, u32)]) -> Actions {
+    let attempt = |&(run_id, run_attempt): &(u64, u32), ended: bool| Attempt {
+        run_id,
+        run_attempt,
+        ended,
+    };
+    Actions {
+        attempts: ended
+            .iter()
+            .map(|a| attempt(a, true))
+            .chain(going.iter().map(|a| attempt(a, false)))
+            .collect(),
+        ..Actions::default()
+    }
+}
+
+/// The same, with the jobs GitHub named in them.
+fn with_jobs(actions: Actions, jobs: &[(u64, u64, u32, &str)]) -> Actions {
+    Actions {
+        jobs: jobs
+            .iter()
+            .map(|&(id, run_id, run_attempt, name)| ActionsJob {
+                id,
+                run_id,
+                run_attempt,
+                name: name.to_owned(),
+            })
+            .collect(),
+        ..actions
+    }
+}
+
+/// A leg run `id` of workflow run `run_id`, attempt `attempt`.
+fn leg_run_of(
+    id: &str,
+    leg: &str,
+    planned: &[&str],
+    run_id: u64,
+    attempt: u32,
+) -> (Run, Option<Proof>) {
+    let (mut run, proof) = leg_run(id, RunState::Done, leg, planned);
+    if let Source::Ci {
+        run_id: r,
+        run_attempt: a,
+        ..
+    } = &mut run.source
+    {
+        *r = run_id;
+        *a = attempt;
+    }
+    (run, proof)
+}
+
+fn unopened(leg: &str, job: Option<(u64, &str)>) -> Missing {
+    Missing::Unopened {
+        leg: leg.into(),
+        job: job.map(|(id, name)| LegJob {
+            id,
+            name: name.into(),
+        }),
+    }
+}
+
+/// A planned leg whose job never opened a run, once its workflow run attempt ended, is a leg
+/// without its proof, named with its job.
+#[test]
+fn a_planned_leg_that_never_opened_ends_with_its_attempt() {
+    let plan = ["linux", "mac"];
+    let one = [leg_run("r1", RunState::Done, "linux", &plan)];
+    let ended = with_jobs(
+        attempts(&[(1, 1)], &[]),
+        &[
+            (11, 1, 1, "leg linux"),
+            (12, 1, 1, "leg mac"),
+            (13, 1, 1, "proof"),
+        ],
+    );
+    let review = review::review("aaa", &one, &ended, &[], &[], None);
+    assert_eq!(review.state, State::Cancelled);
+    assert_eq!(review.missing, [unopened("mac", Some((12, "leg mac")))]);
+    assert_eq!(
+        review.title(),
+        "leg mac of aaa never reached the host: re-run job \"leg mac\""
+    );
+    assert!(
+        review
+            .summary()
+            .contains("- `mac`, job \"leg mac\": never reached the host"),
+        "{}",
+        review.summary()
+    );
+    // Another attempt ending leaves this one's legs to come.
+    let other = attempts(&[(1, 2), (2, 1)], &[]);
+    assert_eq!(
+        review::review("aaa", &one, &other, &[], &[], None).state,
+        State::Running
+    );
+    // Without one job of the attempt that names it, the leg is still named.
+    let review = review::review("aaa", &one, &attempts(&[(1, 1)], &[]), &[], &[], None);
+    assert_eq!(
+        review.title(),
+        "leg mac of aaa never reached the host: re-run its job"
+    );
+}
+
+/// An attempt that ended cancelled or skipped while another run or attempt of the head is
+/// still going loses nothing yet: the review waits for what is going.
+#[test]
+fn nothing_is_lost_while_another_attempt_of_the_head_runs() {
+    let one = [leg_run("r1", RunState::Done, "linux", &["linux", "mac"])];
+    let review = review::review("aaa", &one, &attempts(&[(1, 1)], &[(2, 1)]), &[], &[], None);
+    assert_eq!(review.state, State::Running);
+    assert!(review.missing.is_empty(), "{review:#?}");
+    // With no run of the head at all, the head still waits for CI.
+    let review = review::review("aaa", &[], &attempts(&[(1, 1)], &[(2, 1)]), &[], &[], None);
+    assert_eq!(review.state, State::Ci);
+}
+
+/// Several legs that never reached the host are each named, with their jobs.
+#[test]
+fn several_missing_legs_are_each_named() {
+    let one = [leg_run(
+        "r1",
+        RunState::Done,
+        "linux",
+        &["linux", "mac", "win"],
+    )];
+    let actions = with_jobs(
+        attempts(&[(1, 1)], &[]),
+        &[(12, 1, 1, "leg mac"), (13, 1, 1, "leg win")],
+    );
+    let review = review::review("aaa", &one, &actions, &[], &[], None);
+    assert_eq!(
+        review.missing,
+        [
+            unopened("mac", Some((12, "leg mac"))),
+            unopened("win", Some((13, "leg win")))
+        ]
+    );
+    assert_eq!(
+        review.title(),
+        "legs mac, win of aaa never reached the host: re-run jobs \"leg mac\", \"leg win\""
+    );
+}
+
+/// A leg whose every run ended without done is in the same list, with its job, beside a leg
+/// that never opened.
+#[test]
+fn a_cancelled_leg_and_a_leg_that_never_opened_are_both_missing() {
+    let (mut cancelled, _) = leg_run("r1", RunState::Cancelled, "linux", &["linux", "mac"]);
+    cancelled.state = RunState::Cancelled;
+    let runs = [(cancelled, None)];
+    let actions = with_jobs(
+        attempts(&[(1, 1)], &[]),
+        &[(11, 1, 1, "leg linux"), (12, 1, 1, "leg mac")],
+    );
+    let review = review::review("aaa", &runs, &actions, &[], &[], None);
+    assert_eq!(review.state, State::Cancelled);
+    assert_eq!(
+        review.missing,
+        [
+            Missing::Ended {
+                leg: Some("linux".into()),
+                job: Some(LegJob {
+                    id: 11,
+                    name: "leg linux".into()
+                }),
+            },
+            unopened("mac", Some((12, "leg mac"))),
+        ]
+    );
+    assert_eq!(
+        review.title(),
+        "leg mac of aaa never reached the host: re-run job \"leg mac\""
+    );
+    let summary = review.summary();
+    assert!(
+        summary.contains("- `linux`, job \"leg linux\": ended without its proof"),
+        "{summary}"
+    );
+    assert!(!summary.contains("runs it again"), "{summary}");
+}
+
+/// A head no run of reached the host waits for CI until an attempt of the proof workflow ends
+/// for it, with nothing else of it going.
+#[test]
+fn a_proof_workflow_that_ended_without_a_run_cancels_the_review() {
+    assert_eq!(
+        review::review("aaa", &[], &Actions::default(), &[], &[], None).state,
+        State::Ci
+    );
+    let review = review::review(
+        "aaa",
+        &[],
+        &attempts(&[(8, 1), (8, 2)], &[]),
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Cancelled);
+    assert_eq!(
+        review.missing,
+        [Missing::Workflow {
+            run_id: 8,
+            run_attempt: 2
+        }]
+    );
+    assert_eq!(
+        review.title(),
+        "The proof workflow of aaa ended without reaching the host: re-run it"
+    );
+    // A run of the head that reached the host, in any attempt, is judged instead.
+    let runs = [run("r1", "aaa", RunState::Done, &[])];
+    let review = review::review("aaa", &runs, &attempts(&[(8, 1)], &[]), &[], &[], None);
+    assert_eq!(review.state, State::Approved);
+    assert!(review.missing.is_empty(), "{review:#?}");
+}
+
+/// The gate's run of attempt `attempt` of workflow run 1, done, as the host keeps it after done:
+/// every check of its proof is a check of the run. It names the plan of its attempt, and its
+/// proof fails when `passed` is false (the checks of a leg it never got are not proven).
+fn gate_run(id: &str, planned: &[&str], attempt: u32, passed: bool) -> (Run, Option<Proof>) {
+    let (mut run, _) = run(id, "aaa", RunState::Done, &[]);
+    if let Source::Ci {
+        run_attempt,
+        planned: p,
+        gate,
+        ..
+    } = &mut run.source
+    {
+        *run_attempt = attempt;
+        *p = planned.iter().map(|s| (*s).into()).collect();
+        *gate = true;
+    }
+    let outcome = if passed { Ran::Passed } else { Ran::Failed };
+    let proof = Proof {
+        checks: vec![entry("screens", outcome)],
+        ..Proof::new("aaa".into(), "aaa".into(), "main".into())
+    };
+    (run, Some(proof))
+}
+
+/// The gate of a split proof whose plan needed no leg reports a run of its own, with no
+/// pictures: it proves the head.
+#[test]
+fn a_gate_with_nothing_to_run_proves_the_head() {
+    let review = review::review(
+        "aaa",
+        &[gate_run("g1", &[], 1, true)],
+        &attempts(&[(1, 1)], &[]),
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Approved);
+    assert_eq!(review.title(), "Proven at aaa, with nothing to review");
+}
+
+/// The gate's run fails for a leg that never reached the host, since it cannot prove that
+/// leg's checks: the review names the leg to run again, not the gate. A gate that fails with
+/// every leg there fails the review.
+#[test]
+fn a_gate_failing_for_a_missing_leg_leaves_the_leg_named() {
+    let runs = [
+        gate_run("g1", &["linux", "mac"], 1, false),
+        leg_run("r1", RunState::Done, "linux", &["linux", "mac"]),
+    ];
+    let review = review::review("aaa", &runs, &attempts(&[(1, 1)], &[]), &[], &[], None);
+    assert_eq!(review.state, State::Cancelled, "{review:#?}");
+    assert_eq!(
+        review.title(),
+        "leg mac of aaa never reached the host: re-run its job"
+    );
+    let runs = [
+        gate_run("g1", &["linux"], 1, false),
+        leg_run("r1", RunState::Done, "linux", &["linux"]),
+    ];
+    let review = review::review("aaa", &runs, &attempts(&[(1, 1)], &[]), &[], &[], None);
+    assert_eq!(review.state, State::Failed);
+}
+
+/// Running every job again plans anew: when the new attempt's plan reuses every pass, only its
+/// gate runs, and its empty plan replaces the plan that left a leg missing.
+#[test]
+fn a_rerun_whose_gate_plans_nothing_proves_the_head() {
+    let runs = [
+        gate_run("g2", &[], 2, true),
+        gate_run("g1", &["linux", "mac"], 1, false),
+        leg_run("r1", RunState::Done, "linux", &["linux", "mac"]),
+    ];
+    let review = review::review(
+        "aaa",
+        &runs,
+        &attempts(&[(1, 1), (1, 2)], &[]),
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Approved, "{review:#?}");
+    assert!(review.missing.is_empty(), "{review:#?}");
+}
+
+/// A project without platforms has one leg, `proof`, beside the gate job `proof`: the leg's
+/// job is `leg proof`, not the gate.
+#[test]
+fn the_leg_proof_is_matched_to_its_leg_job_not_the_gate() {
+    let runs = [gate_run("g1", &["proof"], 1, false)];
+    let actions = with_jobs(
+        attempts(&[(1, 1)], &[]),
+        &[
+            (10, 1, 1, "plan"),
+            (11, 1, 1, "leg proof"),
+            (12, 1, 1, "proof"),
+        ],
+    );
+    let review = review::review("aaa", &runs, &actions, &[], &[], None);
+    assert_eq!(review.missing, [unopened("proof", Some((11, "leg proof")))]);
+    assert_eq!(
+        review.title(),
+        "leg proof of aaa never reached the host: re-run job \"leg proof\""
+    );
+}
+
+/// The newest attempt of a workflow run plans its legs: running every job again plans anew,
+/// and may leave out a leg whose pass it reuses from the base commit.
+#[test]
+fn a_newer_attempt_plans_the_legs_of_its_workflow_run() {
+    let first_ended = attempts(&[(1, 1), (1, 2)], &[]);
+    let runs = [
+        leg_run_of("r2", "linux", &["linux"], 1, 2),
+        leg_run_of("r1", "linux", &["linux", "mac"], 1, 1),
+    ];
+    assert_eq!(
+        review::review("aaa", &runs, &first_ended, &[], &[], None).state,
+        State::Approved
+    );
+    // Attempt 2 planned both again: its linux run opened, its mac run is still to come.
+    let runs = [
+        leg_run_of("r2", "linux", &["linux", "mac"], 1, 2),
+        leg_run_of("r1", "linux", &["linux", "mac"], 1, 1),
+    ];
+    assert_eq!(
+        review::review("aaa", &runs, &attempts(&[(1, 1)], &[]), &[], &[], None).state,
+        State::Running
+    );
+}
+
+/// Two workflow runs of the head each plan legs: a leg one of them still runs is to come, even
+/// when the other ended without it.
+#[test]
+fn a_leg_waits_while_any_workflow_run_that_planned_it_runs() {
+    let runs = [
+        leg_run_of("r2", "linux", &["linux", "mac"], 2, 1),
+        leg_run_of("r1", "linux", &["linux", "mac"], 1, 1),
+    ];
+    assert_eq!(
+        review::review("aaa", &runs, &attempts(&[(1, 1)], &[]), &[], &[], None).state,
+        State::Running
+    );
+    assert_eq!(
+        review::review(
+            "aaa",
+            &runs,
+            &attempts(&[(1, 1), (2, 1)], &[]),
+            &[],
+            &[],
+            None
+        )
+        .state,
+        State::Cancelled
     );
 }
 
@@ -662,7 +1073,7 @@ fn a_leg_the_run_names_replaces_its_older_run_without_a_job_name() {
         leg_run("r1", RunState::Done, "linux", &["linux"]),
     ];
     assert_eq!(
-        review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None).state,
+        review::review("aaa", &runs, &Actions::default(), &[], &[], None).state,
         State::Failed
     );
     let (newer, proof) = leg_run("r3", RunState::Done, "linux", &["linux"]);
@@ -674,7 +1085,7 @@ fn a_leg_the_run_names_replaces_its_older_run_without_a_job_name() {
         .push(entry("tests", Ran::Failed));
     let runs = [(newer, proof), (older, failed)];
     assert_eq!(
-        review::review("aaa", &runs, &BTreeMap::new(), &[], &[], None).state,
+        review::review("aaa", &runs, &Actions::default(), &[], &[], None).state,
         State::Approved
     );
 }
@@ -684,7 +1095,14 @@ fn the_review_names_the_preview_its_proof_deployed() {
     let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
     let mut proof = proof.unwrap();
     proof.preview = Some("https://feat-site.example.dev/".into());
-    let review = review::review("aaa", &[(r, Some(proof))], &BTreeMap::new(), &[], &[], None);
+    let review = review::review(
+        "aaa",
+        &[(r, Some(proof))],
+        &Actions::default(),
+        &[],
+        &[],
+        None,
+    );
     assert_eq!(
         review.preview.as_deref(),
         Some("https://feat-site.example.dev/")
@@ -692,7 +1110,7 @@ fn the_review_names_the_preview_its_proof_deployed() {
     let none = review::review(
         "aaa",
         &[run("r1", "aaa", RunState::Done, &[])],
-        &BTreeMap::new(),
+        &Actions::default(),
         &[],
         &[],
         None,
@@ -712,7 +1130,14 @@ fn a_preview_that_is_no_plain_web_address_is_left_out() {
         let (r, proof) = run("r1", "aaa", RunState::Done, &[]);
         let mut proof = proof.unwrap();
         proof.preview = Some(bad.into());
-        let review = review::review("aaa", &[(r, Some(proof))], &BTreeMap::new(), &[], &[], None);
+        let review = review::review(
+            "aaa",
+            &[(r, Some(proof))],
+            &Actions::default(),
+            &[],
+            &[],
+            None,
+        );
         assert_eq!(review.preview, None, "{bad}");
     }
 }
@@ -735,7 +1160,7 @@ fn a_picture_that_changed_since_it_looked_right_waits_and_says_so() {
     let review = review::review(
         "bbb",
         &[now, before],
-        &BTreeMap::new(),
+        &Actions::default(),
         std::slice::from_ref(&given),
         &[],
         None,
@@ -774,7 +1199,7 @@ fn a_picture_that_looks_right_now_has_not_changed_since() {
     );
     let old = verdict("card.png", "still:old:old", "aaa");
     let given = verdict("card.png", &now.0.checks[0].keys["card.png"], "bbb");
-    let review = review::review("bbb", &[now], &BTreeMap::new(), &[old, given], &[], None);
+    let review = review::review("bbb", &[now], &Actions::default(), &[old, given], &[], None);
     assert_eq!(review.state, State::Approved);
     assert_eq!(
         review.pictures[0].changed_since, None,
@@ -805,7 +1230,7 @@ fn an_open_note_on_older_content_says_the_picture_changed_since() {
     let review = review::review(
         "bbb",
         &[now, before],
-        &BTreeMap::new(),
+        &Actions::default(),
         &[],
         &[older.clone(), current],
         None,
@@ -844,7 +1269,7 @@ fn a_note_whose_run_is_not_known_says_nothing_about_change() {
     let review = review::review(
         "bbb",
         &[now],
-        &BTreeMap::new(),
+        &Actions::default(),
         &[],
         &[note("card.png", "made on r0", NoteState::Open)],
         None,
@@ -909,7 +1334,7 @@ fn a_picture_its_run_found_the_same_as_the_one_that_looked_right_keeps_its_verdi
     let review = review::review(
         "bbb",
         &[now, before],
-        &BTreeMap::new(),
+        &Actions::default(),
         std::slice::from_ref(&given),
         &[],
         None,
@@ -943,7 +1368,7 @@ fn a_picture_its_run_found_changed_since_it_looked_right_waits() {
     let review = review::review(
         "bbb",
         &[now, before],
-        &BTreeMap::new(),
+        &Actions::default(),
         std::slice::from_ref(&given),
         &[],
         None,
@@ -981,7 +1406,7 @@ fn an_open_note_on_a_picture_its_run_found_the_same_is_no_change_since() {
     let review = review::review(
         "bbb",
         &[now, before],
-        &BTreeMap::new(),
+        &Actions::default(),
         &[],
         &[note("card.png", "made on r0", NoteState::Open)],
         None,
@@ -1072,7 +1497,14 @@ fn an_open_note_on_a_picture_the_head_does_not_show_lapses() {
     let notes = [note("card.png", "the old name", NoteState::Open)];
     let key = runs[0].0.checks[0].keys["card/light.png"].clone();
     let verdicts = [verdict("card/light.png", &key, "aaa1234")];
-    let review = review::review("aaa1234", &runs, &BTreeMap::new(), &verdicts, &notes, None);
+    let review = review::review(
+        "aaa1234",
+        &runs,
+        &Actions::default(),
+        &verdicts,
+        &notes,
+        None,
+    );
     assert_eq!(review.state, State::Approved, "{review:#?}");
     assert!(review.notes.is_empty(), "{review:#?}");
 }

@@ -810,9 +810,8 @@ fn a_leg_names_itself_and_its_plan_and_leaves_what_it_weakens_to_the_gate() {
     let done = host.sent("POST", "/api/v2/runs/r1/done");
     assert_eq!(done["proof"]["weakened"][0]["check"], "lint", "{done:#}");
     assert_eq!(done["proof"]["leg"], "proof", "{done:#}");
-    assert_eq!(std::fs::read_to_string(dir.join("host-run")).unwrap(), "r1");
 
-    // The gate asks the host through the leg's run: not accepted fails, accepted passes.
+    // The gate asks the host through its own run: not accepted fails, accepted passes.
     let legs = repo.path(".runs/legs");
     let gate = ["--gate", legs.to_str().unwrap()];
     let out = ci_with(&repo, &gate, &host.token_env());
@@ -831,6 +830,71 @@ fn a_leg_names_itself_and_its_plan_and_leaves_what_it_weakens_to_the_gate() {
         out.stdout.contains("accepted by admin on the proof page"),
         "{}",
         out.stdout
+    );
+}
+
+/// The gate always reports: it opens a run of its own, from the workflow file its run came
+/// from, naming itself the gate and its attempt's plan, and closes it with its proof, also when the plan left no leg to run (a pull request
+/// that reuses every pass, or a push whose plan is empty). So a head the host hears nothing of
+/// is one whose proof never reached it.
+#[test]
+fn the_gate_opens_and_closes_a_run_of_its_own() {
+    let host = FakeHost::start();
+    let repo = repo(&host);
+    let legs = repo.path(".runs/no-legs");
+    std::fs::create_dir_all(&legs).unwrap();
+    let mut env = host.token_env();
+    env.push((
+        "GITHUB_WORKFLOW_REF".into(),
+        "owner/repo/.github/workflows/proof.yml@refs/heads/main".into(),
+    ));
+    let mut all: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    all.extend([
+        ("GITHUB_REPOSITORY", "owner/repo"),
+        ("GITHUB_REF", "refs/heads/main"),
+        ("GITHUB_EVENT_NAME", "push"),
+        ("GITHUB_JOB", "proof"),
+        ("GITHUB_RUN_ID", "4343"),
+        ("GITHUB_RUN_ATTEMPT", "1"),
+        ("RUNNER_NAME", "GitHub Actions 9"),
+    ]);
+    let out = repo.fz_env(&["run", "--ci", "--gate", legs.to_str().unwrap()], &all);
+    assert!(
+        out.stdout.contains("proof page: "),
+        "{}\n{}",
+        out.stdout,
+        out.stderr
+    );
+    let open = host.sent("POST", "/api/v2/runs");
+    assert_eq!(open["branch"], "main", "{open:#}");
+    assert_eq!(
+        open["checks"],
+        json!([]),
+        "the gate runs no check: {open:#}"
+    );
+    assert_eq!(open["source"]["job"], "proof", "{open:#}");
+    assert_eq!(
+        open["source"]["workflow"], ".github/workflows/proof.yml",
+        "{open:#}"
+    );
+    assert!(open["source"].get("leg").is_none(), "{open:#}");
+    assert_eq!(
+        open["source"]["gate"], true,
+        "it says it is the gate: {open:#}"
+    );
+    // A push reuses nothing, so its plan, which the gate names, is every leg.
+    assert_eq!(open["source"]["planned"], json!(["proof"]), "{open:#}");
+    let done = host.sent("POST", "/api/v2/runs/r1/done");
+    let ids: Vec<&str> = done["proof"]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["id"].as_str())
+        .collect();
+    assert_eq!(ids, ["lint", "tests"], "its proof is the gate's: {done:#}");
+    assert!(
+        done["proof"]["looks"].as_array().is_none_or(Vec::is_empty),
+        "the legs' runs show their pictures: {done:#}"
     );
 }
 

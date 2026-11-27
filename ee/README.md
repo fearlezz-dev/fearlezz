@@ -25,9 +25,9 @@ is installed on the repository it runs in. The app needs these repository permis
 | **Metadata** read | who may read a repository, and who may write or administer it |
 | **Checks** write | the `Fearlezz review` check run |
 | **Pull requests** write | the one review comment on each pull request |
-| **Actions** write | the `workflow_job` webhook, and running a failed proof job again once an admin accepts what it weakens |
+| **Actions** write | the `workflow_job` and `workflow_run` webhooks, and running a failed proof job again once an admin accepts what it weakens |
 
-and subscribes to the webhook events **Pull request** and **Workflow job**, sent to
+and subscribes to the webhook events **Pull request**, **Workflow job** and **Workflow run**, sent to
 `<APP_ORIGIN>/api/github/webhook` with the webhook secret.
 
 ### Protocol, version 2
@@ -57,10 +57,10 @@ The bodies are the serde types of `crates/fearlezz-proof/src/events.rs`.
 | --- | --- |
 | `GET /api/v2/installed` | `200 {"installed": true}`, or `200 {"installed": false, "install": "<url>"}`. |
 | `GET /api/v2/cli` | Needs no token. `200 {"latest": "<version>" \| null, "minimum": "<version>"}` (`version::Cli`): the newest release of Fearlezz, from GitHub's releases of `fearlezz-dev/fearlezz` and kept an hour (`null` when GitHub could not say), and `CLI_MINIMUM`, the lowest CLI version whose runs the host takes. |
-| `POST /api/v2/runs` | Body `Open` (an OIDC token opens only a CI source, a CLI token only a local one with no `pull`, `400` otherwise): `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?, "run_id", "run_attempt", "runner_name", "leg"?, "planned"?}, "checks": ["<id>", ...]}`, the checks it plans in order; a CI source names its job exactly with `GITHUB_JOB`,
-`GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and `RUNNER_NAME`, which tell the legs of a matrix apart. A run of a proof Fearlezz split over several jobs (`fearlezz run --ci --leg`) also names its `leg` (`linux`, `macos/ui`), the leg it counts as in review whatever GitHub names its job, and `planned`, every leg of its plan: the review stays running until each has a run. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
+| `POST /api/v2/runs` | Body `Open` (an OIDC token opens only a CI source, a CLI token only a local one with no `pull`, `400` otherwise): `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?, "run_id", "run_attempt", "runner_name", "leg"?, "planned"?, "workflow"?, "gate"?}, "checks": ["<id>", ...]}`, the checks it plans in order; a CI source names its job exactly with `GITHUB_JOB`,
+`GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and `RUNNER_NAME`, which tell the legs of a matrix apart. A run of a proof Fearlezz split over several jobs (`fearlezz run --ci --leg`) also names its `leg` (`linux`, `macos/ui`), the leg it counts as in review whatever GitHub names its job, and `planned`, every leg of its plan: the review stays running until each has a run. Its gate (`fearlezz run --ci --gate`) opens a run of its own with no checks, `gate: true` and the plan of its attempt in `planned` (the same plan, also when it left no leg), and closes it with the gate's proof without its pictures, which the legs' runs show. A CI source names its `workflow` file (`.github/workflows/proof.yml`, from `GITHUB_WORKFLOW_REF`), by which the host knows the repository's proof workflows. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
 | `POST /api/v2/runs/<run>/checks` | Body `{"started": {"check": "<id>"}}` when a check starts, or `{"finished": {"check": <proof.json check entry>, "files": {"<path>": {"sha256", "size"}}, "look"?: <look>, "since"?: {"<picture>": {"<key>": <same>}}}}` when it ends, with the files it made (its output at `outputs/<id>.log`, its pictures at `looks/<folder>/...`) and, for a check that takes pictures, its look: the pictures compared with the base commit, as in `proof.json` (`400` when the look is of another check), and `since`: for each picture, whether it looks the same as each picture `approved` named for it. A check the run did not plan joins at the end. `200 {"missing": ["<sha256>", ...]}`: the blobs the host does not hold yet. |
-| `POST /api/v2/runs/<run>/weakenings` | A CI run asks this before it judges what its change weakens; a closed run answers too, so the gate of a split proof asks through a leg's run. Body `{"weakened": [<weakening>, ...]}`, one per part, each `{"check" or "setting", "hows", "was"?, "now"?}`: the part by name, every way it weakened, and the part as TOML in the base and the head config where it is there. `200 {"accepted": <accept> \| null}`: the admin's accept of the run's head (`{"head", "weakened", "by", "at"}`) when it covers exactly these weakenings (each part and its ways, in any order; never the TOML), nothing more or less, else `null`. `409` for a local run. |
+| `POST /api/v2/runs/<run>/weakenings` | A CI run asks this before it judges what its change weakens; the gate of a split proof asks through its own run. Body `{"weakened": [<weakening>, ...]}`, one per part, each `{"check" or "setting", "hows", "was"?, "now"?}`: the part by name, every way it weakened, and the part as TOML in the base and the head config where it is there. `200 {"accepted": <accept> \| null}`: the admin's accept of the run's head (`{"head", "weakened", "by", "at"}`) when it covers exactly these weakenings (each part and its ways, in any order; never the TOML), nothing more or less, else `null`. `409` for a local run. |
 | `GET /api/v2/runs/<run>/approved` | `200 {"<check>": {"<picture>": {"<key>": <marks> or null}}}`: for each picture of the work, the key of the newest looks right and of the pictures its open notes were made on, each with the marks its run's look gave that film, which the comparison times it from. A CI run compares each of its pictures with these before it says the check finished. |
 | `GET /api/v2/runs/<run>/blobs/<sha256>` | The bytes of a file of the run's repository by its SHA-256, so the run can compare with an approved picture; `404` for one the host does not hold. |
 | `PUT /api/v2/blobs/<sha256>` | The bytes of one missing file, with `Content-Length`. Stored by content, per repository, so a file that did not change is sent once. `204`. |
@@ -224,7 +224,7 @@ the job with the display name GitHub gives it, `proof (macos-latest)`, so every 
 counts, and a run again, whole or of failed jobs only, replaces just the legs it ran; until the
 `workflow_job` webhook names a run's job, the run is a leg of its own, so its pictures never drop
 out; a run that ended without done replaces nothing, so the leg's older run keeps its failure
-and pictures in review, and a leg with no run that said done keeps the review from approving), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
+and pictures in review, and a leg with no run that said done keeps the review from approving; so does a leg a split proof's plan made that opened no run before the `workflow_run` webhook said every attempt that planned it completed, while until then the review waits for it; the newest attempt of each workflow run plans its legs, since running every job again plans anew and may reuse a leg's pass from the base commit, and a leg's run or the gate's names a plan, the gate's also when it is empty, so a run again that reuses every pass proves the head with its gate alone; the gate's run, told apart by its `gate`, failing beside a leg without its proof leaves that leg named instead of failing the head), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
 Every write that can move it (a run opening, a look arriving, done, a cancel, a verdict, an
 accept, a push to the pull request) derives it again in the work's room, after the writes
 before it; when it changed, open pages get it live. GitHub gets it as the check run and the
@@ -307,6 +307,8 @@ permission, cached 5 minutes per login and repository.
 | the proof failed | completed, `failure` | The proof of `<head>` failed (and, when it weakens what no admin accepted, that it waits for an admin's accept) |
 | an open note says a picture needs change | completed, `failure` | "1 picture needs change at `<head>`" |
 | a job whose every run ended without done (a run again that ends so replaces nothing) | completed, `cancelled` | A CI job of `<head>` ended without its proof: run it again |
+| a planned leg that opened no run before its attempt completed | completed, `cancelled` | leg `<leg>` of `<head>` never reached the host: re-run job "`<job>`" (or "re-run its job" while no one job of the attempt names the leg) |
+| no run of the head reached the host before a run of the repository's proof workflow ended | completed, `cancelled` | The proof workflow of `<head>` ended without reaching the host: re-run it |
 | a picture waits for a look | completed, `action_required` | for example "2 pictures wait for a look" |
 | everything looks right | completed, `success` | Everything looks right |
 
@@ -320,15 +322,17 @@ completed and goes back to running is created anew; otherwise it is edited, and 
 one is not sent again.
 
 **The comment.** One comment on the pull request, created on its first hosted run and edited
-afterwards: where review stands and a link to the page. Nothing more is written on a closed
-pull request.
+afterwards: where review stands and a link to the page. A closed pull request's comment is
+left as it was, but its head's check run is still finished, so one merged while CI proves it
+(a release pull request) is never left `in_progress`.
 
 **Webhooks** (`POST /api/github/webhook`), each checked against `X-Hub-Signature-256` with the
 webhook secret before anything in it is read (`401` when the signature does not hold):
 
 - `pull_request` opened, synchronize or reopened: the pull request's head becomes its work's
   head, so the check run says it waits for CI. A pull request from a fork is passed over: its
-  CI gets no OIDC token, so no hosted run comes.
+  CI gets no OIDC token, so no hosted run comes. Closed: the comment is no longer edited, and
+  no check run is created; the head's own check run is still finished.
 - A local run has no job: one that said nothing for an hour (no start, end, blob upload or
   done) is closed as cancelled by the host's schedule (a cron trigger every 10 minutes). A blob
   counts for each open run of its writer that names it, as its bytes start and once stored.
@@ -343,12 +347,31 @@ webhook secret before anything in it is read (`401` when the signature does not 
   it unclear no job is the run's.
   Once a runner took a job (in progress or completed), its name is the leg of that same run, and
   the review is derived again.
+- `workflow_run` (requested, in progress or completed) of the repository's own commits (a fork's
+  is dropped, as its pull requests are): the attempt (`id`, `run_attempt`,
+  `head_sha`, its workflow file `path` and `status`) is kept in `attempts` when it is of a proof
+  workflow (a file a CI run of the repository named as its `workflow`, or the workflow run of a
+  run that reached the host), and the review of its branch's work is derived again. Nothing of
+  the head is lost while an attempt of it is not completed: a cancelled attempt beside a queued
+  one waits for that one. Once every attempt completed, each leg without its proof is named
+  with its cause in the review's `missing`, one list: a leg whose every run ended without done,
+  a leg the plan made that opened no run (its job could not reach the host, or was cancelled
+  before it started), or, with no run of the head at all, the proof workflow (every job got a
+  `503` on opening, or the workflow failed to start). Each names its job when the attempt has
+  one whose name has the leg as a word (`leg macos`, `leg (macos, macos-latest)`), else is the leg alone,
+  so the leg `proof` of a project without platforms is its `leg proof` job and not the gate `proof`,
+  matched in one place from the jobs `workflow_job` kept. The host runs nothing again: the
+  check run's title and summary say what a person or an agent re-runs. A workflow that is no
+  proof workflow never ends the wait, and a repository's very first proof has no such file
+  yet, so it waits as before.
 
 **Deploying review.** In the GitHub App's settings, add the permissions and events above, set
 the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SECRET` (declared
 in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
-deploy applies the D1 migration `0004_hosted_review.sql` (the whole schema of protocol 2 and
-review, over the deployed `0001` to `0003`) and the schedule (`[triggers]` in `wrangler.toml`).
+deploy applies the D1 migrations from `0004_hosted_review.sql` (the whole schema of protocol 2
+and review, over the deployed `0001` to `0003`) on, `0009_ended_attempts.sql` among them, which
+keeps the attempts of proof workflows the **Workflow run** event names. The deploy also applies the
+schedule (`[triggers]` in `wrangler.toml`).
 Existing installations
 must approve the new permissions (Actions write among them) before the host can write their
 check runs or run a proof job again. For
@@ -465,7 +488,7 @@ holds no grant, and a grant always holds a dot, so `showcase` never names one.
   accepted does not). A newer push that failed, or whose run is not done, leaves the older
   picture, and a picture the newest proven push no longer takes is `404`. The bar is the run's
   proof, not the check alone: a showcase shows what the default branch proved. Of a split proof,
-  each leg's run counts on its own, since the gate does not stream to the host.
+  each leg's run counts on its own; the gate's run takes no pictures.
 - **Newest push.** Pushes are ordered as the host first saw their commit (its first run's
   place in `runs`, since `opened` holds whole seconds), not by when a run opened: a run of an older push started again (after a flake, or by an admin's accept)
   never brings its picture back over a newer push's. Of one push, its newest run that did not

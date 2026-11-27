@@ -64,6 +64,22 @@ describe("headline", () => {
     });
   });
 
+  test("a leg that never reached the host stops the head, though the run that came passed", () => {
+    const missing: Review["missing"] = [{ cause: "unopened", leg: "macos", job: { id: 7, name: "leg macos" } }];
+    expect(headline(run([passed("lint")]), review("cancelled", { missing }), writer)).toEqual({
+      tone: "bad",
+      icon: "stop",
+      word: "Stopped",
+      detail: "macos never reached the host",
+      title: "write: cancelled",
+    });
+  });
+
+  test("a job that ended without its proof stops the head", () => {
+    const missing: Review["missing"] = [{ cause: "ended", leg: null, job: null }];
+    expect(headline(run([passed("lint")]), review("cancelled", { missing }), writer)).toMatchObject({ word: "Stopped", detail: "A CI job ended without its proof" });
+  });
+
   test("an approved head with nothing to review is proved", () => {
     expect(headline(run([passed("lint")]), review("approved"), writer)).toMatchObject({ tone: "ok", word: "Proved", detail: "Every check passed, nothing to review" });
   });
