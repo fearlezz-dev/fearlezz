@@ -3,9 +3,9 @@
 //! in it is read.
 //!
 //! - `pull_request` (opened, synchronize, reopened): the pull request's head becomes its work's
-//!   head, so its check run says it waits for CI; closed: the app no longer comments on it. A
-//!   pull request from a fork is passed over: its CI gets no OIDC token, so no hosted run comes.
-//! - `pull_request` closed: only the head's check run is still finished (`review::publish`).
+//!   head, so its check run says it waits for CI; closed: the app no longer comments on it and
+//!   only finishes the head's check run (`review::publish`). A pull request from a fork is
+//!   passed over: its CI gets no OIDC token, so no hosted run comes.
 //! - `workflow_job`: what `jobs.rs` says, a queued job waiting on the page and a completed one
 //!   closing the run that never said done. A local run has no job; `api::close_silent` closes
 //!   it once it said nothing for an hour.

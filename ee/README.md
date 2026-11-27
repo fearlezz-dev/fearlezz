@@ -224,7 +224,7 @@ the job with the display name GitHub gives it, `proof (macos-latest)`, so every 
 counts, and a run again, whole or of failed jobs only, replaces just the legs it ran; until the
 `workflow_job` webhook names a run's job, the run is a leg of its own, so its pictures never drop
 out; a run that ended without done replaces nothing, so the leg's older run keeps its failure
-and pictures in review, and a leg with no run that said done keeps the review from approving; so does a leg a split proof's plan made that opened no run before the `workflow_run` webhook said every attempt that planned it completed, while until then the review waits for it), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
+and pictures in review, and a leg with no run that said done keeps the review from approving; so does a leg a split proof's plan made that opened no run before the `workflow_run` webhook said every attempt that planned it completed, while until then the review waits for it; the newest attempt of each workflow run plans its legs, since running every job again plans anew and may reuse a leg's pass from the base commit), the work's verdicts and the head's accept, and stored in `works.review` only to tell when it changed.
 Every write that can move it (a run opening, a look arriving, done, a cancel, a verdict, an
 accept, a push to the pull request) derives it again in the work's room, after the writes
 before it; when it changed, open pages get it live. GitHub gets it as the check run and the
@@ -355,7 +355,8 @@ the webhook URL and a webhook secret. Put the secret in 1Password as `WEBHOOK_SE
 in `secretspec.toml`), then run the devenv tasks `host-push-secrets` and `host-deploy`; the
 deploy applies the D1 migrations from `0004_hosted_review.sql` (the whole schema of protocol 2
 and review, over the deployed `0001` to `0003`) on, `0009_ended_attempts.sql` among them, which
-keeps the attempts the **Workflow run** event says completed and the schedule (`[triggers]` in `wrangler.toml`).
+keeps the attempts the **Workflow run** event says completed. The deploy also applies the
+schedule (`[triggers]` in `wrangler.toml`).
 Existing installations
 must approve the new permissions (Actions write among them) before the host can write their
 check runs or run a proof job again. For

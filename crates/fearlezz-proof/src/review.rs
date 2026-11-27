@@ -452,8 +452,8 @@ pub struct Actions {
 /// proof: a workflow run again replaces the legs it ran, every other leg keeps its newest run,
 /// and a run again that is cancelled replaces nothing, so the older run's failure and pictures
 /// stay in review. A leg whose every run was cancelled has no proof, which keeps the review
-/// from approving; so has a planned leg that opened no run before every attempt that planned
-/// it ended.
+/// from approving; so has a leg the newest attempt of a workflow run planned that opened no
+/// run before every such attempt ended.
 pub fn review(
     head: &str,
     runs: &[(Run, Option<Proof>)],
@@ -474,9 +474,9 @@ pub fn review(
             None => seen.push((leg, counts)),
         }
     }
-    // A leg the plan made that has not opened a run is still to come while an attempt that
-    // planned it runs, and has no proof once every such attempt ended.
-    let mut missing: Vec<(&str, bool)> = Vec::new();
+    // The plans that count: the newest attempt of each workflow run of the head, since running
+    // it again plans anew and may leave out a leg whose pass it reuses.
+    let mut plans: Vec<(u64, u32, &[String])> = Vec::new();
     for (run, _) in runs.iter().filter(|(run, _)| run.head == head) {
         let Source::Ci {
             planned,
@@ -487,7 +487,17 @@ pub fn review(
         else {
             continue;
         };
-        let ended = actions.ended.contains(&(*run_id, *run_attempt));
+        match plans.iter_mut().find(|(id, ..)| id == run_id) {
+            Some(plan) if plan.1 < *run_attempt => *plan = (*run_id, *run_attempt, planned),
+            Some(_) => {}
+            None => plans.push((*run_id, *run_attempt, planned)),
+        }
+    }
+    // A leg a plan made that has not opened a run is still to come while any attempt whose
+    // plan made it runs, and has no proof once every such attempt ended.
+    let mut missing: Vec<(&str, bool)> = Vec::new();
+    for (run_id, run_attempt, planned) in plans {
+        let ended = actions.ended.contains(&(run_id, run_attempt));
         for leg in planned {
             if seen.iter().any(|(l, _)| *l == Leg::Planned(leg)) {
                 continue;

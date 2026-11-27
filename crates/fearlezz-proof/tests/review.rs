@@ -732,6 +732,82 @@ fn a_planned_leg_that_never_opened_ends_with_its_attempt() {
     );
 }
 
+/// A leg run `id` of workflow run `run_id`, attempt `attempt`.
+fn leg_run_of(
+    id: &str,
+    leg: &str,
+    planned: &[&str],
+    run_id: u64,
+    attempt: u32,
+) -> (Run, Option<Proof>) {
+    let (mut run, proof) = leg_run(id, RunState::Done, leg, planned);
+    if let Source::Ci {
+        run_id: r,
+        run_attempt: a,
+        ..
+    } = &mut run.source
+    {
+        *r = run_id;
+        *a = attempt;
+    }
+    (run, proof)
+}
+
+/// The newest attempt of a workflow run plans its legs: running every job again plans anew,
+/// and may leave out a leg whose pass it reuses from the base commit.
+#[test]
+fn a_newer_attempt_plans_the_legs_of_its_workflow_run() {
+    let first_ended = Actions {
+        ended: BTreeSet::from([(1, 1)]),
+        ..Actions::default()
+    };
+    // Attempt 1 planned linux and mac, mac never opened, and attempt 1 completed. Attempt 2
+    // planned linux alone, and it passed.
+    let runs = [
+        leg_run_of("r2", "linux", &["linux"], 1, 2),
+        leg_run_of("r1", "linux", &["linux", "mac"], 1, 1),
+    ];
+    assert_eq!(
+        review::review("aaa", &runs, &first_ended, &[], &[], None).state,
+        State::Approved
+    );
+    // Attempt 2 planned both again: its linux run opened, its mac run is still to come.
+    let runs = [
+        leg_run_of("r2", "linux", &["linux", "mac"], 1, 2),
+        leg_run_of("r1", "linux", &["linux", "mac"], 1, 1),
+    ];
+    assert_eq!(
+        review::review("aaa", &runs, &first_ended, &[], &[], None).state,
+        State::Running
+    );
+}
+
+/// Two workflow runs of the head each plan legs: a leg one of them still runs is to come, even
+/// when the other ended without it.
+#[test]
+fn a_leg_waits_while_any_workflow_run_that_planned_it_runs() {
+    let runs = [
+        leg_run_of("r2", "linux", &["linux", "mac"], 2, 1),
+        leg_run_of("r1", "linux", &["linux", "mac"], 1, 1),
+    ];
+    let one_ended = Actions {
+        ended: BTreeSet::from([(1, 1)]),
+        ..Actions::default()
+    };
+    assert_eq!(
+        review::review("aaa", &runs, &one_ended, &[], &[], None).state,
+        State::Running
+    );
+    let both_ended = Actions {
+        ended: BTreeSet::from([(1, 1), (2, 1)]),
+        ..Actions::default()
+    };
+    assert_eq!(
+        review::review("aaa", &runs, &both_ended, &[], &[], None).state,
+        State::Cancelled
+    );
+}
+
 #[test]
 fn a_leg_the_run_names_replaces_its_older_run_without_a_job_name() {
     // The newer run of leg linux failed; GitHub has named neither job yet.
