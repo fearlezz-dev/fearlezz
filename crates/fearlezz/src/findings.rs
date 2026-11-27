@@ -80,53 +80,52 @@ impl Reader {
     fn format(self) -> Format {
         use Level::{Flag, Gate, Hint};
         let stdout = Source::Stdout;
-        let (name, source, levels, parse): (_, _, Levels, fn(&str, Levels, &InTests) -> Read) =
-            match self {
-                Reader::Cargo => (
-                    "cargo",
-                    stdout,
-                    &[("error", Gate), ("warning", Flag)],
-                    cargo,
-                ),
-                Reader::Sarif => (
-                    "sarif",
-                    Source::Out {
-                        file: "findings.sarif",
-                        else_stdout: true,
-                    },
-                    &[("error", Gate), ("warning", Flag), ("*", Hint)],
-                    sarif,
-                ),
-                Reader::Jsonl => (
-                    "jsonl",
-                    Source::Out {
-                        file: "findings.jsonl",
-                        else_stdout: false,
-                    },
-                    &[],
-                    jsonl,
-                ),
-                Reader::Dart => (
-                    "dart",
-                    stdout,
-                    &[("ERROR", Gate), ("WARNING", Gate), ("INFO", Gate)],
-                    dart,
-                ),
-                Reader::Eslint => ("eslint", stdout, &[("2", Gate), ("*", Flag)], eslint),
-                Reader::Svelte => ("svelte", stdout, &[("ERROR", Gate), ("*", Flag)], svelte),
-                Reader::Terraform => (
-                    "terraform",
-                    stdout,
-                    &[("warning", Flag), ("*", Gate)],
-                    terraform,
-                ),
-                Reader::Yamllint => (
-                    "yamllint",
-                    stdout,
-                    &[("error", Gate), ("*", Flag)],
-                    yamllint,
-                ),
-            };
+        let (name, source, levels, parse): (_, _, Levels, Parse) = match self {
+            Reader::Cargo => (
+                "cargo",
+                stdout,
+                &[("error", Gate), ("warning", Flag)],
+                cargo,
+            ),
+            Reader::Sarif => (
+                "sarif",
+                Source::Out {
+                    file: "findings.sarif",
+                    else_stdout: true,
+                },
+                &[("error", Gate), ("warning", Flag), ("*", Hint)],
+                sarif,
+            ),
+            Reader::Jsonl => (
+                "jsonl",
+                Source::Out {
+                    file: "findings.jsonl",
+                    else_stdout: false,
+                },
+                &[],
+                jsonl,
+            ),
+            Reader::Dart => (
+                "dart",
+                stdout,
+                &[("ERROR", Gate), ("WARNING", Gate), ("INFO", Gate)],
+                dart,
+            ),
+            Reader::Eslint => ("eslint", stdout, &[("2", Gate), ("*", Flag)], eslint),
+            Reader::Svelte => ("svelte", stdout, &[("ERROR", Gate), ("*", Flag)], svelte),
+            Reader::Terraform => (
+                "terraform",
+                stdout,
+                &[("warning", Flag), ("*", Gate)],
+                terraform,
+            ),
+            Reader::Yamllint => (
+                "yamllint",
+                stdout,
+                &[("error", Gate), ("*", Flag)],
+                yamllint,
+            ),
+        };
         Format {
             name,
             source,
