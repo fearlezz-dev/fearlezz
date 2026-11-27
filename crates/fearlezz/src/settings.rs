@@ -193,6 +193,18 @@ impl Shipped {
     }
 }
 
+/// Clippy's `allow-*-in-tests` settings, each with the lints it lets tests break.
+const CLIPPY_IN_TESTS: [(&str, &[&str]); 8] = [
+    ("allow-dbg-in-tests", &["dbg_macro"]),
+    ("allow-expect-in-tests", &["expect_used"]),
+    ("allow-indexing-slicing-in-tests", &["indexing_slicing"]),
+    ("allow-large-stack-frames-in-tests", &["large_stack_frames"]),
+    ("allow-panic-in-tests", &["panic"]),
+    ("allow-print-in-tests", &["print_stdout", "print_stderr"]),
+    ("allow-unwrap-in-tests", &["unwrap_used"]),
+    ("allow-useless-vec-in-tests", &["useless_vec"]),
+];
+
 /// The settings of every tool, after merging pieces and overrides, and the lint tables
 /// whose rules they turn on or off.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -291,6 +303,21 @@ impl Settings {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.tools.is_empty() && self.shipped.is_empty()
+    }
+
+    /// The clippy lints test code may break, as cargo reports them (`clippy::expect_used`):
+    /// those of each `allow-*-in-tests` the clippy settings turn on. Clippy honours them only
+    /// inside `#[test]` and `#[cfg(test)]`; the cargo reader also in integration test crates,
+    /// where a helper beside the tests is test code too.
+    pub(crate) fn clippy_in_tests(&self) -> BTreeSet<String> {
+        let Some(clippy) = self.tools.get(&Tool::Clippy) else {
+            return BTreeSet::new();
+        };
+        CLIPPY_IN_TESTS
+            .iter()
+            .filter(|(setting, _)| clippy.get(*setting).and_then(Value::as_bool) == Some(true))
+            .flat_map(|(_, lints)| lints.iter().map(|l| format!("clippy::{l}")))
+            .collect()
     }
 
     /// A tool's settings with its lint tables written in; the settings win.

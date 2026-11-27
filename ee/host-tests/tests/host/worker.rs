@@ -15,6 +15,8 @@ pub const ISSUER: &str = "https://token.actions.githubusercontent.com";
 pub const INSTALL_URL: &str = "https://github.com/apps/fearlezz/installations/new";
 /// Signs the sign in cookie and the grants of the files origin.
 pub const SIGNING_KEY: &str = "a signing key only the tests know";
+/// The lowest CLI version the host takes in the tests.
+pub(crate) const CLI_MINIMUM: &str = "0.5.4";
 /// The secret GitHub signs the app's webhooks with.
 pub const WEBHOOK_SECRET: &str = "a webhook secret only the tests know";
 
@@ -72,6 +74,7 @@ impl Worker {
             ("GITHUB_APP_KEY", app_key_pem.to_owned()),
             ("SIGNING_KEY", SIGNING_KEY.to_owned()),
             ("WEBHOOK_SECRET", WEBHOOK_SECRET.to_owned()),
+            ("CLI_MINIMUM", CLI_MINIMUM.to_owned()),
         ];
         let mut cmd = wrangler(&host);
         cmd.args([

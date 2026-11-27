@@ -24,6 +24,8 @@ mod repository;
 mod share;
 #[path = "host/showcase.rs"]
 mod showcase;
+#[path = "host/versions.rs"]
+mod versions;
 #[path = "host/worker.rs"]
 mod worker;
 
@@ -638,6 +640,14 @@ fn main() {
         (
             "the_policy_decides_who_writes_notes",
             access::the_policy_decides_who_writes_notes,
+        ),
+        (
+            "the_cli_is_told_the_newest_release_and_the_lowest_version_taken",
+            versions::the_cli_is_told_the_newest_release_and_the_lowest_version_taken,
+        ),
+        (
+            "a_run_from_a_cli_older_than_the_host_takes_is_refused",
+            versions::a_run_from_a_cli_older_than_the_host_takes_is_refused,
         ),
     ];
     let mut trials: Vec<Trial> = tests
@@ -4521,6 +4531,8 @@ pub fn agent() -> ureq::Agent {
         .max_redirects(0)
         .http_status_as_error(false)
         .timeout_global(Some(Duration::from_secs(60)))
+        // A CLI new enough for any lowest version the tests give the host.
+        .user_agent("fearlezz/99.0.0")
         .build()
         .new_agent()
 }

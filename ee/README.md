@@ -56,6 +56,7 @@ The bodies are the serde types of `crates/fearlezz-proof/src/events.rs`.
 | Call | Does |
 | --- | --- |
 | `GET /api/v2/installed` | `200 {"installed": true}`, or `200 {"installed": false, "install": "<url>"}`. |
+| `GET /api/v2/cli` | Needs no token. `200 {"latest": "<version>" \| null, "minimum": "<version>"}` (`version::Cli`): the newest release of Fearlezz, from GitHub's releases of `fearlezz-dev/fearlezz` and kept an hour (`null` when GitHub could not say), and `CLI_MINIMUM`, the lowest CLI version whose runs the host takes. |
 | `POST /api/v2/runs` | Body `Open` (an OIDC token opens only a CI source, a CLI token only a local one with no `pull`, `400` otherwise): `{"repository", "branch", "pull"?: {"number", "title", "url"?}, "head", "base", "source": {"kind": "ci", "job", "run_url"?, "run_id", "run_attempt", "runner_name", "leg"?, "planned"?}, "checks": ["<id>", ...]}`, the checks it plans in order; a CI source names its job exactly with `GITHUB_JOB`,
 `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and `RUNNER_NAME`, which tell the legs of a matrix apart. A run of a proof Fearlezz split over several jobs (`fearlezz run --ci --leg`) also names its `leg` (`linux`, `macos/ui`), the leg it counts as in review whatever GitHub names its job, and `planned`, every leg of its plan: the review stays running until each has a run. Refused unless installed. Makes the work (one branch of one repository) if it is new. `201 {"run": "<id>", "url": "<page url>"}`. |
 | `POST /api/v2/runs/<run>/checks` | Body `{"started": {"check": "<id>"}}` when a check starts, or `{"finished": {"check": <proof.json check entry>, "files": {"<path>": {"sha256", "size"}}, "look"?: <look>, "since"?: {"<picture>": {"<key>": <same>}}}}` when it ends, with the files it made (its output at `outputs/<id>.log`, its pictures at `looks/<folder>/...`) and, for a check that takes pictures, its look: the pictures compared with the base commit, as in `proof.json` (`400` when the look is of another check), and `since`: for each picture, whether it looks the same as each picture `approved` named for it. A check the run did not plan joins at the end. `200 {"missing": ["<sha256>", ...]}`: the blobs the host does not hold yet. |
@@ -68,8 +69,20 @@ The bodies are the serde types of `crates/fearlezz-proof/src/events.rs`.
 A refusal answers `{"error": "<what to do>"}` with `401` for a token that does not pass, `403`
 for a repository without the app or a token for another repository or ref, `400` for a body
 the host cannot read (an unknown `proof.json` schema, bytes that do not hash to their name, a
-`Content-Length` other than the file's size), `404` for a run of another repository, and `409`
-for a run that is done, or a blob no run of the repository names.
+`Content-Length` other than the file's size), `404` for a run of another repository, `409`
+for a run that is done, or a blob no run of the repository names, and `426` when `POST
+/api/v2/runs` comes from a CLI older than `CLI_MINIMUM`.
+
+Every call of the CLI names its version in its `User-Agent` (`fearlezz/0.5.4`); one that names
+none, as every CLI before 0.5.4, counts as `0.0.0`. `CLI_MINIMUM` (`wrangler.toml`, `0.0.0`
+until a maintainer raises it) is raised when a run's protocol changes in a way older CLIs cannot
+follow, while the path keeps `/api/v2`: the host then refuses to open their runs (the other
+calls are not gated), and the CLI prints `proof page not sent: the proof host takes no runs
+from Fearlezz <version>` with a `fix:` line to update, while its checks still run. Before that, the CLI asks `GET
+/api/v2/cli` at most once a day (kept in the user cache folder, within a second or two; never
+on CI, with `[host] off = true` or with `FEARLEZZ_NO_UPDATE_CHECK` set), and `fearlezz` and an
+agent's session start say when a newer release is out or the host no longer takes this one, so
+the agent updates it and tells the developer.
 
 **A host error never fails the proof**, and a host never loosens it. What the change weakens
 fails the job exactly as without a host, unless the host answers `weakenings` with an admin's

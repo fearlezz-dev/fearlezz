@@ -201,6 +201,36 @@ fn the_final_stage_is_ready_with_changed_pictures_and_names_them() {
     assert_eq!(status.last_line(), "next: all proof is in: ready to merge");
 }
 
+/// A picture that could not be compared is still one a person looks at, but it is not called
+/// changed: a comparison that failed in ffmpeg once read as twenty changed pictures.
+#[test]
+fn a_picture_that_cannot_be_compared_is_not_called_changed() {
+    let (repo, counter) = repo();
+    let record = format!(
+        "{RECORD}echo 'not a picture' > \"$FEARLEZZ_OUT/broken.png\"\n\
+         echo '{{\"kind\":\"still\",\"file\":\"broken.png\"}}' >> \"$FEARLEZZ_OUT/proof.jsonl\"\n"
+    );
+    repo.commit("blue");
+    // On both sides, so the base has a before that cannot be read either.
+    repo.git(&["switch", "-q", "main"]);
+    repo.write("record.sh", &record);
+    repo.commit("a broken picture");
+    repo.git(&["switch", "-q", "feat/blue"]);
+    repo.git(&["merge", "-q", "--no-edit", "main"]);
+    ran(&repo, &counter, &["run", "--stage", "merge", "--no-run"]);
+    let out = ran(&repo, &counter, &["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("1 unreadable"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains(
+            "2 pictures changed and 1 could not be compared (screens): a person reviews them \
+             on the pull request"
+        ),
+        "{}",
+        out.stdout
+    );
+}
+
 #[test]
 fn say_approve_is_gone() {
     let (repo, counter) = repo();

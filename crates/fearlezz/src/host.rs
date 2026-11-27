@@ -19,6 +19,7 @@ use fearlezz_proof::events::{self, Accepted, Done, Files, Missing, Open, Opened,
 use fearlezz_proof::floor::Weakening;
 use fearlezz_proof::media::Marks;
 use fearlezz_proof::review::{Accept, Approved, Since};
+use fearlezz_proof::version::{AGENT, Cli};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -49,6 +50,18 @@ const LOCAL: Limit = Limit {
     idle: 5,
 };
 
+/// What the host at `url` says of the CLI (`GET /api/v2/cli`, which needs no sign in): its
+/// newest release and the lowest version it takes. Asked within a second or two, since a
+/// command waits on it.
+pub(crate) fn cli(url: &str) -> Result<Cli> {
+    let url = format!("{url}/api/v2/cli");
+    let (status, answer) = curl_within("GET", &url, "", &[], Body::None, Some(Limit::within(1)))?;
+    if status != 200 {
+        bail!("the host answered {status}{}", said(&answer));
+    }
+    serde_json::from_value(answer).context("the host answered without the versions")
+}
+
 /// The host, and what proves who is calling.
 pub(crate) struct Host {
     url: String,
@@ -72,6 +85,8 @@ pub(crate) enum Opening {
     Opened(Stream),
     /// The repository has not installed the app; where to install it.
     NotInstalled(String),
+    /// The host takes no runs from a Fearlezz this old.
+    TooOld,
 }
 
 /// A run the host opened, to stream the rest of it to.
@@ -166,6 +181,10 @@ impl Host {
             return Ok(Opening::NotInstalled(install));
         }
         let (status, answer) = self.call("POST", "/api/v2/runs", json(open)?)?;
+        // Said in the CLI's own words: a repository may name any host.
+        if status == 426 {
+            return Ok(Opening::TooOld);
+        }
         if status != 201 {
             bail!("the host refused the run ({status}){}", said(&answer));
         }
@@ -557,7 +576,7 @@ pub(crate) fn curl_within(
     let mut cmd = Command::new("curl");
     // A host that cannot be reached must not hold the checks up: they run between the calls.
     cmd.args(["-sS", "-K", "-", "-X", method, "-w", "\n%{http_code}"])
-        .args(["-H", "User-Agent: fearlezz", "-H", "Expect:"]);
+        .args(["-H", &user_agent(), "-H", "Expect:"]);
     match limit {
         Some(limit) => {
             cmd.args(["--connect-timeout", &limit.connect.to_string()])
@@ -626,12 +645,18 @@ pub(crate) fn download(url: &str, token: &str, to: &Path) -> Result<u16> {
             "--max-time",
             "120",
         ])
-        .args(["-H", "User-Agent: fearlezz"])
+        .args(["-H", &user_agent()])
         .arg(url);
     String::from_utf8_lossy(&run_curl(&mut cmd, token, "GET", url)?)
         .trim()
         .parse()
         .with_context(|| format!("GET {url} gave no status code"))
+}
+
+/// The `User-Agent` of every call, naming this version, so the host can tell how old a caller
+/// is.
+fn user_agent() -> String {
+    format!("User-Agent: {AGENT}/{}", crate::version::OURS)
 }
 
 /// Runs `cmd`, a curl that reads its config from stdin (`-K -`), with `token` there as a

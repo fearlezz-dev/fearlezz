@@ -346,3 +346,135 @@ fn tsconfig_options_merge_into_a_file_with_comments() {
     assert_eq!(options["allowUnreachableCode"], false);
     assert_eq!(doc["include"][0], "src");
 }
+
+/// A clippy-shaped check that prints the cargo JSON in `lint.json`, with the clippy settings
+/// `allow`.
+fn clippy_check(allow: &str) -> String {
+    format!(
+        "[check.clippy]\nrun = \"cat lint.json\"\nstage = \"working\"\n\
+         findings = {{ read = \"cargo\", lints = [\"clippy\"] }}\n\n\
+         [settings.clippy]\n{allow}\n\n\
+         [lints.clippy]\nexpect_used = \"gate\"\nprint_stdout = \"gate\"\nneedless_continue = \"gate\"\n"
+    )
+}
+
+/// Cargo's JSON for a clippy lint on line 2 of each file, from the kind of target cargo built
+/// it in (`test` for an integration test crate, such as a helper function in `tests/`).
+fn cargo_json(messages: &[(&str, &str, &str)]) -> String {
+    messages
+        .iter()
+        .map(|(lint, file, kind)| {
+            format!(
+                r#"{{"reason":"compiler-message","target":{{"kind":["{kind}"]}},"message":{{"level":"warning","message":"{lint}","code":{{"code":"clippy::{lint}"}},"spans":[{{"file_name":"{file}","line_start":2,"line_end":2,"is_primary":true}}],"children":[]}}}}"#
+            ) + "\n"
+        })
+        .collect()
+}
+
+/// A change to a helper in an integration test crate and to the library, both on line 2.
+fn helper_change(allow: &str, messages: &[(&str, &str, &str)]) -> Repo {
+    helper_change_in(&clippy_check(allow), messages)
+}
+
+/// The same change under `config`.
+fn helper_change_in(config: &str, messages: &[(&str, &str, &str)]) -> Repo {
+    let repo = Repo::new(
+        config,
+        &[
+            ("src/lib.rs", "//! A library.\n"),
+            ("tests/surfaces.rs", "//! Tests.\n"),
+            ("lint.json", ""),
+        ],
+    );
+    repo.branch("feat/x");
+    repo.write("src/lib.rs", "//! A library.\npub fn f() {}\n");
+    repo.write(
+        "tests/surfaces.rs",
+        "//! Tests.\nfn put_id() -> String { done()[\"id\"].as_str().expect(\"an id\").to_owned() }\n",
+    );
+    repo.write("lint.json", &cargo_json(messages));
+    repo
+}
+
+#[test]
+fn integration_test_crates_may_break_the_lints_clippy_allows_in_tests() {
+    let repo = helper_change(
+        "allow-expect-in-tests = true\nallow-print-in-tests = true",
+        &[
+            ("expect_used", "tests/surfaces.rs", "test"),
+            ("print_stdout", "tests/surfaces.rs", "test"),
+            ("expect_used", "src/lib.rs", "lib"),
+        ],
+    );
+    let out = repo.fz(&["run", "clippy"]);
+    assert!(!out.ok, "{}", out.stdout);
+    // Clippy honours its allowances only inside #[test]; a helper beside them is test code too.
+    assert!(!out.stdout.contains("tests/surfaces.rs"), "{}", out.stdout);
+    // The library still may not.
+    assert!(
+        out.stdout
+            .contains("gate src/lib.rs:2  clippy::expect_used"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn integration_test_crates_keep_every_other_lint_and_those_not_allowed() {
+    let repo = helper_change(
+        "allow-expect-in-tests = false",
+        &[
+            ("expect_used", "tests/surfaces.rs", "test"),
+            ("needless_continue", "tests/surfaces.rs", "test"),
+        ],
+    );
+    let out = repo.fz(&["run", "clippy"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("gate tests/surfaces.rs:2  clippy::expect_used"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("gate tests/surfaces.rs:2  clippy::needless_continue"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn the_rust_piece_lets_test_crates_break_its_allowances_unless_the_project_says_not() {
+    let config = "use = [\"rust\"]\n\n\
+                  [check.clippy]\nrun = \"cat lint.json\"\n\n\
+                  [settings.clippy]\nallow-unwrap-in-tests = false\n";
+    let repo = helper_change_in(
+        config,
+        &[
+            ("expect_used", "tests/surfaces.rs", "test"),
+            ("unwrap_used", "tests/surfaces.rs", "test"),
+            ("expect_used", "src/lib.rs", "lib"),
+        ],
+    );
+    let out = repo.fz(&["run", "clippy"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        !out.stdout
+            .contains("tests/surfaces.rs:2  clippy::expect_used"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("gate tests/surfaces.rs:2  clippy::unwrap_used"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("gate src/lib.rs:2  clippy::expect_used"),
+        "{}",
+        out.stdout
+    );
+}

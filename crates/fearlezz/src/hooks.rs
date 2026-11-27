@@ -135,6 +135,8 @@ pub(crate) struct Work {
     pub next: String,
     /// Notes people left on the proof host that are still open.
     pub open_notes: usize,
+    /// How this Fearlezz is behind its proof host, asked only at a session start.
+    pub behind: Option<String>,
 }
 
 pub(crate) enum Answer {
@@ -151,11 +153,18 @@ pub(crate) enum Answer {
 pub(crate) fn judge(config: &Config, work: &Work, event: Event, input: &Input) -> Answer {
     let command = input.command.as_deref().unwrap_or("");
     match event {
-        Event::SessionStart => Answer::Context(format!(
-            "This repository proves work with Fearlezz (see the fearlezz skill); only fearlezz run \
-             counts as proof. Journal {}: {}. next: {}",
-            work.name, work.now, work.next
-        )),
+        Event::SessionStart => {
+            let behind = work
+                .behind
+                .as_ref()
+                .map(|b| format!(" Update: {b}."))
+                .unwrap_or_default();
+            Answer::Context(format!(
+                "This repository proves work with Fearlezz (see the fearlezz skill); only \
+                 fearlezz run counts as proof. Journal {}: {}. next: {}{behind}",
+                work.name, work.now, work.next
+            ))
+        }
         // Proof the base branch requires is weakened only by a person who read why.
         Event::BeforeShell if merges_past_checks(command) => Answer::Deny(
             "Fearlezz: merging past the required checks is for a person to do, after reading \

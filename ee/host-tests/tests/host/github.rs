@@ -22,6 +22,8 @@ use sha2::Sha256;
 /// The GitHub App's client id, which also names it in its JWTs.
 pub const CLIENT_ID: &str = "Iv1.fearlezz";
 pub const CLIENT_SECRET: &str = "client-secret";
+/// The newest release of Fearlezz, as its releases name it without the `v`.
+pub(crate) const LATEST: &str = "1.2.3";
 /// The key id of the Actions OIDC signing key.
 pub const KID: &str = "actions-key";
 
@@ -507,6 +509,9 @@ fn answer(
                 );
             }
             (201, json!({"token": format!("installation-{id}")}))
+        }
+        ("GET", ["repos", "fearlezz-dev", "fearlezz", "releases", "latest"]) => {
+            (200, json!({ "tag_name": format!("v{LATEST}") }))
         }
         ("GET", ["repos", owner, name]) => {
             let full = format!("{owner}/{name}");

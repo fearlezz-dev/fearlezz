@@ -14,6 +14,7 @@ pub mod look;
 pub mod media;
 pub mod notes;
 pub mod review;
+pub mod version;
 pub mod why;
 
 use std::path::PathBuf;

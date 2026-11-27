@@ -107,6 +107,7 @@ On a developer's machine that sets `FEARLEZZ_QUEUE=<slots>` (the developer's cho
 - `fearlezz --all`: every journal, most urgent first.
 - `fearlezz --since 2h`: what happened since a moment.
 - `fearlezz --check <check>`: the latest result, with its proof folder.
+- `update: ...` in `fearlezz` or at a session start: a newer Fearlezz is out, or the proof host no longer takes this one. Update it the way this machine installed it and tell the developer; the pin in `fearlezz.toml` moves only when the config needs a newer Fearlezz. `FEARLEZZ_NO_UPDATE_CHECK=1` turns the daily check off on a machine; that is the developer's choice, so never set it yourself.
 
 ## Writing a check
 

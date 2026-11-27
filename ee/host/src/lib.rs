@@ -98,6 +98,7 @@ async fn route(req: Request, env: &Env, config: &Config, path: &str) -> Answer {
         ("POST", ["api", "v2", "notes", note, "resolve"]) => {
             notes::resolve(req, env, config, note).await
         }
+        ("GET", ["api", "v2", "cli"]) => cli::versions(env, config).await,
         ("POST", ["api", "v2", "login", "device"]) => cli::device(config).await,
         ("POST", ["api", "v2", "login", "token"]) => cli::token(req, env, config).await,
         ("DELETE", ["api", "v2", "login"]) => cli::logout(&req, env, config).await,
@@ -223,6 +224,26 @@ pub struct Config {
     pub signing_key: String,
     /// What GitHub signs the app's webhooks with.
     pub webhook_secret: String,
+    /// The lowest version of the CLI whose runs the host takes.
+    pub cli_minimum: String,
+}
+
+/// Every setting but the secrets, which never reach a log.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("app_origin", &self.app_origin)
+            .field("files_origin", &self.files_origin)
+            .field("audience", &self.audience)
+            .field("oidc_issuer", &self.oidc_issuer)
+            .field("oidc_jwks", &self.oidc_jwks)
+            .field("github_api", &self.github_api)
+            .field("github_web", &self.github_web)
+            .field("client_id", &self.client_id)
+            .field("install_url", &self.install_url)
+            .field("cli_minimum", &self.cli_minimum)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Config {
@@ -245,6 +266,7 @@ impl Config {
             app_key: secret("GITHUB_APP_KEY")?,
             signing_key: secret("SIGNING_KEY")?,
             webhook_secret: secret("WEBHOOK_SECRET")?,
+            cli_minimum: var("CLI_MINIMUM")?,
         })
     }
 }
