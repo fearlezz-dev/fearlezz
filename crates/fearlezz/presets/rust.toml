@@ -31,7 +31,9 @@ tests = { count = 'test result: \w+\. (\d+) passed; (\d+) failed', failed = '(?m
 # from the code, so only the former show red before green.
 test_files = ["**/tests/**"]
 
-# Production code never unwraps or panics; tests may.
+# Production code never unwraps or panics; tests may. Clippy honours these only inside #[test]
+# and #[cfg(test)]; Fearlezz also drops these lints in integration test crates (tests/), so a
+# helper beside the tests may too.
 [settings.clippy]
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true

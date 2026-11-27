@@ -1,7 +1,7 @@
 //! `fearlezz.toml`: the stages a change moves through, the checks that prove it, and the
 //! environment that makes a checkout usable and runs its services.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
@@ -509,6 +509,9 @@ pub(crate) struct FindingsSpec {
     pub level: Option<Level>,
     /// What to do about a finding the tool gave no fix for.
     pub fix: Option<String>,
+    /// Rules, as the tool reports them, that test code may break: the lints clippy's
+    /// `allow-*-in-tests` settings name, for a check that reads clippy's table.
+    pub in_tests: BTreeSet<String>,
 }
 
 impl FindingsSpec {
@@ -528,7 +531,7 @@ impl FindingsSpec {
     /// Part of the inputs of the check: another reader, scope or default is another proof.
     /// The lint tables are a part of their own.
     pub(crate) fn judged(&self) -> impl fmt::Debug + '_ {
-        (&self.read, self.on, self.level, &self.fix)
+        (&self.read, self.on, self.level, &self.fix, &self.in_tests)
     }
 }
 
@@ -575,6 +578,8 @@ impl RawFindings {
             tools,
             level,
             fix,
+            // Config::load fills it from the settings.
+            in_tests: BTreeSet::new(),
         })
     }
 }
@@ -745,12 +750,18 @@ impl Config {
             let check = c.resolve(&around).with_context(|| format!("check {id}"))?;
             checks.push(Check { id, ..check });
         }
-        let read: std::collections::BTreeSet<lints::Tool> = checks
+        let read: BTreeSet<lints::Tool> = checks
             .iter()
             .filter_map(|c| c.findings.as_ref())
             .flat_map(|f| f.tools.iter().copied())
             .collect();
         let mut settings = Settings::parse(raw.settings.unwrap_or_default(), lints, &read)?;
+        let in_tests = settings.clippy_in_tests();
+        for spec in checks.iter_mut().filter_map(|c| c.findings.as_mut()) {
+            if spec.tools.contains(&lints::Tool::Clippy) {
+                spec.in_tests.clone_from(&in_tests);
+            }
+        }
         settings.cargo = found("Cargo.toml");
         settings.biome_runs = checks.iter().any(|c| {
             c.command.steps.iter().any(|step| {
@@ -891,6 +902,7 @@ fn built_in(
             on,
             tools: Vec::new(),
             levels: Lints::default(),
+            in_tests: BTreeSet::new(),
             level: None,
             fix: None,
         }),
@@ -1027,7 +1039,7 @@ impl RawCheck {
 /// and `[commits]`, and drops `off = false`, so nothing after reads the key. Returns the ids of
 /// the checks turned off, which a check added later (a release's dry run, a built in check)
 /// never comes back under.
-fn drop_off(table: &mut toml::Table) -> Result<std::collections::BTreeSet<String>> {
+fn drop_off(table: &mut toml::Table) -> Result<BTreeSet<String>> {
     fn off(part: &mut toml::Value, at: &str) -> Result<bool> {
         let Some(part) = part.as_table_mut() else {
             return Ok(false);
