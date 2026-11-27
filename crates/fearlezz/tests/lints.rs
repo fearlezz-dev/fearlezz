@@ -373,8 +373,13 @@ fn cargo_json(messages: &[(&str, &str, &str)]) -> String {
 
 /// A change to a helper in an integration test crate and to the library, both on line 2.
 fn helper_change(allow: &str, messages: &[(&str, &str, &str)]) -> Repo {
+    helper_change_in(&clippy_check(allow), messages)
+}
+
+/// The same change under `config`.
+fn helper_change_in(config: &str, messages: &[(&str, &str, &str)]) -> Repo {
     let repo = Repo::new(
-        &clippy_check(allow),
+        config,
         &[
             ("src/lib.rs", "//! A library.\n"),
             ("tests/surfaces.rs", "//! Tests.\n"),
@@ -434,6 +439,41 @@ fn integration_test_crates_keep_every_other_lint_and_those_not_allowed() {
     assert!(
         out.stdout
             .contains("gate tests/surfaces.rs:2  clippy::needless_continue"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn the_rust_piece_lets_test_crates_break_its_allowances_unless_the_project_says_not() {
+    let config = "use = [\"rust\"]\n\n\
+                  [check.clippy]\nrun = \"cat lint.json\"\n\n\
+                  [settings.clippy]\nallow-unwrap-in-tests = false\n";
+    let repo = helper_change_in(
+        config,
+        &[
+            ("expect_used", "tests/surfaces.rs", "test"),
+            ("unwrap_used", "tests/surfaces.rs", "test"),
+            ("expect_used", "src/lib.rs", "lib"),
+        ],
+    );
+    let out = repo.fz(&["run", "clippy"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        !out.stdout
+            .contains("tests/surfaces.rs:2  clippy::expect_used"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("gate tests/surfaces.rs:2  clippy::unwrap_used"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout
+            .contains("gate src/lib.rs:2  clippy::expect_used"),
         "{}",
         out.stdout
     );
