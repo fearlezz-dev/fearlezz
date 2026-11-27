@@ -9,11 +9,10 @@
 //! - `workflow_job`: what `jobs.rs` says, a queued job waiting on the page and a completed one
 //!   closing the run that never said done. A local run has no job; `api::close_silent` closes
 //!   it once it said nothing for an hour.
-//! - `workflow_run` completed: the attempt is kept, which ends every leg its plan made that
-//!   opened no run, so the review stops waiting for it. Its workflow file becomes one the
-//!   repository proves with once a run of it reached the host; such a workflow ending for a head
-//!   no run of reached the host cancels the head's review. The work room's alarm then runs
-//!   what never reached the host again, once per head (`review::rerun`).
+//! - `workflow_run`: where an attempt of a proof workflow stands (one a CI run of the
+//!   repository came from). While one is going the review waits; once it completed, a leg its
+//!   plan made that opened no run never will, and a head no run of reached the host ended
+//!   without its proof. The review names what to run again; a person or an agent runs it.
 
 use fearlezz_proof::events::Source;
 use serde::Deserialize;
@@ -86,7 +85,6 @@ struct WorkflowRun {
     head_branch: Option<String>,
     /// The workflow file (`.github/workflows/proof.yml`).
     path: String,
-    conclusion: Option<String>,
 }
 
 pub async fn receive(mut req: Request, env: &Env, config: &Config) -> Answer {
@@ -232,47 +230,37 @@ async fn workflow_job(env: &Env, event: JobEvent) -> worker::Result<()> {
     Ok(())
 }
 
-/// Keeps an attempt of a workflow run that completed, its workflow file as one the repository
-/// proves with when a run of it reached the host, and derives the review of its branch's work
-/// again: a leg its plan made that opened no run never will, and a proof workflow that ended
-/// with no run of the head ended without its proof.
+/// Keeps where an attempt of a proof workflow stands (requested, in progress or completed), and
+/// derives the review of its branch's work again. Only an attempt of a workflow a CI run of the
+/// repository came from, or of a workflow run such a run names, is kept: every other workflow
+/// of the repository never moves a review.
 async fn workflow_run(env: &Env, event: RunEvent) -> worker::Result<()> {
-    if event.action != "completed" {
-        return Ok(());
-    }
     let run = &event.workflow_run;
     let repo = event.repository.full_name.to_lowercase();
     let db = env.d1("DB")?;
-    let binds = [
-        repo.as_str().into(),
-        (run.id as f64).into(),
-        f64::from(run.run_attempt).into(),
-        run.head_sha.as_str().into(),
-        run.path.as_str().into(),
-        run.conclusion
-            .as_deref()
-            .map_or(JsValue::NULL, JsValue::from),
-    ];
-    db.batch(vec![
-        db.prepare(
-            "INSERT OR IGNORE INTO attempts (repo, workflow_run, run_attempt, head, path, conclusion) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        )
-        .bind(&binds)?,
-        db.prepare(
-            "INSERT OR IGNORE INTO proof_workflows (repo, path) SELECT ?1, ?3 WHERE EXISTS ( \
+    let kept: Option<String> = db
+        .prepare(
+            "INSERT INTO attempts (repo, workflow_run, run_attempt, head, path, status) \
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE EXISTS ( \
                SELECT 1 FROM runs r JOIN works w ON w.id = r.work \
                WHERE w.repo = ?1 AND json_extract(r.source, '$.kind') = 'ci' \
-                 AND json_extract(r.source, '$.run_id') = ?2)",
+                 AND (json_extract(r.source, '$.workflow') = ?5 \
+                   OR json_extract(r.source, '$.run_id') = ?2)) \
+             ON CONFLICT (repo, workflow_run, run_attempt) DO UPDATE SET status = excluded.status \
+               WHERE attempts.status != 'completed' \
+             RETURNING status",
         )
         .bind(&[
             repo.as_str().into(),
             (run.id as f64).into(),
+            f64::from(run.run_attempt).into(),
+            run.head_sha.as_str().into(),
             run.path.as_str().into(),
-        ])?,
-    ])
-    .await?;
-    let Some(branch) = &run.head_branch else {
+            event.action.as_str().into(),
+        ])?
+        .first(Some("status"))
+        .await?;
+    let (Some(_), Some(branch)) = (kept, &run.head_branch) else {
         return Ok(());
     };
     let work: Option<String> = db

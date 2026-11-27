@@ -106,9 +106,6 @@ pub struct State {
     /// Every workflow run whose failed jobs the app asked to run again: its repository, id and
     /// the token that asked.
     pub failed_reruns: Vec<(String, u64, String)>,
-    /// Every workflow run the app asked to run again whole: its repository, id and the token
-    /// that asked.
-    pub workflow_reruns: Vec<(String, u64, String)>,
     /// The repositories whose check runs GitHub cannot write, and how it fails them.
     pub stalls: BTreeMap<String, Stall>,
 }
@@ -241,7 +238,6 @@ impl FakeGitHub {
             jobs: Vec::new(),
             reruns: Vec::new(),
             failed_reruns: Vec::new(),
-            workflow_reruns: Vec::new(),
             stalls: BTreeMap::new(),
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -371,21 +367,6 @@ impl FakeGitHub {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state
             .failed_reruns
-            .iter()
-            .filter(|(r, _, _)| r == repo)
-            .map(|(_, run, token)| (*run, token.clone()))
-            .collect()
-    }
-
-    /// The workflow runs of `repo` the app asked to run again whole, in order, each with the
-    /// token that asked.
-    pub(crate) fn workflow_reruns(&self, repo: &str) -> Vec<(u64, String)> {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state
-            .workflow_reruns
             .iter()
             .filter(|(r, _, _)| r == repo)
             .map(|(_, run, token)| (*run, token.clone()))
@@ -689,18 +670,6 @@ fn answer(
             }
             let run: u64 = run.parse().unwrap_or_default();
             state.failed_reruns.push((repo, run, token.to_owned()));
-            (201, json!({}))
-        }
-        ("POST", ["repos", owner, name, "actions", "runs", run, "rerun"]) => {
-            let repo = format!("{owner}/{name}");
-            if !writes_as_app(state, &repo, token) {
-                return (
-                    403,
-                    json!({"message": "Resource not accessible by integration"}),
-                );
-            }
-            let run: u64 = run.parse().unwrap_or_default();
-            state.workflow_reruns.push((repo, run, token.to_owned()));
             (201, json!({}))
         }
         ("POST", ["repos", owner, name, "issues", issue, "comments"]) => {

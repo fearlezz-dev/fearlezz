@@ -116,49 +116,9 @@ impl Report {
             ctx.config.due().count()
         );
         proof.leg = leg.map(|l| l.id.clone());
-        let workflow = &out.workflow;
-        let open = match (&workflow.repository, workflow.branch(), &workflow.ci_job) {
-            (None, ..) | (_, None, _) => Err("the run names no repository and branch \
-                                              (GITHUB_REPOSITORY, GITHUB_REF)"),
-            (.., None) => Err("the run names no job of a workflow run (GITHUB_RUN_ID, \
-                               GITHUB_RUN_ATTEMPT, RUNNER_NAME)"),
-            (Some(repository), Some(branch), Some(ci_job)) => Ok(Open {
-                repository: repository.clone(),
-                branch: branch.to_string(),
-                pull: proof.pull.clone(),
-                head: proof.head.clone(),
-                base: proof.base.clone(),
-                source: Source::Ci {
-                    job: workflow.job.clone().unwrap_or_default(),
-                    run_url: workflow.run_url.clone(),
-                    run_id: ci_job.run_id,
-                    run_attempt: ci_job.run_attempt,
-                    runner_name: ci_job.runner_name.clone(),
-                    leg: proof.leg.clone(),
-                    planned: out.leg.map(|a| a.planned).unwrap_or_default(),
-                },
-                checks: targets.iter().map(|c| c.id.clone()).collect(),
-            }),
-        };
-        // A host that fails never fails the proof: CI proves the commit anyway.
-        let host =
-            host::Host::from_actions(ctx.config.host.as_deref()).filter(|_| !ctx.config.host_off);
-        // A job on GitHub Actions that may not request an OIDC token could have had the page,
-        // unless the repository sends nothing to the host or the job is a fork's, which never
-        // gets a token.
-        let unsent =
-            (host.is_none() && workflow.actions && !ctx.config.host_off && !workflow.fork())
-                .then_some(host::NO_ID_TOKEN);
-        if let Some(why) = unsent {
-            println!("proof page not sent: {why}");
-        }
-        let stream = host.and_then(|host| match open {
-            Ok(open) => open_on(host, &open),
-            Err(why) => {
-                println!("proof page not sent: {why}");
-                None
-            }
-        });
+        let checks = targets.iter().map(|c| c.id.clone()).collect();
+        let planned = out.leg.map(|a| a.planned).unwrap_or_default();
+        let (stream, unsent) = ci_stream(ctx, &out.workflow, &proof, checks, planned);
         Ok(Report {
             page: stream.as_ref().map(|s| s.url.clone()),
             unsent,
@@ -167,7 +127,7 @@ impl Report {
             bundle: out.proof,
             ci: true,
             platform: leg.and_then(legs::Leg::platform_name),
-            webp_copies: workflow.pushed_default().is_some(),
+            webp_copies: out.workflow.pushed_default().is_some(),
         })
     }
 
@@ -262,10 +222,6 @@ impl Report {
             proof::write(&self.proof, dir)?;
             sent(&mut self.stream, |s| s.done(dir));
         }
-        // The gate of a split proof streams nothing; it asks the host through a leg's run.
-        if let (Some(dir), Some(stream), Some(_)) = (&self.bundle, &self.stream, &self.proof.leg) {
-            std::fs::write(dir.join(legs::HOST_RUN), stream.run())?;
-        }
         let gate = match self.proof.accepted.clone() {
             Some(accept) => Gate::Accepted(accept),
             None if hosted && self.stream.is_some() => Gate::Host,
@@ -310,6 +266,75 @@ fn ci_line(check: &Check, result: &RunResult) -> String {
         .map(|m| format!("  {}", m.summary()))
         .unwrap_or_default();
     format!("{word} {}  {secs:.1} s{tests}{coverage}  {run}", check.id)
+}
+
+/// Opens the run of a CI job on the proof host, when the job may: its `checks`, and the legs
+/// its plan made (`planned`). With the run, or why a job that could have had the host's page
+/// sent nothing, for the job summary. A host that fails never fails the proof: CI proves the
+/// commit anyway.
+pub(crate) fn ci_stream(
+    ctx: &Ctx,
+    workflow: &action::Workflow,
+    proof: &Proof,
+    checks: Vec<String>,
+    planned: Vec<String>,
+) -> (Option<host::Stream>, Option<&'static str>) {
+    let open = match (&workflow.repository, workflow.branch(), &workflow.ci_job) {
+        (None, ..) | (_, None, _) => Err("the run names no repository and branch \
+                                          (GITHUB_REPOSITORY, GITHUB_REF)"),
+        (.., None) => Err("the run names no job of a workflow run (GITHUB_RUN_ID, \
+                           GITHUB_RUN_ATTEMPT, RUNNER_NAME)"),
+        (Some(repository), Some(branch), Some(ci_job)) => Ok(Open {
+            repository: repository.clone(),
+            branch: branch.to_string(),
+            pull: proof.pull.clone(),
+            head: proof.head.clone(),
+            base: proof.base.clone(),
+            source: Source::Ci {
+                job: workflow.job.clone().unwrap_or_default(),
+                run_url: workflow.run_url.clone(),
+                run_id: ci_job.run_id,
+                run_attempt: ci_job.run_attempt,
+                runner_name: ci_job.runner_name.clone(),
+                leg: proof.leg.clone(),
+                planned,
+                workflow: workflow.file.clone(),
+            },
+            checks,
+        }),
+    };
+    let host =
+        host::Host::from_actions(ctx.config.host.as_deref()).filter(|_| !ctx.config.host_off);
+    // A job on GitHub Actions that may not request an OIDC token could have had the page,
+    // unless the repository sends nothing to the host or the job is a fork's, which never
+    // gets a token.
+    let unsent = (host.is_none() && workflow.actions && !ctx.config.host_off && !workflow.fork())
+        .then_some(host::NO_ID_TOKEN);
+    if let Some(why) = unsent {
+        println!("proof page not sent: {why}");
+    }
+    let stream = host.and_then(|host| match open {
+        Ok(open) => open_on(host, &open),
+        Err(why) => {
+            println!("proof page not sent: {why}");
+            None
+        }
+    });
+    (stream, unsent)
+}
+
+/// Closes the gate's run on the proof host with its proof. The pictures stay on the legs'
+/// runs, which took them.
+pub(crate) fn gate_done(stream: &mut Option<host::Stream>, proof: &Proof) -> Result<()> {
+    if stream.is_none() {
+        return Ok(());
+    }
+    let dir = tempfile::tempdir()?;
+    let mut hosted = proof.clone();
+    hosted.looks.clear();
+    proof::write(&hosted, dir.path())?;
+    sent(stream, |s| s.done(dir.path()));
+    Ok(())
 }
 
 /// Opens the run on the proof host, printing its page or why there is none.
@@ -373,7 +398,10 @@ fn too_old() -> String {
 
 /// Sends one step of the run to the host; a host that fails is said once and sent nothing
 /// more, and never fails the proof.
-fn sent(stream: &mut Option<host::Stream>, step: impl FnOnce(&host::Stream) -> Result<()>) {
+pub(crate) fn sent(
+    stream: &mut Option<host::Stream>,
+    step: impl FnOnce(&host::Stream) -> Result<()>,
+) {
     if let Some(s) = stream.as_ref()
         && let Err(e) = step(s)
     {

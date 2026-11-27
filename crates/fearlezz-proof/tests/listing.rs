@@ -29,6 +29,7 @@ fn listed(
                 runner_name: "runner".into(),
                 leg: None,
                 planned: Vec::new(),
+                workflow: None,
             },
             state,
             failed,

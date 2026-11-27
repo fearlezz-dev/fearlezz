@@ -8,14 +8,14 @@
 //! `failure` when the proof failed (what it weakens fails it until an admin accepts it, and the
 //! accept runs the proof job again, see `say.rs`), `cancelled` when a job of the head has no run
 //! that said done, a planned leg never reached the host or the proof workflow ended with no run
-//! of the head (which the alarm runs again once, `rerun`), `failure` too while an open note says a picture needs change (its summary lists the notes),
+//! of the head (the review names what a person or an agent runs again), `failure` too while an open note says a picture needs change (its summary lists the notes),
 //! `action_required` while a picture waits for a look,
 //! and `success` once nothing waits. `action_required` needs no requested actions: it
 //! completes the check run (so a required check blocks the merge), and GitHub sends people to
 //! its `details_url`, the work's page, which is where they act.
 
 use fearlezz_proof::events::WorkChange;
-use fearlezz_proof::review::{self, Missing, Review, State};
+use fearlezz_proof::review::{self, Review, State};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use wasm_bindgen::JsValue;
@@ -107,118 +107,6 @@ pub async fn publish(env: &Env, work: &str, first_run: bool) {
     };
     if let Err(error) = published.await {
         worker::console_error!("the review of work {work} did not reach GitHub: {error}");
-    }
-}
-
-/// Runs again on GitHub, as the app, what the review of work `work` last stored says never
-/// reached the host while it is cancelled: each missing leg's job (which runs the jobs that
-/// need it again too, the gate among them), or the proof workflow's run, its failed jobs when
-/// it failed and every job otherwise. Each at most once per head and leg, kept in `reruns`
-/// before GitHub is asked, so a host that keeps failing never loops. Only the work room's alarm
-/// calls it, right after `publish`; GitHub failing is logged.
-pub(crate) async fn rerun(env: &Env, work: &str) {
-    let ran = async {
-        let db = env.d1("DB")?;
-        let Some(row) = row(&db, work).await? else {
-            return Ok(());
-        };
-        let Some(review) = &row.review else {
-            return Ok(());
-        };
-        let review: Review = serde_json::from_str(review)?;
-        if review.state != State::Cancelled {
-            return Ok(());
-        }
-        let config = Config::from(env)?;
-        for missing in &review.missing {
-            let what = match missing {
-                Missing::Leg { leg, .. } => format!("leg {leg}"),
-                Missing::Workflow { .. } => "workflow".to_owned(),
-            };
-            let claimed: Option<String> = db
-                .prepare(
-                    "INSERT INTO reruns (repo, head, what, at) VALUES (?1, ?2, ?3, ?4) \
-                     ON CONFLICT DO NOTHING RETURNING what",
-                )
-                .bind(&[
-                    row.repo.as_str().into(),
-                    review.head.as_str().into(),
-                    what.as_str().into(),
-                    (crate::now() as f64).into(),
-                ])?
-                .first(Some("what"))
-                .await?;
-            if claimed.is_none() {
-                continue;
-            }
-            if let Err(error) = run_again(&db, &config, &row, missing).await {
-                worker::console_error!(
-                    "{what} of {} in work {work} did not run again: {error}",
-                    review.head
-                );
-            }
-        }
-        Ok::<(), worker::Error>(())
-    };
-    if let Err(error) = ran.await {
-        worker::console_error!(
-            "what never reached the host from work {work} did not run again: {error}"
-        );
-    }
-}
-
-/// Asks GitHub to run `missing` again on `row`'s repository.
-async fn run_again(
-    db: &D1Database,
-    config: &Config,
-    row: &Row,
-    missing: &Missing,
-) -> worker::Result<()> {
-    let Some(token) = github::installation_token(config, &row.repository).await? else {
-        return Err(worker::Error::RustError("the app is not installed".into()));
-    };
-    match missing {
-        Missing::Leg {
-            leg,
-            job,
-            run_id,
-            run_attempt,
-        } => {
-            let all = github::jobs(&token, config, &row.repository, *run_id, *run_attempt).await?;
-            let mut naming = all.iter().filter(|j| match job {
-                Some(job) => &j.name == job,
-                None => review::names_leg(&j.name, leg),
-            });
-            match (naming.next(), naming.next()) {
-                (Some(found), None) => {
-                    github::rerun_job(&token, config, &row.repository, found.id).await
-                }
-                _ => Err(worker::Error::RustError(format!(
-                    "no one job of workflow run {run_id} names leg {leg}"
-                ))),
-            }
-        }
-        Missing::Workflow {
-            run_id,
-            run_attempt,
-        } => {
-            let conclusion: Option<String> = db
-                .prepare(
-                    "SELECT conclusion FROM attempts WHERE repo = ?1 AND workflow_run = ?2 AND run_attempt = ?3",
-                )
-                .bind(&[
-                    row.repo.as_str().into(),
-                    (*run_id as f64).into(),
-                    f64::from(*run_attempt).into(),
-                ])?
-                .first(Some("conclusion"))
-                .await?;
-            if conclusion.as_deref() == Some("failure") {
-                github::rerun_failed_jobs(&token, config, &row.repository, *run_id).await
-            } else {
-                github::rerun_workflow(&token, config, &row.repository, *run_id).await
-            }
-        }
     }
 }
 

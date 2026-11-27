@@ -490,7 +490,9 @@ fn ci_plan(reuse: Option<&Path>) -> Result<bool> {
 /// Combines the bundles of every leg in `dir` into one proof of the commit: each check on each
 /// of its platforms from its leg, or reused from the base commit's CI proof by a pull request,
 /// and otherwise not proven. Judges what the change weakens, writes the bundle when asked and
-/// the job summary GitHub Actions names.
+/// the job summary GitHub Actions names. It always reports to the proof host, with a run of
+/// its own that runs no check, also when the plan left no leg to run: a head the host hears
+/// nothing of is one whose proof never reached it.
 fn ci_gate(dir: &Path, bundle: Option<&Path>, reuse: Option<&Path>) -> Result<bool> {
     let workflow = action::Workflow::read();
     let ctx = ctx()?;
@@ -504,6 +506,8 @@ fn ci_gate(dir: &Path, bundle: Option<&Path>, reuse: Option<&Path>) -> Result<bo
         found.len(),
         dir.display()
     );
+    let (mut stream, unsent) = report::ci_stream(&ctx, &workflow, &proof, Vec::new(), Vec::new());
+    let page = stream.as_ref().map(|s| s.url.clone());
     for leg in legs::legs(&ctx.config) {
         let platform = leg.platform_name();
         for check in &leg.checks {
@@ -545,12 +549,13 @@ fn ci_gate(dir: &Path, bundle: Option<&Path>, reuse: Option<&Path>) -> Result<bo
     let gate = if floor.holds() {
         floor::Gate::Job
     } else {
-        gate_accept(&ctx, &found, &mut proof, &floor)
+        gate_accept(&mut stream, &mut proof, &floor)
     };
     if let Some(dir) = bundle {
         proof::write(&proof, dir)?;
     }
-    report::summary(&proof, None, None, &gate)?;
+    report::gate_done(&mut stream, &proof)?;
+    report::summary(&proof, page.as_deref(), unsent, &gate)?;
     let blockers = proof.blockers();
     // What weakens is said below, with how it gets past.
     let weakened: Vec<String> = proof
@@ -570,29 +575,24 @@ fn ci_gate(dir: &Path, bundle: Option<&Path>, reuse: Option<&Path>) -> Result<bo
 }
 
 /// Where what a split proof weakens gets past: an admin's accept of exactly it at the head, as
-/// the host answers it through the run of a leg that streamed to it. Without such a leg the
-/// gate fails as without a host.
+/// the host answers it through the gate's own run. Without that run the gate fails as without
+/// a host.
 fn gate_accept(
-    ctx: &Ctx,
-    found: &[legs::LegProof],
+    stream: &mut Option<host::Stream>,
     proof: &mut proof::Proof,
     floor: &floor::Floor,
 ) -> floor::Gate {
-    let run = found
-        .iter()
-        .find_map(|l| std::fs::read_to_string(l.dir.join(legs::HOST_RUN)).ok());
-    let host =
-        host::Host::from_actions(ctx.config.host.as_deref()).filter(|_| !ctx.config.host_off);
-    let (Some(run), Some(host)) = (run, host) else {
+    let Some(run) = stream.as_ref() else {
         return floor::Gate::Job;
     };
-    match report::ask_accept(&host.resume(run.trim()), proof, floor) {
+    match report::ask_accept(run, proof, floor) {
         Ok(()) => proof
             .accepted
             .clone()
             .map_or(floor::Gate::Host, floor::Gate::Accepted),
         Err(e) => {
             println!("proof host not asked: {e:#}");
+            *stream = None;
             floor::Gate::Unasked
         }
     }

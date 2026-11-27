@@ -664,8 +664,8 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         db.prepare(VERDICTS).bind(&[work.into()])?,
         open_notes(db, work)?,
         jobs::legs_statement(db, work, head)?,
-        jobs::ended_statement(db, work, head)?,
-        jobs::names_statement(db, work, head)?,
+        jobs::attempts_statement(db, work, head)?,
+        jobs::jobs_statement(db, work, head)?,
     ];
     // The head's runs, and the runs open notes were made on, to tell whether a picture changed
     // since its note.
@@ -675,7 +675,7 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         &[work.into(), head.into()],
     )?);
     let results = db.batch(statements).await?;
-    let [verdicts, notes, legs, ended, names, runs @ ..] = results.as_slice() else {
+    let [verdicts, notes, legs, attempts, head_jobs, runs @ ..] = results.as_slice() else {
         return Err(worker::Error::RustError(
             "D1 answered another number of results".into(),
         ));
@@ -685,14 +685,12 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         .into_iter()
         .map(VerdictRow::verdict)
         .collect();
-    let (ended, proof_ended) = jobs::ended(ended)?;
     Ok(OfHead {
         runs: assemble(runs)?,
         actions: Actions {
             legs: jobs::legs(legs)?,
-            ended,
-            proof_ended,
-            jobs: jobs::names(names)?,
+            attempts: jobs::attempts(attempts)?,
+            jobs: jobs::jobs(head_jobs)?,
         },
         verdicts,
         notes: notes_of(notes)?,

@@ -17,8 +17,8 @@ use fearlezz_proof::media::{
 };
 use fearlezz_proof::notes::{Edit as NoteEdit, Note, NoteState, Region, Side as NoteSide};
 use fearlezz_proof::review::{
-    Accept, ChangedSince, Job, Missing as ReviewMissing, Picture as ReviewPicture, Review, Role,
-    Standing as PictureStanding, State as ReviewState, Title as ReviewTitle,
+    Accept, ChangedSince, Job, LegJob, Missing as ReviewMissing, Picture as ReviewPicture, Review,
+    Role, Standing as PictureStanding, State as ReviewState, Title as ReviewTitle,
     Verdict as PictureVerdict, Viewer,
 };
 use fearlezz_proof::{Case, Check, Item, Pull, Ran, Red, Verdict};
@@ -42,6 +42,7 @@ fn declarations() -> String {
         ReviewTitle::decl(&cfg),
         ReviewPicture::decl(&cfg),
         ReviewMissing::decl(&cfg),
+        LegJob::decl(&cfg),
         ChangedSince::decl(&cfg),
         PictureStanding::decl(&cfg),
         PictureVerdict::decl(&cfg),

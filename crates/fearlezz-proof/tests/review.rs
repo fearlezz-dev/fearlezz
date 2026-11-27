@@ -1,14 +1,16 @@
 //! Where review of a head stands: which pictures wait for a verdict, whether its weakenings
 //! wait for an admin's accept, and what a verdict follows from run to run.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use fearlezz_proof::events::{Run, RunCheck, RunState, Source};
 use fearlezz_proof::floor::{Part, Weakening};
 use fearlezz_proof::look::{Change, Item, Look};
 use fearlezz_proof::media::{Comparison, Mark, Marks, Pair, Verdict as Likeness};
 use fearlezz_proof::notes::{Note, NoteState, Region, Side};
-use fearlezz_proof::review::{self, Accept, Actions, Missing, State, Verdict};
+use fearlezz_proof::review::{
+    self, Accept, Actions, ActionsJob, Attempt, LegJob, Missing, State, Verdict,
+};
 use fearlezz_proof::{Check, Proof, Ran};
 
 fn still(name: &str, change: Change) -> Item {
@@ -142,6 +144,7 @@ fn run(id: &str, head: &str, state: RunState, items: &[Item]) -> (Run, Option<Pr
             runner_name: "runner".into(),
             leg: None,
             planned: Vec::new(),
+            workflow: None,
         },
         state,
         opened: 1.0,
@@ -684,52 +687,37 @@ fn a_split_proof_waits_for_every_planned_leg() {
     );
 }
 
-/// A planned leg whose job never opened a run, once its workflow run attempt ended, is a leg
-/// without its proof: the review stops waiting for it.
-#[test]
-fn a_planned_leg_that_never_opened_ends_with_its_attempt() {
-    let plan = ["linux", "mac"];
-    let one = [leg_run("r1", RunState::Done, "linux", &plan)];
-    let ended = Actions {
-        ended: BTreeSet::from([(1, 1)]),
-        ..Actions::default()
+/// GitHub's word on the head's proof workflow attempts: `ended` completed, `going` not yet.
+fn attempts(ended: &[(u64, u32)], going: &[(u64, u32)]) -> Actions {
+    let attempt = |&(run_id, run_attempt): &(u64, u32), ended: bool| Attempt {
+        run_id,
+        run_attempt,
+        ended,
     };
-    assert_eq!(
-        review::review("aaa", &one, &ended, &[], &[], None).state,
-        State::Cancelled
-    );
-    // Another attempt ending leaves this one's legs to come.
-    let other = Actions {
-        ended: BTreeSet::from([(1, 2), (2, 1)]),
+    Actions {
+        attempts: ended
+            .iter()
+            .map(|a| attempt(a, true))
+            .chain(going.iter().map(|a| attempt(a, false)))
+            .collect(),
         ..Actions::default()
-    };
-    assert_eq!(
-        review::review("aaa", &one, &other, &[], &[], None).state,
-        State::Running
-    );
-    // A leg that failed fails the review, whether or not the other came.
-    let (run, proof) = leg_run("r1", RunState::Done, "linux", &plan);
-    let mut proof = proof.unwrap();
-    proof.checks.push(entry("tests", Ran::Failed));
-    let failed = [(run, Some(proof))];
-    assert_eq!(
-        review::review("aaa", &failed, &ended, &[], &[], None).state,
-        State::Failed
-    );
-    // A run of the missing leg in the next attempt, as running the failed jobs again opens,
-    // proves it.
-    let (mut again, proof) = leg_run("r2", RunState::Done, "mac", &plan);
-    if let Source::Ci { run_attempt, .. } = &mut again.source {
-        *run_attempt = 2;
     }
-    let both = [
-        (again, proof),
-        leg_run("r1", RunState::Done, "linux", &plan),
-    ];
-    assert_eq!(
-        review::review("aaa", &both, &ended, &[], &[], None).state,
-        State::Approved
-    );
+}
+
+/// The same, with the jobs GitHub named in them.
+fn with_jobs(actions: Actions, jobs: &[(u64, u64, u32, &str)]) -> Actions {
+    Actions {
+        jobs: jobs
+            .iter()
+            .map(|&(id, run_id, run_attempt, name)| ActionsJob {
+                id,
+                run_id,
+                run_attempt,
+                name: name.to_owned(),
+            })
+            .collect(),
+        ..actions
+    }
 }
 
 /// A leg run `id` of workflow run `run_id`, attempt `attempt`.
@@ -753,84 +741,152 @@ fn leg_run_of(
     (run, proof)
 }
 
-/// A leg that never reached the host is named in the review, with the job to run again: the
-/// one of its attempt whose name names the leg.
+fn unopened(leg: &str, job: Option<(u64, &str)>) -> Missing {
+    Missing::Unopened {
+        leg: leg.into(),
+        job: job.map(|(id, name)| LegJob {
+            id,
+            name: name.into(),
+        }),
+    }
+}
+
+/// A planned leg whose job never opened a run, once its workflow run attempt ended, is a leg
+/// without its proof, named with its job.
 #[test]
-fn a_missing_leg_is_named_with_its_job() {
-    let one = [leg_run("r1", RunState::Done, "linux", &["linux", "macos"])];
-    let actions = Actions {
-        ended: BTreeSet::from([(1, 1)]),
-        jobs: BTreeMap::from([(
-            (1, 1),
-            vec![
-                "plan".to_owned(),
-                "leg linux".to_owned(),
-                "leg macos".to_owned(),
-                "proof".to_owned(),
-            ],
-        )]),
-        ..Actions::default()
-    };
-    let review = review::review("aaa", &one, &actions, &[], &[], None);
-    assert_eq!(review.state, State::Cancelled);
-    assert_eq!(
-        review.missing,
-        [Missing::Leg {
-            leg: "macos".into(),
-            job: Some("leg macos".into()),
-            run_id: 1,
-            run_attempt: 1,
-        }]
+fn a_planned_leg_that_never_opened_ends_with_its_attempt() {
+    let plan = ["linux", "mac"];
+    let one = [leg_run("r1", RunState::Done, "linux", &plan)];
+    let ended = with_jobs(
+        attempts(&[(1, 1)], &[]),
+        &[
+            (11, 1, 1, "leg linux"),
+            (12, 1, 1, "leg mac"),
+            (13, 1, 1, "proof"),
+        ],
     );
+    let review = review::review("aaa", &one, &ended, &[], &[], None);
+    assert_eq!(review.state, State::Cancelled);
+    assert_eq!(review.missing, [unopened("mac", Some((12, "leg mac")))]);
     assert_eq!(
         review.title(),
-        "leg macos of aaa never reached the host: re-run job \"leg macos\""
+        "leg mac of aaa never reached the host: re-run job \"leg mac\""
     );
     assert!(
-        review.summary().contains("never reached the host"),
+        review
+            .summary()
+            .contains("- `mac`, job \"leg mac\": never reached the host"),
         "{}",
         review.summary()
     );
-    // A job GitHub has not named yet, or two that both name it, leave the job unknown.
-    let unnamed = Actions {
-        jobs: BTreeMap::new(),
-        ..actions.clone()
-    };
-    let review = review::review("aaa", &one, &unnamed, &[], &[], None);
+    // Another attempt ending leaves this one's legs to come.
+    let other = attempts(&[(1, 2), (2, 1)], &[]);
     assert_eq!(
-        review.title(),
-        "leg macos of aaa never reached the host: re-run its job"
+        review::review("aaa", &one, &other, &[], &[], None).state,
+        State::Running
     );
-    // A run that opened and was cancelled keeps its own words.
-    let cancelled = [leg_run("r1", RunState::Cancelled, "linux", &["linux"])];
-    let review = review::review("aaa", &cancelled, &actions, &[], &[], None);
-    assert_eq!(review.state, State::Cancelled);
-    assert!(review.missing.is_empty(), "{review:#?}");
+    // Without one job of the attempt that names it, the leg is still named.
+    let review = review::review("aaa", &one, &attempts(&[(1, 1)], &[]), &[], &[], None);
     assert_eq!(
         review.title(),
-        "A CI job of aaa ended without its proof: run it again"
+        "leg mac of aaa never reached the host: re-run its job"
     );
 }
 
-/// A head no run of reached the host stays waiting for CI until the repository's proof
-/// workflow ends for it; then nothing will come.
+/// An attempt that ended cancelled or skipped while another run or attempt of the head is
+/// still going loses nothing yet: the review waits for what is going.
+#[test]
+fn nothing_is_lost_while_another_attempt_of_the_head_runs() {
+    let one = [leg_run("r1", RunState::Done, "linux", &["linux", "mac"])];
+    let review = review::review("aaa", &one, &attempts(&[(1, 1)], &[(2, 1)]), &[], &[], None);
+    assert_eq!(review.state, State::Running);
+    assert!(review.missing.is_empty(), "{review:#?}");
+    // With no run of the head at all, the head still waits for CI.
+    let review = review::review("aaa", &[], &attempts(&[(1, 1)], &[(2, 1)]), &[], &[], None);
+    assert_eq!(review.state, State::Ci);
+}
+
+/// Several legs that never reached the host are each named, with their jobs.
+#[test]
+fn several_missing_legs_are_each_named() {
+    let one = [leg_run(
+        "r1",
+        RunState::Done,
+        "linux",
+        &["linux", "mac", "win"],
+    )];
+    let actions = with_jobs(
+        attempts(&[(1, 1)], &[]),
+        &[(12, 1, 1, "leg mac"), (13, 1, 1, "leg win")],
+    );
+    let review = review::review("aaa", &one, &actions, &[], &[], None);
+    assert_eq!(
+        review.missing,
+        [
+            unopened("mac", Some((12, "leg mac"))),
+            unopened("win", Some((13, "leg win")))
+        ]
+    );
+    assert_eq!(
+        review.title(),
+        "legs mac, win of aaa never reached the host: re-run jobs \"leg mac\", \"leg win\""
+    );
+}
+
+/// A leg whose every run ended without done is in the same list, with its job, beside a leg
+/// that never opened.
+#[test]
+fn a_cancelled_leg_and_a_leg_that_never_opened_are_both_missing() {
+    let (mut cancelled, _) = leg_run("r1", RunState::Cancelled, "linux", &["linux", "mac"]);
+    cancelled.state = RunState::Cancelled;
+    let runs = [(cancelled, None)];
+    let actions = with_jobs(
+        attempts(&[(1, 1)], &[]),
+        &[(11, 1, 1, "leg linux"), (12, 1, 1, "leg mac")],
+    );
+    let review = review::review("aaa", &runs, &actions, &[], &[], None);
+    assert_eq!(review.state, State::Cancelled);
+    assert_eq!(
+        review.missing,
+        [
+            Missing::Ended {
+                leg: Some("linux".into()),
+                job: Some(LegJob {
+                    id: 11,
+                    name: "leg linux".into()
+                }),
+            },
+            unopened("mac", Some((12, "leg mac"))),
+        ]
+    );
+    assert_eq!(
+        review.title(),
+        "leg mac of aaa never reached the host: re-run job \"leg mac\""
+    );
+    let summary = review.summary();
+    assert!(
+        summary.contains("- `linux`, job \"leg linux\": ended without its proof"),
+        "{summary}"
+    );
+    assert!(!summary.contains("runs it again"), "{summary}");
+}
+
+/// A head no run of reached the host waits for CI until an attempt of the proof workflow ends
+/// for it, with nothing else of it going.
 #[test]
 fn a_proof_workflow_that_ended_without_a_run_cancels_the_review() {
-    let waiting = review::review("aaa", &[], &Actions::default(), &[], &[], None);
-    assert_eq!(waiting.state, State::Ci);
-    // Another workflow of the head ending says nothing of the proof.
-    let other = Actions {
-        ended: BTreeSet::from([(7, 1)]),
-        ..Actions::default()
-    };
-    let review = review::review("aaa", &[], &other, &[], &[], None);
-    assert_eq!(review.state, State::Ci);
-    let ended = Actions {
-        ended: BTreeSet::from([(7, 1), (8, 1), (8, 2)]),
-        proof_ended: BTreeSet::from([(8, 1), (8, 2)]),
-        ..Actions::default()
-    };
-    let review = review::review("aaa", &[], &ended, &[], &[], None);
+    assert_eq!(
+        review::review("aaa", &[], &Actions::default(), &[], &[], None).state,
+        State::Ci
+    );
+    let review = review::review(
+        "aaa",
+        &[],
+        &attempts(&[(8, 1), (8, 2)], &[]),
+        &[],
+        &[],
+        None,
+    );
     assert_eq!(review.state, State::Cancelled);
     assert_eq!(
         review.missing,
@@ -845,21 +901,69 @@ fn a_proof_workflow_that_ended_without_a_run_cancels_the_review() {
     );
     // A run of the head that reached the host, in any attempt, is judged instead.
     let runs = [run("r1", "aaa", RunState::Done, &[])];
-    let review = review::review("aaa", &runs, &ended, &[], &[], None);
+    let review = review::review("aaa", &runs, &attempts(&[(8, 1)], &[]), &[], &[], None);
     assert_eq!(review.state, State::Approved);
     assert!(review.missing.is_empty(), "{review:#?}");
+}
+
+/// The gate of a split proof whose plan needed no leg reports a run of its own, with no
+/// checks of its own and no pictures: it proves the head.
+#[test]
+fn a_gate_with_nothing_to_run_proves_the_head() {
+    let (gate, proof) = run("g1", "aaa", RunState::Done, &[]);
+    let gate = Run {
+        checks: Vec::new(),
+        ..gate
+    };
+    let review = review::review(
+        "aaa",
+        &[(gate, proof)],
+        &attempts(&[(1, 1)], &[]),
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Approved);
+    assert_eq!(review.title(), "Proven at aaa, with nothing to review");
+}
+
+/// The gate's run fails for a leg that never reached the host, since it cannot prove that
+/// leg's checks: the review names the leg to run again, not the gate. A gate that fails with
+/// every leg there fails the review.
+#[test]
+fn a_gate_failing_for_a_missing_leg_leaves_the_leg_named() {
+    let (gate, _) = run("g1", "aaa", RunState::Done, &[]);
+    let gate = Run {
+        checks: Vec::new(),
+        ..gate
+    };
+    let unproven = Proof {
+        checks: vec![entry("screens", Ran::Failed)],
+        ..Proof::new("aaa".into(), "aaa".into(), "main".into())
+    };
+    let runs = [
+        (gate.clone(), Some(unproven.clone())),
+        leg_run("r1", RunState::Done, "linux", &["linux", "mac"]),
+    ];
+    let review = review::review("aaa", &runs, &attempts(&[(1, 1)], &[]), &[], &[], None);
+    assert_eq!(review.state, State::Cancelled);
+    assert_eq!(
+        review.title(),
+        "leg mac of aaa never reached the host: re-run its job"
+    );
+    let runs = [
+        (gate, Some(unproven)),
+        leg_run("r1", RunState::Done, "linux", &["linux"]),
+    ];
+    let review = review::review("aaa", &runs, &attempts(&[(1, 1)], &[]), &[], &[], None);
+    assert_eq!(review.state, State::Failed);
 }
 
 /// The newest attempt of a workflow run plans its legs: running every job again plans anew,
 /// and may leave out a leg whose pass it reuses from the base commit.
 #[test]
 fn a_newer_attempt_plans_the_legs_of_its_workflow_run() {
-    let first_ended = Actions {
-        ended: BTreeSet::from([(1, 1)]),
-        ..Actions::default()
-    };
-    // Attempt 1 planned linux and mac, mac never opened, and attempt 1 completed. Attempt 2
-    // planned linux alone, and it passed.
+    let first_ended = attempts(&[(1, 1), (1, 2)], &[]);
     let runs = [
         leg_run_of("r2", "linux", &["linux"], 1, 2),
         leg_run_of("r1", "linux", &["linux", "mac"], 1, 1),
@@ -874,7 +978,7 @@ fn a_newer_attempt_plans_the_legs_of_its_workflow_run() {
         leg_run_of("r1", "linux", &["linux", "mac"], 1, 1),
     ];
     assert_eq!(
-        review::review("aaa", &runs, &first_ended, &[], &[], None).state,
+        review::review("aaa", &runs, &attempts(&[(1, 1)], &[]), &[], &[], None).state,
         State::Running
     );
 }
@@ -887,20 +991,20 @@ fn a_leg_waits_while_any_workflow_run_that_planned_it_runs() {
         leg_run_of("r2", "linux", &["linux", "mac"], 2, 1),
         leg_run_of("r1", "linux", &["linux", "mac"], 1, 1),
     ];
-    let one_ended = Actions {
-        ended: BTreeSet::from([(1, 1)]),
-        ..Actions::default()
-    };
     assert_eq!(
-        review::review("aaa", &runs, &one_ended, &[], &[], None).state,
+        review::review("aaa", &runs, &attempts(&[(1, 1)], &[]), &[], &[], None).state,
         State::Running
     );
-    let both_ended = Actions {
-        ended: BTreeSet::from([(1, 1), (2, 1)]),
-        ..Actions::default()
-    };
     assert_eq!(
-        review::review("aaa", &runs, &both_ended, &[], &[], None).state,
+        review::review(
+            "aaa",
+            &runs,
+            &attempts(&[(1, 1), (2, 1)], &[]),
+            &[],
+            &[],
+            None
+        )
+        .state,
         State::Cancelled
     );
 }

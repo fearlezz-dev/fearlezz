@@ -6,7 +6,7 @@
 //! A verdict follows the picture, not the run: it is kept by check, picture name and content, so
 //! a picture that did not change keeps its verdict across pushes and runs of the same work.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -444,38 +444,62 @@ fn looked_at(
 pub struct Actions {
     /// The display name GitHub gives each run's job, by run id (see [`Leg`]).
     pub legs: BTreeMap<String, String>,
-    /// The workflow run attempts of the head that completed, as (`run_id`, `run_attempt`): a
-    /// leg their plan made that opened no run by then never will.
-    pub ended: BTreeSet<(u64, u32)>,
-    /// Those of them that are runs of a workflow the repository proves with: one that ended
-    /// while no run of the head reached the host ended without its proof.
-    pub proof_ended: BTreeSet<(u64, u32)>,
-    /// The names of the jobs of each attempt, as GitHub's `workflow_job` webhook gave them,
-    /// which name the job of a leg that never reached the host.
-    pub jobs: BTreeMap<(u64, u32), Vec<String>>,
+    /// The head's attempts of the repository's proof workflows, as GitHub's `workflow_run`
+    /// webhook said them: one still going keeps the review waiting, and one that ended ends
+    /// the legs its plan made.
+    pub attempts: Vec<Attempt>,
+    /// The head's jobs, as GitHub's `workflow_job` webhook named them, which name the job of a
+    /// leg without its proof.
+    pub jobs: Vec<ActionsJob>,
 }
 
-/// What never reached the host though the head's CI ended, which the review names and the
-/// host runs again once.
+/// One attempt of a workflow run of a proof workflow.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attempt {
+    /// The workflow run (`GITHUB_RUN_ID`).
+    pub run_id: u64,
+    /// The attempt, 1 until it is run again.
+    pub run_attempt: u32,
+    /// Whether it completed, however it ended (passed, failed, cancelled or skipped).
+    pub ended: bool,
+}
+
+/// One Actions job of a workflow run attempt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActionsJob {
+    /// GitHub's id of the job, which `POST /actions/jobs/<id>/rerun` takes.
+    pub id: u64,
+    /// The workflow run it is a job of.
+    pub run_id: u64,
+    /// The attempt it is a job of.
+    pub run_attempt: u32,
+    /// Its display name (`leg macos`, `proof (macos-latest)`).
+    pub name: String,
+}
+
+/// A leg of the head's proof that has no proof though nothing more of it can come, with why:
+/// the one list the title, the summary and the page say it from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "ReviewMissing"))]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "cause", rename_all = "snake_case")]
 pub enum Missing {
-    /// A leg the plan of attempt `run_attempt` of workflow run `run_id` made that opened no
-    /// run before the attempt completed, with its job's name when one job of the attempt
-    /// names the leg.
-    Leg {
+    /// A leg whose every run ended without saying done: its job was cancelled, or its stream
+    /// stopped when the host refused a step.
+    Ended {
+        /// The leg's id, as a split proof's plan names it (`macos`).
+        leg: Option<String>,
+        /// Its job, when the attempt has one job that is it.
+        job: Option<LegJob>,
+    },
+    /// A leg a plan made that opened no run before its attempt completed: its job never
+    /// reached the host.
+    Unopened {
         /// The leg's id, as the plan names it (`macos`).
         leg: String,
-        /// The display name of its job (`leg macos`), when one job of the attempt names it.
-        job: Option<String>,
-        /// The workflow run (`GITHUB_RUN_ID`).
-        run_id: u64,
-        /// Its attempt that completed.
-        run_attempt: u32,
+        /// Its job, when the attempt has one job that names it.
+        job: Option<LegJob>,
     },
-    /// The newest attempt of the proof workflow's run of the head, which completed with no run
-    /// of the head reaching the host.
+    /// No run of the head reached the host before an attempt of the proof workflow completed.
     Workflow {
         /// The workflow run (`GITHUB_RUN_ID`).
         run_id: u64,
@@ -484,13 +508,94 @@ pub enum Missing {
     },
 }
 
+/// The Actions job of a leg, as the page links it and a person runs it again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct LegJob {
+    /// GitHub's id of the job.
+    pub id: u64,
+    /// Its display name (`leg macos`).
+    pub name: String,
+}
+
+impl Missing {
+    /// Its line in the check run's summary.
+    fn line(&self) -> String {
+        let (leg, job, why) = match self {
+            Missing::Workflow {
+                run_id,
+                run_attempt,
+            } => {
+                return format!(
+                    "- the proof workflow, run {run_id} attempt {run_attempt}: no run of the \
+                     head reached the host"
+                );
+            }
+            Missing::Ended { leg, job } => (leg.as_deref(), job, "ended without its proof"),
+            Missing::Unopened { leg, job } => (Some(leg.as_str()), job, "never reached the host"),
+        };
+        match (leg, job) {
+            (Some(leg), Some(job)) => format!("- `{leg}`, job \"{}\": {why}", job.name),
+            (Some(leg), None) => format!("- `{leg}`: {why}"),
+            (None, Some(job)) => format!("- job \"{}\": {why}", job.name),
+            (None, None) => format!("- a CI job: {why}"),
+        }
+    }
+}
+
 /// Whether job `name` names leg `leg`: the leg alone, or one word of it (`leg macos`,
 /// `leg (macos, macos-latest)`).
-pub fn names_leg(name: &str, leg: &str) -> bool {
+fn names_leg(name: &str, leg: &str) -> bool {
     name == leg
         || name
             .split(|c: char| c.is_whitespace() || "(),".contains(c))
             .any(|word| word == leg)
+}
+
+impl Actions {
+    /// The one job of attempt (`run_id`, `run_attempt`) that `is` the leg: the one place a
+    /// GitHub job is matched to a leg. None when no job, or several, match.
+    fn job(&self, (run_id, run_attempt): (u64, u32), is: impl Fn(&str) -> bool) -> Option<LegJob> {
+        let mut matching = self
+            .jobs
+            .iter()
+            .filter(|j| j.run_id == run_id && j.run_attempt == run_attempt && is(&j.name));
+        match (matching.next(), matching.next()) {
+            (Some(job), None) => Some(LegJob {
+                id: job.id,
+                name: job.name.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// The job of `leg` in attempt `attempt`.
+    fn job_of(&self, leg: &Leg<'_>, attempt: (u64, u32)) -> Option<LegJob> {
+        match leg {
+            Leg::Planned(id) => self.job(attempt, |name| names_leg(name, id)),
+            Leg::Named { name, .. } => self.job(attempt, |n| n == *name),
+            Leg::Unknown { .. } => None,
+        }
+    }
+
+    /// Whether attempt `attempt` completed.
+    fn ended(&self, attempt: (u64, u32)) -> bool {
+        self.attempts
+            .iter()
+            .any(|a| (a.run_id, a.run_attempt) == attempt && a.ended)
+    }
+}
+
+/// The workflow run and attempt of a CI run.
+fn attempt_of(run: &Run) -> Option<(u64, u32)> {
+    match &run.source {
+        Source::Ci {
+            run_id,
+            run_attempt,
+            ..
+        } => Some((*run_id, *run_attempt)),
+        Source::Local { .. } => None,
+    }
 }
 
 /// The review of `head` from the work's runs (newest first, each with its proof once done),
@@ -498,9 +603,11 @@ pub fn names_leg(name: &str, leg: &str) -> bool {
 /// accept. Only CI runs of the head count, the newest of each leg that did not end without its
 /// proof: a workflow run again replaces the legs it ran, every other leg keeps its newest run,
 /// and a run again that is cancelled replaces nothing, so the older run's failure and pictures
-/// stay in review. A leg whose every run was cancelled has no proof, which keeps the review
-/// from approving; so has a leg the newest attempt of a workflow run planned that opened no
-/// run before every such attempt ended.
+/// stay in review. While a run or an attempt of a proof workflow of the head is still going,
+/// nothing is taken as lost. Once none is, a leg without proof is [`Missing`] and keeps the
+/// review from approving: one whose every run was cancelled, one the newest attempt of a
+/// workflow run planned that opened no run, or, with no run of the head at all, the proof
+/// workflow that ended without reaching the host.
 pub fn review(
     head: &str,
     runs: &[(Run, Option<Proof>)],
@@ -509,58 +616,93 @@ pub fn review(
     notes: &[Note],
     accept: Option<&Accept>,
 ) -> Review {
-    // Each leg, with its newest run that did not end without its proof, if it has one.
-    let mut seen: Vec<(Leg<'_>, Option<&ProvenRun>)> = Vec::new();
+    // Each leg, with its newest run, and its newest run that did not end without its proof,
+    // if it has one.
+    let mut seen: Vec<(Leg<'_>, &Run, Option<&ProvenRun>)> = Vec::new();
     for entry in runs {
         let Some(leg) = Leg::of(&entry.0, head, &actions.legs) else {
             continue;
         };
         let counts = (entry.0.state != RunState::Cancelled).then_some(entry);
-        match seen.iter_mut().find(|(l, _)| *l == leg) {
-            Some((_, chosen)) => *chosen = chosen.or(counts),
-            None => seen.push((leg, counts)),
+        match seen.iter_mut().find(|(l, ..)| *l == leg) {
+            Some((_, _, chosen)) => *chosen = chosen.or(counts),
+            None => seen.push((leg, &entry.0, counts)),
         }
     }
     // The plans that count: the newest attempt of each workflow run of the head, since running
-    // it again plans anew and may leave out a leg whose pass it reuses.
-    let mut plans: Vec<(u64, u32, &[String])> = Vec::new();
+    // it again plans anew and may leave out a leg whose pass it reuses. Only a leg's run names
+    // the plan; the gate's names none.
+    let mut plans: Vec<((u64, u32), &[String])> = Vec::new();
     for (run, _) in runs.iter().filter(|(run, _)| run.head == head) {
-        let Source::Ci {
-            planned,
-            run_id,
-            run_attempt,
-            ..
-        } = &run.source
+        let (
+            Some(attempt),
+            Source::Ci {
+                planned,
+                leg: Some(_),
+                ..
+            },
+        ) = (attempt_of(run), &run.source)
         else {
             continue;
         };
-        match plans.iter_mut().find(|(id, ..)| id == run_id) {
-            Some(plan) if plan.1 < *run_attempt => *plan = (*run_id, *run_attempt, planned),
+        match plans.iter_mut().find(|((id, _), _)| *id == attempt.0) {
+            Some(plan) if plan.0.1 < attempt.1 => *plan = (attempt, planned),
             Some(_) => {}
-            None => plans.push((*run_id, *run_attempt, planned)),
+            None => plans.push((attempt, planned)),
         }
     }
-    // A leg a plan made that has not opened a run is still to come while any attempt whose
-    // plan made it runs, and has no proof once every such attempt ended.
-    let mut missing: Vec<(&str, bool, (u64, u32))> = Vec::new();
-    for (run_id, run_attempt, planned) in plans {
-        let ended = actions.ended.contains(&(run_id, run_attempt));
+    // A leg a plan made that has not opened a run, with the newest attempt that planned it and
+    // whether every attempt that did ended.
+    let mut unopened: Vec<(&str, (u64, u32), bool)> = Vec::new();
+    for (attempt, planned) in plans {
+        let ended = actions.ended(attempt);
         for leg in planned {
-            if seen.iter().any(|(l, _)| *l == Leg::Planned(leg)) {
+            if seen.iter().any(|(l, ..)| *l == Leg::Planned(leg)) {
                 continue;
             }
-            match missing.iter_mut().find(|(l, ..)| l == leg) {
-                Some((_, all_ended, attempt)) => {
+            match unopened.iter_mut().find(|(l, ..)| l == leg) {
+                Some((_, newest, all_ended)) => {
                     *all_ended &= ended;
-                    *attempt = (*attempt).max((run_id, run_attempt));
+                    *newest = (*newest).max(attempt);
                 }
-                None => missing.push((leg, ended, (run_id, run_attempt))),
+                None => unopened.push((leg, attempt, ended)),
             }
         }
     }
-    let to_come = missing.iter().any(|(_, ended, _)| !ended);
-    let unproven = !missing.is_empty() || seen.iter().any(|(_, chosen)| chosen.is_none());
-    let live: Vec<&ProvenRun> = seen.iter().filter_map(|(_, chosen)| *chosen).collect();
+    let live: Vec<&ProvenRun> = seen.iter().filter_map(|(.., chosen)| *chosen).collect();
+    let going = unopened.iter().any(|(.., ended)| !ended)
+        || actions.attempts.iter().any(|a| !a.ended)
+        || live.iter().any(|(run, _)| run.state == RunState::Running);
+    let mut missing: Vec<Missing> = Vec::new();
+    if !going {
+        for (leg, newest, chosen) in &seen {
+            if chosen.is_none() {
+                let job = attempt_of(newest).and_then(|a| actions.job_of(leg, a));
+                let leg = match leg {
+                    Leg::Planned(id) => Some((*id).to_owned()),
+                    Leg::Named { .. } | Leg::Unknown { .. } => None,
+                };
+                missing.push(Missing::Ended { leg, job });
+            }
+        }
+        for (leg, attempt, _) in &unopened {
+            missing.push(Missing::Unopened {
+                leg: (*leg).to_owned(),
+                job: actions.job_of(&Leg::Planned(leg), *attempt),
+            });
+        }
+        let workflow = actions
+            .attempts
+            .iter()
+            .map(|a| (a.run_id, a.run_attempt))
+            .max();
+        if let (true, Some((run_id, run_attempt))) = (seen.is_empty(), workflow) {
+            missing.push(Missing::Workflow {
+                run_id,
+                run_attempt,
+            });
+        }
+    }
 
     let open: Vec<&Note> = notes.iter().filter(|n| n.is_open()).collect();
     let pictures = looked_at(&live, runs, verdicts, &open);
@@ -592,23 +734,22 @@ pub fn review(
         .filter(|a| !weakened.is_empty() && a.covers(head, &weakened))
         .cloned();
 
+    // A run that ran no check is a gate: with a leg missing it fails for that leg's checks,
+    // which the missing leg already names.
     let failed = live.iter().any(|(run, proof)| {
         run.state == RunState::Done
+            && (!run.checks.is_empty() || missing.is_empty())
             && proof
                 .as_ref()
                 .is_none_or(|p| failed(p, head, accept.as_ref()))
     });
-    // The proof workflow's newest attempt of the head that ended, while no run reached the host.
-    let workflow = actions.proof_ended.iter().max().copied();
-    let state = if seen.is_empty() && workflow.is_none() {
+    let state = if seen.is_empty() && missing.is_empty() {
         State::Ci
-    } else if seen.is_empty() {
-        State::Cancelled
-    } else if to_come || live.iter().any(|(run, _)| run.state == RunState::Running) {
+    } else if going {
         State::Running
     } else if failed {
         State::Failed
-    } else if unproven {
+    } else if !missing.is_empty() {
         State::Cancelled
     } else if !open.is_empty() {
         State::NeedsChange
@@ -616,35 +757,6 @@ pub fn review(
         State::Waits
     } else {
         State::Approved
-    };
-    let missing = match (state, workflow) {
-        (State::Cancelled, Some((run_id, run_attempt))) if seen.is_empty() => {
-            vec![Missing::Workflow {
-                run_id,
-                run_attempt,
-            }]
-        }
-        (State::Cancelled, _) => missing
-            .into_iter()
-            .map(|(leg, _, (run_id, run_attempt))| {
-                let names = actions.jobs.get(&(run_id, run_attempt));
-                let mut naming = names
-                    .into_iter()
-                    .flatten()
-                    .filter(|name| names_leg(name, leg));
-                let job = match (naming.next(), naming.next()) {
-                    (Some(name), None) => Some(name.clone()),
-                    _ => None,
-                };
-                Missing::Leg {
-                    leg: leg.to_owned(),
-                    job,
-                    run_id,
-                    run_attempt,
-                }
-            })
-            .collect(),
-        _ => Vec::new(),
     };
     Review {
         head: head.to_owned(),
@@ -783,9 +895,6 @@ impl Review {
                 format!("The proof of {head} failed: what it weakens waits for {whose} accept")
             }
             State::Failed => format!("The proof of {head} failed"),
-            State::Cancelled if self.missing.is_empty() => {
-                format!("A CI job of {head} ended without its proof: run it again")
-            }
             State::Cancelled => self.missing_title(),
             State::NeedsChange => {
                 let n = self.noted().len();
@@ -806,29 +915,36 @@ impl Review {
         }
     }
 
-    /// What never reached the host in one line, and what to run again.
+    /// What has no proof in one line, and what a person runs again: the proof workflow, the
+    /// legs that never reached the host, or else a job that ended without its proof.
     fn missing_title(&self) -> String {
         let head = short(&self.head);
-        let mut legs: Vec<&str> = Vec::new();
-        let mut jobs: Vec<Option<&str>> = Vec::new();
-        for missing in &self.missing {
-            match missing {
-                Missing::Workflow { .. } => {
-                    return format!(
-                        "The proof workflow of {head} ended without reaching the host: re-run it"
-                    );
-                }
-                Missing::Leg { leg, job, .. } => {
-                    legs.push(leg);
-                    jobs.push(job.as_deref());
-                }
-            }
-        }
-        let quoted: Option<Vec<String>> = jobs
+        if self
+            .missing
             .iter()
-            .map(|job| job.map(|j| format!("\"{j}\"")))
+            .any(|m| matches!(m, Missing::Workflow { .. }))
+        {
+            return format!(
+                "The proof workflow of {head} ended without reaching the host: re-run it"
+            );
+        }
+        let unopened: Vec<(&str, Option<&LegJob>)> = self
+            .missing
+            .iter()
+            .filter_map(|m| match m {
+                Missing::Unopened { leg, job } => Some((leg.as_str(), job.as_ref())),
+                Missing::Ended { .. } | Missing::Workflow { .. } => None,
+            })
             .collect();
-        let (what, rerun) = match (legs.len(), quoted) {
+        if unopened.is_empty() {
+            return format!("A CI job of {head} ended without its proof: run it again");
+        }
+        let legs: Vec<&str> = unopened.iter().map(|(leg, _)| *leg).collect();
+        let jobs: Option<Vec<String>> = unopened
+            .iter()
+            .map(|(_, job)| job.map(|j| format!("\"{}\"", j.name)))
+            .collect();
+        let (what, rerun) = match (legs.len(), jobs) {
             (1, Some(jobs)) => ("leg", format!("re-run job {}", jobs.join(", "))),
             (1, None) => ("leg", "re-run its job".to_owned()),
             (_, Some(jobs)) => ("legs", format!("re-run jobs {}", jobs.join(", "))),
@@ -843,43 +959,9 @@ impl Review {
     /// What waits and what is settled, in Markdown, as the check run's summary says it.
     pub fn summary(&self) -> String {
         let mut lines = vec![format!("{}.", self.title())];
-        let legs: Vec<String> = self
-            .missing
-            .iter()
-            .filter_map(|m| match m {
-                Missing::Leg {
-                    leg,
-                    job,
-                    run_id,
-                    run_attempt,
-                } => {
-                    let job = job
-                        .as_ref()
-                        .map(|j| format!(", job \"{j}\""))
-                        .unwrap_or_default();
-                    Some(format!(
-                        "- `{leg}`{job}, in attempt {run_attempt} of workflow run {run_id}"
-                    ))
-                }
-                Missing::Workflow { .. } => None,
-            })
-            .collect();
-        if !legs.is_empty() {
-            lines.push(
-                "\nLegs that never reached the host; the host runs each job again once:".into(),
-            );
-            lines.extend(legs);
-        }
-        if self
-            .missing
-            .iter()
-            .any(|m| matches!(m, Missing::Workflow { .. }))
-        {
-            lines.push(
-                "\nNo run of the head reached the host before the proof workflow ended; the \
-                 host runs it again once."
-                    .into(),
-            );
+        if !self.missing.is_empty() {
+            lines.push("\nWithout proof, for a person or an agent to run again:".into());
+            lines.extend(self.missing.iter().map(Missing::line));
         }
         let waiting: Vec<&Picture> = self.waiting().collect();
         if !waiting.is_empty() {

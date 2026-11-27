@@ -303,23 +303,23 @@ verdict?: PictureVerdict | null,
  */
 changed_since?: ChangedSince | null, };
 
-export type ReviewMissing = { "kind": "leg", 
+export type ReviewMissing = { "cause": "ended", 
+/**
+ * The leg's id, as a split proof's plan names it (`macos`).
+ */
+leg: string | null, 
+/**
+ * Its job, when the attempt has one job that is it.
+ */
+job: LegJob | null, } | { "cause": "unopened", 
 /**
  * The leg's id, as the plan names it (`macos`).
  */
 leg: string, 
 /**
- * The display name of its job (`leg macos`), when one job of the attempt names it.
+ * Its job, when the attempt has one job that names it.
  */
-job: string | null, 
-/**
- * The workflow run (`GITHUB_RUN_ID`).
- */
-run_id: number, 
-/**
- * Its attempt that completed.
- */
-run_attempt: number, } | { "kind": "workflow", 
+job: LegJob | null, } | { "cause": "workflow", 
 /**
  * The workflow run (`GITHUB_RUN_ID`).
  */
@@ -328,6 +328,16 @@ run_id: number,
  * Its newest attempt that completed.
  */
 run_attempt: number, };
+
+export type LegJob = { 
+/**
+ * GitHub's id of the job.
+ */
+id: number, 
+/**
+ * Its display name (`leg macos`).
+ */
+name: string, };
 
 export type ChangedSince = { 
 /**
@@ -635,7 +645,12 @@ leg?: string | null,
 /**
  * Every leg the run's plan made, this one among them: the review waits for each.
  */
-planned?: Array<string>, } | { "kind": "local", 
+planned?: Array<string>, 
+/**
+ * The workflow file its workflow run came from (`.github/workflows/proof.yml`, from
+ * `GITHUB_WORKFLOW_REF`): the host knows a repository's proof workflows by its runs.
+ */
+workflow?: string | null, } | { "kind": "local", 
 /**
  * Who ran it: the login of the CLI's sign in, which the host sets from its token.
  */

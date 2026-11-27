@@ -13,12 +13,12 @@
 //!   without the run saying done.
 //! - A job's display name, once a runner took it, is the leg of its own run, and the review
 //!   counts the newest run of each leg (`fearlezz_proof::review::review`).
-//! - A workflow run attempt that completed (GitHub's `workflow_run` webhook) ends every leg its
-//!   plan made: one that opened no run by then never will.
+//! - Where each attempt of a proof workflow stands, and the head's jobs with their ids, are what
+//!   the review reads of GitHub Actions (`fearlezz_proof::review::Actions`): it matches a job to
+//!   a leg in one place.
+use std::collections::BTreeMap;
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use fearlezz_proof::review::Job;
+use fearlezz_proof::review::{ActionsJob, Attempt, Job};
 use serde::Deserialize;
 use worker::{D1Database, D1PreparedStatement, D1Result};
 
@@ -89,74 +89,71 @@ pub fn legs(result: &D1Result) -> worker::Result<BTreeMap<String, String>> {
         .collect())
 }
 
-/// The statement that reads the workflow run attempts of work `work`'s repository at `head`
-/// that completed, each with whether its workflow is one the repository proves with.
-pub(crate) fn ended_statement(
+/// The statement that reads the attempts of the proof workflows of work `work`'s repository at
+/// `head`, as `workflow_run` left them.
+pub(crate) fn attempts_statement(
     db: &D1Database,
     work: &str,
     head: &str,
 ) -> worker::Result<D1PreparedStatement> {
     db.prepare(
-        "SELECT a.workflow_run, a.run_attempt, \
-           EXISTS (SELECT 1 FROM proof_workflows p WHERE p.repo = a.repo AND p.path = a.path) AS proof \
-         FROM attempts a JOIN works w ON w.repo = a.repo WHERE w.id = ?1 AND a.head = ?2",
+        "SELECT a.workflow_run, a.run_attempt, a.status FROM attempts a JOIN works w ON w.repo = a.repo \
+         WHERE w.id = ?1 AND a.head = ?2",
     )
     .bind(&[work.into(), head.into()])
 }
 
-/// The attempts `ended_statement` read, as (`run_id`, `run_attempt`): every one, and those of
-/// a proof workflow.
-pub(crate) fn ended(
-    result: &D1Result,
-) -> worker::Result<(BTreeSet<(u64, u32)>, BTreeSet<(u64, u32)>)> {
+/// The attempts `attempts_statement` read.
+pub(crate) fn attempts(result: &D1Result) -> worker::Result<Vec<Attempt>> {
     #[derive(Deserialize)]
     struct AttemptRow {
         workflow_run: f64,
         run_attempt: f64,
-        proof: f64,
+        status: String,
     }
-    let mut ended = BTreeSet::new();
-    let mut proof = BTreeSet::new();
-    for row in result.results::<AttemptRow>()? {
-        let attempt = (row.workflow_run as u64, row.run_attempt as u32);
-        if row.proof != 0.0 {
-            proof.insert(attempt);
-        }
-        ended.insert(attempt);
-    }
-    Ok((ended, proof))
+    Ok(result
+        .results::<AttemptRow>()?
+        .into_iter()
+        .map(|row| Attempt {
+            run_id: row.workflow_run as u64,
+            run_attempt: row.run_attempt as u32,
+            ended: row.status == "completed",
+        })
+        .collect())
 }
 
-/// The statement that reads the names of the jobs of work `work`'s repository at `head`, by
-/// workflow run and attempt.
-pub(crate) fn names_statement(
+/// The statement that reads the jobs of work `work`'s repository at `head`.
+pub(crate) fn jobs_statement(
     db: &D1Database,
     work: &str,
     head: &str,
 ) -> worker::Result<D1PreparedStatement> {
     db.prepare(
-        "SELECT j.workflow_run, j.run_attempt, j.name FROM jobs j JOIN works w ON w.repo = j.repo \
+        "SELECT j.id, j.workflow_run, j.run_attempt, j.name FROM jobs j JOIN works w ON w.repo = j.repo \
          WHERE w.id = ?1 AND j.head = ?2 ORDER BY j.id",
     )
     .bind(&[work.into(), head.into()])
 }
 
-/// The job names `names_statement` read, by (`run_id`, `run_attempt`).
-pub(crate) fn names(result: &D1Result) -> worker::Result<BTreeMap<(u64, u32), Vec<String>>> {
+/// The jobs `jobs_statement` read.
+pub(crate) fn jobs(result: &D1Result) -> worker::Result<Vec<ActionsJob>> {
     #[derive(Deserialize)]
-    struct NameRow {
+    struct JobRow {
+        id: f64,
         workflow_run: f64,
         run_attempt: f64,
         name: String,
     }
-    let mut names: BTreeMap<(u64, u32), Vec<String>> = BTreeMap::new();
-    for row in result.results::<NameRow>()? {
-        names
-            .entry((row.workflow_run as u64, row.run_attempt as u32))
-            .or_default()
-            .push(row.name);
-    }
-    Ok(names)
+    Ok(result
+        .results::<JobRow>()?
+        .into_iter()
+        .map(|row| ActionsJob {
+            id: row.id as u64,
+            run_id: row.workflow_run as u64,
+            run_attempt: row.run_attempt as u32,
+            name: row.name,
+        })
+        .collect())
 }
 
 #[derive(Deserialize)]

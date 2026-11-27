@@ -325,27 +325,6 @@ pub async fn rerun_job(token: &str, config: &Config, repo: &str, id: u64) -> Res
     }
 }
 
-/// Runs every job of Actions workflow run `run` of `repo` again, as the app (Actions write).
-pub(crate) async fn rerun_workflow(
-    token: &str,
-    config: &Config,
-    repo: &str,
-    run: u64,
-) -> Result<()> {
-    let url = format!(
-        "{}/repos/{repo}/actions/runs/{run}/rerun",
-        config.github_api
-    );
-    let reply = call(Method::Post, &url, Some(token), Some(&json!({}))).await?;
-    match reply.status {
-        200..=299 => Ok(()),
-        status => Err(worker::Error::RustError(format!(
-            "GitHub answered {status} to running workflow run {run} again: {}",
-            reply.body["message"].as_str().unwrap_or_default()
-        ))),
-    }
-}
-
 /// Runs the failed jobs of Actions workflow run `run` of `repo` again, as the app (Actions
 /// write).
 pub(crate) async fn rerun_failed_jobs(

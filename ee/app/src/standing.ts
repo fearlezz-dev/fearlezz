@@ -75,11 +75,15 @@ export function headline(run: Run, review: Review | undefined, viewer: Looker | 
   const again = changed ? `, ${changed} changed since a look` : "";
   switch (review?.state) {
     case "cancelled": {
-      // What never reached the host while CI ended: the run that came passed, but the head is not proven.
-      const legs = review.missing?.flatMap((m) => (m.kind === "leg" ? [m.leg] : [])) ?? [];
-      const workflow = review.missing?.some((m) => m.kind === "workflow");
-      if (!legs.length && !workflow) break;
-      const detail = legs.length ? `${list(legs)} never reached the host` : "The proof never reached the host";
+      // What has no proof once CI ended: the run that came passed, but the head is not proven.
+      const missing = review.missing ?? [];
+      if (!missing.length) break;
+      const legs = missing.flatMap((m) => (m.cause === "unopened" ? [m.leg] : []));
+      const detail = legs.length
+        ? `${list(legs)} never reached the host`
+        : missing.some((m) => m.cause === "workflow")
+          ? "The proof never reached the host"
+          : "A CI job ended without its proof";
       return { tone: "bad", icon: "stop", word: "Stopped", detail, title: said };
     }
     case "failed":

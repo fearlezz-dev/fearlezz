@@ -60,6 +60,10 @@ pub enum Source {
         /// Every leg the run's plan made, this one among them: the review waits for each.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         planned: Vec<String>,
+        /// The workflow file its workflow run came from (`.github/workflows/proof.yml`, from
+        /// `GITHUB_WORKFLOW_REF`): the host knows a repository's proof workflows by its runs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workflow: Option<String>,
     },
     /// A developer's machine, signed in to the host: unproven, and never reviewed, though a
     /// person may leave notes on its pictures.

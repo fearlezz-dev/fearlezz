@@ -386,12 +386,24 @@ fn main() {
             a_planned_leg_that_never_opens_ends_with_its_attempt,
         ),
         (
-            "a_missing_leg_is_named_and_run_again_once",
-            a_missing_leg_is_named_and_run_again_once,
+            "a_missing_leg_is_named_with_its_job",
+            a_missing_leg_is_named_with_its_job,
         ),
         (
-            "a_proof_workflow_that_ends_without_a_run_cancels_the_review_once",
-            a_proof_workflow_that_ends_without_a_run_cancels_the_review_once,
+            "several_missing_legs_are_each_named",
+            several_missing_legs_are_each_named,
+        ),
+        (
+            "a_cancelled_attempt_beside_a_queued_run_loses_nothing",
+            a_cancelled_attempt_beside_a_queued_run_loses_nothing,
+        ),
+        (
+            "a_proof_workflow_that_ends_without_a_run_cancels_the_review",
+            a_proof_workflow_that_ends_without_a_run_cancels_the_review,
+        ),
+        (
+            "a_gate_with_nothing_to_run_proves_the_head",
+            a_gate_with_nothing_to_run_proves_the_head,
         ),
         (
             "another_workflow_ending_leaves_the_review_waiting",
@@ -3215,12 +3227,30 @@ fn workflow_run(action: &str, run: u64, attempt: u32, branch: &str, head: &str) 
 const PROOF_WORKFLOW: &str = ".github/workflows/proof.yml";
 
 /// The `workflow_run` webhook of `action` for attempt `attempt` of workflow run `run` of the
-/// workflow file `path`.
+/// workflow file `path`, ending `success` once completed.
 fn workflow_run_of(
     path: &str,
     action: &str,
     run: u64,
     attempt: u32,
+    branch: &str,
+    head: &str,
+) -> Value {
+    let conclusion = if action == "completed" {
+        json!("success")
+    } else {
+        Value::Null
+    };
+    workflow_run_ending(path, action, conclusion, (run, attempt), branch, head)
+}
+
+/// The `workflow_run` webhook of `action` for `(run, attempt)` of workflow file `path`, with
+/// its `conclusion`.
+fn workflow_run_ending(
+    path: &str,
+    action: &str,
+    conclusion: Value,
+    (run, attempt): (u64, u32),
     branch: &str,
     head: &str,
 ) -> Value {
@@ -3234,12 +3264,23 @@ fn workflow_run_of(
             "head_sha": head,
             "head_branch": branch,
             "status": action,
-            "conclusion": if action == "completed" { json!("success") } else { Value::Null },
+            "conclusion": conclusion,
             "html_url": format!("https://github.com/owner/review/actions/runs/{run}"),
         },
         "repository": {"full_name": "owner/review"},
         "installation": {"id": 6},
     })
+}
+
+/// Sends a `workflow_run` webhook, which the host takes.
+fn send_run(payload: &Value) {
+    let answer = webhook("workflow_run", payload);
+    assert_eq!(answer.status, 202, "{}", answer.text());
+}
+
+/// The review's title for a reader.
+fn title_of(review: &Value) -> Option<&Value> {
+    review.get("title").and_then(|t| t.get("read"))
 }
 
 /// A leg the plan made whose job never opened a run (the host answered `503` when it asked
@@ -3264,17 +3305,21 @@ fn a_planned_leg_that_never_opens_ends_with_its_attempt() {
         "the macos leg is to come: {review:#}"
     );
 
-    // Another attempt of the workflow run ending leaves it waiting.
-    let answer = webhook(
-        "workflow_run",
-        &workflow_run("completed", 1148, 2, "review/unopened", &head),
-    );
-    assert_eq!(answer.status, 202, "{}", answer.text());
-    let answer = webhook(
-        "workflow_run",
-        &workflow_run("in_progress", 1148, 1, "review/unopened", &head),
-    );
-    assert_eq!(answer.status, 202, "{}", answer.text());
+    // Another attempt of the workflow run ending, while this one runs, leaves it waiting.
+    send_run(&workflow_run(
+        "completed",
+        1148,
+        2,
+        "review/unopened",
+        &head,
+    ));
+    send_run(&workflow_run(
+        "in_progress",
+        1148,
+        1,
+        "review/unopened",
+        &head,
+    ));
     let review = published(148);
     assert_eq!(
         review.get("state"),
@@ -3282,11 +3327,13 @@ fn a_planned_leg_that_never_opens_ends_with_its_attempt() {
         "another attempt ended: {review:#}"
     );
 
-    let answer = webhook(
-        "workflow_run",
-        &workflow_run("completed", 1148, 1, "review/unopened", &head),
-    );
-    assert_eq!(answer.status, 202, "{}", answer.text());
+    send_run(&workflow_run(
+        "completed",
+        1148,
+        1,
+        "review/unopened",
+        &head,
+    ));
     let review = published(148);
     assert_eq!(review.get("state"), Some(&json!("cancelled")), "{review:#}");
     assert_eq!(
@@ -3296,9 +3343,9 @@ fn a_planned_leg_that_never_opens_ends_with_its_attempt() {
     );
 }
 
-/// A leg that never reached the host is named with its job, and the host runs that job again
-/// once: a second attempt that misses it again stays cancelled.
-fn a_missing_leg_is_named_and_run_again_once() {
+/// A leg that never reached the host is named with its job and the job to run again, whatever
+/// its attempt concluded; the host runs nothing again itself.
+fn a_missing_leg_is_named_with_its_job() {
     let head = commit("a150");
     let branch = "review/missing";
     webhook("pull_request", &pull_request("opened", 150, branch, &head));
@@ -3306,111 +3353,170 @@ fn a_missing_leg_is_named_and_run_again_once() {
     github.job_ended(
         "owner/review",
         1150,
-        11501,
-        "leg linux",
-        "runner-linux",
-        "success",
-    );
-    github.job_ended(
-        "owner/review",
-        1150,
         11502,
         "leg macos",
         "runner-macos",
-        "success",
+        "failure",
     );
     let linux = Job::pull("owner/review", 150, branch)
         .at(&head, 1150)
         .on("runner-linux")
         .leg("linux", &["linux", "macos"]);
     linux.picked_up("leg linux");
-    let macos = linux.on("runner-macos");
-    macos.ended("leg macos");
+    linux.on("runner-macos").ended("leg macos");
     let run = linux.open(&["tests"]);
     let answer = linux.done(&run.id, &[entry("tests", "passed")], &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
-    let answer = webhook(
-        "workflow_run",
-        &workflow_run("completed", 1150, 1, branch, &head),
-    );
-    assert_eq!(answer.status, 202, "{}", answer.text());
+    // The gate failed the workflow run: the leg it misses is still the cause named.
+    send_run(&workflow_run_ending(
+        PROOF_WORKFLOW,
+        "completed",
+        json!("failure"),
+        (1150, 1),
+        branch,
+        &head,
+    ));
     let review = published(150);
     assert_eq!(review.get("state"), Some(&json!("cancelled")), "{review:#}");
     assert_eq!(
-        review.get("title").and_then(|t| t.get("read")),
+        title_of(&review),
         Some(&json!(format!(
             "leg macos of {} never reached the host: re-run job \"leg macos\"",
             head.get(..7).unwrap_or_default()
         ))),
         "{review:#}"
     );
-    let reruns = eventually(|| match github.reruns("owner/review", 1150) {
-        reruns if reruns.is_empty() => Err("no rerun yet".to_owned()),
-        reruns => Ok(reruns),
-    });
     assert_eq!(
-        reruns,
-        [(11502, "installation-6".to_owned())],
-        "the missing leg's job runs again, as the app"
+        review
+            .get("missing")
+            .and_then(|m| m.get(0))
+            .and_then(|m| m.get("cause")),
+        Some(&json!("unopened")),
+        "{review:#}"
     );
-
-    // Its rerun misses the host again: the review stays cancelled, and nothing runs again.
-    let again = linux.again();
-    let run = again.open(&["tests"]);
-    let answer = again.done(&run.id, &[entry("tests", "passed")], &[]);
-    assert_eq!(answer.status, 200, "{}", answer.text());
-    let review = published(150);
-    assert_eq!(review.get("state"), Some(&json!("running")), "{review:#}");
-    let answer = webhook(
-        "workflow_run",
-        &workflow_run("completed", 1150, 2, branch, &head),
+    assert_eq!(
+        check_run(&head).state(),
+        "cancelled",
+        "the required check completes"
     );
-    assert_eq!(answer.status, 202, "{}", answer.text());
-    let review = published(150);
-    assert_eq!(review.get("state"), Some(&json!("cancelled")), "{review:#}");
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(
-        github.reruns("owner/review", 1150).len(),
-        1,
-        "a leg runs again once per head"
+        github.reruns("owner/review", 1150),
+        [],
+        "a person or an agent runs it again, not the host"
     );
 }
 
+/// Several legs of one attempt that never reached the host are each named.
+fn several_missing_legs_are_each_named() {
+    let head = commit("a153");
+    let branch = "review/several";
+    webhook("pull_request", &pull_request("opened", 153, branch, &head));
+    let linux = Job::pull("owner/review", 153, branch)
+        .at(&head, 1153)
+        .on("runner-linux")
+        .leg("linux", &["linux", "macos", "windows"]);
+    linux.picked_up("leg linux");
+    linux.on("runner-macos").ended("leg macos");
+    linux.on("runner-windows").ended("leg windows");
+    let run = linux.open(&["tests"]);
+    let answer = linux.done(&run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    send_run(&workflow_run("completed", 1153, 1, branch, &head));
+    let review = published(153);
+    assert_eq!(
+        title_of(&review),
+        Some(&json!(format!(
+            "legs macos, windows of {} never reached the host: re-run jobs \"leg macos\", \"leg windows\"",
+            head.get(..7).unwrap_or_default()
+        ))),
+        "{review:#}"
+    );
+}
+
+/// An attempt cancelled while a newer run of the same head is queued (an edited title starts
+/// one) loses nothing: the review waits for the newer run, which proves the head.
+fn a_cancelled_attempt_beside_a_queued_run_loses_nothing() {
+    let head = commit("a154");
+    let branch = "review/edited";
+    webhook("pull_request", &pull_request("opened", 154, branch, &head));
+    let first = Job::pull("owner/review", 154, branch)
+        .at(&head, 1154)
+        .on("runner-linux")
+        .leg("linux", &["linux", "macos"]);
+    let run = first.open(&["tests"]);
+    let answer = first.done(&run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    send_run(&workflow_run("requested", 2154, 1, branch, &head));
+    send_run(&workflow_run_ending(
+        PROOF_WORKFLOW,
+        "completed",
+        json!("cancelled"),
+        (1154, 1),
+        branch,
+        &head,
+    ));
+    let review = published(154);
+    assert_eq!(review.get("state"), Some(&json!("running")), "{review:#}");
+
+    let second = first.at(&head, 2154);
+    for (job, leg) in [
+        (second.clone(), "linux"),
+        (second.on("runner-macos"), "macos"),
+    ] {
+        let job = job.leg(leg, &["linux", "macos"]);
+        let run = job.open(&["tests"]);
+        let answer = job.done(&run.id, &[entry("tests", "passed")], &[]);
+        assert_eq!(answer.status, 200, "{}", answer.text());
+    }
+    send_run(&workflow_run("completed", 2154, 1, branch, &head));
+    let review = published(154);
+    assert_eq!(review.get("state"), Some(&json!("approved")), "{review:#}");
+}
+
 /// A head no run of reached the host waits for CI until a run of the repository's proof
-/// workflow ends for it: the host learns that workflow from a run of it that reached the host,
-/// so before then the review keeps waiting.
-fn a_proof_workflow_that_ends_without_a_run_cancels_the_review_once() {
+/// workflow ends for it: the host knows that workflow from the runs that came from it, so for
+/// a repository's first proof the review keeps waiting.
+fn a_proof_workflow_that_ends_without_a_run_cancels_the_review() {
     let first = ".github/workflows/proves-first.yml";
     let branch = "review/no-run";
-    let github = &world().github;
-    // The repository's first proof: nothing tells its workflow yet.
+    // The repository's first proof of this workflow: no run came from it yet.
     let unknown = commit("a151");
     webhook(
         "pull_request",
         &pull_request("opened", 151, branch, &unknown),
     );
-    let answer = webhook(
-        "workflow_run",
-        &workflow_run_of(first, "completed", 1151, 1, branch, &unknown),
-    );
-    assert_eq!(answer.status, 202, "{}", answer.text());
+    send_run(&workflow_run_of(
+        first,
+        "completed",
+        1151,
+        1,
+        branch,
+        &unknown,
+    ));
     let review = published(151);
     assert_eq!(review.get("state"), Some(&json!("ci")), "{review:#}");
 
-    // A run of it reaches the host: it is the repository's proof workflow.
+    // A run of it reaches the host: it is one of the repository's proof workflows.
     let proven = commit("b151");
     webhook(
         "pull_request",
         &pull_request("synchronize", 151, branch, &proven),
     );
-    let job = Job::pull("owner/review", 151, branch).at(&proven, 2151);
+    let job = Job::pull("owner/review", 151, branch)
+        .at(&proven, 2151)
+        .from(first);
     let run = job.open(&["tests"]);
     let answer = job.done(&run.id, &[entry("tests", "passed")], &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
-    webhook(
-        "workflow_run",
-        &workflow_run_of(first, "completed", 2151, 1, branch, &proven),
-    );
+    send_run(&workflow_run_of(
+        first,
+        "completed",
+        2151,
+        1,
+        branch,
+        &proven,
+    ));
     let review = published(151);
     assert_eq!(review.get("state"), Some(&json!("approved")), "{review:#}");
 
@@ -3422,42 +3528,48 @@ fn a_proof_workflow_that_ends_without_a_run_cancels_the_review_once() {
     );
     let review = published(151);
     assert_eq!(review.get("state"), Some(&json!("ci")), "{review:#}");
-    let answer = webhook(
-        "workflow_run",
-        &workflow_run_of(first, "completed", 3151, 1, branch, &lost),
+    send_run(&workflow_run_of(first, "requested", 3151, 1, branch, &lost));
+    assert_eq!(
+        published(151).get("state"),
+        Some(&json!("ci")),
+        "a requested attempt keeps it waiting"
     );
-    assert_eq!(answer.status, 202, "{}", answer.text());
+    send_run(&workflow_run_of(first, "completed", 3151, 1, branch, &lost));
     let review = published(151);
     assert_eq!(review.get("state"), Some(&json!("cancelled")), "{review:#}");
     assert_eq!(
-        review.get("title").and_then(|t| t.get("read")),
+        title_of(&review),
         Some(&json!(format!(
             "The proof workflow of {} ended without reaching the host: re-run it",
             lost.get(..7).unwrap_or_default()
         ))),
         "{review:#}"
     );
-    let ran = |run: u64| {
-        github
-            .workflow_reruns("owner/review")
-            .iter()
-            .filter(|(r, _)| *r == run)
-            .count()
-    };
-    eventually(|| match ran(3151) {
-        0 => Err("no rerun yet".to_owned()),
-        n => Ok(n),
-    });
-    assert_eq!(ran(3151), 1, "the proof workflow runs again, once");
-    // Its rerun misses the host again: once per head.
-    webhook(
-        "workflow_run",
-        &workflow_run_of(first, "completed", 3151, 2, branch, &lost),
+    assert_eq!(
+        check_run(&lost).state(),
+        "cancelled",
+        "the required check completes"
     );
-    let review = published(151);
-    assert_eq!(review.get("state"), Some(&json!("cancelled")), "{review:#}");
-    std::thread::sleep(Duration::from_secs(1));
-    assert_eq!(ran(3151), 1, "the proof workflow runs again once per head");
+}
+
+/// The gate of a split proof whose plan needed no leg opens a run of its own with no checks:
+/// it proves the head.
+fn a_gate_with_nothing_to_run_proves_the_head() {
+    let head = commit("a156");
+    let branch = "review/nothing";
+    webhook("pull_request", &pull_request("opened", 156, branch, &head));
+    let gate = Job::pull("owner/review", 156, branch).at(&head, 1156);
+    let run = gate.open(&[]);
+    let answer = gate.done(&run.id, &[], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    send_run(&workflow_run("completed", 1156, 1, branch, &head));
+    let review = published(156);
+    assert_eq!(review.get("state"), Some(&json!("approved")), "{review:#}");
+    assert_eq!(
+        check_run(&head).state(),
+        "success",
+        "the gate proves the head"
+    );
 }
 
 /// Another workflow of a head ending never ends its wait for the proof.
@@ -3472,35 +3584,28 @@ fn another_workflow_ending_leaves_the_review_waiting() {
     let run = job.open(&["tests"]);
     let answer = job.done(&run.id, &[entry("tests", "passed")], &[]);
     assert_eq!(answer.status, 200, "{}", answer.text());
-    webhook(
-        "workflow_run",
-        &workflow_run("completed", 1152, 1, branch, &proven),
-    );
+    send_run(&workflow_run("completed", 1152, 1, branch, &proven));
     published(152);
     let head = commit("b152");
     webhook(
         "pull_request",
         &pull_request("synchronize", 152, branch, &head),
     );
-    let answer = webhook(
-        "workflow_run",
-        &workflow_run_of(
-            ".github/workflows/lint.yml",
-            "completed",
-            2152,
-            1,
-            branch,
-            &head,
-        ),
-    );
-    assert_eq!(answer.status, 202, "{}", answer.text());
+    send_run(&workflow_run_of(
+        ".github/workflows/lint.yml",
+        "completed",
+        2152,
+        1,
+        branch,
+        &head,
+    ));
     let review = published(152);
     assert_eq!(review.get("state"), Some(&json!("ci")), "{review:#}");
     assert_eq!(check_run(&head).state(), "queued", "still waiting for CI");
 }
 
 /// A pull request merged while CI still proves it (a release pull request) gets its check run
-/// finished, but its comment is left as it was.
+/// finished, but its comment is left as it was, also when a leg never reached the host.
 fn a_closed_pull_request_keeps_its_check_run_but_not_its_comment() {
     let head = commit("a149");
     webhook(
@@ -3527,12 +3632,46 @@ fn a_closed_pull_request_keeps_its_check_run_but_not_its_comment() {
         "success",
         "a closed pull request's check run is finished"
     );
-    let after = world().github.comments("owner/review", 149);
     let bodies = |c: &[github::Comment]| c.first().map(|c| c.bodies.clone());
+    let after = world().github.comments("owner/review", 149);
     assert_eq!(
         bodies(&after),
         bodies(&comments),
         "a closed pull request's comment is not edited"
+    );
+
+    // A closed pull request whose leg never reached the host: cancelled, nothing run again.
+    let head = commit("a155");
+    let branch = "review/closed-missing";
+    webhook("pull_request", &pull_request("opened", 155, branch, &head));
+    let linux = Job::pull("owner/review", 155, branch)
+        .at(&head, 1155)
+        .on("runner-linux")
+        .leg("linux", &["linux", "macos"]);
+    let run = linux.open(&["tests"]);
+    published(155);
+    let comments = world().github.comments("owner/review", 155);
+    webhook("pull_request", &pull_request("closed", 155, branch, &head));
+    let answer = linux.done(&run.id, &[entry("tests", "passed")], &[]);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    send_run(&workflow_run("completed", 1155, 1, branch, &head));
+    let review = published(155);
+    assert_eq!(review.get("state"), Some(&json!("cancelled")), "{review:#}");
+    assert_eq!(
+        check_run(&head).state(),
+        "cancelled",
+        "the check run still completes"
+    );
+    let after = world().github.comments("owner/review", 155);
+    assert_eq!(
+        bodies(&after),
+        bodies(&comments),
+        "its comment is not edited"
+    );
+    assert_eq!(
+        world().github.reruns("owner/review", 1155),
+        [],
+        "a closed pull request runs nothing again"
     );
 }
 
@@ -4352,6 +4491,8 @@ struct Job {
     event: Option<&'static str>,
     /// The commit its token names instead of the one it proves.
     sha: Option<String>,
+    /// The workflow file its workflow run came from.
+    workflow: &'static str,
 }
 
 /// The runner a job runs on unless a test names another.
@@ -4377,6 +4518,7 @@ impl Job {
             leg: None,
             event: None,
             sha: None,
+            workflow: PROOF_WORKFLOW,
         }
     }
 
@@ -4393,6 +4535,7 @@ impl Job {
             leg: None,
             event: None,
             sha: None,
+            workflow: PROOF_WORKFLOW,
         }
     }
 
@@ -4427,6 +4570,14 @@ impl Job {
     fn naming(&self, sha: &str) -> Job {
         Job {
             sha: Some(sha.to_owned()),
+            ..self.clone()
+        }
+    }
+
+    /// The same job in a workflow run of the workflow file `path`.
+    fn from(&self, path: &'static str) -> Job {
+        Job {
+            workflow: path,
             ..self.clone()
         }
     }
@@ -4549,6 +4700,7 @@ impl Job {
                 "run_id": self.workflow_run,
                 "run_attempt": self.attempt,
                 "runner_name": self.runner,
+                "workflow": self.workflow,
             },
             "checks": checks,
         });
