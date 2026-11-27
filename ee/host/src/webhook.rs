@@ -3,11 +3,16 @@
 //! in it is read.
 //!
 //! - `pull_request` (opened, synchronize, reopened): the pull request's head becomes its work's
-//!   head, so its check run says it waits for CI; closed: the app writes nothing more on it. A
-//!   pull request from a fork is passed over: its CI gets no OIDC token, so no hosted run comes.
+//!   head, so its check run says it waits for CI; closed: the app no longer comments on it and
+//!   only finishes the head's check run (`review::publish`). A pull request from a fork is
+//!   passed over: its CI gets no OIDC token, so no hosted run comes.
 //! - `workflow_job`: what `jobs.rs` says, a queued job waiting on the page and a completed one
 //!   closing the run that never said done. A local run has no job; `api::close_silent` closes
 //!   it once it said nothing for an hour.
+//! - `workflow_run`: where an attempt of a proof workflow stands (one a CI run of the
+//!   repository came from). While one is going the review waits; once it completed, a leg its
+//!   plan made that opened no run never will, and a head no run of reached the host ended
+//!   without its proof. The review names what to run again; a person or an agent runs it.
 
 use fearlezz_proof::events::Source;
 use serde::Deserialize;
@@ -65,6 +70,25 @@ struct WorkflowJob {
     html_url: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct RunEvent {
+    action: String,
+    workflow_run: WorkflowRun,
+    repository: Repository,
+}
+
+#[derive(Deserialize)]
+struct WorkflowRun {
+    id: u64,
+    run_attempt: u32,
+    head_sha: String,
+    head_branch: Option<String>,
+    /// The workflow file (`.github/workflows/proof.yml`).
+    path: String,
+    /// The repository its commit is from: a fork's for a pull request from one.
+    head_repository: Option<Repository>,
+}
+
 pub async fn receive(mut req: Request, env: &Env, config: &Config) -> Answer {
     let body = req.bytes().await?;
     let signature = req
@@ -88,6 +112,7 @@ pub async fn receive(mut req: Request, env: &Env, config: &Config) -> Answer {
     match event.as_str() {
         "pull_request" => pull_request(env, serde_json::from_slice(&body).map_err(bad)?).await?,
         "workflow_job" => workflow_job(env, serde_json::from_slice(&body).map_err(bad)?).await?,
+        "workflow_run" => workflow_run(env, serde_json::from_slice(&body).map_err(bad)?).await?,
         _ => {}
     }
     Ok(Response::empty()?.with_status(202))
@@ -205,6 +230,63 @@ async fn workflow_job(env: &Env, event: JobEvent) -> worker::Result<()> {
         room::write(env, &work, &write).await?;
     }
     Ok(())
+}
+
+/// Keeps where an attempt of a proof workflow stands (requested, in progress or completed), and
+/// derives the review of its branch's work again. Only an attempt of a workflow a CI run of the
+/// repository came from, or of a workflow run such a run names, is kept: every other workflow
+/// of the repository never moves a review, nor does a fork's run, as with its pull requests.
+async fn workflow_run(env: &Env, event: RunEvent) -> worker::Result<()> {
+    let run = &event.workflow_run;
+    let repository = &event.repository.full_name;
+    let from = run.head_repository.as_ref().map(|r| r.full_name.as_str());
+    if !from.is_some_and(|f| f.eq_ignore_ascii_case(repository)) {
+        return Ok(());
+    }
+    let repo = repository.to_lowercase();
+    let db = env.d1("DB")?;
+    let kept: Option<String> = db
+        .prepare(
+            "INSERT INTO attempts (repo, workflow_run, run_attempt, head, path, status) \
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE EXISTS ( \
+               SELECT 1 FROM works w JOIN runs r ON r.work = w.id \
+               WHERE w.repo = ?1 AND json_extract(r.source, '$.workflow') = ?5) \
+             OR EXISTS ( \
+               SELECT 1 FROM runs r JOIN works w ON w.id = r.work \
+               WHERE json_extract(r.source, '$.run_id') = ?2 AND w.repo = ?1) \
+             ON CONFLICT (repo, workflow_run, run_attempt) DO UPDATE SET status = excluded.status \
+               WHERE attempts.status != 'completed' \
+             RETURNING status",
+        )
+        .bind(&[
+            repo.as_str().into(),
+            (run.id as f64).into(),
+            f64::from(run.run_attempt).into(),
+            run.head_sha.as_str().into(),
+            run.path.as_str().into(),
+            event.action.as_str().into(),
+        ])?
+        .first(Some("status"))
+        .await?;
+    let (Some(_), Some(branch)) = (kept, &run.head_branch) else {
+        return Ok(());
+    };
+    let work: Option<String> = db
+        .prepare("SELECT id FROM works WHERE repo = ?1 AND branch = ?2")
+        .bind(&[repo.as_str().into(), branch.as_str().into()])?
+        .first(Some("id"))
+        .await?;
+    match work {
+        Some(work) => {
+            let write = Write {
+                statements: Vec::new(),
+                event: None,
+                derive: Derive::Review,
+            };
+            room::write(env, &work, &write).await
+        }
+        None => Ok(()),
+    }
 }
 
 /// Closes, as cancelled, the run of `repo` still running that the completed `job` was.

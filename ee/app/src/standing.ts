@@ -66,14 +66,26 @@ export function headline(run: Run, review: Review | undefined, viewer: Looker | 
   if (run.state === "cancelled") return { tone: "bad", icon: "stop", word: "Stopped", detail: "Ended without its proof", title: `The run of ${head} ended without its proof` };
   if (failed) return { tone: "bad", icon: "cross", word: `${failed} failed`, detail: list(failedNames), title: `${checks} failed at ${head}` };
 
-  // Once the review of this head failed, needs change, waits or is approved, the host's line for
-  // this person is the title.
+  // Once the review of this head failed, needs change, waits, is approved or misses a leg, the
+  // host's line for this person is the title.
   const said = review?.title[roleOf(viewer)] ?? "";
   const count = (standing: string) => review?.pictures.filter((p) => p.standing === standing).length ?? 0;
   // What changed since a person looked, said after what waits so it is looked at again.
   const changed = review?.pictures.filter((p) => p.changed_since).length ?? 0;
   const again = changed ? `, ${changed} changed since a look` : "";
   switch (review?.state) {
+    case "cancelled": {
+      // What has no proof once CI ended: the run that came passed, but the head is not proven.
+      const missing = review.missing ?? [];
+      if (!missing.length) break;
+      const legs = missing.flatMap((m) => (m.cause === "unopened" ? [m.leg] : []));
+      const detail = legs.length
+        ? `${list(legs)} never reached the host`
+        : missing.some((m) => m.cause === "workflow")
+          ? "The proof never reached the host"
+          : "A CI job ended without its proof";
+      return { tone: "bad", icon: "stop", word: "Stopped", detail, title: said };
+    }
     case "failed":
       // A weakening that waits for an accept is a decision, not a failure: it reads as one.
       if (review.weakened.length && !review.accept) {

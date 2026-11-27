@@ -13,10 +13,12 @@
 //!   without the run saying done.
 //! - A job's display name, once a runner took it, is the leg of its own run, and the review
 //!   counts the newest run of each leg (`fearlezz_proof::review::review`).
-
+//! - Where each attempt of a proof workflow stands, and the head's jobs with their ids, are what
+//!   the review reads of GitHub Actions (`fearlezz_proof::review::Actions`): it matches a job to
+//!   a leg in one place.
 use std::collections::BTreeMap;
 
-use fearlezz_proof::review::Job;
+use fearlezz_proof::review::{ActionsJob, Attempt, Job};
 use serde::Deserialize;
 use worker::{D1Database, D1PreparedStatement, D1Result};
 
@@ -83,6 +85,73 @@ pub fn legs(result: &D1Result) -> worker::Result<BTreeMap<String, String>> {
         .filter_map(|(run, (job, names))| {
             let name = own(names.iter().map(String::as_str), &job)?.to_owned();
             Some((run, name))
+        })
+        .collect())
+}
+
+/// The statement that reads the attempts of the proof workflows of work `work`'s repository at
+/// `head`, as `workflow_run` left them.
+pub(crate) fn attempts_statement(
+    db: &D1Database,
+    work: &str,
+    head: &str,
+) -> worker::Result<D1PreparedStatement> {
+    db.prepare(
+        "SELECT a.workflow_run, a.run_attempt, a.status FROM attempts a JOIN works w ON w.repo = a.repo \
+         WHERE w.id = ?1 AND a.head = ?2",
+    )
+    .bind(&[work.into(), head.into()])
+}
+
+/// The attempts `attempts_statement` read.
+pub(crate) fn attempts(result: &D1Result) -> worker::Result<Vec<Attempt>> {
+    #[derive(Deserialize)]
+    struct AttemptRow {
+        workflow_run: f64,
+        run_attempt: f64,
+        status: String,
+    }
+    Ok(result
+        .results::<AttemptRow>()?
+        .into_iter()
+        .map(|row| Attempt {
+            run_id: row.workflow_run as u64,
+            run_attempt: row.run_attempt as u32,
+            ended: row.status == "completed",
+        })
+        .collect())
+}
+
+/// The statement that reads the jobs of work `work`'s repository at `head`.
+pub(crate) fn jobs_statement(
+    db: &D1Database,
+    work: &str,
+    head: &str,
+) -> worker::Result<D1PreparedStatement> {
+    db.prepare(
+        "SELECT j.id, j.workflow_run, j.run_attempt, j.name FROM jobs j JOIN works w ON w.repo = j.repo \
+         WHERE w.id = ?1 AND j.head = ?2 ORDER BY j.id",
+    )
+    .bind(&[work.into(), head.into()])
+}
+
+/// The jobs `jobs_statement` read.
+pub(crate) fn jobs(result: &D1Result) -> worker::Result<Vec<ActionsJob>> {
+    #[derive(Deserialize)]
+    struct JobRow {
+        id: f64,
+        workflow_run: f64,
+        run_attempt: f64,
+        name: String,
+    }
+    Ok(result
+        .results::<JobRow>()?
+        .into_iter()
+        .map(|row| ActionsJob {
+            id: row.id as u64,
+            run_id: row.workflow_run as u64,
+            run_attempt: row.run_attempt as u32,
+            name: row.name,
         })
         .collect())
 }

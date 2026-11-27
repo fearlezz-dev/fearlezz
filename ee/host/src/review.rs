@@ -7,7 +7,8 @@
 //! The check run says `queued` until a CI run of the head opens, `in_progress` while one runs,
 //! `failure` when the proof failed (what it weakens fails it until an admin accepts it, and the
 //! accept runs the proof job again, see `say.rs`), `cancelled` when a job of the head has no run
-//! that said done, `failure` too while an open note says a picture needs change (its summary lists the notes),
+//! that said done, a planned leg never reached the host or the proof workflow ended with no run
+//! of the head (the review names what a person or an agent runs again), `failure` too while an open note says a picture needs change (its summary lists the notes),
 //! `action_required` while a picture waits for a look,
 //! and `success` once nothing waits. `action_required` needs no requested actions: it
 //! completes the check run (so a required check blocks the merge), and GitHub sends people to
@@ -52,7 +53,7 @@ pub async fn refresh(env: &Env, pages: &Pages, work: &str) -> worker::Result<()>
     let review = review::review(
         head,
         &of.runs,
-        &of.legs,
+        &of.actions,
         &of.verdicts,
         &of.notes,
         accept.as_ref(),
@@ -162,7 +163,8 @@ fn status(state: State) -> (&'static str, Option<&'static str>) {
 
 /// Writes the review to its pull request as the app: the head's check run, created when the
 /// head has none or a completed one would go back to running, updated otherwise; and the
-/// comment, created only by a run's first word. Nothing unchanged is written again.
+/// comment, created only by a run's first word. Once the pull request is closed only its
+/// head's check run is still updated. Nothing unchanged is written again.
 async fn write(
     db: &D1Database,
     config: &Config,
@@ -185,9 +187,9 @@ async fn write(
     else {
         return Ok(());
     };
-    if last.closed != 0.0 {
-        return Ok(());
-    }
+    // A pull request merged or closed while CI still proves its head gets that head's check run
+    // finished, so nothing waits on it, but no new check run and no comment.
+    let closed = last.closed != 0.0;
     let page = work::page_url(config, &row.repository, &row.branch, Some(pull));
     let (status, conclusion) = status(review.state);
     let mut check = json!({
@@ -210,6 +212,7 @@ async fn write(
                 format!("/repos/{}/check-runs/{}", row.repository, id as u64),
             ))
         }
+        _ if closed => None,
         _ => Some((
             Method::Post,
             format!("/repos/{}/check-runs", row.repository),
@@ -225,6 +228,7 @@ async fn write(
         review.title()
     );
     let comment_write = match last.comment {
+        _ if closed => None,
         Some(_) if last.comment_body.as_deref() == Some(body.as_str()) => None,
         Some(id) => Some((
             Method::Patch,

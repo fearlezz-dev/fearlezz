@@ -250,6 +250,10 @@ notes?: Array<Note>,
  */
 preview?: string | null, 
 /**
+ * What never reached the host, when that is why the review is cancelled.
+ */
+missing?: Array<ReviewMissing>, 
+/**
  * Where it stands in one line, as [`Review::title_for`] says it to each role; empty in a
  * review stored before the host sent it, until [`Review::titled`].
  */
@@ -298,6 +302,42 @@ verdict?: PictureVerdict | null,
  * again; none when nothing was said about other content.
  */
 changed_since?: ChangedSince | null, };
+
+export type ReviewMissing = { "cause": "ended", 
+/**
+ * The leg's id, as a split proof's plan names it (`macos`).
+ */
+leg: string | null, 
+/**
+ * Its job, when the attempt has one job that is it.
+ */
+job: LegJob | null, } | { "cause": "unopened", 
+/**
+ * The leg's id, as the plan names it (`macos`).
+ */
+leg: string, 
+/**
+ * Its job, when the attempt has one job that names it.
+ */
+job: LegJob | null, } | { "cause": "workflow", 
+/**
+ * The workflow run (`GITHUB_RUN_ID`).
+ */
+run_id: number, 
+/**
+ * Its newest attempt that completed.
+ */
+run_attempt: number, };
+
+export type LegJob = { 
+/**
+ * GitHub's id of the job.
+ */
+id: number, 
+/**
+ * Its display name (`leg macos`).
+ */
+name: string, };
 
 export type ChangedSince = { 
 /**
@@ -605,7 +645,17 @@ leg?: string | null,
 /**
  * Every leg the run's plan made, this one among them: the review waits for each.
  */
-planned?: Array<string>, } | { "kind": "local", 
+planned?: Array<string>, 
+/**
+ * The workflow file its workflow run came from (`.github/workflows/proof.yml`, from
+ * `GITHUB_WORKFLOW_REF`): the host knows a repository's proof workflows by its runs.
+ */
+workflow?: string | null, 
+/**
+ * Whether it is the gate of a split proof (`fearlezz run --ci --gate`): it runs no
+ * check, combines the legs' proofs, and names the plan of its attempt in `planned`.
+ */
+gate?: boolean, } | { "kind": "local", 
 /**
  * Who ran it: the login of the CLI's sign in, which the host sets from its token.
  */

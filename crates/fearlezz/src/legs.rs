@@ -23,9 +23,6 @@ use crate::proof::{self, Proof, Ran};
 /// The OSes a platform can name.
 const OSES: [&str; 3] = ["linux", "macos", "windows"];
 
-/// The file in a leg's bundle naming its run on the proof host, which the gate asks.
-pub(crate) const HOST_RUN: &str = "host-run";
-
 /// The leg of a project without platforms whose checks name no job.
 const ONE_LEG: &str = "proof";
 

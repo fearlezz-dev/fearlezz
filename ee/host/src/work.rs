@@ -14,7 +14,7 @@ use fearlezz_proof::events::{
 };
 use fearlezz_proof::look::Look;
 use fearlezz_proof::notes::{Note, NoteState, Region, Side};
-use fearlezz_proof::review::{self, Review, Verdict};
+use fearlezz_proof::review::{self, Actions, Review, Verdict};
 use fearlezz_proof::{Check, Proof, Pull};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
@@ -648,11 +648,13 @@ pub async fn snapshot(db: &D1Database, work: &str) -> worker::Result<Option<Snap
 }
 
 /// What a work's review is derived from: its runs of `head`, newest first, with their
-/// proofs, its verdicts and its open notes.
+/// proofs, what GitHub Actions said of their jobs, its verdicts and its open notes.
 pub struct OfHead {
     pub runs: Vec<(Run, Option<Proof>)>,
-    /// The leg of each CI run GitHub named, by run id (`jobs::legs`).
-    pub legs: BTreeMap<String, String>,
+    /// The leg of each CI run GitHub named (`jobs::legs`), the attempts that ended and those
+    /// of a proof workflow (`jobs::ended`), and the names of each attempt's jobs
+    /// (`jobs::names`).
+    pub actions: Actions,
     pub verdicts: Vec<Verdict>,
     pub notes: Vec<Note>,
 }
@@ -661,7 +663,9 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
     let mut statements = vec![
         db.prepare(VERDICTS).bind(&[work.into()])?,
         open_notes(db, work)?,
-        crate::jobs::legs_statement(db, work, head)?,
+        jobs::legs_statement(db, work, head)?,
+        jobs::attempts_statement(db, work, head)?,
+        jobs::jobs_statement(db, work, head)?,
     ];
     // The head's runs, and the runs open notes were made on, to tell whether a picture changed
     // since its note.
@@ -671,7 +675,7 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         &[work.into(), head.into()],
     )?);
     let results = db.batch(statements).await?;
-    let [verdicts, notes, legs, runs @ ..] = results.as_slice() else {
+    let [verdicts, notes, legs, attempts, head_jobs, runs @ ..] = results.as_slice() else {
         return Err(worker::Error::RustError(
             "D1 answered another number of results".into(),
         ));
@@ -683,7 +687,11 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         .collect();
     Ok(OfHead {
         runs: assemble(runs)?,
-        legs: crate::jobs::legs(legs)?,
+        actions: Actions {
+            legs: jobs::legs(legs)?,
+            attempts: jobs::attempts(attempts)?,
+            jobs: jobs::jobs(head_jobs)?,
+        },
         verdicts,
         notes: notes_of(notes)?,
     })
