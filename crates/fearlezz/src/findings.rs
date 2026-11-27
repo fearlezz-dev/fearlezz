@@ -63,18 +63,24 @@ struct Format {
     name: &'static str,
     source: Source<'static>,
     levels: Levels,
-    parse: fn(&str, Levels) -> Read,
+    parse: Parse,
 }
 
 /// The findings a format read, and what it could not read.
 type Read = (Vec<Finding>, Vec<String>);
+
+/// Rules, as the tool reports them, that test code may break (`FindingsSpec::in_tests`).
+type InTests = BTreeSet<String>;
+
+/// How a format's text is read into findings.
+type Parse = fn(&str, Levels, &InTests) -> Read;
 
 impl Reader {
     /// The format table: one row per reader.
     fn format(self) -> Format {
         use Level::{Flag, Gate, Hint};
         let stdout = Source::Stdout;
-        let (name, source, levels, parse): (_, _, Levels, fn(&str, Levels) -> Read) = match self {
+        let (name, source, levels, parse): (_, _, Levels, Parse) = match self {
             Reader::Cargo => (
                 "cargo",
                 stdout,
@@ -139,7 +145,7 @@ impl Reader {
     }
 
     /// Reads the findings a run left, placed in the repository, and what could not be read.
-    pub(crate) fn read(self, run: &Run<'_>) -> Read {
+    pub(crate) fn read(self, run: &Run<'_>, in_tests: &InTests) -> Read {
         let format = self.format();
         // A stream or a file: never a glob, so never an error.
         let text: String = format
@@ -147,7 +153,7 @@ impl Reader {
             .read(run, format.name)
             .map(|reports| reports.into_iter().map(|r| r.text).collect())
             .unwrap_or_default();
-        let (found, errors) = (format.parse)(&text, format.levels);
+        let (found, errors) = (format.parse)(&text, format.levels, in_tests);
         (place(found, run), errors)
     }
 }
@@ -381,12 +387,13 @@ fn cargo_path(file: &str, manifest: Option<&str>) -> String {
 
 /// Cargo's JSON messages, one per line among the lines it prints for people. Lints (a code
 /// like `clippy::unwrap_used` or `unused_variables`) count on changed lines; hard errors
-/// (`E0308`, or no code) count anywhere.
+/// (`E0308`, or no code) count anywhere. A lint of `in_tests` in an integration test crate is
+/// dropped: all of that crate is test code, not only what clippy sees inside `#[test]`.
 #[expect(
     clippy::indexing_slicing,
     reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
 )]
-fn cargo(text: &str, levels: Levels) -> Read {
+fn cargo(text: &str, levels: Levels, in_tests: &InTests) -> Read {
     let mut found = Vec::new();
     let mut errors = Vec::new();
     let mut build_failed = false;
@@ -425,6 +432,12 @@ fn cargo(text: &str, levels: Levels) -> Read {
             continue;
         };
         let code = m["code"]["code"].as_str().unwrap_or("");
+        let test_crate = v["target"]["kind"]
+            .as_array()
+            .is_some_and(|kinds| kinds.iter().any(|k| k == "test"));
+        if test_crate && in_tests.contains(code) {
+            continue;
+        }
         let hard = code.is_empty()
             || (code.len() == 5
                 && code.starts_with('E')
@@ -487,7 +500,7 @@ fn cargo(text: &str, levels: Levels) -> Read {
 /// `SEVERITY|TYPE|CODE|FILE|LINE|COLUMN|LENGTH|MESSAGE` lines among the analyzer's other
 /// output. Every issue blocks, as `flutter analyze` fails on any; compile errors count
 /// anywhere.
-fn dart(text: &str, levels: Levels) -> Read {
+fn dart(text: &str, levels: Levels, _: &InTests) -> Read {
     let mut found = Vec::new();
     let mut errors = Vec::new();
     for (n, line) in text.lines().enumerate() {
@@ -512,7 +525,7 @@ fn dart(text: &str, levels: Levels) -> Read {
 
 /// ESLint's JSON: one entry per file with its messages. Severity 2 blocks; a message without
 /// a rule is a parse error, which counts anywhere.
-fn eslint(text: &str, levels: Levels) -> Read {
+fn eslint(text: &str, levels: Levels, _: &InTests) -> Read {
     if text.trim().is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -550,7 +563,7 @@ fn eslint(text: &str, levels: Levels) -> Read {
     clippy::indexing_slicing,
     reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
 )]
-fn svelte(text: &str, levels: Levels) -> Read {
+fn svelte(text: &str, levels: Levels, _: &InTests) -> Read {
     let mut found = Vec::new();
     let mut errors = Vec::new();
     for line in text.lines() {
@@ -627,7 +640,7 @@ fn sarif_file(run: &Value, location: &Value) -> String {
     clippy::indexing_slicing,
     reason = "a serde_json Value indexed by a missing key or position is Null; it never panics"
 )]
-fn sarif(text: &str, levels: Levels) -> Read {
+fn sarif(text: &str, levels: Levels, _: &InTests) -> Read {
     if text.trim().is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -662,7 +675,7 @@ fn sarif(text: &str, levels: Levels) -> Read {
 
 /// `validate -json` diagnostics. An error means the configuration does not hold together, so
 /// it counts wherever it is, as a compile error does; a warning counts on changed lines.
-fn terraform(text: &str, levels: Levels) -> Read {
+fn terraform(text: &str, levels: Levels, _: &InTests) -> Read {
     if text.trim().is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -703,7 +716,7 @@ fn terraform(text: &str, levels: Levels) -> Read {
 
 /// `file:line:column: [level] message (rule)`: an error is a gate, a warning a flag, as the
 /// project's yamllint config sets each rule's level.
-fn yamllint(text: &str, levels: Levels) -> Read {
+fn yamllint(text: &str, levels: Levels, _: &InTests) -> Read {
     let mut found = Vec::new();
     let mut errors = Vec::new();
     for (n, l) in text.lines().enumerate() {
@@ -740,7 +753,7 @@ fn yamllint(text: &str, levels: Levels) -> Read {
 }
 
 /// One finding per line in this module's shape.
-fn jsonl(text: &str, _: Levels) -> Read {
+fn jsonl(text: &str, _: Levels, _: &InTests) -> Read {
     let mut found = Vec::new();
     let mut errors = Vec::new();
     for (n, line) in text
@@ -763,7 +776,7 @@ mod tests {
     /// What `reader` reads from `text`, its paths as the tool wrote them.
     fn parse(reader: Reader, text: &str) -> (Vec<Finding>, Vec<String>) {
         let format = reader.format();
-        (format.parse)(text, format.levels)
+        (format.parse)(text, format.levels, &BTreeSet::new())
     }
 
     fn cargo(text: &str) -> Vec<Finding> {

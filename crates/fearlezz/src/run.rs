@@ -97,7 +97,7 @@ pub(crate) fn execute(
         // too; a tool's are read from what it wrote.
         let (found, unread) = match builtin_found.take() {
             Some(found) => (found, Vec::new()),
-            None => spec.read.read(&run),
+            None => spec.read.read(&run, &spec.in_tests),
         };
         errors.extend(unread);
         let found = spec.levels.apply(&spec.tools, spec.defaults(found));
