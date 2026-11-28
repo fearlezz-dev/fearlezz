@@ -91,12 +91,13 @@ describe("review", () => {
     expect(applyWork(two, 5, { kind: "verdict", verdict: verdict("x") })).toBe(two);
   });
 
-  test("a verdict taken back leaves the work's, only that content's", () => {
+  test("a verdict taken back leaves the work's with every other verdict on its picture", () => {
     const one = applyWork(snapshot, 4, { kind: "verdict", verdict: verdict("writer") });
     const other = { ...verdict("writer"), key: "still:c:d" };
-    const two = applyWork(one, 5, { kind: "verdict", verdict: other });
-    const three = applyWork(two, 6, { kind: "withdrawn", check: "screens", picture: verdict("x").picture, key: "still:b:a" });
-    expect(three.verdicts).toEqual([other]);
+    const elsewhere = { ...verdict("writer"), picture: "other.png" };
+    const two = applyWork(applyWork(one, 5, { kind: "verdict", verdict: other }), 6, { kind: "verdict", verdict: elsewhere });
+    const three = applyWork(two, 7, { kind: "withdrawn", check: "screens", picture: verdict("x").picture });
+    expect(three.verdicts).toEqual([elsewhere]);
   });
 
   test("a verdict that resolved notes takes them off the page", () => {

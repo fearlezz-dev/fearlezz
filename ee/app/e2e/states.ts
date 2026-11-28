@@ -247,6 +247,12 @@ const AGAIN_LOOK: Look = {
   ],
 };
 const AGAIN_FILM_VERDICT: PictureVerdict = { ...AGAIN_VERDICT, picture: AGAIN_FILM, key: "old-film" };
+/** The look read the same inputs, `inputs-1`, in every run it is given to. */
+const sameInputs = (checks: RunCheck[]) =>
+  checks.map((c) => (c.id === "ee-page-look" ? { ...c, entry: passed("ee-page-look", { key: "inputs-1" }) } : c));
+const UNSTABLE = "profile/desktop/dark.png";
+const UNSTABLE_VERDICT: PictureVerdict = { ...verdictOn(UNSTABLE), key: OLD_KEYS[UNSTABLE]!, run: "r1", head: OLD_HEAD, at: NOW - 5100 };
+
 const lookedAgain = (keys: Record<string, string>) => (checks: RunCheck[]) =>
   checks.map((c) => (c.id === "ee-page-look" ? { ...c, look: AGAIN_LOOK, keys } : c));
 
@@ -719,3 +725,24 @@ const alignedRun = (r: Run): Run => ({
   ),
 });
 export const ALIGNED: World = { ...STRIP.world, live: live({ ...stripLive, runs: [alignedRun(stripNow!), ...stripEarlier] }) };
+
+/** Pushed again with nothing the look reads changed, yet the dark profile came out other than
+ * when mara said it looks right: the looks right holds, marked unstable. */
+export const UNSTABLE_WORLD: World = {
+  viewer: WRITER,
+  files: FILES,
+  live: live(
+    snapshot(
+      [
+        run("r2", HEAD, "done", sameInputs(looked(allPassed()))),
+        run("r1", OLD_HEAD, "done", sameInputs(lookedAgain(OLD_KEYS)(allPassed())), ci("linux", 1188), NOW - 5400),
+      ],
+      {
+        review: review("waits", "6 pictures wait for a look at 8f3c2a1", {
+          pictures: waitingPictures().map((p) => (p.name === UNSTABLE ? { ...p, standing: "looks_right" as const, unstable: true } : p)),
+        }),
+        verdicts: [UNSTABLE_VERDICT],
+      },
+    ),
+  ),
+};

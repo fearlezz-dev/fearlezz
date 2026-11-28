@@ -101,6 +101,7 @@ where
         total_after: round3(after.total),
         max_shift: 0.0,
         max_shift_at: None,
+        tail: None,
         states_before: before.states.len(),
         states_after: after.states.len(),
         moments: Vec::new(),
@@ -113,6 +114,7 @@ where
     let clock = clock.unwrap_or_default();
     if !still {
         out.timeline = timeline(&clock.anchors, before.total, after.total);
+        out.tail = Some(round3(clock.tail(before.total, after.total)));
     }
     if before.w != after.w || before.h != after.h {
         out.verdict = Verdict::Changed;

@@ -75,6 +75,11 @@ pub struct Comparison {
     pub max_shift: f64,
     /// Where the largest shift is in the before film, in seconds.
     pub max_shift_at: Option<f64>,
+    /// How much longer the after film runs past what its end is timed from (its last anchor
+    /// or free span) than the before film, in seconds. None for a still, and from a CLI that
+    /// did not write it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail: Option<f64>,
     /// How many stable states the before film holds.
     pub states_before: usize,
     /// How many stable states the after film holds.
@@ -91,6 +96,24 @@ pub struct Comparison {
     /// so what plays side by side is what was compared. Empty for stills.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timeline: Vec<Section>,
+}
+
+/// How late a film with the same pictures may come, in seconds, before a person looks at it:
+/// within it, timing is noise from run to run (an animation or a load starting a little
+/// later); past it, the film is slower in a way a person may care about.
+pub const TIMING_BUDGET: f64 = 1.0;
+
+impl Comparison {
+    /// Whether its timing differs by no more than [`TIMING_BUDGET`]: in each held state, in
+    /// how long it runs past its last anchor, and in how long it runs in all, since each
+    /// section between marks may come a little late and add up. Unknown, so never within it,
+    /// while its tail is not known.
+    pub fn within_budget(&self) -> bool {
+        let within = |s: f64| s.abs() <= TIMING_BUDGET;
+        self.tail.is_some_and(|t| {
+            within(t) && within(self.max_shift) && within(self.total_after - self.total_before)
+        })
+    }
 }
 
 /// One section of two films' timeline, between two anchors their checks marked (or a film's

@@ -470,6 +470,48 @@ fn a_film_that_loads_longer_before_its_mark_looks_the_same() {
     );
 }
 
+/// What the final stage says when the box of the marked film shows after a load of `load`
+/// seconds instead of 0.3, with no mark to time it from.
+fn final_stage_with_load(load: &str) -> String {
+    let repo = Repo::new(
+        r#"
+[check.screens]
+run = "sh record.sh"
+stage = "look"
+inputs = ["src/**", "record.sh"]
+films = "films/**/*.gif"
+"#,
+        &[
+            ("record.sh", WRITE_MARKED_FILM),
+            ("src/load.txt", "0.3"),
+            ("src/mark.txt", "no"),
+        ],
+    );
+    repo.branch("feat/slow");
+    repo.write("src/load.txt", load);
+    repo.commit("slower");
+    repo.fz(&["run", "--stage", "merge", "--no-run"]);
+    let out = repo.fz(&["run"]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+    out.stdout
+}
+
+#[test]
+fn a_film_only_a_little_late_waits_for_nobody_and_a_much_slower_one_does() {
+    let late = final_stage_with_load("0.8");
+    assert!(late.contains("look screens: 1 timing"), "{late}");
+    assert!(
+        !late.contains("a person reviews them"),
+        "half a second later is within the timing budget: {late}"
+    );
+    let slow = final_stage_with_load("1.8");
+    assert!(slow.contains("look screens: 1 timing"), "{slow}");
+    assert!(
+        slow.contains("1 picture changed (screens): a person reviews them on the pull request"),
+        "a second and a half later is past the budget: {slow}"
+    );
+}
+
 #[test]
 fn flaky_pictures_are_shown_apart() {
     let repo = Repo::new(

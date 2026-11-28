@@ -667,11 +667,12 @@ pub async fn of_head(db: &D1Database, work: &str, head: &str) -> worker::Result<
         jobs::attempts_statement(db, work, head)?,
         jobs::jobs_statement(db, work, head)?,
     ];
-    // The head's runs, and the runs open notes were made on, to tell whether a picture changed
-    // since its note.
+    // The head's runs, the runs open notes were made on, to tell whether a picture changed
+    // since its note, and the runs verdicts were given on, whose inputs a verdict holds on.
     statements.extend(run_statements(
         db,
-        "work = ?1 AND (head = ?2 OR id IN (SELECT run FROM notes WHERE work = ?1 AND state = 'open'))",
+        "work = ?1 AND (head = ?2 OR id IN (SELECT run FROM notes WHERE work = ?1 AND state = 'open') \
+         OR id IN (SELECT run FROM verdicts WHERE work = ?1))",
         &[work.into(), head.into()],
     )?);
     let results = db.batch(statements).await?;

@@ -13,6 +13,7 @@
   "total_after": 2.0,
   "max_shift": 0.0,
   "max_shift_at": 0.0,
+  "tail": 0.0,
   "states_before": 2,
   "states_after": 2,
   "moments": [
