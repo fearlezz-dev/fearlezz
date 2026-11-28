@@ -9,7 +9,8 @@
 # flutter-film: integration_test/app_test.dart drives the macOS app while Fearlezz films its
 # window from outside (macOS with Screen Recording). A run records its first window only and
 # `flutter test` starts the app once per file, so it films this one entry file; put every flow
-# to film in it. The app needs the integration_test dev dependency. Turn it off with
+# to film in it. A film keeps the window's first size, so keep it one size and film a phone
+# layout with flutter-phone-film. The app needs the integration_test dev dependency. Turn it off with
 # `[check.flutter-film] off = true` for an app without them.
 #
 # flutter-phone-film: the same entry file drives the app on an iOS simulator of Fearlezz's own,
