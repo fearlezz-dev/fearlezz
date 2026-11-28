@@ -318,3 +318,60 @@ findings = "jsonl"
     assert!(!out.ok, "{}", out.stdout);
     assert!(out.stdout.contains("gate sub/a.txt:1"), "{}", out.stdout);
 }
+
+#[test]
+fn dead_code_pub_in_binary_spares_a_librarys_test_build() {
+    // Clippy builds a library's unit tests as a binary, where every public item another crate
+    // uses looks unused. A real binary's unused public item still blocks.
+    let config = r#"
+[check.clippy]
+run = "cargo clippy --all-targets --quiet --message-format=json"
+stage = "working"
+findings = { read = "cargo", lints = ["rustc"] }
+
+[lints.rustc]
+dead_code_pub_in_binary = "gate"
+"#;
+    let crate_toml = |name: &str, deps: &str| {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [dependencies]\n{deps}\n[lints]\nworkspace = true\n"
+        )
+    };
+    let repo = Repo::new(
+        config,
+        &[
+            (".gitignore", "target/\n"),
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"proto\", \"app\"]\nresolver = \"3\"\n\n\
+                 [workspace.lints.rust]\ndead_code_pub_in_binary = \"warn\"\n",
+            ),
+            ("proto/Cargo.toml", &crate_toml("proto", "")),
+            (
+                "app/Cargo.toml",
+                &crate_toml("app", "proto = { path = \"../proto\" }\n"),
+            ),
+            ("proto/src/lib.rs", "\n"),
+            ("app/src/main.rs", "fn main() {}\n"),
+        ],
+    );
+    repo.branch("feat/x");
+    repo.write(
+        "proto/src/lib.rs",
+        "pub fn used_elsewhere() -> u8 {\n    1\n}\n\n\
+         #[cfg(test)]\nmod tests {\n    #[test]\n    fn runs() {}\n}\n",
+    );
+    repo.write(
+        "app/src/main.rs",
+        "pub fn unused() {}\n\nfn main() {\n    let _ = proto::used_elsewhere();\n}\n",
+    );
+    let out = repo.fz(&["run", "clippy"]);
+    assert!(!out.ok, "{}\n{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("gate app/src/main.rs:1"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("proto/src/lib.rs"), "{}", out.stdout);
+}

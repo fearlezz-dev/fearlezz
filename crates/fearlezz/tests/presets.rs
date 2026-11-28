@@ -73,6 +73,38 @@ fn the_flutter_piece_never_asks_for_the_types_it_forbids() {
     }
 }
 
+/// The lint pairs the Dart analyzer refuses together (`incompatible_lint`), as Dart 3.14 lists
+/// them with every rule on and each named partner turned off until none is left.
+const INCOMPATIBLE_DART_LINTS: [(&str, &str); 10] = [
+    ("avoid_types_on_closure_parameters", "always_specify_types"),
+    ("omit_local_variable_types", "always_specify_types"),
+    ("omit_obvious_local_variable_types", "always_specify_types"),
+    ("omit_obvious_property_types", "always_specify_types"),
+    ("prefer_relative_imports", "always_use_package_imports"),
+    ("prefer_single_quotes", "prefer_double_quotes"),
+    (
+        "specify_nonobvious_local_variable_types",
+        "omit_local_variable_types",
+    ),
+    ("type_annotate_public_apis", "omit_obvious_property_types"),
+    ("unnecessary_final", "prefer_final_in_for_each"),
+    ("unnecessary_final", "prefer_final_locals"),
+];
+
+#[test]
+fn the_dart_pieces_turn_on_no_lints_the_analyzer_refuses_together() {
+    for piece in ["dart", "flutter"] {
+        let repo = Repo::new(&format!("use = [\"{piece}\"]\n"), &[]);
+        let out = repo.fz(&["setup", "sync"]);
+        assert!(out.ok, "{}", out.stderr);
+        let options = std::fs::read_to_string(repo.path("analysis_options.yaml")).unwrap();
+        let on = |rule: &str| options.contains(&format!("\n    {rule}: true\n"));
+        for (a, b) in INCOMPATIBLE_DART_LINTS {
+            assert!(!(on(a) && on(b)), "{piece} turns on both {a} and {b}");
+        }
+    }
+}
+
 #[test]
 fn an_off_that_is_not_true_or_false_says_so() {
     let repo = Repo::new("use = [\"rust\"]\n\n[check.clippy]\noff = \"yes\"\n", &[]);
