@@ -186,6 +186,8 @@ test("the film to look at next is compared with your look ahead, so it opens com
 });
 
 test("a film pair's lanes grow in once, and are not drawn again as its films load or its run changes", async ({ page }) => {
+  // How the lanes grow in is motion, which stills turn off (playwright.config.ts).
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   const socket = await serve(page, STRIP.world);
   // Films that take a moment, as they do over a real connection.
   await page.route(/\.webm/, async (route) => {

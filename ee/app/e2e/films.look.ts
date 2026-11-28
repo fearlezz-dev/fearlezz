@@ -9,13 +9,14 @@
 
 import { type Page, type TestInfo, test } from "@playwright/test";
 import type { Note, PictureVerdict, Snapshot } from "../src/proof";
-import { NOW, type Socket, type World, serve, settled } from "./host";
+import { NOW, type Socket, type World, connecting, serve, settled } from "./host";
 import { loaded, noting, write } from "./marks";
 import { STRIP, WORK, WORK_PATH } from "./states";
 
 // Every test here is recorded, at the viewport scaled to fit 800 pixels, its proportions kept,
-// with what happens in it noted for Fearlezz to time the film from (marks.ts).
-test.use({ video: "on" });
+// with what happens in it noted for Fearlezz to time the film from (marks.ts). A film shows how
+// the page moves, so it keeps the motion stills turn off.
+test.use({ video: "on", reducedMotion: "no-preference" });
 test.beforeEach(({ page }) => noting(page));
 
 const pause = (page: Page, ms: number) => page.waitForTimeout(ms);
@@ -185,7 +186,7 @@ async function open(page: Page, world: World) {
   await pointer(page);
   await serve(page, world);
   await page.goto(WORK_PATH);
-  await settled(page, !!world.files);
+  await settled(page, !!world.files, connecting(world));
   loaded(page);
   await pause(page, 600);
 }
