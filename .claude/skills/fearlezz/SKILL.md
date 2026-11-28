@@ -158,6 +158,8 @@ Proof that people can see should grow with the project. When setting up, or when
 
 `use` pulls in pieces of config with the same shape as `fearlezz.toml`. The project file wins field by field, so write only what changes; `off = true` drops a check a piece brings in.
 
+`fearlezz setup show <piece>` prints a built in piece as shipped (its checks, `[env]`, settings); `fearlezz setup show <check>` prints a check as it resolves, after the pieces, `each` and your fields; with no name it prints the whole merged config. Each value is followed by the piece or file it came from, and each lint table is counted per level; add `--lints` for every level.
+
 ```toml
 use = [
   "rust",                                  # built in: fmt, clippy, tests (also: dart, flutter, flutter-look, typescript: tsc, svelte: svelte-check in its place, biome, eslint, oxlint, prettier: a TypeScript project's linting and formatting, react, next, qwik, solid, vue: the rules of that framework, vitest, bun, node-test: a TypeScript project's tests, playwright, python, kotlin, go, go-race: the tests under the race detector at merge, envtest: Kubernetes binaries for an operator's tests, lua, devenv, agents, commits: Conventional Commits, actions: zizmor over GitHub workflows, safety: secret scanning with gitleaks where a leaked key on a changed line is a gate, trufflehog and betterleaks as other secret scanners, osv-scanner: vulnerable dependencies as flags)

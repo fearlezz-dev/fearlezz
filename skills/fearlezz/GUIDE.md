@@ -50,6 +50,7 @@ List everything step 2 found, and for each say which Fearlezz check would take i
 
 Run `fearlezz setup init` with the flag from step 3. It writes a starter `fearlezz.toml` from the languages it finds, with `could prove:` lines for step 9. Then shape each check to the commands the project really runs, from step 2:
 
+- See what a piece sets with `fearlezz setup show <piece>` (such as `rust` or `devenv`), and a check as it resolves with `fearlezz setup show <check>`; never read Fearlezz's source for it.
 - Turn a piece's check off with `off = true` when the project does not run it, and add the checks it does run that no piece brings.
 - A check that needs two commands lists them as steps, `run = ["first", "second"]`, never `first && second`.
 - Keep a check's `run` a plain tool command; Fearlezz reads the tool's own output, so no shell glue.

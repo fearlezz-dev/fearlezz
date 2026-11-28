@@ -46,6 +46,8 @@ pub(crate) struct Config {
     /// The table it was read from, pieces merged in and checks turned off left out, so a part
     /// of it can be shown as written.
     table: toml::Table,
+    /// Where each value of `table` came from, before `each` fanned checks out.
+    pub origins: presets::Origins,
     /// The project folders of each check with `each`, by its id (`.` the root): a check of a
     /// folder that is no longer a project goes with it, which never weakens the proof.
     pub fanned: BTreeMap<String, Vec<String>>,
@@ -228,7 +230,7 @@ pub(crate) struct Check {
     /// What it reads, the key its results are reused by: the files `inputs` names, or
     /// without them every file outside `no_proof`. Only a speed hint; it never decides
     /// whether the check is needed.
-    inputs: Globs,
+    pub inputs: Globs,
     /// Too slow, costly or reliant on real infrastructure to run for each change: only a
     /// scheduled run (`fearlezz run --ci --scheduled`) or naming it runs it.
     pub schedule: bool,
@@ -674,7 +676,7 @@ impl Config {
     /// Reads `fearlezz.toml` in `root`, with the pieces it uses merged in (cached under
     /// `common`, the git folder every worktree shares).
     pub(crate) fn load(root: &Path, common: &Path) -> Result<Config> {
-        let table = presets::resolve(root, common)?;
+        let (table, origins) = presets::resolve(root, common)?;
         let at = || format!("in {}", root.join(FILE).display());
         let no_proof: Vec<String> = table
             .get("no_proof")
@@ -692,7 +694,13 @@ impl Config {
         }
         .files()?;
         let found = |marker: &str| projects(root, &files, marker, &no_proof);
-        Config::from_table(table, &found).with_context(at)
+        let config = Config::from_table(table, &found).with_context(at)?;
+        Ok(Config { origins, ..config })
+    }
+
+    /// The merged table: pieces merged in, `each` fanned out, what is off left out.
+    pub(crate) fn table(&self) -> &toml::Table {
+        &self.table
     }
 
     /// The config `table`, pieces merged in, says, with `found` the project folders of each
@@ -810,6 +818,7 @@ impl Config {
             releases: crate::release::parse(raw.release.as_ref())?,
             platforms,
             table,
+            origins: presets::Origins::new(),
             fanned,
         })
     }

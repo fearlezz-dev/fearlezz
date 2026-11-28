@@ -225,6 +225,140 @@ fn an_unknown_piece_says_what_exists() {
     );
 }
 
+#[test]
+fn show_prints_a_piece_as_shipped_with_its_lints_counted() {
+    // A piece is shown before any fearlezz.toml exists, while setting up.
+    let repo = Repo::new("", &[]);
+    std::fs::remove_file(repo.path("fearlezz.toml")).unwrap();
+    let out = repo.fz(&["setup", "show", "rust"]);
+    assert!(out.ok, "{}", out.stderr);
+    for shipped in [
+        "[check.clippy]",
+        "run = \"cargo test --quiet\"",
+        "each = \"Cargo.toml\"",
+        "# Production code never unwraps or panics; tests may.",
+        "allow-unwrap-in-tests = true",
+    ] {
+        assert!(out.stdout.contains(shipped), "{shipped}: {}", out.stdout);
+    }
+    // About 900 lint levels become a count per level.
+    assert!(
+        out.stdout.contains("[lints.clippy] # ") && out.stdout.contains(" gate, "),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("useless_vec"), "{}", out.stdout);
+    assert!(out.stdout.lines().count() < 80, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .trim_end()
+            .lines()
+            .last()
+            .unwrap()
+            .starts_with("next: "),
+        "{}",
+        out.stdout
+    );
+
+    let out = repo.fz(&["setup", "show", "rust", "--lints"]);
+    assert!(out.ok, "{}", out.stderr);
+    assert!(
+        out.stdout.contains("useless_vec = \"gate\""),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn show_resolves_a_check_and_names_where_each_value_came_from() {
+    let config = r#"
+use = ["rust"]
+
+[check.tests]
+run = "cargo nextest run"
+"#;
+    let repo = Repo::new(config, &[("Cargo.toml", "[package]\nname = \"x\"\n")]);
+    let out = repo.fz(&["setup", "show", "tests"]);
+    assert!(out.ok, "{}", out.stderr);
+    assert!(out.stdout.contains("[check.tests]"), "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("run = \"cargo nextest run\" # fearlezz.toml"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("stage = \"working\" # rust"),
+        "{}",
+        out.stdout
+    );
+    // The piece's `each` is spent on fanning out, so the resolved check no longer has it.
+    assert!(!out.stdout.contains("each ="), "{}", out.stdout);
+    assert!(!out.stdout.contains("[check.fmt]"), "{}", out.stdout);
+    assert!(
+        out.stdout
+            .trim_end()
+            .lines()
+            .last()
+            .unwrap()
+            .starts_with("next: "),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn show_without_names_prints_the_merged_config() {
+    let config = "use = [\"rust\"]\n\n[lints.clippy]\nuseless_vec = \"hint\"\n";
+    let repo = Repo::new(config, &[]);
+    let out = repo.fz(&["setup", "show"]);
+    assert!(out.ok, "{}", out.stderr);
+    for part in [
+        "[check.fmt]",
+        "[check.clippy]",
+        "[check.tests]",
+        "allow-unwrap-in-tests = true # rust",
+    ] {
+        assert!(out.stdout.contains(part), "{part}: {}", out.stdout);
+    }
+    // The count says which file set how many levels; --lints prints each.
+    assert!(out.stdout.contains("fearlezz.toml 1"), "{}", out.stdout);
+    assert!(!out.stdout.contains("useless_vec"), "{}", out.stdout);
+    // The checks Fearlezz forms itself are named, though no table holds them.
+    assert!(out.stdout.contains("settings"), "{}", out.stdout);
+
+    let out = repo.fz(&["setup", "show", "--lints"]);
+    assert!(
+        out.stdout
+            .contains("useless_vec = \"hint\" # fearlezz.toml"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn show_of_an_unknown_name_lists_the_pieces_and_checks() {
+    let repo = Repo::new("use = [\"rust\"]\n", &[]);
+    let out = repo.fz(&["setup", "show", "rsut"]);
+    assert!(!out.ok);
+    assert!(
+        out.stderr.contains("no piece or check \"rsut\""),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("pieces are actions, agents, "),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .contains("checks are clippy, fmt, settings, tests"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// A repository of pieces, like someone's shared setup, tagged v1.
 fn shared() -> Repo {
     let web =
