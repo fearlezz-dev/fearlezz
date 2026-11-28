@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.4](https://github.com/fearlezz-dev/fearlezz/compare/v0.5.3...v0.5.4) (2026-11-28)
+
+
+### Features
+
+* fearlezz setup show prints what each piece and check sets ([#77](https://github.com/fearlezz-dev/fearlezz/issues/77)) ([9152f4d](https://github.com/fearlezz-dev/fearlezz/commit/9152f4d08943e0b18a5f30139f4e814d47843127))
+* the CLI says when a newer Fearlezz is out, and the host refuses ones too old ([#81](https://github.com/fearlezz-dev/fearlezz/issues/81)) ([b3a8d1a](https://github.com/fearlezz-dev/fearlezz/commit/b3a8d1a459b813defc31fec3eba3c704d8b7fff4))
+
+
+### Bug Fixes
+
+* a helper in an integration test crate may break the lints clippy allows in tests ([#84](https://github.com/fearlezz-dev/fearlezz/issues/84)) ([f62241d](https://github.com/fearlezz-dev/fearlezz/commit/f62241dd861e53d4c60d89491ffd8de1e288c67f))
+* ffmpeg refused the film reread's select expression past 100 states ([#82](https://github.com/fearlezz-dev/fearlezz/issues/82)) ([c32c366](https://github.com/fearlezz-dev/fearlezz/commit/c32c366a6460b0aa142d1d0e111e88d72fec276e))
+* setup init sees a Flutter app in a folder as Flutter, not as an Xcode app ([#78](https://github.com/fearlezz-dev/fearlezz/issues/78)) ([8324b69](https://github.com/fearlezz-dev/fearlezz/commit/8324b699fdd2acf795bc8f049442ed601a9f47b8))
+* the Dart piece turns on no conflicting lints, and dead_code_pub_in_binary spares library test builds ([#79](https://github.com/fearlezz-dev/fearlezz/issues/79)) ([31a0128](https://github.com/fearlezz-dev/fearlezz/commit/31a0128c788ec3e2a266f6411c27f1a09837596f))
+* the review check never hangs on a leg that never reached the host ([#85](https://github.com/fearlezz-dev/fearlezz/issues/85)) ([ae6cf53](https://github.com/fearlezz-dev/fearlezz/commit/ae6cf5315474427202a747f8342e42651156cca2))
+* the setup guide offers every opportunity, asks before loosening a lint, and signs in itself ([#76](https://github.com/fearlezz-dev/fearlezz/issues/76)) ([b65f222](https://github.com/fearlezz-dev/fearlezz/commit/b65f222e82e79791998866d2ce9f27b447af0959))
+
 ## [0.5.3](https://github.com/fearlezz-dev/fearlezz/compare/v0.5.2...v0.5.3) (2026-11-25)
 
 
