@@ -21,7 +21,9 @@ export default defineConfig({
     timeout: 600_000,
   },
   // The full Chromium in its headless mode: nixpkgs ships it, not Playwright's headless shell.
-  use: { baseURL: `http://localhost:${port}`, channel: "chromium" },
+  // Stills are shown without motion (the page keeps all of it behind prefers-reduced-motion), so
+  // a still never catches a fade or the page's entry halfway; films turn motion back on.
+  use: { baseURL: `http://localhost:${port}`, channel: "chromium", reducedMotion: "reduce" },
   expect: { toHaveScreenshot: { animations: "disabled", caret: "hide" } },
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },

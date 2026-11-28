@@ -968,7 +968,12 @@ export function Stage(props: {
         <div class="against">
           <Show when={props.against}>
             {(a) => (
-              <p class="pair-says" data-pair-says={a().error ? "error" : a().comparison ? a().comparison!.verdict : "comparing"} aria-live="polite">
+              <p
+                class="pair-says"
+                data-pair-says={a().error ? "error" : a().comparison ? a().comparison!.verdict : "comparing"}
+                aria-live="polite"
+                aria-busy={!a().error && !a().comparison}
+              >
                 <Show when={!a().error} fallback={<>Could not compare here: {a().error}</>}>
                   <Show when={a().comparison} fallback={<>Comparing with {a().word.toLowerCase()}…</>}>
                     {(c) => <>{pairSummary(c(), a().word, a().said)}</>}
@@ -1082,7 +1087,7 @@ export function Stage(props: {
                 sameSize() && !clock.held("before") && !clock.held("after") ? marksAt(measured()!, clock.film("after")) : [];
               return (
                 <>
-                  <div class="busy-wrap" data-busy={busy() ? "" : undefined}>
+                  <div class="busy-wrap" data-busy={busy() ? "" : undefined} aria-busy={!!busy()}>
                     <Compare
                       mode={props.mode}
                       before={beforeUrl()}
