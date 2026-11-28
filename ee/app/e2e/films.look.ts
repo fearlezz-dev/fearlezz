@@ -17,6 +17,10 @@ import { STRIP, WORK, WORK_PATH } from "./states";
 // with what happens in it noted for Fearlezz to time the film from (marks.ts). A film shows how
 // the page moves, so it keeps the motion stills turn off.
 test.use({ video: "on", reducedMotion: "no-preference" });
+// A test's budget also covers closing its page and saving its film, and saving a film grows with
+// the machine's load far more than the test's own steps do, so a film gets three times the stills'
+// default budget.
+test.describe.configure({ timeout: 90_000 });
 test.beforeEach(({ page }) => noting(page));
 
 const pause = (page: Page, ms: number) => page.waitForTimeout(ms);
