@@ -763,6 +763,10 @@ impl Config {
             }
         }
         settings.cargo = found("Cargo.toml");
+        settings.flutter_look = checks
+            .iter()
+            .find(|c| c.id == "flutter-look")
+            .and_then(|c| c.command.dir.clone());
         settings.biome_runs = checks.iter().any(|c| {
             c.command.steps.iter().any(|step| {
                 step.split_whitespace()

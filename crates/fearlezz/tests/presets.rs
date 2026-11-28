@@ -674,6 +674,53 @@ fn flutter_film_runs_its_entry_file_as_a_plain_command() {
     assert_eq!(run, "flutter test integration_test/app_test.dart -d macos");
 }
 
+#[test]
+fn the_flutter_look_tests_of_an_app_in_a_folder_run_there_beside_their_helpers() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let repo = Repo::new(
+        "use = [\"flutter-look\"]\n[check.flutter-look]\ndir = \"app\"\n",
+        &[("app/pubspec.yaml", "name: app\n")],
+    );
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    repo.commit("synced");
+    repo.branch("feat/x");
+    // A flutter that passes only in the app's folder, with the helpers its tests import.
+    let bin = tempfile::tempdir().unwrap();
+    let flutter = bin.path().join("flutter");
+    std::fs::write(
+        &flutter,
+        "#!/bin/sh\ntest -f pubspec.yaml && test -f look_test/fearlezz_look.dart || exit 1\n\
+         echo '+1: All tests passed!'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&flutter, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let out = repo.fz_env(&["run", "flutter-look"], &[("PATH", &path)]);
+    assert!(out.ok, "{}\n{}", out.stdout, out.stderr);
+}
+
+#[test]
+fn the_flutter_phone_film_is_off_until_an_app_turns_it_on() {
+    let repo = Repo::new("use = [\"flutter-look\"]\n", &[]);
+    assert!(!checks(&repo).contains("flutter-phone-film"));
+    let repo = Repo::new(
+        "use = [\"flutter-look\"]\n[check.flutter-phone-film]\noff = false\n",
+        &[],
+    );
+    assert!(checks(&repo).contains("flutter-phone-film"));
+    let preset: toml::Value = toml::from_str(include_str!("../presets/flutter-look.toml")).unwrap();
+    let phone = &preset["check"]["flutter-phone-film"];
+    assert_eq!(
+        phone["run"].as_str().unwrap(),
+        "flutter test integration_test/app_test.dart -d \"$FEARLEZZ_DEVICE\""
+    );
+    assert_eq!(phone["needs"].as_array().unwrap()[0].as_str(), Some("ios"));
+}
+
 // The language pieces, run with the real tools devenv gives
 
 /// A repository on `config` with `files`, synced, on a branch whose change is to come.

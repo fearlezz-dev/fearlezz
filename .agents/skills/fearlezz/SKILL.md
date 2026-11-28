@@ -60,7 +60,7 @@ Every command ends with a `next:` line (JSON output and errors aside); follow it
 - Rendered text a person should review, such as manifests (`kustomize build`, `flate`) or a plan, is a text: `texts = "rendered/**/*.yaml"` on a check (or `"kind": "text"` in `proof.jsonl`) makes each matching file in `$FEARLEZZ_OUT` a text, compared line by line with the same check on the base commit like a picture. `fearlezz run` prints each changed text's summary, its before and after files and the start of its diff; it never holds the work, and a person reviews it on the pull request.
 - Code a generator writes into the repository is proven up to date with `generates = ["gen/**"]` on the check that runs the generator (globs from the folder the check runs in), never with `git diff` glue. The files it names must come out of the command the same as the tree had them; a difference fails the check with the diff, and the regenerated files stay, so commit them.
 - While building a UI, look at it often: `fearlezz --still <window>` (macOS) takes a still of a running app's window, named by pid, bundle id, app name or part of its title, and prints the PNG's path. Read the picture and critique it. It is for you, not proof.
-- For a Flutter app, `use = ["flutter-look"]`: widget tests in `look_test/` call `still(tester, "home")` on a widget wrapped in `lookable(...)` (helpers written by `fearlezz setup sync`), headless and fast; `flutter-film` films the macOS app while `integration_test/app_test.dart` drives it, at the final stage.
+- For a Flutter app, `use = ["flutter-look"]`, one piece with three checks: `flutter-look`, widget tests in `look_test/` that call `still(tester, "home")` on a widget wrapped in `lookable(...)` (helpers written by `fearlezz setup sync` into `look_test/` of the folder the check runs in), headless and fast; `flutter-film`, which films the macOS app while `integration_test/app_test.dart` drives it, at the final stage; and `flutter-phone-film`, the same drive on an iOS simulator, off until an app that targets phones sets `[check.flutter-phone-film] off = false`. An app in a folder sets `dir = "app"` on each of them.
 
 ## Recording an app's window
 
@@ -148,7 +148,7 @@ In a repository without `fearlezz.toml`, `fearlezz setup init` writes a starter:
 
 Proof that people can see should grow with the project. When setting up, or when a change makes a new kind of proof possible (a first UI screen, a new rendered output, a README that describes the UI), offer it to the developer, with `fearlezz say ask` or directly, and add it when they agree:
 
-- A UI no check takes pictures of: `use = ["playwright"]` for a web app, `record` for a desktop window, `flutter-look` and `flutter-film` for a Flutter app, films for flows.
+- A UI no check takes pictures of: `use = ["playwright"]` for a web app, `record` for a desktop window, `use = ["flutter-look"]` for a Flutter app, films for flows.
 - Rendered output (kustomize, helm, terraform) no check keeps: write it into `$FEARLEZZ_OUT` and name it with `texts`.
 - Checks that take stills and films while README.md shows none: `fearlezz setup showcase` prints the markup that shows each from its stable address, `https://fearlezz.seamlezz.net/showcase/<owner>/<repo>/<check>/<picture>` (Fearlezz's README, "Showcase media").
 

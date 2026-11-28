@@ -310,24 +310,19 @@ fn uis(root: &Path, files: &[String]) -> Vec<Opportunity> {
             .iter()
             .map(|d| format!("{}pubspec.yaml", slashed(d)))
             .collect();
-        // The flutter-look checks and helpers are the root's alone for now.
+        // The flutter-look checks run at the root unless they name the app's folder.
         let folder = outer
             .iter()
             .find(|d| !d.is_empty())
-            .map(|d| {
-                format!(
-                    " (its checks run at the root, so an app in a folder needs dir = \"{d}\" \
-                     on them and the look_test helpers in {d})"
-                )
-            })
+            .map(|d| format!(" with dir = \"{d}\" on its checks"))
             .unwrap_or_default();
         found.push(Opportunity {
             within: outer.clone(),
             ..pictures(
                 format!(
                     "a Flutter app ({}), and no check takes stills or films of it: offer \
-                     use = [\"flutter-look\"]{folder}, stills of its widgets, and flutter-film \
-                     to film its flows",
+                     use = [\"flutter-look\"]{folder}, stills of its widgets and films of its \
+                     flows",
                     pubspecs.join(", ")
                 ),
                 dart_file,

@@ -137,7 +137,8 @@ enum Shipped {
     /// The Fearlezz agent skill, in each agent's skills folder.
     Skill,
     /// The helpers of the `flutter-look` piece's widget tests in `look_test/`: real fonts,
-    /// and `still`, which writes a still into `$FEARLEZZ_OUT`.
+    /// and `still`, which writes a still into `$FEARLEZZ_OUT`. They sit in the folder the
+    /// `flutter-look` check runs in, beside the tests that import them.
     FlutterLook,
     /// The proof hooks of Codex (`.codex/hooks.json`) and Cursor (`.cursor/hooks.json`);
     /// Claude Code's go into `.claude/settings.json` with the `claude` settings.
@@ -217,6 +218,9 @@ pub(crate) struct Settings {
     /// The folders of the repository's Cargo projects (`.` for the root), which the Rust lint
     /// tables are written into.
     pub cargo: Vec<String>,
+    /// The folder the `flutter-look` check runs in, which its helpers are written into; the
+    /// root without one.
+    pub flutter_look: Option<String>,
     /// A check runs Biome, through a piece or a command of the project's own.
     pub biome_runs: bool,
     /// What the config proves already, against which the check names what the project could
@@ -292,9 +296,10 @@ impl Settings {
             shipped,
             lints,
             read,
-            // Config::load finds them in the repository, the checks that run Biome, what the
-            // checks prove and the proof host.
+            // Config::load finds them in the repository, the flutter-look check's folder, the
+            // checks that run Biome, what the checks prove and the proof host.
             cargo: Vec::new(),
+            flutter_look: None,
             biome_runs: false,
             grow: crate::grow::Have::default(),
             host: String::new(),
@@ -362,9 +367,25 @@ impl Settings {
     /// Every file a tool may read its settings from, by exact path. They are hashed from
     /// disk, so a managed file git ignores still counts.
     pub(crate) fn files(&self) -> Vec<String> {
-        let tools = self.tools.keys().flat_map(|t| t.row().files);
-        let shipped = self.shipped.keys().flat_map(|s| s.files());
-        tools.chain(shipped).map(|p| (*p).to_string()).collect()
+        let tools = self
+            .tools
+            .keys()
+            .flat_map(|t| t.row().files)
+            .map(|p| (*p).to_string());
+        let shipped = self
+            .shipped
+            .keys()
+            .flat_map(|s| s.files().iter().map(|p| self.placed(*s, p)));
+        tools.chain(shipped).collect()
+    }
+
+    /// Where a shipped file goes in the repository: the flutter-look helpers in the folder of
+    /// the check that runs their tests, everything else where it says.
+    fn placed(&self, file: Shipped, path: &str) -> String {
+        match (file, &self.flutter_look) {
+            (Shipped::FlutterLook, Some(dir)) => format!("{dir}/{path}"),
+            _ => path.to_string(),
+        }
     }
 
     /// How `head` tunes the tools that judge code differently: any setting added, removed or
@@ -400,8 +421,8 @@ impl Settings {
     /// text, which can change between builds of one version.
     pub(crate) fn fingerprint(&self) -> String {
         format!(
-            "{:?}{:?}{:?}{:?}{}{SKILL}",
-            self.tools, self.shipped, self.lints, self.grow, self.host
+            "{:?}{:?}{:?}{:?}{:?}{}{SKILL}",
+            self.tools, self.shipped, self.flutter_look, self.lints, self.grow, self.host
         )
     }
 
@@ -432,7 +453,8 @@ impl Settings {
             out.extend(self.write(root, *tool)?);
         }
         for (file, table) in &self.shipped {
-            out.extend(file.render(root, table)?);
+            let files = file.render(root, table)?;
+            out.extend(files.into_iter().map(|(p, c)| (self.placed(*file, &p), c)));
         }
         let mut drifted = Vec::new();
         for (path, content) in out {

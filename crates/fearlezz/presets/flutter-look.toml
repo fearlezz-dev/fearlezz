@@ -2,8 +2,8 @@
 #
 # flutter-look: widget tests in look_test/ render stills headlessly. No window, no simulator,
 # no Screen Recording, so it runs anywhere, CI included. `fearlezz setup sync` writes the
-# helpers into look_test/ (real fonts, and `still(tester, "home")` around a widget wrapped in
-# `lookable(...)`). Text renders a little differently per OS; a look only ever compares runs
+# helpers into look_test/ of the folder the check runs in (real fonts, and
+# `still(tester, "home")` around a widget wrapped in `lookable(...)`). Text renders a little differently per OS; a look only ever compares runs
 # on the same machine.
 #
 # flutter-film: integration_test/app_test.dart drives the macOS app while Fearlezz films its
@@ -11,6 +11,12 @@
 # `flutter test` starts the app once per file, so it films this one entry file; put every flow
 # to film in it. The app needs the integration_test dev dependency. Turn it off with
 # `[check.flutter-film] off = true` for an app without them.
+#
+# flutter-phone-film: the same entry file drives the app on an iOS simulator of Fearlezz's own,
+# filmed whole by `simctl io`, so it needs no Screen Recording and runs on CI's macOS runners.
+# Off until an app that targets phones turns it on with `[check.flutter-phone-film] off = false`.
+#
+# An app in a folder sets `dir = "app"` on each of these checks it uses.
 
 [check.flutter-look]
 run = "flutter test look_test"
@@ -22,5 +28,13 @@ run = "flutter test integration_test/app_test.dart -d macos"
 stage = "merge"
 tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
 record = { film = "app" }
+
+[check.flutter-phone-film]
+run = "flutter test integration_test/app_test.dart -d \"$FEARLEZZ_DEVICE\""
+stage = "merge"
+needs = ["ios"]
+tests = { count = '\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed|Some tests failed)' }
+record = { film = "phone" }
+off = true
 
 [settings.flutter-look]

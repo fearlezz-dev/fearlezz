@@ -842,6 +842,39 @@ fn the_flutter_look_piece_writes_its_test_helpers_and_catches_their_drift() {
     );
 }
 
+#[test]
+fn the_flutter_look_helpers_sit_beside_the_look_tests_of_an_app_in_a_folder() {
+    // The look tests in app/look_test import the helpers from their own folder.
+    let repo = Repo::new(
+        "use = [\"flutter-look\"]\n[check.flutter-look]\ndir = \"app\"\n",
+        &[("app/pubspec.yaml", "name: app\n")],
+    );
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    for file in [
+        "app/look_test/fearlezz_look.dart",
+        "app/look_test/flutter_test_config.dart",
+    ] {
+        assert!(
+            out.stdout.contains(&format!("wrote {file}")),
+            "{}",
+            out.stdout
+        );
+    }
+    assert!(!repo.path("look_test").exists());
+    repo.commit("synced");
+    repo.branch("feat/x");
+    repo.write("app/look_test/fearlezz_look.dart", "// mine now\n");
+    let out = repo.fz(&["run", "settings"]);
+    assert!(!out.ok, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("gate app/look_test/fearlezz_look.dart:1  settings  differs"),
+        "{}",
+        out.stdout
+    );
+}
+
 /// Every development build says the same version, so the settings check's results are keyed on
 /// what the binary ships: a result stored by a build of other files is never reused.
 #[test]
