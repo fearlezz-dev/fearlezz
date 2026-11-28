@@ -146,6 +146,9 @@ impl Browser {
         );
         let page = attached["sessionId"].as_str().unwrap().to_owned();
         self.page = Some(page.clone());
+        // Reduced motion, as the Playwright tests have it: every animation then ends at once,
+        // so a test that measures the page and then acts on it finds things where it measured.
+        self.send("Emulation.setEmulatedMedia", media(&[]), true);
         // A new page starts as about:blank, whose document is already complete, and `url`
         // replaces it a moment later, destroying whatever script runs in it then. So wait for
         // the document of `url` itself, asking again when the swap cuts a question short.
@@ -243,8 +246,8 @@ impl Browser {
             json!({"width": width, "height": height, "deviceScaleFactor": 2, "mobile": mobile});
         self.send("Emulation.setDeviceMetricsOverride", metrics, true);
         let scheme = if dark { "dark" } else { "light" };
-        let media = json!({"features": [{"name": "prefers-color-scheme", "value": scheme}]});
-        self.send("Emulation.setEmulatedMedia", media, true);
+        let scheme = json!({"name": "prefers-color-scheme", "value": scheme});
+        self.send("Emulation.setEmulatedMedia", media(&[scheme]), true);
     }
 
     /// The whole page as a PNG.
@@ -275,4 +278,12 @@ impl Drop for Browser {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// What `Emulation.setEmulatedMedia` sets: reduced motion and `more`. Each call replaces the
+/// features before it, so every call names reduced motion.
+fn media(more: &[Value]) -> Value {
+    let mut features = vec![json!({"name": "prefers-reduced-motion", "value": "reduce"})];
+    features.extend_from_slice(more);
+    json!({"features": features})
 }
