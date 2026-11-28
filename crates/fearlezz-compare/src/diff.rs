@@ -12,9 +12,9 @@
 use crate::{Box4, Image};
 
 /// Per pixel difference in any color channel (0 to 255) that counts as different.
-const PIX_THRESH: i16 = 28;
+pub(crate) const PIX_THRESH: i16 = 28;
 /// Changed areas smaller than this many pixels are noise.
-const MIN_BLOB: usize = 40;
+pub(crate) const MIN_BLOB: usize = 40;
 const THUMB_W: usize = 48;
 /// Changed areas closer than this many pixels share one box.
 const BOX_GROW: u32 = 12;
@@ -113,14 +113,14 @@ pub(crate) fn thumb(g: &Image) -> Vec<f32> {
         .collect()
 }
 
-struct Mask {
-    w: usize,
-    h: usize,
-    on: Vec<bool>,
+pub(crate) struct Mask {
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) on: Vec<bool>,
 }
 
 impl Mask {
-    fn count(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         self.on.iter().filter(|v| **v).count()
     }
 
@@ -133,7 +133,7 @@ impl Mask {
     }
 
     /// Erosion then dilation with a cross; outside the mask counts as off.
-    fn open(&self) -> Mask {
+    pub(crate) fn open(&self) -> Mask {
         let (w, h) = (self.w, self.h);
         let mut eroded = vec![false; w * h];
         for y in 1..h.saturating_sub(1) {
@@ -158,7 +158,7 @@ impl Mask {
     }
 
     /// Connected parts (4 neighbours): for each, its pixels' indices.
-    fn parts(&self) -> Vec<Vec<usize>> {
+    pub(crate) fn parts(&self) -> Vec<Vec<usize>> {
         let mut seen = vec![false; self.on.len()];
         let mut parts = Vec::new();
         for start in 0..self.on.len() {
@@ -188,7 +188,7 @@ impl Mask {
     }
 
     /// Keeps only parts of at least `MIN_BLOB` pixels.
-    fn drop_specks(&mut self) {
+    pub(crate) fn drop_specks(&mut self) {
         for part in self.parts() {
             if part.len() < MIN_BLOB {
                 for i in part {
@@ -200,6 +200,23 @@ impl Mask {
 
     /// Bounding boxes of the areas left after growing the mask by `grow` pixels (city block).
     fn boxes(&self, grow: u32) -> Vec<Box4> {
+        let w = self.w;
+        self.grown(grow)
+            .parts()
+            .into_iter()
+            .map(|part| {
+                let mut b = [u32::MAX, u32::MAX, 0, 0];
+                for i in part {
+                    let (x, y) = ((i % w) as u32, (i / w) as u32);
+                    b = [b[0].min(x), b[1].min(y), b[2].max(x + 1), b[3].max(y + 1)];
+                }
+                b
+            })
+            .collect()
+    }
+
+    /// The mask grown by `by` pixels (city block).
+    pub(crate) fn grown(&self, by: u32) -> Mask {
         let far = u32::MAX / 2;
         let mut dist: Vec<u32> = self.on.iter().map(|v| if *v { 0 } else { far }).collect();
         let (w, h) = (self.w, self.h);
@@ -225,28 +242,16 @@ impl Mask {
                 }
             }
         }
-        let grown = Mask {
+        Mask {
             w,
             h,
-            on: dist.iter().map(|d| *d <= grow).collect(),
-        };
-        grown
-            .parts()
-            .into_iter()
-            .map(|part| {
-                let mut b = [u32::MAX, u32::MAX, 0, 0];
-                for i in part {
-                    let (x, y) = ((i % w) as u32, (i / w) as u32);
-                    b = [b[0].min(x), b[1].min(y), b[2].max(x + 1), b[3].max(y + 1)];
-                }
-                b
-            })
-            .collect()
+            on: dist.iter().map(|d| *d <= by).collect(),
+        }
     }
 }
 
 /// Separable Gaussian blur with mirrored edges, as scipy's default.
-fn blur(px: &[f32], w: usize, h: usize) -> Vec<f32> {
+pub(crate) fn blur(px: &[f32], w: usize, h: usize) -> Vec<f32> {
     let (k, r) = (&BLUR, BLUR.len() / 2);
     let reflect = |i: isize, n: usize| -> usize {
         let n = n as isize;

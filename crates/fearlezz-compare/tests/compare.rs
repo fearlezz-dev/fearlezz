@@ -640,3 +640,97 @@ fn a_change_shown_just_before_its_mark_is_matched_across_it() {
     );
     assert_eq!(c.verdict, Verdict::Same, "{c:?}");
 }
+
+/// A film of a page of words scrolled up by each of `offsets` in turn, a frame each, with a
+/// red box drawn over the frame at `flash`. The words are dark blocks at made up places, so
+/// no two stretches of the page look alike.
+fn scrolled(offsets: &[usize], flash: Option<usize>) -> Frames {
+    let (w, h, tall) = (160, 120, 420);
+    let mut page = vec![255u8; w * tall * 3];
+    let mut seed: u32 = 7;
+    let mut next = |n: u32| {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        (seed >> 16) % n
+    };
+    for line in (8..tall - 8).step_by(14) {
+        let mut x = 6 + next(10) as usize;
+        while x + 12 < w {
+            let word = 8 + next(28) as usize;
+            fill(
+                &mut page,
+                w,
+                (x, (x + word).min(w - 4)),
+                (line, line + 6),
+                [40, 40, 48],
+            );
+            x += word + 6 + next(8) as usize;
+        }
+    }
+    let each = offsets
+        .iter()
+        .enumerate()
+        .map(|(i, &o)| {
+            let mut px = page[o * w * 3..(o + h) * w * 3].to_vec();
+            if flash == Some(i) {
+                fill(&mut px, w, (60, 100), (50, 70), [220, 30, 30]);
+            }
+            px
+        })
+        .collect();
+    Frames {
+        format: Format::Rgb,
+        w,
+        h,
+        each,
+    }
+}
+
+/// Before scrolls in steps of 60 pixels a frame; after was caught 30 pixels into each step.
+fn scrolls() -> (Vec<usize>, Vec<usize>) {
+    let rest = |o: usize, n: usize| std::iter::repeat_n(o, n);
+    let before = rest(0, 5).chain([60, 120]).chain(rest(180, 8)).collect();
+    let after = rest(0, 5)
+        .chain([30, 90, 150])
+        .chain(rest(180, 7))
+        .collect();
+    (before, after)
+}
+
+#[test]
+fn a_scroll_caught_at_other_moments_is_no_change() {
+    let (before, after) = scrolls();
+    let c = compared(&scrolled(&before, None), &scrolled(&after, None));
+    assert_ne!(c.verdict, Verdict::Changed, "{c:?}");
+    assert!(c.moments.is_empty(), "{c:?}");
+}
+
+#[test]
+fn a_flash_during_a_scroll_is_a_change_at_its_moment() {
+    let (before, after) = scrolls();
+    let c = compared(&scrolled(&before, None), &scrolled(&after, Some(6)));
+    assert_eq!(c.verdict, Verdict::Changed, "{c:?}");
+    assert!(
+        c.moments.iter().any(|m| (m.after.0 - 0.6).abs() < 1e-9),
+        "{c:?}"
+    );
+}
+
+#[test]
+fn a_part_of_a_scroll_gone_blank_for_a_frame_is_a_change() {
+    let (before, after) = scrolls();
+    let mut film = scrolled(&after, None);
+    let w = film.w;
+    fill(&mut film.each[6], w, (20, 140), (40, 64), [255; 3]);
+    let c = compared(&scrolled(&before, None), &film);
+    assert_eq!(c.verdict, Verdict::Changed, "{c:?}");
+}
+
+#[test]
+fn a_scroll_that_ends_a_little_further_is_a_change() {
+    let (before, mut after) = scrolls();
+    for o in after.iter_mut().skip(8) {
+        *o = 186;
+    }
+    let c = compared(&scrolled(&before, None), &scrolled(&after, None));
+    assert_eq!(c.verdict, Verdict::Changed, "{c:?}");
+}

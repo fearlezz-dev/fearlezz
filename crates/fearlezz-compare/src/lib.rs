@@ -6,7 +6,9 @@
 //! states, match states across films with dynamic time warping over small thumbnails, then
 //! pixel diff matched states after a light blur, ignoring blobs too small to matter. Pixels
 //! are compared per color channel, so a change of hue alone is found. A pair of states caught
-//! mid transition counts as unchanged when each sits inside the other film's neighbours.
+//! mid transition counts as unchanged when each sits inside the other film's neighbours, or
+//! when every part of it that differs is the other film's content moved part of the way along
+//! a motion that film makes there: a scroll or a slide caught at other moments.
 //! Stills are lossless, so they get no codec noise allowance: every pixel more than about 2
 //! levels apart counts, however faint, unless it is antialiasing, and a change of fewer than
 //! 30 pixels is render jitter, no change a person sees.
@@ -27,6 +29,7 @@
 mod compare;
 mod diff;
 mod film;
+mod motion;
 mod picture;
 
 pub use compare::compare;
