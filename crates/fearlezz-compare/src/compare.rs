@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diff::{diff, outside_range, still_diff};
 use crate::film::Window;
+use crate::motion::{self, AROUND, Motion, Planes};
 use crate::{Box4, Comparison, Film, Moment, Pair, Reread, State, Verdict};
 use fearlezz_proof::media::{Footage, Section};
 
@@ -175,8 +176,36 @@ where
     Ok(out)
 }
 
+/// Whether state `x` of one film, blurred, differs from state `c` of the other film, read
+/// through `w`, only by that film's content caught part of the way through a motion it makes
+/// between its states around `c` that `keep` keeps, without a gap.
+fn only_moved<R: Reread>(
+    x: &Planes,
+    theirs: &mut Motion,
+    w: &Window<'_, R>,
+    c: usize,
+    keep: &dyn Fn(usize) -> bool,
+) -> Result<bool, crate::Unfit> {
+    let n = w.film().states.len();
+    let lo = (c.saturating_sub(AROUND)..=c)
+        .find(|&s| (s..c).all(keep))
+        .unwrap_or(c);
+    let hi = (c..(c + AROUND + 1).min(n))
+        .take_while(|&s| s == c || keep(s))
+        .last()
+        .unwrap_or(c);
+    let frames = (lo..=hi)
+        .map(|s| Ok(theirs.planes(s, w.image(s)?)))
+        .collect::<Result<Vec<_>, crate::Unfit>>()?;
+    let steps: Vec<_> = (lo..hi)
+        .zip(frames.iter().zip(frames.iter().skip(1)))
+        .map(|(s, (from, to))| theirs.step(s, from, to))
+        .collect();
+    Ok(motion::only_moved(x, c - lo, &frames, &steps))
+}
+
 /// Each pair of states the path visits, with what differs between them. The path only moves
-/// forward, so each film needs the states one before to one after.
+/// forward, so each film needs the states a few before to a few after.
 fn pairs<B, A>(
     (wo, wn): &mut (Window<'_, B>, Window<'_, A>),
     path: &[(usize, usize)],
@@ -193,10 +222,13 @@ where
     let mut pairs = Vec::new();
     let visited: BTreeSet<(usize, usize)> = path.iter().copied().collect();
     let mut cache: BTreeMap<(usize, usize), (usize, Vec<Box4>)> = BTreeMap::new();
+    let (mut mo, mut mn) = (Motion::default(), Motion::default());
     for &(i, j) in path {
-        wo.span(i.saturating_sub(1), i + 1)?;
-        wn.span(j.saturating_sub(1), j + 1)?;
+        wo.span(i.saturating_sub(AROUND), i + AROUND)?;
+        wn.span(j.saturating_sub(AROUND), j + AROUND)?;
         cache.retain(|&(ci, cj), _| ci + 1 >= i && cj + 1 >= j);
+        mo.forget_before(i.saturating_sub(AROUND));
+        mn.forget_before(j.saturating_sub(AROUND));
         let mut pd = |i: usize, j: usize| -> Result<(usize, Vec<Box4>), crate::Unfit> {
             if let Some(d) = cache.get(&(i, j)) {
                 return Ok(d.clone());
@@ -238,6 +270,18 @@ where
                 before_found || outside_range(wo.image(i)?, &wn.near(j, |jj| allowed(i, jj))?) == 0;
             after_found =
                 after_found || outside_range(wn.image(j)?, &wo.near(i, |ii| allowed(ii, j))?) == 0;
+            // A scroll or a slide caught at other moments shows content at other places; the
+            // other film's own motion around the counterpart may explain it.
+            if !(before_found && after_found) {
+                before_found = before_found || {
+                    let x = mo.planes(i, wo.image(i)?);
+                    only_moved(&x, &mut mn, wn, j, &|jj| allowed(i, jj))?
+                };
+                after_found = after_found || {
+                    let x = mn.planes(j, wn.image(j)?);
+                    only_moved(&x, &mut mo, wo, i, &|ii| allowed(ii, j))?
+                };
+            }
             if before_found && after_found {
                 px = 0;
                 boxes.clear();
