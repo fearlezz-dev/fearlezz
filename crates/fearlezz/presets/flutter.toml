@@ -1,6 +1,6 @@
 # A Flutter app: the dart piece's formatting and analyzer, and the tests through Flutter.
 # `flutter test` runs test/ only; integration_test/app_test.dart is the entry file the
-# flutter-film check of flutter-look runs.
+# flutter-film and flutter-phone-film checks of flutter-look run.
 use = ["dart"]
 
 [check.dart-test]

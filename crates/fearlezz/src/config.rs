@@ -700,6 +700,8 @@ impl Config {
     /// off goes, and each release place adds its dry run.
     fn from_table(mut table: toml::Table, found: &dyn Fn(&str) -> Vec<String>) -> Result<Config> {
         let fanned = expand_each(&mut table, found)?;
+        // The flutter-look helpers follow its check's folders, even while it is off.
+        let flutter_look = flutter_look_folders(&table)?;
         let off = drop_off(&mut table)?;
         crate::release::add_dry_checks(&mut table, DEFAULT_STAGES.last().copied(), &off);
 
@@ -763,10 +765,7 @@ impl Config {
             }
         }
         settings.cargo = found("Cargo.toml");
-        settings.flutter_look = checks
-            .iter()
-            .find(|c| c.id == "flutter-look")
-            .and_then(|c| c.command.dir.clone());
+        settings.flutter_look = flutter_look;
         settings.biome_runs = checks.iter().any(|c| {
             c.command.steps.iter().any(|step| {
                 step.split_whitespace()
@@ -1219,6 +1218,27 @@ impl Narrowing<'_> {
         }
         ok
     }
+}
+
+/// The folders the `flutter-look` check runs in, `each` already fanned out (`.` for the root).
+fn flutter_look_folders(table: &toml::Table) -> Result<Vec<String>> {
+    let Some(toml::Value::Table(checks)) = table.get("check") else {
+        return Ok(Vec::new());
+    };
+    let mut folders = Vec::new();
+    for (id, check) in checks {
+        if id != "flutter-look" && !id.starts_with("flutter-look/") {
+            continue;
+        }
+        let dir = match check.get("dir").and_then(toml::Value::as_str) {
+            Some(dir) => folder(dir).with_context(|| format!("check {id}: dir"))?,
+            None => ".".into(),
+        };
+        if !folders.contains(&dir) {
+            folders.push(dir);
+        }
+    }
+    Ok(folders)
 }
 
 /// A folder of the repository as a check names it: relative, without `.` segments, never

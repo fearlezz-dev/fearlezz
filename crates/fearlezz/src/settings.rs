@@ -218,9 +218,9 @@ pub(crate) struct Settings {
     /// The folders of the repository's Cargo projects (`.` for the root), which the Rust lint
     /// tables are written into.
     pub cargo: Vec<String>,
-    /// The folder the `flutter-look` check runs in, which its helpers are written into; the
-    /// root without one.
-    pub flutter_look: Option<String>,
+    /// The folders the `flutter-look` check runs in (one per project folder with `each`, `.`
+    /// for the root), which its helpers are written into; the root alone without one.
+    pub flutter_look: Vec<String>,
     /// A check runs Biome, through a piece or a command of the project's own.
     pub biome_runs: bool,
     /// What the config proves already, against which the check names what the project could
@@ -299,7 +299,7 @@ impl Settings {
             // Config::load finds them in the repository, the flutter-look check's folder, the
             // checks that run Biome, what the checks prove and the proof host.
             cargo: Vec::new(),
-            flutter_look: None,
+            flutter_look: Vec::new(),
             biome_runs: false,
             grow: crate::grow::Have::default(),
             host: String::new(),
@@ -375,17 +375,26 @@ impl Settings {
         let shipped = self
             .shipped
             .keys()
-            .flat_map(|s| s.files().iter().map(|p| self.placed(*s, p)));
+            .flat_map(|s| s.files().iter().flat_map(|p| self.placed(*s, p)));
         tools.chain(shipped).collect()
     }
 
-    /// Where a shipped file goes in the repository: the flutter-look helpers in the folder of
-    /// the check that runs their tests, everything else where it says.
-    fn placed(&self, file: Shipped, path: &str) -> String {
-        match (file, &self.flutter_look) {
-            (Shipped::FlutterLook, Some(dir)) => format!("{dir}/{path}"),
-            _ => path.to_string(),
+    /// Where a shipped file goes in the repository: the flutter-look helpers in each folder
+    /// the check that runs their tests runs in, everything else where it says.
+    fn placed(&self, file: Shipped, path: &str) -> Vec<String> {
+        if file != Shipped::FlutterLook || self.flutter_look.is_empty() {
+            return vec![path.to_string()];
         }
+        self.flutter_look
+            .iter()
+            .map(|dir| {
+                if dir == "." {
+                    path.to_string()
+                } else {
+                    format!("{dir}/{path}")
+                }
+            })
+            .collect()
     }
 
     /// How `head` tunes the tools that judge code differently: any setting added, removed or
@@ -454,7 +463,13 @@ impl Settings {
         }
         for (file, table) in &self.shipped {
             let files = file.render(root, table)?;
-            out.extend(files.into_iter().map(|(p, c)| (self.placed(*file, &p), c)));
+            for (path, content) in files {
+                out.extend(
+                    self.placed(*file, &path)
+                        .into_iter()
+                        .map(|p| (p, content.clone())),
+                );
+            }
         }
         let mut drifted = Vec::new();
         for (path, content) in out {

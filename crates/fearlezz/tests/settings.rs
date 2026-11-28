@@ -875,6 +875,37 @@ fn the_flutter_look_helpers_sit_beside_the_look_tests_of_an_app_in_a_folder() {
     );
 }
 
+#[test]
+fn the_flutter_look_helpers_follow_each_folder_and_stay_while_the_check_is_off() {
+    // One look check per Flutter app: helpers beside each app's look tests.
+    let apps = [
+        ("a/pubspec.yaml", "name: a\n"),
+        ("b/pubspec.yaml", "name: b\n"),
+    ];
+    let repo = Repo::new(
+        "use = [\"flutter-look\"]\n[check.flutter-look]\neach = \"pubspec.yaml\"\n",
+        &apps,
+    );
+    let out = repo.fz(&["setup", "sync"]);
+    assert!(out.ok, "{}", out.stderr);
+    for file in [
+        "a/look_test/fearlezz_look.dart",
+        "b/look_test/fearlezz_look.dart",
+    ] {
+        assert!(repo.path(file).exists(), "{file}: {}", out.stdout);
+    }
+    assert!(!repo.path("look_test").exists());
+
+    // Turning the check off for a while leaves the helpers where its tests are.
+    let repo = Repo::new(
+        "use = [\"flutter-look\"]\n[check.flutter-look]\ndir = \"app\"\noff = true\n",
+        &[("app/pubspec.yaml", "name: app\n")],
+    );
+    assert!(repo.fz(&["setup", "sync"]).ok);
+    assert!(repo.path("app/look_test/fearlezz_look.dart").exists());
+    assert!(!repo.path("look_test").exists());
+}
+
 /// Every development build says the same version, so the settings check's results are keyed on
 /// what the binary ships: a result stored by a build of other files is never reused.
 #[test]

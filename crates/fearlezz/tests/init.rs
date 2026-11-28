@@ -401,6 +401,13 @@ fn init_offers_flutter_pictures_for_a_flutter_app_not_an_apple_app() {
         "{}",
         out.stdout
     );
+    // Its look checks run where the app is once they name its folder.
+    assert!(
+        out.stdout
+            .contains("use = [\"flutter-look\"] with dir = \"app\" on its checks"),
+        "{}",
+        out.stdout
+    );
 
     // A native Apple app beside it is still one.
     let mut files = FLUTTER_IN_A_FOLDER.to_vec();
