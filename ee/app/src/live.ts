@@ -59,7 +59,7 @@ export function applyWork(state: Snapshot, seq: number, change: WorkChange): Sna
       return { ...next, ...notes, verdicts: [...(state.verdicts ?? []).filter((o) => !same(o)), v] };
     }
     case "withdrawn": {
-      const gone = (o: { check: string; picture: string; key: string }) => o.check === change.check && o.picture === change.picture && o.key === change.key;
+      const gone = (o: { check: string; picture: string }) => o.check === change.check && o.picture === change.picture;
       return { ...next, verdicts: (state.verdicts ?? []).filter((o) => !gone(o)) };
     }
     case "note": {

@@ -169,9 +169,10 @@ async fn content(db: &D1Database, id: &str, ask: &Ask) -> Result<String, Refusal
         .ok_or_else(|| Refusal::new(409, "its pictures are not all in yet; wait for them"))
 }
 
-/// `DELETE /api/v2/runs/<run>/verdicts`: a person with write access takes back the verdict on
-/// a picture's content, which then waits for a look again wherever it shows. Taking back a
-/// verdict that is not there changes nothing.
+/// `DELETE /api/v2/runs/<run>/verdicts`: a person with write access takes back every verdict
+/// on a picture, as a note does, so it waits for a look again wherever it shows, also where a
+/// verdict on other content held by the same inputs. Taking back a verdict that is not there
+/// changes nothing.
 pub(crate) async fn withdraw(mut req: Request, env: &Env, config: &Config, id: &str) -> Answer {
     let person = access::speaker(&req, env, config, "take back a verdict").await?;
     let ask: Ask = req
@@ -183,21 +184,20 @@ pub(crate) async fn withdraw(mut req: Request, env: &Env, config: &Config, id: &
     let run = run(env, config, &db, viewer, id).await?;
     reviewed(&run, "verdicts are taken back")?;
     access::can(env, config, viewer, Action::Verdict, &run.repository).await?;
-    let key = content(&db, id, &ask).await?;
+    // Only a picture of this run that waits for a look, with all its files in, is taken back.
+    content(&db, id, &ask).await?;
     let write = Write {
         statements: vec![Statement::new(
-            "DELETE FROM verdicts WHERE work = ?1 AND check_id = ?2 AND picture = ?3 AND key = ?4",
+            "DELETE FROM verdicts WHERE work = ?1 AND check_id = ?2 AND picture = ?3",
             [
                 run.work.as_str().into(),
                 ask.check.as_str().into(),
                 ask.picture.as_str().into(),
-                key.as_str().into(),
             ],
         )],
         event: Some(Event::work(WorkChange::Withdrawn {
             check: ask.check,
             picture: ask.picture,
-            key,
         })),
         derive: Derive::Review,
     };

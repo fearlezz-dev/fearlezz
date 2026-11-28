@@ -185,6 +185,11 @@ pub struct Picture {
     /// again; none when nothing was said about other content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_since: Option<ChangedSince>,
+    /// Its verdict holds only because its check read the same inputs as when the verdict was
+    /// given, while the picture itself differs: the check gives other pictures for the same
+    /// code. Shown, never waited on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unstable: bool,
 }
 
 /// What a person said about what a picture showed before: it changed since. The verdict and
@@ -330,16 +335,35 @@ fn item_in<'a>(runs: &'a [ProvenRun], id: &str, check: &str, name: &str) -> Opti
     check.look.as_ref()?.items.iter().find(|i| i.name == name)
 }
 
-/// Whether picture `name` of `check`, now `key`, looks as the picture of key `then` did: the
-/// same file, or one its run's CLI found the same.
-fn alike(check: &RunCheck, name: &str, key: &str, then: &str) -> bool {
-    then == key
-        || check
-            .since
-            .get(name)
-            .and_then(|s| s.get(then))
-            .copied()
-            .unwrap_or(false)
+/// Why what was said about another look of a picture still holds for it now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Alike {
+    /// It shows the same: the same file, or one its run's CLI found the same.
+    Shows,
+    /// It shows something else, but its check read the same inputs on the same platform as in
+    /// the run it was said on, so nothing a change did made it differ.
+    SameInputs,
+}
+
+/// Whether picture `name` of `check` (in a run of `runs`, every run known), now `key`, holds
+/// what was said about the picture of key `then` that run `run` showed, and why. None when
+/// it shows something else on other inputs, or the run said on or its inputs are not known.
+fn alike(
+    runs: &[ProvenRun],
+    (check, name, key): (&RunCheck, &str, &str),
+    (then, run): (&str, &str),
+) -> Option<Alike> {
+    let compared = check.since.get(name).and_then(|s| s.get(then)).copied();
+    if then == key || compared == Some(true) {
+        return Some(Alike::Shows);
+    }
+    let inputs = |c: &RunCheck| {
+        let entry = c.entry.as_ref()?;
+        Some((entry.platform.clone(), entry.key.clone()?))
+    };
+    let (said, _) = runs.iter().find(|(r, _)| r.id == run)?;
+    let was = said.checks.iter().find(|c| c.id == check.id)?;
+    (inputs(check)? == inputs(was)?).then_some(Alike::SameInputs)
 }
 
 /// The content key `check` gave picture `name` in run `id`, when that run is among `runs`.
@@ -360,20 +384,22 @@ fn changed_since(
     open: &[&Note],
 ) -> Option<ChangedSince> {
     let check = run_check.id.as_str();
+    let now = (run_check, name, key);
     let verdict = match verdict {
         Some(_) => None,
         None => verdicts
             .iter()
             .filter(|v| v.check == check && v.picture == name)
             .max_by(|a, b| a.at.total_cmp(&b.at))
-            .filter(|v| !alike(run_check, name, key, &v.key))
+            .filter(|v| alike(runs, now, (&v.key, &v.run)).is_none())
             .cloned(),
     };
     let notes: Vec<String> = open
         .iter()
         .filter(|n| n.check == check && n.picture == name)
         .filter(|n| {
-            key_in(runs, &n.run, check, name).is_some_and(|then| !alike(run_check, name, key, then))
+            key_in(runs, &n.run, check, name)
+                .is_some_and(|then| alike(runs, now, (then, &n.run)).is_none())
         })
         .map(|n| n.id.clone())
         .collect();
@@ -403,11 +429,19 @@ fn looked_at(
                 if seen {
                     continue;
                 }
-                // The newest looks right on a picture that looks alike.
-                let verdict = verdicts
+                // The newest looks right on a picture that looks alike; unstable when each
+                // holds only by the inputs.
+                let now = (check, item.name.as_str(), key.as_str());
+                let holding: Vec<(&Verdict, Alike)> = verdicts
                     .iter()
                     .filter(|v| v.check == check.id && v.picture == item.name)
-                    .filter(|v| alike(check, &item.name, key, &v.key))
+                    .filter_map(|v| Some((v, alike(runs, now, (&v.key, &v.run))?)))
+                    .collect();
+                let unstable =
+                    !holding.is_empty() && holding.iter().all(|(_, why)| *why == Alike::SameInputs);
+                let verdict = holding
+                    .iter()
+                    .map(|(v, _)| *v)
                     .max_by(|a, b| a.at.total_cmp(&b.at))
                     .cloned();
                 let noted = open
@@ -432,6 +466,7 @@ fn looked_at(
                     standing,
                     verdict,
                     changed_since,
+                    unstable,
                 });
             }
         }

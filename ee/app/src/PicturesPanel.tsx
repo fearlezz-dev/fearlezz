@@ -26,7 +26,7 @@ import {
 } from "./pictures";
 import { type Draft, type Elsewhere, type Shown as Noted, editNote, elsewhere, fromWhere, linkedWith, makeNote, notesOn, pending, resolveNote, sidesOf } from "./notes";
 import type { Note, PictureChange, Run, Snapshot } from "./proof";
-import { type Looker, canSay, carried, changedSince, covered, localBy, maySignIn, onlyViews, signIn, signedIn, standingOf, toLookAt, verdict as say, verdictOf, withdraw } from "./review";
+import { type Looker, canSay, carried, changedSince, covered, localBy, maySignIn, onlyViews, signIn, signedIn, standingOf, toLookAt, unstableOf, verdict as say, verdictOf, withdraw } from "./review";
 import { type Against, MODES, type Mode, type Noting, Stage, stepSpeed } from "./Stage";
 import { opensOn, stripOf, worthShowing } from "./runs";
 import { Strip, dotName } from "./Strip";
@@ -777,6 +777,7 @@ function ReviewBar(props: {
   // Whether an edit takes the linked notes along: almost always, so it starts checked.
   const [alsoLinked, setAlsoLinked] = createSignal(true);
   const verdict = createMemo(() => verdictOf(props.state, props.run, props.shown));
+  const unstable = createMemo(() => unstableOf(props.state, props.run, props.shown));
   // Why this picture gets no verdict, in a few words; the reason in full is its title.
   const never = (): [string, string] | undefined => {
     if (localBy(props.run)) return ["Verdicts on CI", "A local run is unproven, so its pictures get a verdict on CI."];
@@ -998,6 +999,15 @@ function ReviewBar(props: {
               </Show>
             </p>
           )}
+        </Show>
+        <Show when={standing() === "looks_right" && unstable()}>
+          <p
+            class="flaky-note"
+            data-unstable-note
+            title="Nothing this check reads changed since it looked right, yet this run recorded it differently, so the looks right holds"
+          >
+            Unstable: same code, recorded differently
+          </p>
         </Show>
         <Show when={since() && (sinceNotes().length || !props.onYourLook) ? since() : undefined}>
           {(s) => (

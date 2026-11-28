@@ -109,9 +109,16 @@ pub enum DiffLine {
 }
 
 impl Item {
-    /// Whether a person looks at it: anything but the same, and never a flaky one.
+    /// Whether a person looks at it: anything but the same, and never a flaky one. A film
+    /// that only changed its timing waits only past the timing budget
+    /// ([`crate::media::TIMING_BUDGET`]).
     pub fn to_look_at(&self) -> bool {
-        self.change != Change::Same && !self.flaky
+        let on_time = self.change == Change::Timing
+            && self
+                .comparison
+                .as_ref()
+                .is_some_and(Comparison::within_budget);
+        self.change != Change::Same && !on_time && !self.flaky
     }
 }
 

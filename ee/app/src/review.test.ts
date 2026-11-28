@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { picturesOf } from "./pictures";
-import type { Picture, Run, Snapshot } from "./proof";
-import { canAccept, canSay, carried, changedSince, covered, isViewer, localBy, opening, roleOf, standingOf, verdictOf } from "./review";
+import { type Shown, picturesOf } from "./pictures";
+import type { Check, Comparison, Picture, Run, Snapshot } from "./proof";
+import { canAccept, canSay, carried, changedSince, covered, isViewer, localBy, opening, roleOf, standingOf, toLookAt, unstableOf, verdictOf } from "./review";
 
 const picture: Picture = {
   name: "card.png",
@@ -205,5 +205,55 @@ describe("covered", () => {
       "card/desktop/light.png",
       "card/mobile/light.png",
     ]);
+  });
+});
+
+describe("same inputs", () => {
+  const keyed = (r: Run, inputs: string): Run => ({
+    ...r,
+    checks: r.checks.map((c) => ({ ...c, entry: { id: "screens", key: inputs, run: "true", stage: "look", outcome: "passed", seconds: 1 } as Check })),
+  });
+  const shown = (r: Run) => picturesOf(r)[0]!;
+  test("a verdict holds on a picture that differs when its check read the same inputs, and marks it unstable", () => {
+    const first = keyed(run("r1", "aaa1111", "k1"), "in1");
+    const later = keyed(run("r2", "bbb2222", "k2"), "in1");
+    const s = state([later, first]);
+    expect(verdictOf(s, later, shown(later))?.run).toBe("r1");
+    expect(unstableOf(s, later, shown(later))).toBe(true);
+    expect(changedSince(s, later, shown(later))).toBeUndefined();
+    expect(unstableOf(s, first, shown(first))).toBe(false);
+  });
+  test("other inputs, or a run the page does not hold, keep a picture that differs waiting", () => {
+    const first = keyed(run("r1", "aaa1111", "k1"), "in1");
+    const styled = keyed(run("r2", "bbb2222", "k2"), "in2");
+    expect(verdictOf(state([styled, first]), styled, shown(styled))).toBeUndefined();
+    const alone = keyed(run("r2", "bbb2222", "k2"), "in1");
+    expect(verdictOf(state([alone]), alone, shown(alone))).toBeUndefined();
+  });
+});
+
+describe("toLookAt", () => {
+  const late = (max_shift: number, tail: number | null, total_after = 3): Shown =>
+    picturesOf({
+      ...run("r1", "aaa1111", "k1"),
+      checks: [
+        {
+          id: "screens",
+          look: {
+            check: "screens",
+            base_commit: "b",
+            base_result: "passed",
+            items: [{ ...picture, name: "a.webm", kind: "film", change: "timing", comparison: { verdict: "timing", max_shift, tail, total_before: 3, total_after } as Comparison }],
+          },
+        },
+      ],
+    })[0]!;
+  test("a film only a little late waits for nobody; a much later one, or one without its tail, waits", () => {
+    expect(toLookAt(late(0.3, -0.2))).toBe(false);
+    expect(toLookAt(late(-0.9, 0))).toBe(false);
+    expect(toLookAt(late(1.4, 0))).toBe(true);
+    expect(toLookAt(late(0, 1.5))).toBe(true);
+    expect(toLookAt(late(0.2, null))).toBe(true);
+    expect(toLookAt(late(0.9, 0.9, 7.5))).toBe(true);
   });
 });

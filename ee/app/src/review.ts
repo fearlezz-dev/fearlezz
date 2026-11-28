@@ -32,8 +32,20 @@ export const canAccept = (looker: Looker | undefined) => roleOf(looker) === "adm
 /** Who ran a local run, which is unproven and never reviewed; undefined for a CI run. */
 export const localBy = (run: Run) => (run.source.kind === "local" ? run.source.login || "a developer" : undefined);
 
-/** Whether a person looks at a picture: anything but the same, and never a flaky one. */
-export const toLookAt = (p: Shown) => p.picture.change !== "same" && !p.picture.flaky;
+/** How late a film with the same pictures may come, in seconds, before a person looks at it:
+ * the proof model's `TIMING_BUDGET`. */
+export const TIMING_BUDGET = 1;
+
+/** Whether a person looks at a picture: anything but the same, and never a flaky one. A film
+ * that only changed its timing waits only past the timing budget (in a held state, its tail or
+ * its whole length), or when its comparison did not say its tail. The proof model's
+ * `Item::to_look_at` says the same. */
+export const toLookAt = (p: Shown) => {
+  const c = p.picture.comparison;
+  const within = (s: number) => Math.abs(s) <= TIMING_BUDGET;
+  const onTime = p.picture.change === "timing" && c != null && c.tail != null && within(c.tail) && within(c.max_shift) && within(c.total_after - c.total_before);
+  return p.picture.change !== "same" && !onTime && !p.picture.flaky;
+};
 
 /** How far one looks right reaches among a screen's variants: the picture alone, every
  * variant of its viewport, every variant of its theme, or the whole screen. */
@@ -75,20 +87,46 @@ export function keyOf(run: Run, p: Shown): string | undefined {
   return run.checks.find((c) => c.id === p.check)?.keys?.[p.picture.name];
 }
 
-/** Whether picture `p` of `run`, whose content is `key`, looks like the picture whose content
- * was `then`: the same file, or one the run's CLI compared it with and found the same. The
- * host's review uses the same rule. */
-function alike(run: Run, p: Shown, key: string, then: string): boolean {
-  return then === key || run.checks.find((c) => c.id === p.check)?.since?.[p.picture.name]?.[then] === true;
+/** Whether picture `p` of `run`, whose content is `key`, holds what was said about the picture
+ * whose content was `then` in run `said` (of `state`), and why: it shows the same (the same
+ * file, or one the run's CLI compared it with and found the same), or its check read the same
+ * inputs on the same platform there, so nothing a change did made it differ. Undefined when
+ * neither, or the run said on is not held. The host's review uses the same rule. */
+function alike(state: Snapshot, run: Run, p: Shown, key: string, then: string, said: string): "shows" | "inputs" | undefined {
+  const check = run.checks.find((c) => c.id === p.check);
+  if (then === key || check?.since?.[p.picture.name]?.[then] === true) return "shows";
+  const was = state.runs.find((r) => r.id === said)?.checks.find((c) => c.id === p.check);
+  const now = check?.entry;
+  const before = was?.entry;
+  if (!now?.key || !before?.key) return undefined;
+  return now.key === before.key && (now.platform ?? null) === (before.platform ?? null) ? "inputs" : undefined;
 }
 
-/** The newest verdict on a picture of a run that looks like it, given on this run or any other. */
-export function verdictOf(state: Snapshot, run: Run, p: Shown): PictureVerdict | undefined {
+/** Each verdict on a picture of a run that holds for it, given on this run or any other, with
+ * why it holds, newest first. */
+function holding(state: Snapshot, run: Run, p: Shown): [PictureVerdict, "shows" | "inputs"][] {
   const key = keyOf(run, p);
-  if (!key) return undefined;
+  if (!key) return [];
   return (state.verdicts ?? [])
-    .filter((v) => v.check === p.check && v.picture === p.picture.name && alike(run, p, key, v.key))
-    .sort((a, b) => b.at - a.at)[0];
+    .filter((v) => v.check === p.check && v.picture === p.picture.name)
+    .flatMap((v): [PictureVerdict, "shows" | "inputs"][] => {
+      const why = alike(state, run, p, key, v.key, v.run);
+      return why ? [[v, why]] : [];
+    })
+    .sort((a, b) => b[0].at - a[0].at);
+}
+
+/** The newest verdict on a picture of a run that holds for it, given on this run or any other. */
+export function verdictOf(state: Snapshot, run: Run, p: Shown): PictureVerdict | undefined {
+  return holding(state, run, p)[0]?.[0];
+}
+
+/** Whether a picture's verdict holds only because its check read the same inputs, while the
+ * picture differs: the check gives other pictures for the same code. The host's review says the
+ * same as `unstable`. */
+export function unstableOf(state: Snapshot, run: Run, p: Shown): boolean {
+  const held = holding(state, run, p);
+  return held.length > 0 && held.every(([, why]) => why === "inputs");
 }
 
 /** Where a picture of a run stands: an open note on it says it needs change, which outweighs a
@@ -119,7 +157,7 @@ export function changedSince(state: Snapshot, run: Run, p: Shown): Since | undef
   const notes = notesOn(state, p.check, p.picture.name, run)
     .filter((n) => {
       const was = then(n.note.run);
-      return was !== undefined && !alike(run, p, key, was);
+      return was !== undefined && !alike(state, run, p, key, was, n.note.run);
     })
     .map((n) => n.note.id);
   return verdict || notes.length ? { verdict, notes } : undefined;
@@ -148,13 +186,12 @@ export function verdict(state: Snapshot, run: Run, p: Shown, by: string): Promis
   return hoping(verdictChange(given, open), ask);
 }
 
-/** Takes back the verdict on a picture's content, shown at once; the error the host gave, if it
- * refused. */
+/** Takes back every verdict on a picture, as the host does, shown at once; the error the host
+ * gave, if it refused. */
 export function withdraw(run: Run, p: Shown): Promise<string | undefined> {
   const ask = () => send("DELETE", `/api/v2/runs/${encodeURIComponent(run.id)}/verdicts`, { check: p.check, picture: p.picture.name });
-  const key = keyOf(run, p);
-  if (!key) return ask().then(refusal);
-  return hoping({ kind: "withdrawn", check: p.check, picture: p.picture.name, key }, ask);
+  if (!keyOf(run, p)) return ask().then(refusal);
+  return hoping({ kind: "withdrawn", check: p.check, picture: p.picture.name }, ask);
 }
 
 export const accept = (run: string) => say(run, "accept", {});

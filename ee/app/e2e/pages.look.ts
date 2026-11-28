@@ -4,7 +4,7 @@
 
 import { type Page, expect, test } from "@playwright/test";
 import { settled, show } from "./host";
-import { LONG_STRIP, REPOSITORY_PATH, REPOSITORY_STATES, STRIP, WORK, WORK_PATH } from "./states";
+import { LONG_STRIP, REPOSITORY_PATH, REPOSITORY_STATES, STRIP, UNSTABLE_WORLD, WORK, WORK_PATH } from "./states";
 
 const THEMES = ["light", "dark"] as const;
 
@@ -96,6 +96,15 @@ test("work page: how far looks right reaches", async ({ page }) => {
   await page.locator('.variant[data-picture="ee-page-look/profile/desktop/dark.png"]').click();
   await page.locator("[data-say-more]").click();
   await stills(page, "work/looks-right-menu", false);
+});
+
+// Nothing the look reads changed since the dark profile looked right, yet it was recorded
+// otherwise: its looks right holds, marked unstable.
+test("work page: a looks right held on the same inputs", async ({ page }) => {
+  await show(page, WORK_PATH, UNSTABLE_WORLD);
+  await page.locator('.variant[data-picture="ee-page-look/profile/desktop/dark.png"]').click();
+  await expect(page.locator("[data-unstable-note]")).toBeVisible();
+  await stills(page, "work/unstable");
 });
 
 test("work page: a weakening's change opened", async ({ page }) => {

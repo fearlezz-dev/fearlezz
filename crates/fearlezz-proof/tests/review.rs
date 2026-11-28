@@ -60,6 +60,7 @@ fn film(changed: &[usize]) -> Item {
             total_after: 3.0,
             max_shift: 0.0,
             max_shift_at: None,
+            tail: None,
             marks_changed: false,
             timeline: Vec::new(),
             states_before: 3,
@@ -1507,4 +1508,136 @@ fn an_open_note_on_a_picture_the_head_does_not_show_lapses() {
     );
     assert_eq!(review.state, State::Approved, "{review:#?}");
     assert!(review.notes.is_empty(), "{review:#?}");
+}
+
+/// A CI run like [`run`] whose check `screens` read inputs hashed to `inputs`.
+fn run_on(id: &str, head: &str, inputs: &str, items: &[Item]) -> (Run, Option<Proof>) {
+    let (mut run, proof) = run(id, head, RunState::Done, items);
+    if let Some(entry) = run.checks[0].entry.as_mut() {
+        entry.key = Some(inputs.into());
+    }
+    (run, proof)
+}
+
+#[test]
+fn a_verdict_holds_on_the_same_inputs_and_marks_a_picture_that_differs_unstable() {
+    // Two runs of the same code record the film a little differently: the check read the
+    // same inputs, so nothing the change did can have made it differ.
+    let before = run_on("r0", "aaa", "inputs", &[still("card.png", Change::Changed)]);
+    let given = verdict("card.png", &before.0.checks[0].keys["card.png"], "aaa");
+    let now = run_on("r1", "bbb", "inputs", &[still("card.png", Change::Changed)]);
+    let review = review::review(
+        "bbb",
+        &[now, before],
+        &Actions::default(),
+        std::slice::from_ref(&given),
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Approved, "{review:?}");
+    let picture = &review.pictures[0];
+    assert_eq!(picture.verdict.as_ref(), Some(&given));
+    assert!(picture.unstable, "same inputs, other picture: {picture:?}");
+    assert_eq!(picture.changed_since, None, "{picture:?}");
+}
+
+#[test]
+fn a_verdict_on_the_same_picture_is_not_unstable() {
+    let before = run_on("r0", "aaa", "inputs", &[still("card.png", Change::Changed)]);
+    let given = verdict("card.png", &before.0.checks[0].keys["card.png"], "aaa");
+    let review = review::review("aaa", &[before], &Actions::default(), &[given], &[], None);
+    assert_eq!(review.state, State::Approved);
+    assert!(!review.pictures[0].unstable, "{:?}", review.pictures[0]);
+}
+
+#[test]
+fn other_inputs_or_an_unknown_run_keep_a_picture_that_differs_waiting() {
+    // A styling change is a change of what the check reads: the picture waits for a look.
+    let before = run_on("r0", "aaa", "inputs", &[still("card.png", Change::Changed)]);
+    let given = verdict("card.png", &before.0.checks[0].keys["card.png"], "aaa");
+    let styled = run_on("r1", "bbb", "styled", &[still("card.png", Change::Changed)]);
+    let review = review::review(
+        "bbb",
+        &[styled, before.clone()],
+        &Actions::default(),
+        std::slice::from_ref(&given),
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Waits, "{review:?}");
+    assert!(!review.pictures[0].unstable);
+
+    // Without the run the verdict was given on, its inputs are not known.
+    let now = run_on("r1", "bbb", "inputs", &[still("card.png", Change::Changed)]);
+    let review = review::review(
+        "bbb",
+        &[now],
+        &Actions::default(),
+        std::slice::from_ref(&given),
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Waits, "{review:?}");
+
+    // A check that names no inputs key proves nothing about them.
+    let unkeyed = run(
+        "r0",
+        "aaa",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let now = run(
+        "r1",
+        "bbb",
+        RunState::Done,
+        &[still("card.png", Change::Changed)],
+    );
+    let given = verdict("card.png", &unkeyed.0.checks[0].keys["card.png"], "aaa");
+    let review = review::review(
+        "bbb",
+        &[now, unkeyed],
+        &Actions::default(),
+        &[given],
+        &[],
+        None,
+    );
+    assert_eq!(review.state, State::Waits, "{review:?}");
+}
+
+/// A film with the same pictures at other times: its held states up to `shift` seconds
+/// later, and the stretch after its last anchor `tail` seconds longer (unknown to an older CLI).
+fn late(name: &str, shift: f64, tail: Option<f64>) -> Item {
+    let mut item = film(&[]);
+    item.name = name.into();
+    item.change = Change::Timing;
+    let c = item.comparison.as_mut().unwrap();
+    c.verdict = Likeness::Timing;
+    c.max_shift = shift;
+    c.tail = tail;
+    item
+}
+
+#[test]
+fn a_film_only_a_little_late_waits_for_nobody_and_a_much_later_one_waits() {
+    let items = vec![
+        late("jitter.webm", 0.3, Some(-0.2)),
+        late("earlier.webm", -0.9, Some(0.0)),
+        late("slower.webm", 1.4, Some(0.0)),
+        late("longer.webm", 0.0, Some(1.5)),
+        late("older.webm", 0.2, None),
+        {
+            // Every section a little late, which adds up to a much slower film.
+            let mut adds_up = late("adds-up.webm", 0.9, Some(0.9));
+            adds_up.comparison.as_mut().unwrap().total_after = 7.5;
+            adds_up
+        },
+    ];
+    let runs = [run("r1", "aaa", RunState::Done, &items)];
+    let review = review::review("aaa", &runs, &Actions::default(), &[], &[], None);
+    let waiting: Vec<&str> = review.waiting().map(|p| p.name.as_str()).collect();
+    assert_eq!(
+        waiting,
+        ["slower.webm", "longer.webm", "older.webm", "adds-up.webm"],
+        "past the second of budget in a state, its tail or in all, or a comparison that did not say its tail"
+    );
 }

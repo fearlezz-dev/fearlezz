@@ -192,11 +192,7 @@ check: string,
 /**
  * The picture's name.
  */
-picture: string, 
-/**
- * The content the verdict was on.
- */
-key: string, } | { "kind": "edited", 
+picture: string, } | { "kind": "edited", 
 /**
  * The notes as they are now.
  */
@@ -301,7 +297,13 @@ verdict?: PictureVerdict | null,
  * What a person said about what it showed before it changed, so it shows for a look
  * again; none when nothing was said about other content.
  */
-changed_since?: ChangedSince | null, };
+changed_since?: ChangedSince | null, 
+/**
+ * Its verdict holds only because its check read the same inputs as when the verdict was
+ * given, while the picture itself differs: the check gives other pictures for the same
+ * code. Shown, never waited on.
+ */
+unstable?: boolean, };
 
 export type ReviewMissing = { "cause": "ended", 
 /**
@@ -825,6 +827,12 @@ max_shift: number,
  * Where the largest shift is in the before film, in seconds.
  */
 max_shift_at: number | null, 
+/**
+ * How much longer the after film runs past what its end is timed from (its last anchor
+ * or free span) than the before film, in seconds. None for a still, and from a CLI that
+ * did not write it.
+ */
+tail?: number | null, 
 /**
  * How many stable states the before film holds.
  */

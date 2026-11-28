@@ -331,14 +331,12 @@ pub enum WorkChange {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         resolved: Vec<Note>,
     },
-    /// Someone took back the verdict on a picture's content.
+    /// Someone took back every verdict on a picture.
     Withdrawn {
         /// The check that took the picture.
         check: String,
         /// The picture's name.
         picture: String,
-        /// The content the verdict was on.
-        key: String,
     },
     /// Someone changed the words of notes: one, or a group linked by `link`.
     Edited {

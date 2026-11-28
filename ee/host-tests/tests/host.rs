@@ -346,6 +346,10 @@ fn main() {
             a_verdict_carries_over_to_a_later_run_with_the_same_pictures,
         ),
         (
+            "a_verdict_holds_on_the_same_inputs_until_it_is_taken_back",
+            a_verdict_holds_on_the_same_inputs_until_it_is_taken_back,
+        ),
+        (
             "a_verdict_follows_what_the_run_found_comparing_with_the_approved_picture",
             a_verdict_follows_what_the_run_found_comparing_with_the_approved_picture,
         ),
@@ -2564,6 +2568,60 @@ fn a_verdict_carries_over_to_a_later_run_with_the_same_pictures() {
     let (changed, changed_files) = one_still(b"carries before", b"carries after, changed");
     proven(&third, &changed, &changed_files, &json!({}));
     let review = review_of(104);
+    assert_eq!(review["state"], "waits", "{review:#}");
+    assert!(review["pictures"][0]["verdict"].is_null(), "{review:#}");
+}
+
+/// Like [`proven`], with the check `screens` having read inputs hashed to `inputs`.
+fn proven_on(job: &Job, look: &Value, files: &[(&str, Vec<u8>)], inputs: &str) -> String {
+    let mut screens = entry("screens", "passed");
+    screens["key"] = json!(inputs);
+    let run = job.open(&["screens"]);
+    let files: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    let answer = job.finished_with_look(&run.id, &screens, &files, look);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    for (_, bytes) in &files {
+        job.send(bytes);
+    }
+    let answer = job.close_with(
+        &run.id,
+        std::slice::from_ref(&screens),
+        std::slice::from_ref(look),
+        &files,
+        &json!({}),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    run.id
+}
+
+fn a_verdict_holds_on_the_same_inputs_until_it_is_taken_back() {
+    let first = Job::pull("owner/review", 143, "review/inputs").at(&commit("a143"), 1143);
+    let (look, files) = one_still(b"inputs before", b"inputs after, recording 1");
+    let run = proven_on(&first, &look, &files, "inputs-1");
+    let writer = sign_in("writer-code", "/");
+    let body = looks_right("card/light.png");
+    let answer = say(&run, "verdicts", Some(&writer), &[], &body);
+    assert_eq!(answer.status, 201, "{}", answer.text());
+
+    // A later push that changed nothing the check reads records the picture otherwise: the
+    // looks right from the earlier push holds, and the picture is marked unstable.
+    let second = first.at(&commit("b143"), 2143);
+    let (again, again_files) = one_still(b"inputs before", b"inputs after, recording 2");
+    let later = proven_on(&second, &again, &again_files, "inputs-1");
+    let review = review_of(143);
+    assert_eq!(review["head"], commit("b143"), "{review:#}");
+    assert_eq!(review["state"], "approved", "{review:#}");
+    assert_eq!(review["pictures"][0]["unstable"], true, "{review:#}");
+    assert_eq!(
+        review["pictures"][0]["verdict"]["run"],
+        run.as_str(),
+        "{review:#}"
+    );
+
+    // Taking it back on the later run takes back the verdict that holds there.
+    let answer = withdraw(&later, Some(&writer), &body);
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let review = review_of(143);
     assert_eq!(review["state"], "waits", "{review:#}");
     assert!(review["pictures"][0]["verdict"].is_null(), "{review:#}");
 }
