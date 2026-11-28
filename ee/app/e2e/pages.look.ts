@@ -20,6 +20,15 @@ async function stills(page: Page, screen: string, fullPage = true) {
   }
 }
 
+/** Shows the stage in full screen with its key, once the browser's full screen is in place: it
+ * comes a moment after the key and moves the stage, so a still or a pinch aimed sooner catches
+ * the stage on its way. */
+async function fullScreen(page: Page) {
+  await page.keyboard.press("f");
+  await page.waitForFunction(() => !document.fullscreenEnabled || document.fullscreenElement !== null);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+}
+
 for (const [name, { path, world }] of Object.entries(WORK)) {
   test(`work page: ${name}`, async ({ page }) => {
     await show(page, path ?? WORK_PATH, world);
@@ -74,7 +83,7 @@ test("work page: every kind of swatch", async ({ page }) => {
 test("work page: a held Y in full screen", async ({ page }) => {
   await show(page, WORK_PATH, WORK["no-before"]!.world);
   await page.locator('.variant[data-picture="ee-page-look/profile/desktop/dark.png"]').click();
-  await page.keyboard.press("f");
+  await fullScreen(page);
   await page.keyboard.down("y");
   await expect(page.locator("[data-say-menu]")).toBeVisible();
   await page.keyboard.up("y");
@@ -121,13 +130,13 @@ test("work page: a note of another variant", async ({ page }) => {
 
 test("work page: full screen", async ({ page }) => {
   await show(page, WORK_PATH, WORK["needs-change"]!.world);
-  await page.keyboard.press("f");
+  await fullScreen(page);
   await stills(page, "work/full-screen", false);
 });
 
 test("work page: full screen, zoomed in", async ({ page, isMobile }) => {
   await show(page, WORK_PATH, WORK["needs-change"]!.world);
-  await page.keyboard.press("f");
+  await fullScreen(page);
   if (isMobile) for (const _ of [1, 2, 3]) await page.keyboard.press("+");
   else {
     // Pinched in on the banner the note is about.
@@ -160,7 +169,7 @@ test("work page: a long strip of runs, folded", async ({ page }) => {
 
 test("work page: the strip of runs in full screen", async ({ page }) => {
   await show(page, WORK_PATH, STRIP.world);
-  await page.keyboard.press("f");
+  await fullScreen(page);
   await expect(page.locator("[data-pair-says]")).toHaveAttribute("data-pair-says", "changed");
   await settled(page, true);
   await stills(page, "work/strip-of-runs-full-screen", false);

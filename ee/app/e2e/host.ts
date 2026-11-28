@@ -29,7 +29,13 @@ export type Socket = { send: (message: unknown) => void };
 export async function show(page: Page, path: string, world: World): Promise<void> {
   await serve(page, world);
   await page.goto(path);
-  await settled(page, !!world.files);
+  await settled(page, !!world.files, connecting(world));
+}
+
+/** Whether a page shown `world` keeps waiting for the host on purpose: its live connection
+ * sends nothing, so the page says it is connecting for as long as it is shown. */
+export function connecting(world: World): boolean {
+  return !world.live && !world.gone;
 }
 
 /** Answers `page` as a host that `world` describes, before it opens anything: the live
@@ -87,9 +93,11 @@ export async function serve(page: Page, world: World): Promise<Socket> {
   };
 }
 
-/** Waits until the page drew what it was told: its fonts, and, for a run with pictures, every
- * picture it shows loaded from the files. */
-export async function settled(page: Page, pictures: boolean): Promise<void> {
+/** Waits until the page drew what it was told: its fonts, for a run with pictures every picture
+ * it shows loaded from the files, and nothing it works on itself still busy (`aria-busy`, such
+ * as comparing a picture with its look), unless it is `connecting` to the host on purpose. A
+ * still taken sooner catches whichever of those happened to finish first. */
+export async function settled(page: Page, pictures: boolean, connecting = false): Promise<void> {
   await page.locator("main > *").first().waitFor();
   if (pictures) await page.locator('img[src^="/files/"]').first().waitFor();
   // A lazy thumbnail below the fold would never load, yet a still of the whole page shows it.
@@ -100,4 +108,5 @@ export async function settled(page: Page, pictures: boolean): Promise<void> {
     }),
   );
   await page.evaluate(() => document.fonts.ready);
+  if (!connecting) await page.waitForFunction(() => document.querySelector('[aria-busy="true"]') === null);
 }
